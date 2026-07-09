@@ -130,6 +130,18 @@ function main() {
       "Build, local regression, retrieval eval, completion audit, lint, frontend build, and UI smoke scripts must exist.",
     ),
     check(
+      "ci-validation",
+      contains(root, ".github/workflows/aletheia-local-ci.yml", [
+        "Aletheia Local CI",
+        "npm run test:aletheia:local",
+        "npm run test:aletheia:retrieval-eval",
+        "npm run test:aletheia:package",
+        "npm run test:aletheia:completion",
+        "npm run test:aletheia:ui",
+      ]),
+      "GitHub Actions must run the local-first validation matrix on main and pull requests.",
+    ),
+    check(
       "dirty-worktree",
       statusLines.length === 0,
       `${statusLines.length} changed files are present; review and split commits before handoff.`,

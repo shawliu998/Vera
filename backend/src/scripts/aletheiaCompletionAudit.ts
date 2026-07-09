@@ -276,6 +276,7 @@ function main() {
       evidence: [
         "backend/package.json",
         "frontend/package.json",
+        ".github/workflows/aletheia-local-ci.yml",
         "docs/status.md",
       ],
       checks: [
@@ -291,6 +292,14 @@ function main() {
         packageScript(root, "frontend/package.json", "lint"),
         packageScript(root, "frontend/package.json", "build"),
         packageScript(root, "frontend/package.json", "test:aletheia:ui"),
+        contains(root, ".github/workflows/aletheia-local-ci.yml", [
+          "Aletheia Local CI",
+          "npm run test:aletheia:local",
+          "npm run test:aletheia:retrieval-eval",
+          "npm run test:aletheia:package",
+          "npm run test:aletheia:completion",
+          "npm run test:aletheia:ui",
+        ]),
         contains(root, "docs/status.md", [
           "npm run test:aletheia:local",
           "npm run check:aletheia:operator",

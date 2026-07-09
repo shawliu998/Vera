@@ -125,6 +125,12 @@ This checks local privacy defaults, least-privilege tool boundaries,
 professional positioning copy, validation entrypoints, and reports the current
 worktree size without failing solely because changes are uncommitted.
 
+The same validation posture is enforced on `main` and pull requests through
+`.github/workflows/aletheia-local-ci.yml`. The CI workflow installs backend and
+frontend dependencies, builds both apps, runs the local regression and retrieval
+eval, executes package preflight and completion audit, then runs frontend lint
+and the Aletheia UI smoke suite.
+
 Create a screenshot-ready local UI smoke matter:
 
 ```bash

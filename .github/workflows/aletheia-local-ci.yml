@@ -1,0 +1,74 @@
+name: Aletheia Local CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aletheia-local-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  local-validation:
+    name: Local-first validation
+    runs-on: macos-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install chromium
+
+      - name: Build backend
+        working-directory: backend
+        run: npm run build
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Run backend local-first checks
+        working-directory: backend
+        env:
+          ALETHEIA_LOCAL_PACKAGE_DIR: ${{ runner.temp }}/aletheia-package-preflight
+        run: |
+          npm run check:aletheia:operator
+          npm run test:aletheia:local
+          npm run test:aletheia:retrieval-eval
+          npm run test:aletheia:package
+          npm run test:aletheia:completion
+
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Run Aletheia UI smoke
+        working-directory: frontend
+        run: npm run test:aletheia:ui

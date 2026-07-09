@@ -12,7 +12,7 @@ It is not production-ready for the default Supabase path yet.
 ## Continuous Engineering Loop
 
 A Codex heartbeat automation named
-`aletheia-continuous-professional-agent-engineering-loop` is active for this
+`aletheia-continuous-professional-local-agent-loop` is active for this
 thread on an hourly cadence. Each wakeup should run the operator health check
 first, inspect the current worktree and docs, then choose the smallest useful
 implementation or documentation improvement before running the relevant
@@ -23,6 +23,10 @@ The fast operator health entrypoint is:
 ```bash
 cd backend && npm run check:aletheia:operator
 ```
+
+Main branch pushes and pull requests are also covered by
+`.github/workflows/aletheia-local-ci.yml`, which runs the backend local-first
+checks, package preflight, frontend lint/build, and Playwright UI smoke.
 
 ## Completed Capabilities
 
@@ -79,6 +83,7 @@ Current known result:
 - backend TypeScript build passes.
 - fast operator health check passes, with a warning when the worktree contains
   uncommitted local changes that still need review/splitting.
+- GitHub Actions local CI is configured for `main` and pull requests.
 - frontend production build passes.
 - full frontend lint exits cleanly with no warnings.
 - automated Playwright UI smoke passes for the local workspace approval flow
