@@ -122,6 +122,7 @@ function main() {
       "core-validation-entrypoints",
       packageScript(root, "backend/package.json", "build") &&
         packageScript(root, "backend/package.json", "check:aletheia:doctor") &&
+        packageScript(root, "backend/package.json", "check:aletheia:backup") &&
         packageScript(root, "backend/package.json", "test:aletheia:local") &&
         packageScript(root, "backend/package.json", "test:aletheia:retrieval-eval") &&
         packageScript(root, "backend/package.json", "test:aletheia:completion") &&
@@ -168,6 +169,7 @@ function main() {
         recommendedNextCommands: [
           "cd backend && npm run build",
           "cd backend && npm run check:aletheia:doctor",
+          "cd backend && npm run check:aletheia:backup",
           "cd backend && npm run test:aletheia:local",
           "cd backend && npm run test:aletheia:retrieval-eval",
           "cd backend && npm run test:aletheia:completion",

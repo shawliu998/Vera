@@ -136,6 +136,17 @@ This verifies the runtime environment for local/private use: Node 22+,
 `node:sqlite`, local storage/auth defaults, writable `.data/aletheia`
 directories, retrieval settings, and semantic-index boundaries.
 
+Run the backup manifest check before handoff or migration:
+
+```bash
+cd backend
+npm run check:aletheia:backup
+```
+
+This emits a machine-readable backup scope for `aletheia.db`, `documents/`,
+`exports/`, and `index/`, including directory sizes and a SQLite sha256 when a
+local database exists.
+
 The same validation posture is enforced on `main` and pull requests through
 `.github/workflows/aletheia-local-ci.yml`. The CI workflow installs backend and
 frontend dependencies, builds both apps, runs the local regression and retrieval

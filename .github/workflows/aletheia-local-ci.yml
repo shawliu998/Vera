@@ -60,6 +60,7 @@ jobs:
           ALETHEIA_LOCAL_PACKAGE_DIR: ${{ runner.temp }}/aletheia-package-preflight
         run: |
           npm run check:aletheia:doctor
+          npm run check:aletheia:backup
           npm run check:aletheia:operator
           npm run test:aletheia:local
           npm run test:aletheia:retrieval-eval

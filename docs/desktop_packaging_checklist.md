@@ -7,6 +7,7 @@ not a release process yet; it defines what must be true before packaging.
 
 - `npm run check:aletheia:doctor` passes in the target local/private
   environment.
+- `npm run check:aletheia:backup` produces the backup scope manifest.
 - `npm run test:aletheia:local` passes.
 - `npm run seed:aletheia:ui-smoke` creates a screenshot-ready matter.
 - `npm run dev:aletheia:local` starts or reuses local frontend/backend servers.
@@ -83,6 +84,7 @@ Restore should verify:
 cd backend
 npm run build
 npm run check:aletheia:doctor
+npm run check:aletheia:backup
 npm run test:aletheia:local
 npm run seed:aletheia:ui-smoke
 npm run package:aletheia:local
