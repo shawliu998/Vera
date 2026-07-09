@@ -25,8 +25,8 @@ The user has stated that they obtained permission to modify and rebuild on top o
 - Added the Aletheia product layer.
 - Added a high-stakes professional work positioning.
 - Added structured matter workflow surfaces.
-- Added deterministic Legal Matter Review demo data.
-- Added Compliance Impact Review and Deal Due Diligence mock templates.
+- Added deterministic Legal Matter Review fallback data.
+- Added source-linked Compliance Impact Review and Deal Due Diligence local workflow templates.
 - Updated visible product branding in the core demo path.
 
 ## Current License Status

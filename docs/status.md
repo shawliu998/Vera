@@ -1,0 +1,106 @@
+# Product Status
+
+This document is the authoritative short status for Aletheia 明证. Keep broader
+design notes in the existing architecture and deployment documents.
+
+## Current Stage
+
+Current stage: local-first MVP / private pilot candidate.
+
+It is not production-ready for the default Supabase path yet.
+
+## Continuous Engineering Loop
+
+A Codex heartbeat automation named
+`aletheia-continuous-professional-agent-engineering-loop` is active for this
+thread on an hourly cadence. Each wakeup should run the operator health check
+first, inspect the current worktree and docs, then choose the smallest useful
+implementation or documentation improvement before running the relevant
+validation commands.
+
+The fast operator health entrypoint is:
+
+```bash
+cd backend && npm run check:aletheia:operator
+```
+
+## Completed Capabilities
+
+The product can demonstrate a full Legal Matter Review flow in local mode:
+matter creation, document upload and parsing, SQLite FTS5 search, evidence
+mapping with deterministic claim/issue suggestions and audit-facing retrieval
+rank diagnostics, issue map generation with a reviewable Issue Map UI and echoed
+claim-level review tags, evidence matrix generation, deterministic draft memo
+generation, approval-gated audit pack, feedback dataset, and final memo export.
+The same local document/evidence pipeline now generates template-specific
+Compliance Register and Red Flag Memo work products for compliance impact review
+and deal due diligence matters. The workspace also includes Matter Memory,
+Matter Playbooks, draft Playbook Improvement Proposals from reviewer feedback,
+run traces with budgets and metrics, expanded human checkpoint decisions,
+resumable edited/responded checkpoints, bounded specialist role labels with tool
+allowlists, persisted Workflow Graph metadata, filterable/exportable live local
+Evidence/Reviews registries, the filterable/exportable live local Audit
+Workbench, matter-scoped registry snapshots saved as auditable local work
+products, the narrow Aletheia Tool Adapter, and a private local packaging
+manifest prototype with strict preflight checks. Aletheia routes also support a
+private bearer-token auth mode for controlled single-tenant deployments.
+
+## Current Boundaries
+
+- Automated Playwright UI smoke covers desktop and mobile local workspace
+  flows with screenshot baseline assertions for the initial workspace render.
+- Full frontend lint exits cleanly with no warnings.
+- Supabase-backed Aletheia document upload and search are not implemented; use
+  `ALETHEIA_STORAGE_DRIVER=local` for document workflows.
+- Several inherited frontend/backend files are too large and should be split
+  before major feature work continues.
+- Semantic or hybrid retrieval remains disabled by default; the optional
+  `local-json` adapter requires explicit feature flags and is intended as a
+  local prototype before LanceDB/Qdrant.
+
+## Verification Commands
+
+Run before demos or packaging:
+
+```bash
+cd backend && npm run build
+cd backend && npm run check:aletheia:operator
+cd backend && npm run test:aletheia:local
+cd backend && npm run test:aletheia:retrieval-eval
+cd backend && npm run test:aletheia:package
+cd backend && npm run test:aletheia:completion
+cd frontend && npm run lint
+cd frontend && npm run test:aletheia:ui
+cd frontend && npm run build
+```
+
+Current known result:
+
+- backend TypeScript build passes.
+- fast operator health check passes, with a warning when the worktree contains
+  uncommitted local changes that still need review/splitting.
+- frontend production build passes.
+- full frontend lint exits cleanly with no warnings.
+- automated Playwright UI smoke passes for the local workspace approval flow
+  on desktop and mobile Chromium using the default 3410/3411 smoke ports,
+  including initial workspace screenshot baselines and the live
+  Evidence/Reviews/Audit registry pages with local filters, JSON downloads, and
+  persisted matter-scoped registry snapshots, plus Compliance/Diligence
+  template pages that present local workflow previews rather than fixture-only
+  workflows.
+- local Aletheia regression passes for TXT, DOCX, PDF, FTS search, evidence,
+  Issue Map, optional local-json semantic/hybrid retrieval, work products,
+  approvals, exports, Playbook Improvement Proposals, resumable checkpoints,
+  matter-scoped registry snapshots, template-specific Compliance Register and
+  Red Flag Memo generation, and MCP smoke coverage, including specialist role
+  tool-policy and Workflow Graph assertions.
+- local retrieval eval passes for fail-closed semantic policy, keyword search,
+  optional local-json semantic search, hybrid search, and cross-matter
+  isolation, including retrieval rank and ranking-basis diagnostics.
+- strict local package preflight passes after backend and frontend build output
+  exists, and its manifest records privacy defaults, backup/restore scope,
+  startup commands, source-availability docs, and release evidence checks.
+- completion audit passes and checks current-state evidence for local-first
+  storage, the real document chain, professional templates, Matter Memory,
+  Playbooks, Run Trace, approval gates, Tool Adapter/MCP, retrieval eval,
+  private deployment, automated validation, demo evidence, and attribution.

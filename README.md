@@ -13,13 +13,13 @@ This is not a legal chatbot. It demonstrates how agentic systems can support leg
 3. Open the Legal Matter Review demo matter.
 4. Inspect the agent plan, issue map, evidence matrix, draft memo, human review panel, audit log, and feedback summary.
 5. Export the Audit Pack JSON and Feedback JSON from the demo workspace.
-6. Open the Compliance Impact Review and Deal Due Diligence templates for mock workflow examples.
+6. Open the Compliance Impact Review and Deal Due Diligence templates for workflow previews, or create local matters from those templates to generate source-linked Compliance Register and Red Flag Memo work products.
 
 ## Workflow Templates
 
 - Legal Matter Review: full MVP demo with matter intake, chronology, issue map, evidence matrix, draft memo, human review, audit trail, and feedback summary.
-- Compliance Impact Review: mock workflow with obligation register, business impact, gap analysis, and remediation tracker.
-- Deal Due Diligence Memo: mock workflow with VDR-style red flags, contract risk, diligence questions, and evidence map.
+- Compliance Impact Review: local source-linked workflow with obligation/control evidence, issue map, evidence matrix, Compliance Register, human review, and audit trail.
+- Deal Due Diligence Memo: local source-linked workflow with VDR evidence, issue map, evidence matrix, Red Flag Memo, diligence questions, human review, and audit trail.
 
 ## Architecture
 
@@ -38,8 +38,11 @@ Matter Workspace
   -> Feedback / Eval Export
 ```
 
-Mock-mode business logic is centralized in `frontend/src/aletheia`.
-The demo workspace can also export two local JSON artifacts:
+Deterministic fallback fixtures are centralized in `frontend/src/aletheia`.
+They keep the workspace usable when a local backend is not running, while the
+local-first path supports real document upload, parsing, retrieval, evidence
+mapping, review, and audited exports. The demo workspace can also export two
+local JSON artifacts:
 
 - Audit Pack: matter profile, document registry, workflow artifacts, review log, audit log, and validation status.
 - Feedback Eval Dataset: expert review tags mapped back to their target claim, evidence, memo section, and supporting citations.
@@ -52,20 +55,25 @@ runtime skeleton: runs, steps, tool calls, and human checkpoints.
 
 The first API surface is mounted at `/aletheia` on the backend and currently
 supports listing matters, creating a matter, loading a matter, adding review
-items, saving structured work products, and appending audit events.
+items, saving structured work products, appending audit events, uploading and
+searching local documents, mapping source-linked evidence, generating evidence
+matrices and draft memos, requesting approval checkpoints, maintaining Matter
+Memory, drafting and approving Matter Playbooks, and calling the narrow
+Aletheia Tool Adapter.
 Newly created matters receive a deterministic initial Agent Plan work product so
 the workflow starts from a reviewable scaffold even before model integration.
 
 Backend persistence now goes through an Aletheia repository boundary. The
 default adapter remains Supabase/Postgres for compatibility with the base
-application. A local adapter skeleton is present for the local-first roadmap:
-SQLite for structured records and filesystem paths for documents, exports, and
-indexes.
+application. The local adapter now supports SQLite persistence for Aletheia
+matters, work products, reviews, audit events, and agent runs. Local mode also
+stores uploaded documents on disk, extracts text, chunks documents, and indexes
+chunks with SQLite FTS5 keyword search.
 
-The Matter Queue now uses a hybrid data model: it renders deterministic demo
-matters immediately, then attempts to load persisted matters from the Aletheia
-API. When the backend or Supabase auth is not configured, the UI stays usable in
-demo fallback mode.
+The Matter Queue now uses a hybrid data model: it renders deterministic
+fallback matters immediately, then attempts to load persisted matters from the
+Aletheia API. When the backend or auth is not configured, the UI stays usable in
+local fallback mode.
 
 ## How To Run
 
@@ -83,20 +91,141 @@ http://localhost:3000/aletheia
 
 The demo workspace is deterministic and does not require an external model API key.
 
-## Mock Mode
+Run the local-first regression:
 
-Current MVP uses deterministic sample data for stable demo behavior:
+```bash
+cd backend
+npm run test:aletheia:local
+```
+
+This uses an isolated temporary data directory and verifies source upload,
+local search, evidence mapping, evidence matrix, draft memo, Matter Memory,
+Matter Playbooks, run trace, approval gates, local export files, and the stdio
+MCP wrapper. The synthetic document fixtures cover TXT, DOCX, and PDF parsing.
+
+Run the local retrieval eval:
+
+```bash
+cd backend
+npm run test:aletheia:retrieval-eval
+```
+
+This checks keyword, optional local-json semantic, hybrid retrieval,
+fail-closed policy, and matter isolation before retrieval ranking changes.
+
+Run the fast operator health check before a scheduled engineering loop decides
+which heavier validations to run:
+
+```bash
+cd backend
+npm run check:aletheia:operator
+```
+
+This checks local privacy defaults, least-privilege tool boundaries,
+professional positioning copy, validation entrypoints, and reports the current
+worktree size without failing solely because changes are uncommitted.
+
+Create a screenshot-ready local UI smoke matter:
+
+```bash
+cd backend
+npm run seed:aletheia:ui-smoke
+```
+
+See `docs/ui_smoke.md` for the full browser verification flow.
+Run the automated UI smoke:
+
+```bash
+cd frontend
+npm run test:aletheia:ui
+```
+
+The smoke runs against isolated local backend/frontend services and covers both
+desktop Chromium and a mobile Chromium viewport, including screenshot baseline
+assertions for the initial workspace render.
+
+See `docs/private_deployment.md` for local desktop and private single-tenant
+deployment notes.
+See `docs/hybrid_retrieval.md`, `docs/retrieval_eval.md`, and
+`docs/desktop_packaging_checklist.md` for retrieval, eval, and packaging
+follow-up plans.
+See `docs/release_notes_local_first_mvp.md` for the current local-first MVP
+summary.
+See `docs/status.md` for the current release-readiness snapshot and blockers.
+
+Start local backend and frontend together:
+
+```bash
+cd backend
+npm run dev:aletheia:local
+```
+
+The launcher leaves existing dev servers untouched and prints the MCP command
+for clients that should start the stdio wrapper.
+
+## Local Pilot Mode
+
+Current MVP uses deterministic fallback data for stable offline and screenshot
+behavior:
 
 - `frontend/src/aletheia/mockData.ts`
 - `frontend/src/aletheia/workflow.ts`
 - `frontend/src/aletheia/schemas.ts`
 - `frontend/src/aletheia/exports.ts`
 
-The next production step is to connect the same structured outputs to document parsing, retrieval, and model validation.
+The local-first path now supports source document upload, text extraction,
+SQLite FTS5 search, mapping retrieved chunks into persisted Evidence Items, and
+generating source-linked Issue Map, Evidence Matrix, and Draft Memo work
+products. Local search results include deterministic claim/issue suggestions so
+source chunks can be mapped without manually typing a claim ID, while still
+remaining reviewable and overrideable. Search results now expose rank, score
+direction, retrieval layers, and a plain-language ranking basis so evidence
+selection is auditable. The workspace renders Issue Map groups with support
+counts, open questions, source documents, and representative quotes for expert
+review, and reviewers can tag mapped claims directly from the Issue Map panel
+with saved review tags echoed back on the mapped issue. Agent runs now expose a
+reviewable trace with bounded specialist role labels, allowed tool lists, steps,
+tool calls, human checkpoints, and persisted Workflow Graph metadata. Audit
+Pack, Feedback Dataset, and Final Memo exports
+are blocked by executable human approval gates. Run Trace entries now surface
+linked work products, audit events, and directed graph transitions. Matter
+Memory and Matter Playbooks are now matter-scoped, persisted locally, and
+audited; playbooks must be explicitly approved before use as a professional
+workflow manual. Reviewer feedback and review tags can generate draft Playbook
+Improvement Proposals without mutating approved playbooks. The Aletheia Tool
+Adapter now exposes a narrow least-privilege tool surface for
+external agents without enabling terminal, browser, web search, email, or
+destructive file operations. Export-class work products are also written to the
+local export store under `.data/aletheia/exports`. The Audit page now works as
+a live local Audit Workbench: it aggregates persisted matter audit events,
+review tags, work products, approval gates, and matter readiness packets instead
+of relying only on demo data. Evidence and Reviews pages also read persisted
+local matters, so source-backed evidence and human review tags can be inspected
+across the workspace. Evidence, Reviews, and Audit views include local filters
+for matter, claim, support status, review tag, and audit action to make audit
+material easy to locate during expert review, and each view can export the
+filtered result set as local JSON for a review packet or demo evidence. The same
+filtered views can also be saved back into each affected matter as
+`registry_snapshot` work products, persisted under the local export store with
+an audit event and matter-scoped provenance.
 
 ## Screenshots
 
-Placeholder: run the frontend and capture `/aletheia` plus `/aletheia/matters/matter-demo-legal-001`.
+Matter Queue:
+
+![Aletheia matter queue](docs/screenshots/aletheia-home-desktop.jpg)
+
+Local Matter Workspace:
+
+![Aletheia local matter workspace](docs/screenshots/aletheia-matter-overview-desktop.jpg)
+
+Agent Run Trace:
+
+![Aletheia run trace](docs/screenshots/aletheia-run-trace-desktop.jpg)
+
+Mobile Workspace:
+
+![Aletheia mobile matter workspace](docs/screenshots/aletheia-matter-mobile.jpg)
 
 ## License And Attribution
 
@@ -104,6 +233,8 @@ This repository retains the original open-source license file and attribution no
 
 ## Roadmap
 
-1. Implement the local SQLite/filesystem adapter behind the repository boundary.
-2. Replace deterministic scaffolds with validated LLM structured output where appropriate.
-3. Connect generated agent outputs to agent runs, tool calls, checkpoints, and persisted work products.
+1. Replace or augment the local-json semantic prototype with a LanceDB-backed
+   local semantic index adapter behind `ALETHEIA_SEMANTIC_INDEX_ENABLED=true`.
+2. Harden the private desktop packaging prototype into a signed installer or
+   operator-managed bundle.
+3. Split inherited oversized frontend/backend files before major feature work.

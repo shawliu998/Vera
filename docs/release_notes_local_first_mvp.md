@@ -1,0 +1,117 @@
+# Local-First MVP Release Notes
+
+This note summarizes the current Aletheia local-first MVP.
+
+## Product Positioning
+
+Aletheia 明证 is a private, auditable professional agent workspace for legal,
+compliance, and diligence workflows. The product emphasis is not automatic
+answers; it is verifiable work products, source-linked evidence, human review,
+and replayable audit records.
+
+## Included
+
+- Aletheia-branded workspace under `/aletheia`.
+- Matter Queue, templates, evidence, reviews, and audit surfaces.
+- Local SQLite repository for Aletheia routes.
+- Aletheia-only `private_token` auth mode for controlled single-tenant local or
+  private-network deployments.
+- Local filesystem document store under `.data/aletheia/documents`.
+- Local export store under `.data/aletheia/exports`.
+- TXT, DOCX, and PDF text extraction in local regression.
+- SQLite FTS5 document chunk search.
+- Source-linked Evidence Items with chunk IDs, quote offsets, document names,
+  support status, and relevance.
+- Deterministic claim/issue suggestions for local document search results and
+  evidence mapping fallback.
+- Deterministic Issue Map generation with a reviewable workspace panel and
+  claim-level review tags.
+- Deterministic Evidence Matrix generation.
+- Deterministic Legal Draft Memo, Compliance Register, and Red Flag Memo
+  generation from the same source-linked evidence matrix.
+- Agent Run Trace with steps, tool calls, human checkpoints, and linked
+  artifacts.
+- Bounded specialist role labels and allowed tool lists in Run Trace.
+- Template-aware Run Trace drafting steps for Legal, Compliance, and Diligence
+  matters.
+- Resumable edited/responded checkpoints that append a run step, generate a
+  revised Draft Memo, and audit `agent_run_resumed`.
+- Human approval gate for Audit Pack export.
+- Human approval gate for Feedback Dataset export.
+- Human approval gate for Final Memo export.
+- Matter-scoped Matter Memory.
+- Draft/approved Matter Playbooks.
+- Draft Playbook Improvement Proposals generated from reviewer feedback and
+  review tags without mutating approved playbooks.
+- Aletheia Tool Adapter over HTTP.
+- stdio MCP wrapper exposing the same narrow tool surface.
+- Matter-scoped registry snapshots for filtered Evidence, Human Review, and
+  Audit Workbench views, persisted as local export-store work products with
+  audit events.
+- One-command local launcher.
+- Strict local packaging preflight that generates a private deployment manifest
+  and fails on missing build output, deployment docs, attribution notices, or
+  demo evidence docs.
+- Completion audit command that verifies the repository still contains evidence
+  for local-first storage, real document workflows, Matter Memory, Playbooks,
+  Run Trace, approval gates, Tool Adapter/MCP, retrieval eval, private
+  deployment, automated validation, demo assets, and attribution.
+- Local regression command covering documents, retrieval, work products,
+  approvals, exports, and MCP.
+- Local retrieval eval covering fail-closed semantic policy, keyword retrieval,
+  optional local-json semantic/hybrid retrieval, and cross-matter isolation.
+- UI smoke seed command, screenshot evidence, and committed Playwright browser
+  smoke across desktop and mobile Chromium with screenshot baselines.
+
+## Commands
+
+```bash
+cd backend
+npm run test:aletheia:local
+npm run test:aletheia:retrieval-eval
+npm run test:aletheia:completion
+npm run seed:aletheia:ui-smoke
+npm run dev:aletheia:local
+npm run mcp:aletheia
+```
+
+```bash
+cd frontend
+npm run build
+```
+
+## Trust Boundaries
+
+- Matter Memory is matter-scoped only.
+- Playbooks require explicit human approval.
+- High-risk exports require approval checkpoints.
+- External web search, browser automation, terminal execution, email, and
+  destructive file operations are not exposed through the Aletheia Tool Adapter.
+- Local mode applies to Aletheia routes; inherited application routes may still
+  require Supabase-backed services.
+
+## Evidence
+
+- `docs/screenshots/aletheia-home-desktop.jpg`
+- `docs/screenshots/aletheia-matter-overview-desktop.jpg`
+- `docs/screenshots/aletheia-run-trace-desktop.jpg`
+- `docs/screenshots/aletheia-matter-mobile.jpg`
+- `docs/demo_evidence.md`
+
+## Known Limitations
+
+- Node 22 emits an ExperimentalWarning for `node:sqlite`.
+- SQLite FTS5 is the default retrieval layer; optional semantic or hybrid
+  retrieval requires explicit enablement of the local-json prototype adapter.
+- Browser UI smoke is committed as a Playwright test across desktop and mobile
+  with screenshot baseline assertions for the initial workspace render.
+- Signed installer distribution and production SSO/session policy are still
+  outside the prototype package.
+
+## Future Hardening
+
+- Replace or augment the local-json prototype with the LanceDB semantic index
+  adapter behind
+  `ALETHEIA_SEMANTIC_INDEX_ENABLED=true`.
+- Harden the private desktop packaging prototype into an operator-specific
+  signed installer or managed bundle when a deployment target is selected.
