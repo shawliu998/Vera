@@ -285,6 +285,7 @@ function main() {
         packageScript(root, "backend/package.json", "check:aletheia:backup"),
         packageScript(root, "backend/package.json", "check:aletheia:restore"),
         packageScript(root, "backend/package.json", "check:aletheia:privacy"),
+        packageScript(root, "backend/package.json", "check:aletheia:tool-policy"),
         packageScript(root, "backend/package.json", "check:aletheia:evidence"),
         packageScript(root, "backend/package.json", "check:aletheia:audit-integrity"),
         packageScript(root, "backend/package.json", "test:aletheia:local"),
@@ -305,6 +306,7 @@ function main() {
           "npm run check:aletheia:backup",
           "npm run check:aletheia:restore",
           "npm run check:aletheia:privacy",
+          "npm run check:aletheia:tool-policy",
           "npm run check:aletheia:evidence",
           "npm run check:aletheia:audit-integrity",
           "npm run test:aletheia:local",
@@ -319,6 +321,7 @@ function main() {
           "npm run check:aletheia:backup",
           "npm run check:aletheia:restore",
           "npm run check:aletheia:privacy",
+          "npm run check:aletheia:tool-policy",
           "npm run check:aletheia:evidence",
           "npm run check:aletheia:audit-integrity",
           "npm run test:aletheia:local",
@@ -385,6 +388,7 @@ function main() {
         contains(root, "docs/status.md", [
           "release evidence manifest",
           "npm run check:aletheia:privacy",
+          "npm run check:aletheia:tool-policy",
           "npm run check:aletheia:evidence",
         ]),
         contains(root, "README.md", [

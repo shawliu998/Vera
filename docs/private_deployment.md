@@ -59,6 +59,10 @@ Operational notes:
   handoff. It scans only tracked repository files for accidental `.data`
   artifacts, disallowed `.env` files, high-confidence API key shapes, private
   key blocks, and non-placeholder private deployment secrets.
+- Run `npm run check:aletheia:tool-policy` before enabling agent integrations.
+  It verifies the HTTP Tool Adapter and stdio MCP wrapper expose only the
+  approved narrow allowlist and keep browser, terminal, external web, email, and
+  destructive file operations disabled.
 - Treat `exports/` as client-sensitive output.
 - Do not enable external web/model tools unless the deployment owner explicitly
   configures them.
@@ -126,6 +130,7 @@ Before upgrading:
 - run `npm run check:aletheia:backup`;
 - run `ALETHEIA_RESTORE_SOURCE_DIR=.data/aletheia npm run check:aletheia:restore`;
 - run `npm run check:aletheia:privacy`;
+- run `npm run check:aletheia:tool-policy`;
 - run `ALETHEIA_AUDIT_SOURCE_DIR=.data/aletheia npm run check:aletheia:audit-integrity`;
 - run `npm run test:aletheia:local`;
 - run `npm run test:aletheia:restore-drill`;

@@ -48,6 +48,12 @@ The tracked-file privacy preflight entrypoint is:
 cd backend && npm run check:aletheia:privacy
 ```
 
+The least-privilege Tool Adapter policy audit entrypoint is:
+
+```bash
+cd backend && npm run check:aletheia:tool-policy
+```
+
 The release evidence manifest entrypoint is:
 
 ```bash
@@ -114,6 +120,7 @@ cd backend && npm run check:aletheia:doctor
 cd backend && npm run check:aletheia:backup
 cd backend && npm run check:aletheia:restore
 cd backend && npm run check:aletheia:privacy
+cd backend && npm run check:aletheia:tool-policy
 cd backend && npm run check:aletheia:evidence
 cd backend && npm run check:aletheia:audit-integrity
 cd backend && npm run check:aletheia:operator
@@ -139,6 +146,9 @@ Current known result:
 - tracked-file privacy preflight passes and blocks committed local data,
   disallowed `.env` files, private key blocks, high-confidence API key shapes,
   and non-placeholder private deployment secrets.
+- Tool Adapter policy audit passes and verifies the HTTP adapter and MCP
+  wrapper expose only the approved narrow allowlist while browser, terminal,
+  external web, email, and destructive file operations stay disabled.
 - release evidence manifest passes and records the current git commit,
   validation commands, screenshot hashes, deployment/attribution docs, privacy
   defaults, and approval posture.

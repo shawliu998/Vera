@@ -181,6 +181,17 @@ This scans tracked repository files for accidental `.data` artifacts,
 disallowed `.env` files, high-confidence secret patterns, and non-placeholder
 private deployment tokens without reading untracked client documents.
 
+Run the Tool Adapter policy audit before enabling agent integrations:
+
+```bash
+cd backend
+npm run check:aletheia:tool-policy
+```
+
+This verifies that the HTTP Tool Adapter and stdio MCP wrapper expose only the
+approved narrow allowlist, keep browser/terminal/web/email/destructive tools
+disabled, and preserve approval-gate policy signals.
+
 Generate the release evidence manifest before handoff:
 
 ```bash
@@ -208,8 +219,9 @@ local export files are reported with byte counts and sha256 hashes.
 The same validation posture is enforced on `main` and pull requests through
 `.github/workflows/aletheia-local-ci.yml`. The CI workflow installs backend and
 frontend dependencies, builds both apps, runs the local regression, restore
-drill, and retrieval eval, executes privacy, package, evidence, integrity, and
-completion checks, then runs frontend lint and the Aletheia UI smoke suite.
+drill, and retrieval eval, executes privacy, tool-policy, package, evidence,
+integrity, and completion checks, then runs frontend lint and the Aletheia UI
+smoke suite.
 
 Create a screenshot-ready local UI smoke matter:
 
