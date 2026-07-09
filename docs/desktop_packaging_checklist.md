@@ -13,6 +13,9 @@ not a release process yet; it defines what must be true before packaging.
 - `npm run check:aletheia:privacy` fails on tracked local data, disallowed
   `.env` files, private key blocks, high-confidence API key shapes, or
   non-placeholder private deployment secrets.
+- `npm run check:aletheia:ops-readiness` verifies the local doctor, local
+  launcher, `/health`, private-token auth boundary, package metadata,
+  backup/restore/audit integrity chain, and private deployment runbook.
 - `npm run check:aletheia:tool-policy` verifies the HTTP Tool Adapter and stdio
   MCP wrapper expose only the approved allowlist and keep high-risk automation
   tools disabled.
@@ -119,6 +122,7 @@ npm run check:aletheia:doctor
 npm run check:aletheia:backup
 ALETHEIA_RESTORE_SOURCE_DIR=.data/aletheia npm run check:aletheia:restore
 npm run check:aletheia:privacy
+npm run check:aletheia:ops-readiness
 npm run check:aletheia:tool-policy
 npm run check:aletheia:approval-policy
 npm run check:aletheia:matter-isolation

@@ -132,6 +132,11 @@ function main() {
         packageScript(
           root,
           "backend/package.json",
+          "check:aletheia:ops-readiness",
+        ) &&
+        packageScript(
+          root,
+          "backend/package.json",
           "check:aletheia:tool-policy",
         ) &&
         packageScript(
@@ -187,6 +192,7 @@ function main() {
         "npm run test:aletheia:local",
         "npm run test:aletheia:retrieval-eval",
         "npm run check:aletheia:privacy",
+        "npm run check:aletheia:ops-readiness",
         "npm run check:aletheia:tool-policy",
         "npm run check:aletheia:approval-policy",
         "npm run check:aletheia:matter-isolation",
@@ -227,6 +233,7 @@ function main() {
           "cd backend && npm run check:aletheia:backup",
           "cd backend && npm run check:aletheia:restore",
           "cd backend && npm run check:aletheia:privacy",
+          "cd backend && npm run check:aletheia:ops-readiness",
           "cd backend && npm run check:aletheia:tool-policy",
           "cd backend && npm run check:aletheia:approval-policy",
           "cd backend && npm run check:aletheia:matter-isolation",

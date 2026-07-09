@@ -48,6 +48,12 @@ The tracked-file privacy preflight entrypoint is:
 cd backend && npm run check:aletheia:privacy
 ```
 
+The private deployment operational readiness audit entrypoint is:
+
+```bash
+cd backend && npm run check:aletheia:ops-readiness
+```
+
 The least-privilege Tool Adapter policy audit entrypoint is:
 
 ```bash
@@ -138,6 +144,7 @@ cd backend && npm run check:aletheia:doctor
 cd backend && npm run check:aletheia:backup
 cd backend && npm run check:aletheia:restore
 cd backend && npm run check:aletheia:privacy
+cd backend && npm run check:aletheia:ops-readiness
 cd backend && npm run check:aletheia:tool-policy
 cd backend && npm run check:aletheia:approval-policy
 cd backend && npm run check:aletheia:matter-isolation
@@ -167,6 +174,10 @@ Current known result:
 - tracked-file privacy preflight passes and blocks committed local data,
   disallowed `.env` files, private key blocks, high-confidence API key shapes,
   and non-placeholder private deployment secrets.
+- operational readiness audit passes and verifies the local doctor, local
+  launcher, `/health` endpoint, private-token Aletheia auth boundary, package
+  manifest, backup/restore/audit integrity chain, and private deployment
+  runbook coverage.
 - Tool Adapter policy audit passes and verifies the HTTP adapter and MCP
   wrapper expose only the approved narrow allowlist while browser, terminal,
   external web, email, and destructive file operations stay disabled.

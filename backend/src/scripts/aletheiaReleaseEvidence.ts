@@ -23,6 +23,7 @@ const VALIDATION_COMMANDS = [
   "cd backend && npm run check:aletheia:backup",
   "cd backend && npm run check:aletheia:restore",
   "cd backend && npm run check:aletheia:privacy",
+  "cd backend && npm run check:aletheia:ops-readiness",
   "cd backend && npm run check:aletheia:tool-policy",
   "cd backend && npm run check:aletheia:approval-policy",
   "cd backend && npm run check:aletheia:matter-isolation",
@@ -158,6 +159,11 @@ function main() {
         packageScript(
           root,
           "backend/package.json",
+          "check:aletheia:ops-readiness",
+        ) &&
+        packageScript(
+          root,
+          "backend/package.json",
           "check:aletheia:tool-policy",
         ) &&
         packageScript(
@@ -207,6 +213,7 @@ function main() {
       contains(root, ".github/workflows/aletheia-local-ci.yml", [
         "npm run check:aletheia:evidence",
         "npm run check:aletheia:privacy",
+        "npm run check:aletheia:ops-readiness",
         "npm run check:aletheia:tool-policy",
         "npm run check:aletheia:approval-policy",
         "npm run check:aletheia:matter-isolation",

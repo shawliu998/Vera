@@ -59,6 +59,10 @@ Operational notes:
   handoff. It scans only tracked repository files for accidental `.data`
   artifacts, disallowed `.env` files, high-confidence API key shapes, private
   key blocks, and non-placeholder private deployment secrets.
+- Run `npm run check:aletheia:ops-readiness` before private deployment or
+  packaging. It verifies local doctor coverage, the local launcher, `/health`,
+  private-token auth boundaries, package metadata, backup/restore/audit
+  integrity, and runbook coverage.
 - Run `npm run check:aletheia:tool-policy` before enabling agent integrations.
   It verifies the HTTP Tool Adapter and stdio MCP wrapper expose only the
   approved narrow allowlist and keep browser, terminal, external web, email, and
@@ -139,6 +143,7 @@ Before upgrading:
 - run `npm run check:aletheia:backup`;
 - run `ALETHEIA_RESTORE_SOURCE_DIR=.data/aletheia npm run check:aletheia:restore`;
 - run `npm run check:aletheia:privacy`;
+- run `npm run check:aletheia:ops-readiness`;
 - run `npm run check:aletheia:tool-policy`;
 - run `npm run check:aletheia:approval-policy`;
 - run `npm run check:aletheia:matter-isolation`;

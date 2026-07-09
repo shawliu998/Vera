@@ -181,6 +181,17 @@ This scans tracked repository files for accidental `.data` artifacts,
 disallowed `.env` files, high-confidence secret patterns, and non-placeholder
 private deployment tokens without reading untracked client documents.
 
+Run the operational readiness audit before private deployment or packaging:
+
+```bash
+cd backend
+npm run check:aletheia:ops-readiness
+```
+
+This verifies the local doctor, local launcher, `/health` endpoint, private
+token auth boundary, package manifest, backup/restore/audit integrity chain,
+and private deployment runbook coverage.
+
 Run the Tool Adapter policy audit before enabling agent integrations:
 
 ```bash

@@ -69,6 +69,18 @@ data directories, retrieval defaults, and semantic-index boundaries. It reports
 cloud/external model keys as warnings so an operator can confirm whether any
 fallbacks were intentionally enabled.
 
+Before packaging or handing off a private workstation build, run the operational
+readiness audit:
+
+```bash
+cd backend
+npm run check:aletheia:ops-readiness
+```
+
+The audit verifies doctor coverage, the local launcher, `/health`, private-token
+auth boundaries, package metadata, backup/restore/audit integrity, and runbook
+coverage.
+
 One-command local launcher:
 
 ```bash

@@ -58,6 +58,9 @@ and replayable audit records.
 - Tracked-file privacy preflight that blocks committed local data, disallowed
   `.env` files, private key blocks, high-confidence API key shapes, and
   non-placeholder private deployment secrets before handoff or packaging.
+- Operational readiness audit that verifies local doctor coverage, the local
+  launcher, `/health`, private-token auth boundaries, package metadata,
+  backup/restore/audit integrity, and private deployment runbook coverage.
 - Tool Adapter policy audit that verifies the HTTP Tool Adapter and stdio MCP
   wrapper expose only the approved allowlist and keep browser, terminal,
   external web, email, and destructive file operations disabled.
@@ -96,6 +99,7 @@ npm run test:aletheia:local
 npm run test:aletheia:restore-drill
 npm run test:aletheia:retrieval-eval
 npm run check:aletheia:privacy
+npm run check:aletheia:ops-readiness
 npm run check:aletheia:tool-policy
 npm run check:aletheia:approval-policy
 npm run check:aletheia:matter-isolation
