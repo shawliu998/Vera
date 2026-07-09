@@ -61,7 +61,9 @@ export default function AletheiaTemplatesPage() {
                                         variant="outline"
                                         className="rounded-full border-gray-200 bg-white px-2 py-0 text-[11px] text-gray-600"
                                     >
-                                        {template.maturity === "complete_demo" ? "complete" : "mock"}
+                                        {template.maturity === "complete_demo"
+                                            ? "local MVP"
+                                            : "local pilot"}
                                     </Badge>
                                 </div>
                                 <div className="w-72 shrink-0 truncate text-sm text-gray-500">

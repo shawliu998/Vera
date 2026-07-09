@@ -144,7 +144,7 @@ export function AletheiaWorkspace({ workspace }: { workspace: MatterWorkspace })
                             Export Audit Pack
                         </Button>
                         <Badge variant="outline" className="rounded-full border-gray-200 bg-white px-2 py-0 text-[11px] text-gray-600">
-                            Mock mode
+                            Deterministic fallback
                         </Badge>
                         <Badge variant="outline" className={cn("rounded-full px-2 py-0 text-[11px]", riskClass(workspace.matter.riskLevel))}>
                             {workspace.matter.riskLevel} risk
