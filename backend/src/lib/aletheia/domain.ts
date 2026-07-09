@@ -126,6 +126,257 @@ export function auditActionForWorkProduct(kind: string) {
   return "work_product_saved";
 }
 
+export const GATE_SNAPSHOT_SCHEMA_VERSION = "aletheia-gate-snapshot-v0";
+
+export const GATE_AUDIT_ACTIONS = {
+  resultsPersisted: "gate_results_persisted",
+  finalExportAuthorized: "final_export_gate_authorized",
+  finalExportBlocked: "final_export_gate_blocked",
+} as const;
+
+const GATE_TYPES = new Set([
+  "citation",
+  "human_approval",
+  "missing_material",
+  "conflict",
+  "jurisdiction",
+  "privilege",
+  "export",
+]);
+
+const GATE_STATUSES = new Set(["passed", "failed", "warning", "skipped"]);
+
+const GATE_SOURCE_REF_TYPES = new Set([
+  "work_product",
+  "evidence_item",
+  "review_item",
+  "human_checkpoint",
+  "audit_event",
+  "agent_run",
+  "matter_memory",
+  "document",
+  "matter",
+]);
+
+const GATE_SOURCE_REF_ROLES = new Set([
+  "input",
+  "approval",
+  "blocker",
+  "audit",
+  "provenance",
+]);
+
+type GateSnapshotSourceRef = {
+  type: string;
+  id: string;
+  role: string;
+  document_id?: string | null;
+  source_chunk_id?: string | null;
+  quote_start?: number | null;
+  quote_end?: number | null;
+  claim_id?: string | null;
+};
+
+type GateSnapshotResult = {
+  id: string;
+  matter_id: string;
+  gate_type: string;
+  status: string;
+  reason: string;
+  affected_artifact_ids: string[];
+  required_action?: string;
+  created_at: string;
+};
+
+type GateSnapshotProvenance = {
+  gate_id: string;
+  gate_type: string;
+  status: string;
+  displayed_reason: string;
+  source_record_refs: GateSnapshotSourceRef[];
+  unresolved_source_requirements: string[];
+};
+
+function stringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function sanitizeGateResults(value: unknown, matterId: string) {
+  if (!Array.isArray(value)) return [];
+  const results: GateSnapshotResult[] = [];
+  for (const item of value) {
+    const record = recordOrEmpty(item);
+    const id = stringOrNull(record.id);
+    const gateType = stringOrNull(record.gate_type);
+    const status = stringOrNull(record.status);
+    if (!id || !gateType || !status) continue;
+    if (!GATE_TYPES.has(gateType) || !GATE_STATUSES.has(status)) continue;
+    results.push({
+      id,
+      matter_id: stringOrNull(record.matter_id) ?? matterId,
+      gate_type: gateType,
+      status,
+      reason: stringOrNull(record.reason) ?? "",
+      affected_artifact_ids: stringArray(record.affected_artifact_ids),
+      required_action: stringOrNull(record.required_action) ?? undefined,
+      created_at: stringOrNull(record.created_at) ?? new Date().toISOString(),
+    });
+  }
+  return results;
+}
+
+function sanitizeGateSourceRefs(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  const refs: GateSnapshotSourceRef[] = [];
+  for (const item of value) {
+    const record = recordOrEmpty(item);
+    const type = stringOrNull(record.type);
+    const id = stringOrNull(record.id);
+    const role = stringOrNull(record.role);
+    if (!type || !id || !role) continue;
+    if (!GATE_SOURCE_REF_TYPES.has(type) || !GATE_SOURCE_REF_ROLES.has(role)) {
+      continue;
+    }
+    refs.push({
+      type,
+      id,
+      role,
+      document_id: stringOrNull(record.document_id),
+      source_chunk_id: stringOrNull(record.source_chunk_id),
+      quote_start: numberOrNull(record.quote_start),
+      quote_end: numberOrNull(record.quote_end),
+      claim_id: stringOrNull(record.claim_id),
+    });
+  }
+  return refs;
+}
+
+function sanitizeGateProvenance(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  const provenance: GateSnapshotProvenance[] = [];
+  for (const item of value) {
+    const record = recordOrEmpty(item);
+    const gateId = stringOrNull(record.gate_id);
+    const gateType = stringOrNull(record.gate_type);
+    const status = stringOrNull(record.status);
+    if (!gateId || !gateType || !status) continue;
+    if (!GATE_TYPES.has(gateType) || !GATE_STATUSES.has(status)) continue;
+    provenance.push({
+      gate_id: gateId,
+      gate_type: gateType,
+      status,
+      displayed_reason: stringOrNull(record.displayed_reason) ?? "",
+      source_record_refs: sanitizeGateSourceRefs(record.source_record_refs),
+      unresolved_source_requirements: stringArray(
+        record.unresolved_source_requirements,
+      ),
+    });
+  }
+  return provenance;
+}
+
+function gateSnapshotSummary(results: GateSnapshotResult[]) {
+  return {
+    total: results.length,
+    passed: results.filter((gate) => gate.status === "passed").length,
+    warnings: results.filter((gate) => gate.status === "warning").length,
+    failed: results.filter((gate) => gate.status === "failed").length,
+    skipped: results.filter((gate) => gate.status === "skipped").length,
+  };
+}
+
+export function buildGateSnapshotAuditDetails(args: {
+  matterId: string;
+  action: "final_memo_export";
+  approvalCheckpointId?: string | null;
+  content: Record<string, unknown>;
+}) {
+  const gateResults = sanitizeGateResults(
+    args.content.gateResults,
+    args.matterId,
+  );
+  const gateProvenance = sanitizeGateProvenance(args.content.gateProvenance);
+  const provenanceByGateId = new Map(
+    gateProvenance.map((item) => [item.gate_id, item] as const),
+  );
+  const failures: string[] = [];
+
+  if (gateResults.length === 0) {
+    failures.push("No gateResults were provided for persisted gate snapshot.");
+  }
+
+  const exportGate = gateResults.find((gate) => gate.gate_type === "export");
+  if (!exportGate || exportGate.status !== "passed") {
+    failures.push("Final memo export gate must be present and passed.");
+  }
+
+  for (const gate of gateResults) {
+    if (gate.status === "failed") {
+      failures.push(`Gate ${gate.id} failed: ${gate.reason}`);
+    }
+    const provenance = provenanceByGateId.get(gate.id);
+    if (!provenance) {
+      failures.push(`Gate ${gate.id} has no persisted provenance map.`);
+      continue;
+    }
+    if (
+      provenance.status !== gate.status ||
+      provenance.gate_type !== gate.gate_type
+    ) {
+      failures.push(`Gate ${gate.id} provenance does not match gate result.`);
+    }
+    if (provenance.source_record_refs.length === 0) {
+      failures.push(`Gate ${gate.id} has no source record refs.`);
+    }
+    if (provenance.unresolved_source_requirements.length > 0) {
+      failures.push(
+        `Gate ${gate.id} has unresolved source requirements: ${provenance.unresolved_source_requirements.join("; ")}`,
+      );
+    }
+  }
+
+  const approvalGateRefs = gateProvenance
+    .filter((item) => ["human_approval", "export"].includes(item.gate_type))
+    .flatMap((item) => item.source_record_refs)
+    .filter((ref) => ref.type === "human_checkpoint");
+  if (args.approvalCheckpointId) {
+    const linked = approvalGateRefs.some(
+      (ref) => ref.id === args.approvalCheckpointId && ref.role === "approval",
+    );
+    if (!linked) {
+      failures.push(
+        "Passed final memo approval/export gates must reference the approved checkpoint.",
+      );
+    }
+  }
+
+  const details = {
+    schemaVersion: GATE_SNAPSHOT_SCHEMA_VERSION,
+    action: args.action,
+    matterId: args.matterId,
+    approvalCheckpointId: args.approvalCheckpointId ?? null,
+    sourceDraftMemoId: stringOrNull(args.content.sourceDraftMemoId),
+    gateResults,
+    gateProvenance,
+    gateSummary: gateSnapshotSummary(gateResults),
+    authorization: {
+      status: failures.length === 0 ? "passed" : "blocked",
+      failureReasons: failures,
+      requiresPersistedAuditEvent: true,
+      requiresApprovedCheckpoint: true,
+      frontendOnlyPayloadAccepted: false,
+    },
+  };
+
+  return {
+    ok: failures.length === 0,
+    details,
+    failures,
+  };
+}
+
 export function professionalDraftProfileForTemplate(template: string) {
   if (template === "compliance_impact_review") {
     return {
@@ -225,6 +476,24 @@ function arrayOfRecords(value: unknown): Array<Record<string, unknown>> {
           Boolean(item) && typeof item === "object" && !Array.isArray(item),
       )
     : [];
+}
+
+function stringArrayPayload(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+export function normalizedFactFromQuote(value: unknown) {
+  const quote =
+    typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+  if (!quote) return "";
+  const firstSentence =
+    quote.match(/^(.{40,240}?[.!?])\s/)?.[1] ??
+    quote.slice(0, 220).replace(/[,;:\s]+$/, "");
+  return firstSentence.length < quote.length
+    ? `${firstSentence}`
+    : firstSentence;
 }
 
 export function deriveClaimSuggestionFromText(
@@ -465,22 +734,54 @@ export function buildSourceLinkedEvidenceMatrixContent(args: {
   };
   evidence: Array<Record<string, unknown>>;
 }) {
-  const evidence = args.evidence.map((item) => ({
-    id: String(item.id),
-    claimId: stringOrNull(item.claim_id),
-    documentId: stringOrNull(item.document_id),
-    sourceChunkId: stringOrNull(item.source_chunk_id),
-    documentName: stringOrNull(item.document_name),
-    page: numberOrNull(item.page),
-    section: stringOrNull(item.section),
-    quote: typeof item.quote === "string" ? item.quote : "",
-    quoteStart: numberOrNull(item.quote_start),
-    quoteEnd: numberOrNull(item.quote_end),
-    relevance: stringOrNull(item.relevance) ?? "direct",
-    supportStatus: stringOrNull(item.support_status) ?? "insufficient",
-    confidence: stringOrNull(item.confidence),
-    createdAt: stringOrNull(item.created_at),
-  }));
+  const evidence = args.evidence
+    .map((item) => ({
+      metadata: recordOrEmpty(item.metadata),
+      id: String(item.id),
+      claimId: stringOrNull(item.claim_id),
+      documentId: stringOrNull(item.document_id),
+      sourceChunkId: stringOrNull(item.source_chunk_id),
+      documentName: stringOrNull(item.document_name),
+      page: numberOrNull(item.page),
+      section: stringOrNull(item.section),
+      quote: typeof item.quote === "string" ? item.quote : "",
+      quoteStart: numberOrNull(item.quote_start),
+      quoteEnd: numberOrNull(item.quote_end),
+      relevance: stringOrNull(item.relevance) ?? "direct",
+      supportStatus: stringOrNull(item.support_status) ?? "insufficient",
+      confidence: stringOrNull(item.confidence),
+      createdAt: stringOrNull(item.created_at),
+    }))
+    .map((item) => ({
+      id: item.id,
+      claimId: item.claimId,
+      supportsClaim: item.claimId,
+      documentId: item.documentId,
+      sourceChunkId: item.sourceChunkId,
+      documentName: item.documentName,
+      page: item.page,
+      section: item.section,
+      quote: item.quote,
+      quoteStart: item.quoteStart,
+      quoteEnd: item.quoteEnd,
+      normalizedFact:
+        stringOrNull(item.metadata.normalizedFact) ??
+        normalizedFactFromQuote(item.quote),
+      relevance: item.relevance,
+      supportStatus: item.supportStatus,
+      confidence:
+        item.confidence ??
+        (item.supportStatus === "supports" && item.relevance === "direct"
+          ? "medium"
+          : "low"),
+      reviewStatus:
+        item.supportStatus === "supports" ? "unreviewed" : "needs_human_review",
+      sensitiveMaterialFlags: stringArrayPayload(
+        item.metadata.sensitiveMaterialFlags,
+      ),
+      metadata: item.metadata,
+      createdAt: item.createdAt,
+    }));
 
   const counts = {
     total: evidence.length,
@@ -659,7 +960,11 @@ export function buildDeterministicDraftMemoContent(args: {
         ],
         evidenceIds: [...contraryEvidence, ...insufficientEvidence]
           .map((item) => stringOrNull(item.id))
-          .filter((id): id is string => Boolean(id)),
+          .filter((id): id is string => Boolean(id)).length
+          ? [...contraryEvidence, ...insufficientEvidence]
+              .map((item) => stringOrNull(item.id))
+              .filter((id): id is string => Boolean(id))
+          : evidenceIds,
         reviewStatus:
           contraryEvidence.length > 0 || insufficientEvidence.length > 0
             ? "needs_revision"

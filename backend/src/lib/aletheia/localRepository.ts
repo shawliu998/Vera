@@ -6,15 +6,19 @@ import {
   chunkMatterDocument,
   documentTypeForFilename,
   extractMatterDocumentText,
+  sensitiveMaterialFlagsForText,
   writeMatterDocumentFile,
 } from "./documentParser";
 import {
+  GATE_AUDIT_ACTIONS,
   auditActionForWorkProduct,
+  buildGateSnapshotAuditDetails,
   buildAgentRunTraceScaffold,
   buildAgentWorkflowGraph,
   buildDeterministicDraftMemoContent,
   buildInitialAgentPlan,
   deriveClaimSuggestionFromText,
+  normalizedFactFromQuote,
   professionalDraftProfileForTemplate,
   buildSourceLinkedIssueMapContent,
   buildSourceLinkedEvidenceMatrixContent,
@@ -37,6 +41,7 @@ import type {
   ProposePlaybookImprovementInput,
   CreateWorkProductInput,
   DecideApprovalInput,
+  PersistGateSnapshotInput,
   ResumeAgentRunInput,
   RequestApprovalInput,
   SearchMatterDocumentsInput,
@@ -99,6 +104,12 @@ function parseArray(value: unknown): unknown[] {
   } catch {
     return [];
   }
+}
+
+function stringArrayFromObject(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 function ensureLocalDirs(root: string) {
@@ -776,6 +787,26 @@ export class LocalAletheiaRepository implements AletheiaRepository {
         );
       }
     }
+    const gateEvidence =
+      input.kind === "final_memo"
+        ? await this.persistFinalMemoGateAuthorization(
+            ctx,
+            matterId,
+            input.content,
+            input.approvalCheckpointId ?? null,
+          )
+        : null;
+    const content = gateEvidence
+      ? {
+          ...input.content,
+          persistedGateEvidence: {
+            schemaVersion: "aletheia-final-memo-gate-evidence-v0",
+            gateSnapshotAuditEventId: gateEvidence.gateSnapshotAuditEventId,
+            gateAuthorizationAuditEventId:
+              gateEvidence.gateAuthorizationAuditEventId,
+          },
+        }
+      : input.content;
     const timestamp = now();
     const id = randomUUID();
     this.db
@@ -796,7 +827,7 @@ export class LocalAletheiaRepository implements AletheiaRepository {
         input.title,
         input.status,
         input.schemaVersion,
-        json(input.content),
+        json(content),
         json(input.validationErrors),
         input.generatedBy,
         input.model,
@@ -823,7 +854,7 @@ export class LocalAletheiaRepository implements AletheiaRepository {
             title: input.title,
             schemaVersion: input.schemaVersion,
             exportedAt: timestamp,
-            content: input.content,
+            content,
           },
           null,
           2,
@@ -843,6 +874,10 @@ export class LocalAletheiaRepository implements AletheiaRepository {
         status: input.status,
         approvalCheckpointId: input.approvalCheckpointId ?? null,
         exportPath,
+        gateSnapshotAuditEventId:
+          gateEvidence?.gateSnapshotAuditEventId ?? null,
+        gateAuthorizationAuditEventId:
+          gateEvidence?.gateAuthorizationAuditEventId ?? null,
       },
     });
     this.touchMatter(ctx.userId, matterId);
@@ -1409,6 +1444,28 @@ export class LocalAletheiaRepository implements AletheiaRepository {
     return this.writeAuditEvent(ctx.userId, matterId, input);
   }
 
+  async persistGateSnapshot(
+    ctx: AletheiaUserContext,
+    matterId: string,
+    input: PersistGateSnapshotInput,
+  ) {
+    const matter = this.loadOwnedMatter(ctx, matterId);
+    if (!matter) return null;
+    const snapshot = buildGateSnapshotAuditDetails({
+      matterId,
+      action: input.action,
+      approvalCheckpointId: input.approvalCheckpointId ?? null,
+      content: input.content,
+    });
+    return this.writeAuditEvent(ctx.userId, matterId, {
+      actor: "system",
+      action: GATE_AUDIT_ACTIONS.resultsPersisted,
+      workflowVersion: snapshot.details.schemaVersion,
+      model: null,
+      details: snapshot.details,
+    });
+  }
+
   async createAgentRun(
     ctx: AletheiaUserContext,
     matterId: string,
@@ -1667,6 +1724,7 @@ export class LocalAletheiaRepository implements AletheiaRepository {
           c.text,
           c.quote_start,
           c.quote_end,
+          c.metadata,
           d.name as document_name
         from aletheia_document_chunks c
         join aletheia_matter_documents d on d.id = c.document_id
@@ -1715,6 +1773,18 @@ export class LocalAletheiaRepository implements AletheiaRepository {
         input.confidence ?? null,
         json({
           source: "local_document_search",
+          normalizedFact: normalizedFactFromQuote(source.text),
+          sensitiveMaterialFlags: [
+            ...new Set([
+              ...sensitiveMaterialFlagsForText({
+                filename: source.document_name,
+                text: source.text,
+              }),
+              ...stringArrayFromObject(
+                parseObject(source.metadata).sensitiveMaterialFlags,
+              ),
+            ]),
+          ],
           claimSuggestion:
             claimId === suggestedClaim.claimId ? suggestedClaim : null,
           ...(input.metadata ?? {}),
@@ -1884,6 +1954,10 @@ export class LocalAletheiaRepository implements AletheiaRepository {
       parsedStatus === "parsed"
         ? parsedText.replace(/\s+/g, " ").trim().slice(0, 400)
         : "Document uploaded but text extraction failed.";
+    const sensitiveMaterialFlags = sensitiveMaterialFlagsForText({
+      filename: input.filename,
+      text: parsedText,
+    });
 
     this.db
       .prepare(
@@ -1910,6 +1984,7 @@ export class LocalAletheiaRepository implements AletheiaRepository {
           storagePath: filePath,
           chunkCount: chunks.length,
           parser: "aletheia-local-v0",
+          sensitiveMaterialFlags,
         }),
         timestamp,
         timestamp,
@@ -1938,7 +2013,12 @@ export class LocalAletheiaRepository implements AletheiaRepository {
           chunk.text,
           chunk.quoteStart,
           chunk.quoteEnd,
-          "{}",
+          json({
+            sensitiveMaterialFlags: sensitiveMaterialFlagsForText({
+              filename: input.filename,
+              text: chunk.text,
+            }),
+          }),
           timestamp,
         );
       this.db
@@ -2465,6 +2545,71 @@ export class LocalAletheiaRepository implements AletheiaRepository {
         .prepare("select * from aletheia_audit_events where id = ?")
         .get(id),
     );
+  }
+
+  private async persistFinalMemoGateAuthorization(
+    ctx: AletheiaUserContext,
+    matterId: string,
+    content: Record<string, unknown>,
+    approvalCheckpointId: string | null,
+  ) {
+    const snapshot = buildGateSnapshotAuditDetails({
+      matterId,
+      action: "final_memo_export",
+      approvalCheckpointId,
+      content,
+    });
+    const snapshotEvent = (await this.writeAuditEvent(ctx.userId, matterId, {
+      actor: "system",
+      action: GATE_AUDIT_ACTIONS.resultsPersisted,
+      workflowVersion: snapshot.details.schemaVersion,
+      model: null,
+      details: snapshot.details,
+    })) as { id?: string } | null;
+
+    if (!snapshot.ok) {
+      await this.writeAuditEvent(ctx.userId, matterId, {
+        actor: "system",
+        action: GATE_AUDIT_ACTIONS.finalExportBlocked,
+        workflowVersion: snapshot.details.schemaVersion,
+        model: null,
+        details: {
+          schemaVersion: snapshot.details.schemaVersion,
+          action: "final_memo_export",
+          matterId,
+          approvalCheckpointId,
+          gateSnapshotAuditEventId: snapshotEvent?.id ?? null,
+          failureReasons: snapshot.failures,
+        },
+      });
+      throw new ApprovalRequiredError(
+        `Final memo export requires a persisted passing gate snapshot: ${snapshot.failures.join(" ")}`,
+      );
+    }
+
+    const authorizationEvent = (await this.writeAuditEvent(
+      ctx.userId,
+      matterId,
+      {
+        actor: "system",
+        action: GATE_AUDIT_ACTIONS.finalExportAuthorized,
+        workflowVersion: snapshot.details.schemaVersion,
+        model: null,
+        details: {
+          schemaVersion: snapshot.details.schemaVersion,
+          action: "final_memo_export",
+          matterId,
+          approvalCheckpointId,
+          gateSnapshotAuditEventId: snapshotEvent?.id ?? null,
+          gateSummary: snapshot.details.gateSummary,
+        },
+      },
+    )) as { id?: string } | null;
+
+    return {
+      gateSnapshotAuditEventId: snapshotEvent?.id ?? null,
+      gateAuthorizationAuditEventId: authorizationEvent?.id ?? null,
+    };
   }
 
   private loadOwnedMatter(ctx: AletheiaUserContext, matterId: string) {

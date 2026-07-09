@@ -88,7 +88,10 @@ function check(
 
 function isSubpath(parent: string, child: string) {
   const relative = path.relative(parent, child);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
 }
 
 function parseObject(value: string) {
@@ -100,6 +103,12 @@ function parseObject(value: string) {
   } catch {
     return {};
   }
+}
+
+function recordFromUnknown(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function count(db: DatabaseSync, sql: string) {
@@ -138,6 +147,9 @@ function main() {
     auditEvents: 0,
     exportEvents: 0,
     highRiskExports: 0,
+    gateSnapshots: 0,
+    finalExportGateAuthorizations: 0,
+    blockedFinalExportAttempts: 0,
   };
   const exportFiles: ExportFileRecord[] = [];
 
@@ -180,7 +192,10 @@ function main() {
         throw new Error("skip-audit-integrity-deep-checks");
       }
 
-      summary.matters = count(db, "select count(*) as count from aletheia_matters");
+      summary.matters = count(
+        db,
+        "select count(*) as count from aletheia_matters",
+      );
       summary.workProducts = count(
         db,
         "select count(*) as count from aletheia_work_products",
@@ -236,6 +251,28 @@ function main() {
           `,
         )
         .all() as AuditEventRow[];
+      const gateAuditRows = db
+        .prepare(
+          `
+            select id, matter_id, action, details, created_at
+            from aletheia_audit_events
+            where action in (
+              'gate_results_persisted',
+              'final_export_gate_authorized',
+              'final_export_gate_blocked'
+            )
+          `,
+        )
+        .all() as AuditEventRow[];
+      summary.gateSnapshots = gateAuditRows.filter(
+        (row) => row.action === "gate_results_persisted",
+      ).length;
+      summary.finalExportGateAuthorizations = gateAuditRows.filter(
+        (row) => row.action === "final_export_gate_authorized",
+      ).length;
+      summary.blockedFinalExportAttempts = gateAuditRows.filter(
+        (row) => row.action === "final_export_gate_blocked",
+      ).length;
       const checkpoints = db
         .prepare(
           `
@@ -250,6 +287,9 @@ function main() {
       const missingExportPaths: string[] = [];
       const escapedExportPaths: string[] = [];
       const missingApprovalLinks: string[] = [];
+      const missingGateSnapshots: string[] = [];
+      const invalidGateSnapshots: string[] = [];
+      const missingGateAuthorizations: string[] = [];
 
       for (const product of exportProducts) {
         const action = EXPORT_ACTIONS[product.kind];
@@ -297,11 +337,76 @@ function main() {
             ) {
               return false;
             }
-            if (approvalCheckpointId) return checkpoint.id === approvalCheckpointId;
+            if (approvalCheckpointId)
+              return checkpoint.id === approvalCheckpointId;
             return true;
           });
           if (!linked) {
             missingApprovalLinks.push(`${product.kind}:${product.id}`);
+          }
+
+          if (product.kind === "final_memo") {
+            const gateSnapshotAuditEventId =
+              typeof details.gateSnapshotAuditEventId === "string"
+                ? details.gateSnapshotAuditEventId
+                : null;
+            const gateAuthorizationAuditEventId =
+              typeof details.gateAuthorizationAuditEventId === "string"
+                ? details.gateAuthorizationAuditEventId
+                : null;
+            const snapshotEvent = gateAuditRows.find(
+              (row) =>
+                row.id === gateSnapshotAuditEventId &&
+                row.matter_id === product.matter_id &&
+                row.action === "gate_results_persisted",
+            );
+            if (!snapshotEvent) {
+              missingGateSnapshots.push(`${product.kind}:${product.id}`);
+            } else {
+              const snapshotDetails = parseObject(snapshotEvent.details);
+              const authorization = recordFromUnknown(
+                snapshotDetails.authorization,
+              );
+              const gateSummary = recordFromUnknown(
+                snapshotDetails.gateSummary,
+              );
+              const gateResults = Array.isArray(snapshotDetails.gateResults)
+                ? snapshotDetails.gateResults
+                : [];
+              const exportGatePassed = gateResults.some((gate) => {
+                const row = recordFromUnknown(gate);
+                return row.gate_type === "export" && row.status === "passed";
+              });
+              if (
+                snapshotDetails.schemaVersion !== "aletheia-gate-snapshot-v0" ||
+                snapshotDetails.action !== "final_memo_export" ||
+                authorization.status !== "passed" ||
+                Number(gateSummary.failed ?? 0) !== 0 ||
+                !exportGatePassed
+              ) {
+                invalidGateSnapshots.push(`${product.kind}:${product.id}`);
+              }
+            }
+
+            const authorizationEvent = gateAuditRows.find((row) => {
+              if (
+                row.id !== gateAuthorizationAuditEventId ||
+                row.matter_id !== product.matter_id ||
+                row.action !== "final_export_gate_authorized"
+              ) {
+                return false;
+              }
+              const authorizationDetails = parseObject(row.details);
+              return (
+                authorizationDetails.gateSnapshotAuditEventId ===
+                  gateSnapshotAuditEventId &&
+                authorizationDetails.approvalCheckpointId ===
+                  approvalCheckpointId
+              );
+            });
+            if (!authorizationEvent) {
+              missingGateAuthorizations.push(`${product.kind}:${product.id}`);
+            }
           }
         }
       }
@@ -335,9 +440,35 @@ function main() {
             ? `High-risk exports missing approved checkpoint links: ${missingApprovalLinks.join(", ")}`
             : "High-risk exports resolve to approved human checkpoints.",
         ),
+        check(
+          "final-memo-exports-have-persisted-gate-snapshots",
+          missingGateSnapshots.length === 0,
+          missingGateSnapshots.length
+            ? `Final memo exports missing gate snapshot audit events: ${missingGateSnapshots.join(", ")}`
+            : "Final memo exports resolve to persisted gate snapshot audit events.",
+        ),
+        check(
+          "final-memo-gate-snapshots-pass",
+          invalidGateSnapshots.length === 0,
+          invalidGateSnapshots.length
+            ? `Final memo exports have non-passing or malformed gate snapshots: ${invalidGateSnapshots.join(", ")}`
+            : "Final memo gate snapshots are passing and schema-versioned.",
+        ),
+        check(
+          "final-memo-exports-have-gate-authorization-events",
+          missingGateAuthorizations.length === 0,
+          missingGateAuthorizations.length
+            ? `Final memo exports missing gate authorization audit events: ${missingGateAuthorizations.join(", ")}`
+            : "Final memo exports resolve to gate authorization audit events linked to checkpoint and snapshot.",
+        ),
       );
     } catch (error) {
-      if (!(error instanceof Error && error.message === "skip-audit-integrity-deep-checks")) {
+      if (
+        !(
+          error instanceof Error &&
+          error.message === "skip-audit-integrity-deep-checks"
+        )
+      ) {
         checks.push(
           check(
             "audit-integrity-query",

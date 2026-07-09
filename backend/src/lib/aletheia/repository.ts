@@ -45,6 +45,12 @@ export type AppendAuditEventInput = {
   details: Record<string, unknown>;
 };
 
+export type PersistGateSnapshotInput = {
+  action: "final_memo_export";
+  approvalCheckpointId?: string | null;
+  content: Record<string, unknown>;
+};
+
 export type AgentRunBudget = {
   maxSteps?: number;
   maxToolCalls?: number;
@@ -154,6 +160,11 @@ export interface AletheiaRepository {
     ctx: AletheiaUserContext,
     matterId: string,
     input: AppendAuditEventInput,
+  ): Promise<unknown | null>;
+  persistGateSnapshot(
+    ctx: AletheiaUserContext,
+    matterId: string,
+    input: PersistGateSnapshotInput,
   ): Promise<unknown | null>;
   createAgentRun(
     ctx: AletheiaUserContext,

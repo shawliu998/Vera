@@ -325,27 +325,31 @@ aletheiaRouter.post(
         return void res.status(201).json({ tool: toolName, result });
       }
 
-      const detail: any = await repo.getMatterDetail(ctx, matterId);
-      if (!detail) {
-        return void res.status(404).json({ detail: "Matter not found" });
+      if (toolName === "export_audit_pack") {
+        const detail: any = await repo.getMatterDetail(ctx, matterId);
+        if (!detail) {
+          return void res.status(404).json({ detail: "Matter not found" });
+        }
+        const result = await repo.createWorkProduct(ctx, matterId, {
+          kind: "audit_pack",
+          title:
+            text(args.title, 240) ||
+            `${String(detail.matter?.title ?? "Matter")} Audit Pack`,
+          status: "generated",
+          schemaVersion: "aletheia-audit-pack-v0",
+          content: auditPackContent(detail),
+          validationErrors: [],
+          generatedBy: "agent",
+          model: null,
+          approvalCheckpointId: nullableText(args.approvalCheckpointId, 120),
+        });
+        if (!result) {
+          return void res.status(404).json({ detail: "Matter not found" });
+        }
+        return void res.status(201).json({ tool: toolName, result });
       }
-      const result = await repo.createWorkProduct(ctx, matterId, {
-        kind: "audit_pack",
-        title:
-          text(args.title, 240) ||
-          `${String(detail.matter?.title ?? "Matter")} Audit Pack`,
-        status: "generated",
-        schemaVersion: "aletheia-audit-pack-v0",
-        content: auditPackContent(detail),
-        validationErrors: [],
-        generatedBy: "agent",
-        model: null,
-        approvalCheckpointId: nullableText(args.approvalCheckpointId, 120),
-      });
-      if (!result) {
-        return void res.status(404).json({ detail: "Matter not found" });
-      }
-      return void res.status(201).json({ tool: toolName, result });
+
+      return void res.status(404).json({ detail: "Tool is not available" });
     } catch (error) {
       handleRouteError(res, error);
     }
@@ -464,6 +468,38 @@ aletheiaRouter.post(
             req.body?.approvalCheckpointId,
             120,
           ),
+        },
+      );
+      if (!data)
+        return void res.status(404).json({ detail: "Matter not found" });
+      res.status(201).json(data);
+    } catch (error) {
+      handleRouteError(res, error);
+    }
+  },
+);
+
+// POST /aletheia/matters/:matterId/gate-snapshots
+aletheiaRouter.post(
+  "/matters/:matterId/gate-snapshots",
+  requireAuth,
+  async (req, res) => {
+    const action = text(req.body?.action, 80);
+    if (action !== "final_memo_export") {
+      return void res.status(400).json({ detail: "action is invalid" });
+    }
+
+    try {
+      const data = await createAletheiaRepository().persistGateSnapshot(
+        userContext(res),
+        req.params.matterId,
+        {
+          action,
+          approvalCheckpointId: nullableText(
+            req.body?.approvalCheckpointId,
+            120,
+          ),
+          content: objectPayload(req.body?.content),
         },
       );
       if (!data)
@@ -612,7 +648,10 @@ aletheiaRouter.post(
         req.params.checkpointId,
         {
           decision: decision as
-            "approved" | "rejected" | "edited" | "responded",
+            | "approved"
+            | "rejected"
+            | "edited"
+            | "responded",
           comment: nullableText(req.body?.comment, 1000),
           editedPayload: objectPayload(req.body?.editedPayload),
           response: nullableText(req.body?.response, 4000),
@@ -926,7 +965,9 @@ aletheiaRouter.post(
           claimId: claimId || null,
           relevance: relevance as "direct" | "indirect" | "weak",
           supportStatus: supportStatus as
-            "supports" | "contradicts" | "insufficient",
+            | "supports"
+            | "contradicts"
+            | "insufficient",
           workProductId: nullableText(req.body?.workProductId, 80),
           confidence: confidence as "low" | "medium" | "high" | null,
           metadata: objectPayload(req.body?.metadata),

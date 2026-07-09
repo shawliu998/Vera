@@ -32,6 +32,27 @@ export function documentTypeForFilename(filename: string) {
   return "other";
 }
 
+export function sensitiveMaterialFlagsForText(args: {
+  filename?: string;
+  text?: string;
+}) {
+  const value = `${args.filename ?? ""}\n${args.text ?? ""}`.toLowerCase();
+  const flags: string[] = [];
+  const checks: Array<[string, RegExp]> = [
+    ["privileged", /\b(privileged|attorney[- ]client|legal advice)\b/],
+    ["confidential", /\b(confidential|non[- ]disclosure|nda|trade secret)\b/],
+    ["personal_data", /\b(ssn|passport|date of birth|personal data|personally identifiable|pii)\b/],
+    ["financial", /\b(bank account|wire transfer|tax return|payroll|financial statement)\b/],
+    ["health", /\b(health record|medical|hipaa|diagnosis|patient)\b/],
+    ["minor", /\b(minor child|under 18|juvenile)\b/],
+  ];
+
+  for (const [flag, pattern] of checks) {
+    if (pattern.test(value)) flags.push(flag);
+  }
+  return flags;
+}
+
 export async function extractMatterDocumentText(args: {
   filename: string;
   buffer: Buffer;

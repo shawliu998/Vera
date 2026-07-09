@@ -1,11 +1,14 @@
 import { createServerSupabase } from "../supabase";
 import {
+  GATE_AUDIT_ACTIONS,
   auditActionForWorkProduct,
+  buildGateSnapshotAuditDetails,
   buildAgentRunTraceScaffold,
   buildAgentWorkflowGraph,
   buildDeterministicDraftMemoContent,
   buildInitialAgentPlan,
   deriveClaimSuggestionFromText,
+  normalizedFactFromQuote,
   professionalDraftProfileForTemplate,
   buildSourceLinkedIssueMapContent,
   buildSourceLinkedEvidenceMatrixContent,
@@ -28,6 +31,7 @@ import type {
   ProposePlaybookImprovementInput,
   CreateWorkProductInput,
   DecideApprovalInput,
+  PersistGateSnapshotInput,
   ResumeAgentRunInput,
   RequestApprovalInput,
   SearchMatterDocumentsInput,
@@ -40,6 +44,18 @@ function numberOrDefault(value: unknown, fallback: number) {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? value
     : fallback;
+}
+
+function objectOrEmpty(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function stringArrayFromObject(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 function numberOrNull(value: unknown) {
@@ -223,6 +239,26 @@ export class SupabaseAletheiaRepository implements AletheiaRepository {
         );
       }
     }
+    const gateEvidence =
+      input.kind === "final_memo"
+        ? await this.persistFinalMemoGateAuthorization(
+            ctx,
+            matterId,
+            input.content,
+            input.approvalCheckpointId ?? null,
+          )
+        : null;
+    const content = gateEvidence
+      ? {
+          ...input.content,
+          persistedGateEvidence: {
+            schemaVersion: "aletheia-final-memo-gate-evidence-v0",
+            gateSnapshotAuditEventId: gateEvidence.gateSnapshotAuditEventId,
+            gateAuthorizationAuditEventId:
+              gateEvidence.gateAuthorizationAuditEventId,
+          },
+        }
+      : input.content;
 
     const { data, error } = await this.db
       .from("aletheia_work_products")
@@ -233,7 +269,7 @@ export class SupabaseAletheiaRepository implements AletheiaRepository {
         title: input.title,
         status: input.status,
         schema_version: input.schemaVersion,
-        content: input.content,
+        content,
         validation_errors: input.validationErrors,
         generated_by: input.generatedBy,
         model: input.model,
@@ -253,6 +289,10 @@ export class SupabaseAletheiaRepository implements AletheiaRepository {
         title: input.title,
         status: input.status,
         approvalCheckpointId: input.approvalCheckpointId ?? null,
+        gateSnapshotAuditEventId:
+          gateEvidence?.gateSnapshotAuditEventId ?? null,
+        gateAuthorizationAuditEventId:
+          gateEvidence?.gateAuthorizationAuditEventId ?? null,
       },
     });
     await this.touchMatter(matterId, ctx.userId);
@@ -579,6 +619,28 @@ export class SupabaseAletheiaRepository implements AletheiaRepository {
     return this.writeAuditEvent(ctx.userId, matterId, input);
   }
 
+  async persistGateSnapshot(
+    ctx: AletheiaUserContext,
+    matterId: string,
+    input: PersistGateSnapshotInput,
+  ) {
+    const matter = await this.loadOwnedMatter(ctx, matterId);
+    if (!matter) return null;
+    const snapshot = buildGateSnapshotAuditDetails({
+      matterId,
+      action: input.action,
+      approvalCheckpointId: input.approvalCheckpointId ?? null,
+      content: input.content,
+    });
+    return this.writeAuditEvent(ctx.userId, matterId, {
+      actor: "system",
+      action: GATE_AUDIT_ACTIONS.resultsPersisted,
+      workflowVersion: snapshot.details.schemaVersion,
+      model: null,
+      details: snapshot.details,
+    });
+  }
+
   async createAgentRun(
     ctx: AletheiaUserContext,
     matterId: string,
@@ -661,7 +723,7 @@ export class SupabaseAletheiaRepository implements AletheiaRepository {
     const { data: chunk, error: chunkError } = await this.db
       .from("aletheia_document_chunks")
       .select(
-        "id, matter_document_id, page, section, text, quote_start, quote_end",
+        "id, matter_document_id, page, section, text, quote_start, quote_end, metadata",
       )
       .eq("id", input.sourceChunkId)
       .eq("matter_id", matterId)
@@ -682,6 +744,7 @@ export class SupabaseAletheiaRepository implements AletheiaRepository {
       typeof input.claimId === "string" && input.claimId.trim()
         ? input.claimId.trim()
         : suggestedClaim.claimId;
+    const chunkMetadata = objectOrEmpty(chunk.metadata);
 
     const { data, error } = await this.db
       .from("aletheia_evidence_items")
@@ -703,6 +766,10 @@ export class SupabaseAletheiaRepository implements AletheiaRepository {
         metadata: {
           source: "source_document_chunk",
           matterDocumentId: chunk.matter_document_id,
+          normalizedFact: normalizedFactFromQuote(chunk.text),
+          sensitiveMaterialFlags: stringArrayFromObject(
+            chunkMetadata.sensitiveMaterialFlags,
+          ),
           claimSuggestion:
             claimId === suggestedClaim.claimId ? suggestedClaim : null,
           ...(input.metadata ?? {}),
@@ -916,6 +983,71 @@ export class SupabaseAletheiaRepository implements AletheiaRepository {
       .maybeSingle();
     if (error) throw error;
     return data;
+  }
+
+  private async persistFinalMemoGateAuthorization(
+    ctx: AletheiaUserContext,
+    matterId: string,
+    content: Record<string, unknown>,
+    approvalCheckpointId: string | null,
+  ) {
+    const snapshot = buildGateSnapshotAuditDetails({
+      matterId,
+      action: "final_memo_export",
+      approvalCheckpointId,
+      content,
+    });
+    const snapshotEvent = (await this.writeAuditEvent(ctx.userId, matterId, {
+      actor: "system",
+      action: GATE_AUDIT_ACTIONS.resultsPersisted,
+      workflowVersion: snapshot.details.schemaVersion,
+      model: null,
+      details: snapshot.details,
+    })) as { id?: string } | null;
+
+    if (!snapshot.ok) {
+      await this.writeAuditEvent(ctx.userId, matterId, {
+        actor: "system",
+        action: GATE_AUDIT_ACTIONS.finalExportBlocked,
+        workflowVersion: snapshot.details.schemaVersion,
+        model: null,
+        details: {
+          schemaVersion: snapshot.details.schemaVersion,
+          action: "final_memo_export",
+          matterId,
+          approvalCheckpointId,
+          gateSnapshotAuditEventId: snapshotEvent?.id ?? null,
+          failureReasons: snapshot.failures,
+        },
+      });
+      throw new ApprovalRequiredError(
+        `Final memo export requires a persisted passing gate snapshot: ${snapshot.failures.join(" ")}`,
+      );
+    }
+
+    const authorizationEvent = (await this.writeAuditEvent(
+      ctx.userId,
+      matterId,
+      {
+        actor: "system",
+        action: GATE_AUDIT_ACTIONS.finalExportAuthorized,
+        workflowVersion: snapshot.details.schemaVersion,
+        model: null,
+        details: {
+          schemaVersion: snapshot.details.schemaVersion,
+          action: "final_memo_export",
+          matterId,
+          approvalCheckpointId,
+          gateSnapshotAuditEventId: snapshotEvent?.id ?? null,
+          gateSummary: snapshot.details.gateSummary,
+        },
+      },
+    )) as { id?: string } | null;
+
+    return {
+      gateSnapshotAuditEventId: snapshotEvent?.id ?? null,
+      gateAuthorizationAuditEventId: authorizationEvent?.id ?? null,
+    };
   }
 
   private async writeAuditEvent(
