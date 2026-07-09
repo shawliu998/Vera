@@ -60,7 +60,7 @@
     "cd backend && npm run check:aletheia:approval-policy",
     "cd backend && npm run check:aletheia:audit-workbench",
     "node .agentops/scripts/check-agentops.mjs",
-    "cd frontend && npm run test:aletheia:ui (failed historically: missing test-results/aletheia-ui-smoke-state.json in UI smoke/agentops mobile setup and review-studio mobile expected ready but received blocked)",
+    "cd frontend && npm run test:aletheia:ui (historical failure cleared by ui-smoke-recovery; latest full UI smoke passed on explicit clean ports)",
     "cd frontend && node --test --experimental-strip-types tests/agentops/gates.test.ts",
     "cd backend && npm run build",
     "cd backend && npm run check:aletheia:approval-policy",
@@ -78,20 +78,20 @@
     "cd backend && npm run check:aletheia:approval-policy",
     "cd backend && npm run check:aletheia:audit-workbench",
     "node .agentops/scripts/check-agentops.mjs",
-    "cd frontend && npm run test:aletheia:ui (failed historically: missing test-results/aletheia-ui-smoke-state.json in UI smoke/agentops mobile setup and review-studio mobile expected ready but received blocked)",
+    "cd frontend && npm run test:aletheia:ui (historical failure cleared by ui-smoke-recovery; latest full UI smoke passed on explicit clean ports)",
     "cd frontend && node --test --experimental-strip-types tests/agentops/gates.test.ts",
     "cd backend && npm run build",
     "cd backend && npm run check:aletheia:approval-policy",
     "cd backend && ALETHEIA_AUDIT_SOURCE_DIR=/var/folders/21/lq2y7qwx7nz2czy8zxyyc6480000gn/T/aletheia-local-regression-1783584348456 npm run check:aletheia:audit-integrity",
     "cd backend && npm run test:aletheia:local"
   ],
-  "blockers": ["None"],
+  "blockers": [],
   "risks": [
     "Gate inputs are still derived in remoteMatterTransforms rather than through the canonical AgentOps adapter acceptance path.",
     "GateResult/GatePersistenceProvenance are still supplied by the frontend gate engine, but final memo authorization now uses server-written persisted gate audit events.",
-    "Full Aletheia UI smoke was not rerun in this backend persistence lane."
+    "Keep full Aletheia UI smoke in the release/private-pilot acceptance path when gate or review surfaces change."
   ],
-  "needs": ["None"],
+  "needs": [],
   "next_actions": [
     "Use full UI smoke as a later broad regression check if UI surfaces change."
   ]

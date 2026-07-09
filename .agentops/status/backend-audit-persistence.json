@@ -42,8 +42,7 @@
   "risks": [
     "No migration-backed gate snapshot table was added; the canonical persistence source is aletheia_audit_events details with schemaVersion aletheia-gate-snapshot-v0.",
     "GateResult payloads are still supplied by the existing deterministic frontend gate engine, but final authorization now uses the server-written audit event IDs generated during createWorkProduct(final_memo).",
-    "The broader worktree contains many unrelated parallel uncommitted changes from other owners; this lane did not revert them.",
-    "Full frontend UI smoke was not rerun in this lane because no frontend UI files were changed."
+    "Full frontend UI smoke is tracked by the UI smoke recovery lane and should remain part of release/private-pilot acceptance when gate or review surfaces change."
   ],
   "needs": [
     "Gate Engine owner can now remove the backend/audit persistence blocker and treat persisted gate snapshot evidence as the final memo authorization contract.",
