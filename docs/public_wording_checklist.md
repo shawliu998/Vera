@@ -46,5 +46,4 @@ Use this checklist before updating README, demo, pitch, or reviewer-facing docs.
 - Calling Aletheia a generic multi-industry SaaS.
 - Claiming production readiness, guaranteed correctness, or compliance
   certification without evidence.
-- Internal coordination language such as heartbeat, supervisor cycle, owner
-  thread, dirty worktree, or worktree handoff.
+- Internal coordination jargon or repo-state handoff language.

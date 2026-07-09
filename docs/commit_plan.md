@@ -1,7 +1,7 @@
 # Aletheia Commit Plan
 
-This plan splits the current uncommitted Aletheia work into reviewable commit
-groups. It intentionally does not stage or commit files by itself.
+This plan splits the current Aletheia changes into reviewable commit groups. It
+intentionally does not stage or commit files by itself.
 
 ## Review Summary
 
@@ -19,14 +19,13 @@ groups. It intentionally does not stage or commit files by itself.
 
 ## Post-P0 AgentOps Addendum
 
-Updated by the Supervisor cycle at `2026-07-09T08:14:32Z`.
+Updated at `2026-07-09T08:14:32Z`.
 
 This plan predates the final AgentOps P0 closeout. Use
 `.agentops/WORKTREE_HANDOFF.md` as the acceptance wrapper and include the
-current AgentOps/coordination additions below when splitting the dirty
-worktree. Do not fold these files silently into older runtime commits.
-The currently observed dirty-path bucket map lives in
-`.agentops/WORKTREE_SPLIT_MANIFEST.md`.
+current AgentOps additions below when splitting the remaining review groups. Do
+not fold these files silently into older runtime commits. The current path
+bucket map lives in `.agentops/WORKTREE_SPLIT_MANIFEST.md`.
 
 Suggested additional grouping:
 
@@ -377,5 +376,5 @@ git diff --check
   workflows are expected to run with `ALETHEIA_STORAGE_DRIVER=local`.
 - `node:sqlite` emits an ExperimentalWarning during local tests. This is
   expected with the current Node runtime.
-- The worktree should not be committed as one patch. Use the groups above in
-  order.
+- The remaining changes should not be committed as one patch. Use the groups
+  above in order.

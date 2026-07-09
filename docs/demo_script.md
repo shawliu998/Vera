@@ -78,12 +78,11 @@ Current stage: local-first MVP / private pilot candidate.
       as Supabase-backed or production export infrastructure."
 
 12. Generate Eval Cases.
-    - "The feedback export and V1 helper fixtures can turn open review comments
-      and failed gates into local replayable eval material, so future changes
-      to retrieval, drafting, review, and gates can be tested."
-    - "Review-derived eval material is not yet a persisted review-to-eval
-      workflow because durable review-resolution API/status semantics are still
-      missing."
+    - "The feedback export and V1 local review-resolution path can turn review
+      comments and failed gates into local replayable eval material, so future
+      changes to retrieval, drafting, review, and gates can be tested."
+    - "Keep this claim local-only: review-derived eval export is durable in the
+      local workflow, not Supabase-backed or production SaaS."
 
 ## V1 Private-Pilot Demo Caveats
 
@@ -92,13 +91,15 @@ Current stage: local-first MVP / private pilot candidate.
   guaranteed legal correctness, or replacement of professional judgment.
 - Supabase V1 document/chunk/source listing and Supabase V1 runtime persistence
   are unavailable.
-- There is no public `persistV1RuntimeResult` route and no approval retry
-  wiring for blocked external-provider calls.
+- The local runtime-result route can record approval retry/resume state, but it
+  does not dispatch a real external provider.
+- Approved skill activation is local-only and requires explicit human approval
+  before candidate skill suggestions become approved matter playbooks.
 - External model calls stay off by default for sensitive/private data. Any
   future external-provider use must be explicit, configurable, logged, and
   auditable.
-- The updated Playwright route spec still needs to be run as part of final UI
-  smoke validation.
+- Full local Playwright UI smoke passed 6/6 on explicit backend/frontend ports;
+  focused mobile smoke passed 2/2, and frontend typecheck/lint passed.
 
 ## 2-3 Minute Video Path
 

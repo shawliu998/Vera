@@ -11,17 +11,17 @@ The V1 local/private-pilot candidate is completed for bounded reviewer
 evaluation with explicit caveats. The local Remote Matter Command Center export
 path now fetches
 `GET /aletheia/matters/:matterId/v1/source-index` and passes the returned source
-index into the export package builder. Downloaded local AgentOps export packages
-can include `audit_pack.source_index_manifest` with document, chunk, and
-source-link manifest counts.
+index into the export package builder. Local export package and durable eval
+export routes write JSON export files, SQLite export metadata, source-index
+manifests, export hashes, and audit events.
 
 This does not mean V1 is production SaaS or Supabase-ready. Supabase V1
 document/chunk/source listing is unavailable, Supabase V1 runtime persistence
-is unavailable, and there is no public `persistV1RuntimeResult` route or
-approval retry wiring. Review-derived eval cases remain local/helper fixture
-output until durable review-resolution API/status semantics exist. External
-model calls remain off by default for sensitive/private data and must stay
-explicit, configurable, logged, and auditable.
+is unavailable, and Supabase review-derived eval/export persistence is
+unavailable. The local runtime-result route records authorization and trace
+state for approval retry/resume flows without dispatching a real external
+provider. External model calls remain off by default for sensitive/private data
+and must stay explicit, configurable, logged, and auditable.
 
 ## Product Positioning
 
@@ -57,6 +57,9 @@ and replayable audit records.
   matters.
 - Resumable edited/responded checkpoints that append a run step, generate a
   revised Draft Memo, and audit `agent_run_resumed`.
+- Local V1 runtime-result route with approval retry/resume recording for
+  authorized external-model-call retry state, without external provider
+  dispatch.
 - Human approval gate for Audit Pack export.
 - Human approval gate for Feedback Dataset export.
 - Human approval gate for Final Memo export.
@@ -120,6 +123,14 @@ and replayable audit records.
   smoke across desktop and mobile Chromium with screenshot baselines.
 - Local V1 source-index export manifest support for the Remote Matter Command
   Center export path.
+- Local V1 export package and durable eval export routes with SQLite export
+  metadata, source-index manifests, export hashes, and audit events.
+- Local review-derived eval persistence for accepted/rejected/needs-material/
+  resolved review paths.
+- Approved skill activation local workflow turns review-derived eval candidate
+  skills into approved matter playbooks only after explicit human approval.
+- Full local Playwright UI smoke passed 6/6 on explicit backend/frontend ports;
+  focused mobile smoke passed 2/2, and frontend typecheck/lint passed.
 
 ## Commands
 
@@ -136,6 +147,7 @@ npm run check:aletheia:knowledge-governance
 npm run check:aletheia:audit-workbench
 npm run check:aletheia:tool-policy
 npm run check:aletheia:approval-policy
+npm run check:aletheia:approved-skill-activation
 npm run check:aletheia:matter-isolation
 npm run check:aletheia:run-trace
 npm run check:aletheia:evidence
@@ -177,9 +189,11 @@ npm run build
 - V1 source-index export manifest support is local-only. Supabase V1
   document/chunk/source listing is not implemented.
 - Supabase V1 runtime persistence is not implemented.
-- `persistV1RuntimeResult` is not exposed through a public route, and blocked
-  external-provider approval retry wiring is not implemented.
-- Review-derived eval cases are not yet a persisted review-to-eval workflow.
+- Local runtime approval retry records authorization and trace state only; it
+  does not dispatch a real external provider.
+- Review-derived eval, export persistence, and approved skill activation are
+  local-only; Supabase parity, production/global skill registry governance, and
+  production/SaaS export infrastructure are not claimed.
 - Browser UI smoke is committed as a Playwright test across desktop and mobile
   with screenshot baseline assertions for the initial workspace render.
 - The updated V1 route/export Playwright spec passed full desktop/mobile UI

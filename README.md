@@ -38,8 +38,8 @@ software, or a replacement for qualified professionals.
 
 ## V1 Private Pilot Snapshot
 
-As of 2026-07-09, the V1 local/private-pilot candidate is completed for bounded
-reviewer evaluation with explicit caveats. It should be presented as an
+As of 2026-07-09, the V1 local/private-pilot candidate is completed for
+bounded reviewer evaluation with explicit caveats. It should be presented as an
 expert-support workspace, not production SaaS and not legal advice.
 
 Working local/private-pilot scope:
@@ -53,23 +53,25 @@ Working local/private-pilot scope:
 - The Remote Matter Command Center export path fetches that local source index
   and can include `audit_pack.source_index_manifest` plus source-index manifest
   counts in downloaded local AgentOps export packages.
-- Deterministic runtime, gate summaries, review visibility, export/audit
-  helpers, and local eval-case fixture helpers are available for focused
-  private-pilot validation without external model keys.
+- Deterministic runtime, gate summaries, review visibility, local
+  review-resolution persistence, export/audit routes, durable eval exports, and
+  approved skill activation are available for focused private-pilot validation
+  without external model keys.
 
 Unavailable or partial V1 scope:
 
 - Supabase V1 document/chunk/source listing is unavailable.
 - Supabase V1 runtime persistence is unavailable.
-- `persistV1RuntimeResult` exists only below the public API boundary; there is
-  no public route or approval retry wiring for it.
-- Review-derived eval cases are local/helper fixture output until durable
-  review-resolution API/status semantics exist; do not describe this as a
-  persisted review-to-eval workflow.
+- Local runtime approval retry records authorization and trace state only; it
+  does not dispatch a real external provider.
+- Review-derived eval, export persistence, and approved skill activation are
+  local-only; do not describe them as Supabase-backed, production SaaS, or
+  automatic production learning.
 - External model calls remain off by default for sensitive/private data and
   must be explicitly configured, logged, and auditable if enabled later.
-- Full Playwright UI smoke for the updated V1 route/export flow passed for the
-  local/private-pilot validation path.
+- Full Playwright UI smoke passed 6/6 on explicit local backend/frontend ports
+  for the local/private-pilot validation path; focused mobile smoke passed 2/2,
+  and frontend typecheck/lint passed.
 
 ## What A Reviewer Should Notice
 
@@ -461,7 +463,7 @@ See `docs/hybrid_retrieval.md`, `docs/retrieval_eval.md`, and
 follow-up plans.
 See `docs/release_notes_local_first_mvp.md` for the current local-first MVP
 summary.
-See `docs/status.md` for the current release-readiness snapshot and blockers.
+See `docs/status.md` for the current release-readiness snapshot.
 
 Start local backend and frontend together:
 

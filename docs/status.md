@@ -239,22 +239,32 @@ Current known result:
   file paths, local data-directory boundaries, and approved checkpoint links for
   high-risk exports when a local database is present. It also reports local
   export file byte counts and sha256 hashes for review packets.
+- local export package and durable eval export routes pass and verify JSON
+  export files, SQLite export metadata, source-index manifests, export hashes,
+  and audit events.
+- local runtime-result route audit passes and verifies runtime persistence plus
+  approval retry/resume recording without external provider dispatch.
+- local review-resolution persistence passes and produces review-derived eval
+  cases for accepted/rejected/needs-material/resolved review paths.
+- local approved skill activation audit passes and verifies review-derived eval
+  candidate skills can become approved matter-scoped playbook skills only after
+  explicit human approval, with an `approved_skill_activated` audit event.
 - real-data restore drill passes by creating an isolated local regression
   matter, writing a backup manifest with a SQLite hash, running restore
   preflight with zero warnings, and running audit integrity with real export
   files and approved high-risk checkpoints.
-- fast operator health check passes, with a warning when the worktree contains
-  uncommitted local changes that still need review/splitting.
+- fast operator health check passes.
 - GitHub Actions local CI is configured for `main` and pull requests.
 - frontend production build passes.
 - full frontend lint exits cleanly with no warnings.
 - automated Playwright UI smoke passes for the local workspace approval flow
-  on desktop and mobile Chromium using the default 3410/3411 smoke ports,
+  on desktop and mobile Chromium using explicit local smoke ports,
   including initial workspace screenshot baselines and the live
   Evidence/Reviews/Audit registry pages with local filters, JSON downloads, and
   persisted matter-scoped registry snapshots, plus Compliance/Diligence
   template pages that present local workflow previews rather than fixture-only
-  workflows.
+  workflows. The latest full local run passed 6/6, with focused mobile smoke
+  also passing 2/2 and frontend typecheck/lint passing.
 - local Aletheia regression passes for TXT, DOCX, PDF, FTS search, evidence,
   Issue Map, optional local-json semantic/hybrid retrieval, work products,
   approvals, exports, Playbook Improvement Proposals, resumable checkpoints,

@@ -3,7 +3,7 @@
 Current stage: **V1 local/private-pilot candidate completed; production/SaaS
 not claimed.**
 
-Aletheia V1 is complete for bounded local reviewer evaluation. The validated
+Aletheia V1 is completed for bounded local reviewer evaluation. The validated
 path shows a local-first sensitive-work agent harness with the first
 public/private-pilot Domain Pack: Private Contract / Due Diligence Review. It
 is not legal advice software, not production SaaS, and not a replacement for
@@ -16,9 +16,18 @@ qualified professional judgment.
 - Matter-scoped retrieval with source provenance and retrieval diagnostics.
 - Source-linked evidence, issue/risk, review, gate, and export surfaces.
 - Fail-closed gates for high-risk export flows.
-- Local AgentOps export packages with source-index manifests and export
-  authorization status.
-- Local eval fixture output for review/gate failure cases.
+- Local AgentOps export package and durable eval export routes with
+  source-index manifests, SQLite export metadata, export hashes, and audit
+  events.
+- Local review-resolution persistence and review-derived eval cases for
+  accepted/rejected/needs-material/resolved review paths.
+- Local approved skill activation from review-derived eval candidate to
+  human-approved matter playbook and `approved_skill_activated` audit event.
+- Local runtime-result persistence with approval retry/resume recording for
+  authorized external-model-call retries, without dispatching an external
+  provider.
+- Full local Playwright UI smoke passed 6/6 on explicit backend/frontend ports;
+  focused mobile smoke passed 2/2, and frontend typecheck/lint passed.
 - Reviewer-facing documentation and release notes that preserve the
   local/private-pilot boundary.
 
@@ -33,6 +42,7 @@ cd backend && npm run check:aletheia:source-provenance
 cd backend && npm run check:aletheia:approval-policy
 cd backend && npm run check:aletheia:run-trace
 cd backend && npm run check:aletheia:audit-integrity
+cd backend && npm run check:aletheia:approved-skill-activation
 cd backend && node --import tsx src/scripts/aletheiaBackendApiScopingAudit.ts
 cd backend && node --import tsx src/scripts/aletheiaV1RuntimePersistenceAudit.ts
 ```
@@ -55,9 +65,10 @@ git diff --check
 - No production SaaS readiness is claimed.
 - Supabase V1 document/chunk/source listing is unavailable.
 - Supabase V1 runtime persistence is unavailable.
-- No public `persistV1RuntimeResult` route or approval retry wiring exists.
-- Review-derived eval is local/helper fixture output until durable
-  review-resolution API/status semantics exist.
+- Local runtime approval retry records authorization and trace state only; it
+  does not dispatch a real external provider.
+- Supabase review-derived eval, export persistence, and skill activation are
+  unavailable.
 - External model calls remain off by default for sensitive/private data and
   must be explicit, configurable, logged, and auditable if enabled later.
 

@@ -186,11 +186,18 @@ http://localhost:3000/aletheia
 - Audit Pack, Feedback Export, and Final Memo work products are persisted to
   `.data/aletheia/exports/<matterId>/` in local mode, with file paths recorded
   in audit event details.
-- Review-derived eval cases are local/helper fixture output until durable
-  review-resolution API/status semantics are implemented.
+- Local export package and durable eval export routes write JSON export files,
+  SQLite export metadata, source-index manifests, export hashes, and audit
+  events.
+- Review-derived eval cases are persisted for the local review-resolution
+  workflow.
 - Supabase V1 document/chunk/source listing is unavailable.
 - Supabase V1 runtime persistence is unavailable.
-- No public `persistV1RuntimeResult` route or approval retry wiring exists.
+- The local runtime-result route can record approval retry/resume state, but it
+  does not dispatch a real external provider.
+- Approved skill activation is implemented for the local workflow and requires
+  explicit human approval before candidate skill suggestions become approved
+  matter playbooks.
 - External model calls remain off by default for sensitive/private data and
   must stay explicit, configurable, logged, and auditable if enabled later.
 - The broader inherited app still has Supabase-dependent routes. Local mode
