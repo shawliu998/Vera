@@ -26,6 +26,8 @@ ENV ALETHEIA_RETRIEVAL_MODE=keyword
 ENV ALETHEIA_SEMANTIC_INDEX_ENABLED=false
 ENV ALETHEIA_SEMANTIC_INDEX_DRIVER=disabled
 ENV ALETHEIA_SEMANTIC_INDEX_DIR=/data/aletheia/index/semantic-local
+ENV ALETHEIA_DEMO_SEED_ENABLED=true
+ENV ALETHEIA_DEMO_SEED_MODE=empty
 
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json

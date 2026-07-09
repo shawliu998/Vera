@@ -36,6 +36,32 @@ Current stage: **V1 local/private-pilot candidate completed; production/SaaS
 not claimed.** Aletheia is not positioned as production SaaS, legal advice
 software, or a replacement for qualified professionals.
 
+## Docker Quick Start
+
+```bash
+git clone https://github.com/shawliu998/Aletheia.git
+cd Aletheia
+cp .env.example .env
+docker compose up --build
+```
+
+Open:
+
+```text
+http://localhost:3000/aletheia
+```
+
+On the first empty local workspace, Docker seeds a local-only **Private
+Contract Review Demo** matter so reviewers can inspect the V1 loop immediately:
+
+```text
+ingestion -> retrieval -> evidence -> memo -> review -> gates -> audit/export -> eval -> approved skill activation
+```
+
+Set `ALETHEIA_DEMO_SEED_ENABLED=false` in `.env` before starting Docker for a
+blank workspace. See `docs/install_local.md` for data reset, private-token
+mode, and validation details.
+
 ## V1 Private Pilot Snapshot
 
 As of 2026-07-09, the V1 local/private-pilot candidate is completed for
@@ -90,9 +116,9 @@ Unavailable or partial V1 scope:
 ## Demo Flow
 
 1. Open `/aletheia`.
-2. Open or create a Matter from the Matter Queue.
-3. Load the sample Private Contract / Due Diligence Review documents or create a
-   local matter with uploaded source files.
+2. Open the seeded **Private Contract Review Demo** matter from the Matter
+   Queue, or create a local matter with uploaded source files.
+3. Inspect the sample Private Contract / Due Diligence Review source record.
 4. Show the Matter Command Center: document registry, agent plan, run trace,
    issue map, evidence matrix, work products, review queue, gate state, and
    audit log.

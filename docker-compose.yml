@@ -18,6 +18,8 @@ services:
       ALETHEIA_SEMANTIC_INDEX_ENABLED: "false"
       ALETHEIA_SEMANTIC_INDEX_DRIVER: disabled
       ALETHEIA_SEMANTIC_INDEX_DIR: /data/aletheia/index/semantic-local
+      ALETHEIA_DEMO_SEED_ENABLED: ${ALETHEIA_DEMO_SEED_ENABLED:-true}
+      ALETHEIA_DEMO_SEED_MODE: ${ALETHEIA_DEMO_SEED_MODE:-empty}
     ports:
       - "${BACKEND_PORT:-3001}:3001"
     volumes:

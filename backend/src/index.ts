@@ -13,6 +13,7 @@ import { userRouter } from "./routes/user";
 import { downloadsRouter } from "./routes/downloads";
 import { caseLawRouter } from "./routes/caseLaw";
 import { aletheiaRouter } from "./routes/aletheia";
+import { seedAletheiaDemoIfNeeded } from "./lib/aletheia/demoSeed";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
@@ -162,4 +163,15 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.listen(PORT, () => {
   console.log(`Aletheia backend running on port ${PORT}`);
+  seedAletheiaDemoIfNeeded()
+    .then((result) => {
+      if ("matterId" in result) {
+        console.log(
+          `Aletheia demo seed created matter ${result.matterId} (${result.reason})`,
+        );
+      }
+    })
+    .catch((error) => {
+      console.error("[aletheia-demo-seed] failed", error);
+    });
 });

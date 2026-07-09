@@ -31,6 +31,13 @@ Then open:
 http://localhost:3000/aletheia
 ```
 
+On the first empty local workspace, Docker seeds a local-only **Private
+Contract Review Demo** matter. It includes a source document, retrieved evidence
+items, generated issue/evidence/memo work products, a reviewer blocker,
+review-derived eval data, approved export gates, audit/eval export files, and an
+approved matter playbook. This gives reviewers a ready workspace without
+uploading documents first.
+
 You can also use the helper script:
 
 ```bash
@@ -68,7 +75,14 @@ The default `.env.example` uses:
 ```bash
 ALETHEIA_AUTH_MODE=single_user
 NEXT_PUBLIC_API_BASE_URL=http://localhost:3001
+ALETHEIA_DEMO_SEED_ENABLED=true
+ALETHEIA_DEMO_SEED_MODE=empty
 ```
+
+Set `ALETHEIA_DEMO_SEED_ENABLED=false` before first startup for a blank
+workspace. Set `ALETHEIA_DEMO_SEED_MODE=always` only when you explicitly want to
+add the bundled demo to a non-empty local workspace. The seed is idempotent and
+will not create duplicate bundled demo matters in the same local volume.
 
 For a local private-token mode, set all three values in `.env` before building:
 
@@ -111,6 +125,7 @@ The Docker local package has been validated with:
 - backend `GET /health` returning `{"ok":true}`
 - frontend `/aletheia` returning HTTP 200
 - a minimal browser smoke check confirming the Aletheia workspace renders
+- first-start demo seed path for the V1 local workflow
 
 ## Scope
 
