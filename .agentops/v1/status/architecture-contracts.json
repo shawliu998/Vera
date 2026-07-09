@@ -1,0 +1,85 @@
+{
+  "agent": "v1-architecture-contracts",
+  "status": "stable_for_first_feature_batch",
+  "last_cycle_summary": "Completed a final bounded Architecture / Contracts cycle after Supervisor marked the baseline ready. Re-read V1 status/planning, confirmed the existing additive V1 facade is the first-batch contract source, fixed the promised EvalCase type export, added a focused V1 contract test over the compact fixture, guards, gate/citation helpers, audit/eval/skill conversion, BigAt parsing, and hashing, and verified TypeScript plus the focused test. No further contract edits should occur unless Architecture / Contracts is explicitly re-dispatched.",
+  "first_batch_contract_baseline": {
+    "stable": true,
+    "contract_source": "frontend/src/aletheia/agentops/v1Contracts.ts",
+    "status": "ready_for_document_retrieval_llm_runtime_and_gate_engine",
+    "consumers": {
+      "document_retrieval": {
+        "stable": true,
+        "required_contracts": [
+          "DocumentRecord",
+          "DocumentChunk",
+          "RetrievalResult",
+          "EvidenceItem",
+          "hashArtifact",
+          "validateV1ArtifactShape",
+          "createV1CompactFixture"
+        ],
+        "instruction": "Use or centrally extend the V1 facade; do not create private document, chunk, retrieval, or evidence models."
+      },
+      "llm_runtime": {
+        "stable": true,
+        "required_contracts": [
+          "AgentRun",
+          "ToolCall",
+          "AuditEvent",
+          "createDefaultAgentRun",
+          "createAuditEvent",
+          "hashArtifact",
+          "validateV1ArtifactShape"
+        ],
+        "instruction": "Log deterministic and external model activity through AgentRun, ToolCall, and AuditEvent-compatible records."
+      },
+      "gate_engine": {
+        "stable": true,
+        "required_contracts": [
+          "GateResult",
+          "GateSummary",
+          "calculateCitationCoverage",
+          "countUnsupportedClaims",
+          "summarizeGateResults",
+          "canExportFinal"
+        ],
+        "instruction": "Use shared gate summaries and final-export checks so final export fails closed on blocking gates."
+      }
+    }
+  },
+  "files_changed": [
+    "frontend/src/aletheia/agentops/v1Contracts.ts",
+    "frontend/tests/agentops/v1Contracts.test.ts",
+    "frontend/src/aletheia/agentops/index.ts",
+    ".agentops/v1/V1_CONTRACTS.md",
+    ".agentops/v1/V1_DATA_FLOW.md",
+    ".agentops/v1/V1_MODULE_BOUNDARIES.md",
+    ".agentops/v1/status/architecture-contracts.json"
+  ],
+  "contracts_added_or_changed": [
+    "Added V1_CONTRACT_VERSION and V1 facade exports.",
+    "Added V1-only types: DocumentRecord, DocumentChunk, RetrievalResult, Claim, ObligationItem, GateSummary, V1WorkspaceFixture, V1BigAtReference, V1BigAtReferenceResolution.",
+    "Re-exported P0-compatible V1 models: Matter, EvidenceItem, IssueNode, RiskItem, DraftMemo, ReviewComment, GateResult, AuditEvent, AgentRun, ToolCall, ProfessionalSkill.",
+    "Added shared helpers: createAuditEvent, countUnsupportedClaims, summarizeGateResults, createEvalCaseFromReviewComment, createSkillCandidateFromEvalCases, hashArtifact, validateV1ArtifactShape, createV1CompactFixture.",
+    "Exposed existing shared helpers through the V1 facade: createDefaultMatter, createDefaultAgentRun, calculateCitationCoverage, canExportFinal, parseBigAtReferences, resolveBigAtReference.",
+    "Fixed the V1 facade type export so EvalCase is available from the contract source promised by V1_CONTRACTS.md."
+  ],
+  "fixtures_added": [
+    "createV1CompactFixture covers Matter -> DocumentRecord -> DocumentChunk -> RetrievalResult -> EvidenceItem -> Claim -> IssueNode -> ObligationItem -> RiskItem -> DraftMemo -> GateResult."
+  ],
+  "tests_run": [
+    "cd frontend && ../backend/node_modules/.bin/tsx --test tests/agentops/v1Contracts.test.ts",
+    "cd frontend && npx tsc --noEmit --pretty false"
+  ],
+  "blockers": [
+    "No first-batch contract blocker remains for Document Retrieval, LLM Runtime, or Gate Engine.",
+    "Backend persistence still uses P0 repository input/output records and should be mapped to the V1 facade by feature owners before broad V1 data storage changes."
+  ],
+  "next_actions": [
+    "Document Retrieval should adopt DocumentRecord, DocumentChunk, and RetrievalResult from frontend/src/aletheia/agentops/v1Contracts.ts rather than local shapes.",
+    "Gate Engine and Export agents should use summarizeGateResults and canExportFinal for final export fail-closed behavior.",
+    "Eval/Skills agents should use createEvalCaseFromReviewComment and createSkillCandidateFromEvalCases as the baseline conversion path, extending centrally if needed.",
+    "LLM Runtime should use AgentRun, ToolCall, createDefaultAgentRun, createAuditEvent, and hashArtifact for run trace and model/tool-call provenance.",
+    "Architecture / Contracts should stop further contract edits unless explicitly re-dispatched by the orchestrator or supervisor."
+  ]
+}

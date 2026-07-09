@@ -1,0 +1,55 @@
+{
+  "agent": "v1-eval-skills",
+  "status": "bounded_cycle_done_eval_fixture_baseline_added",
+  "last_cycle_summary": "Completed a second bounded Eval/Skills cycle after reading V1 planning/status files, git status, the shared V1 contract facade, Review Studio/Gate/Runtime/Backend API status, and relevant eval/skills code/tests. Added createV1EvalCaseFixture so open ReviewComment records and failed GateResult records can be bundled into a replayable local eval fixture without a private schema. The fixture excludes resolved reviews and warning gates by default, carries source review/gate IDs plus local-only limitations, and focused coverage proves any skill derived from the fixture remains approval_status candidate.",
+  "capability_map": {
+    "review_comment_to_eval_case": {
+      "status": "existing_preserved",
+      "evidence": "createEvalCaseFromReviewComment remains in frontend/src/aletheia/agentops/v1Contracts.ts and is covered by frontend/tests/agentops/v1Contracts.test.ts."
+    },
+    "gate_failure_to_eval_case": {
+      "status": "implemented_this_cycle",
+      "evidence": "createEvalCaseFromGateFailure maps GateResult records into EvalCase records with gate_id, gate_type, gate_status, affected_artifact_ids, required_action, expected_behavior, expert_feedback, and source_run_id."
+    },
+    "eval_case_fixture": {
+      "status": "implemented_this_cycle",
+      "evidence": "createV1EvalCaseFixture bundles open review comments and failed gates into EvalCase records, preserving source_review_comment_ids, source_gate_result_ids, source_run_id, and local_only_limitations. Warning gates are excluded unless include_warning_gates is explicitly set."
+    },
+    "candidate_skill_generation": {
+      "status": "existing_preserved_with_new_regression",
+      "evidence": "createSkillCandidateFromEvalCases still creates ProfessionalSkill records with approval_status candidate and source eval case IDs; focused tests cover candidates created from gate-failure and eval-fixture cases."
+    },
+    "human_approval_inactive_by_default": {
+      "status": "guarded",
+      "evidence": "No approved skill activation path was added. Candidate skills remain inactive suggestions until explicit expert/human approval updates approval_status, and existing legacy playbook mapping still requires an approved playbook identity and timestamp before activation."
+    },
+    "local_source_index_scope": {
+      "status": "available_local_only",
+      "evidence": "Eval/Skills can consume the local-only /aletheia/matters/:matterId/v1/source-index contract for source provenance. Supabase source listing remains unavailable and must fail closed."
+    }
+  },
+  "files_changed": [
+    "frontend/src/aletheia/agentops/v1Contracts.ts",
+    "frontend/tests/agentops/v1Contracts.test.ts",
+    ".agentops/v1/V1_CONTRACTS.md",
+    ".agentops/v1/status/eval-skills.json"
+  ],
+  "checks_run": [
+    "cd frontend && ../backend/node_modules/.bin/tsx --test tests/agentops/v1Contracts.test.ts",
+    "cd frontend && npx tsc --noEmit --pretty false",
+    "jq -e . .agentops/v1/status/*.json",
+    "node .agentops/scripts/check-agentops.mjs"
+  ],
+  "blockers": [
+    "Supabase V1 document/chunk/source listing remains unavailable, so eval source-index provenance is local-only.",
+    "V1 runtime persistence remains local repository-level only for eval consumers; no authenticated public persistV1RuntimeResult route or approval retry wiring exists.",
+    "Review Studio still lacks persisted review-resolution API/status semantics, so review-derived eval cases remain helper/local contract output until durable review state is wired.",
+    "No legal-rule auto-learning or legal advice generation was implemented."
+  ],
+  "next_actions": [
+    "Wire Review Studio unresolved ReviewComment records into createEvalCaseFromReviewComment when a human explicitly chooses to create eval cases.",
+    "Extend createV1EvalCaseFixture with source-index document/chunk/source-link provenance once a local caller supplies the backend source-index snapshot.",
+    "Keep ProfessionalSkill records candidate-only until explicit expert approval and, where required, approved matter playbook provenance exist.",
+    "If downstream Export/Audit needs durable eval datasets, require source review, gate, evidence, audit, source-index, and run IDs before treating eval output as persisted learning state."
+  ]
+}

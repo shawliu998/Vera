@@ -1,0 +1,80 @@
+{
+  "agent": "v1-export-audit",
+  "status": "bounded_cycle_done_source_index_manifest_refs_guarded",
+  "last_cycle_summary": "Completed a sixth bounded Export/Audit cycle. Re-read V1 planning docs, all V1 status JSON, git status, shared V1 contracts, backend/API scoping, gate-engine, review-studio, document-retrieval, LLM runtime, supervisor readiness, current Export/Audit status, and relevant export/audit code. Added source-index manifest referential-integrity validation for chunk-to-document, source-link-to-document, and source-link-to-chunk references, and wired source-index manifest validation into export package integrity so orphaned source provenance fails closed. The focused export package test now covers the valid local-only warning path and a deliberately orphaned source-index failure. Gate Engine semantics, final export fail-closed behavior, and no-Supabase/no-external-provider claims remain unchanged.",
+  "capability_map": {
+    "source_index_consumer_adapter": {
+      "status": "implemented_previous_cycle",
+      "evidence": "buildExportPackage and buildAuditPack now accept options.sourceIndex with schema_version, storage_driver, matter_id, generated_at, documents, chunks, source_links, and limitations."
+    },
+    "source_index_export_caller": {
+      "status": "implemented_previous_cycle",
+      "evidence": "RemoteMatterCommandCenter passes the typed local V1 source index into buildExportPackage, includes source_index_manifest in the preview payload, and shows local-only/Supabase-unavailable status text next to the audit export package."
+    },
+    "audit_pack_source_manifest": {
+      "status": "implemented_previous_cycle_refs_guarded_this_cycle",
+      "evidence": "buildV1SourceIndexManifest produces aletheia-v1-source-index-manifest-v1 with document/chunk/source-link counts, deterministic hashes, document status counts, validation items, explicit local-only limitations, and this cycle's referential-integrity checks for chunk/document/source-link IDs."
+    },
+    "final_vs_draft_export_guard": {
+      "status": "implemented_previous_cycle_visible_this_cycle",
+      "evidence": "buildExportAuthorization uses existing canExportFinal semantics. Draft intent returns warning when final gates are not ready; final intent returns blocked until the export gate passes and no gate is failed. AuditPack includes export_authorization and ExportPackage.manifest includes final_export_allowed."
+    },
+    "command_center_authorization_visibility": {
+      "status": "implemented_previous_cycle",
+      "evidence": "RemoteMatterCommandCenter preview payload now includes export_authorization, the export panel shows final export allowed/blocked status, and the route spec asserts downloaded package manifest.final_export_allowed matches audit_pack.export_authorization.final_export_allowed."
+    },
+    "run_trace_audit_event_inclusion": {
+      "status": "implemented_previous_cycle_manifest_counts_added",
+      "evidence": "ExportPackage.manifest now includes audit_event_agent_runs, audit_event_tool_calls, audit_event_review_comments, and audit_event_gate_results, and validateExportPackageIntegrity fails if those per-class counts drift from audit_pack.audit_events."
+    },
+    "audit_event_manifest_counts": {
+      "status": "implemented_previous_cycle",
+      "evidence": "Focused exportPackage.test coverage asserts the per-class manifest counts and tampers audit_event_tool_calls to verify manifest_counts fails closed on provenance count drift."
+    },
+    "source_index_manifest_ref_integrity": {
+      "status": "implemented_this_cycle",
+      "evidence": "Source-index manifest validation now fails when chunks reference missing documents, source links reference missing documents, or source links reference missing chunks; validateExportPackageIntegrity surfaces failed source-index manifest validation as source_index_manifest_validation."
+    },
+    "final_export_fail_closed": {
+      "status": "existing_preserved",
+      "evidence": "This cycle did not alter Gate Engine canExportFinal behavior or final_memos filtering; final work remains constrained to approved memo records with passed gate status and backend approval policy."
+    },
+    "supabase_readiness": {
+      "status": "not_claimed",
+      "evidence": "Source-index manifest labels local storage as local_only and appends the explicit limitation that Supabase V1 document, chunk, and source-link listing remains unavailable."
+    }
+  },
+  "files_changed": [
+    "frontend/src/aletheia/agentops/exportPackage.ts",
+    "frontend/tests/agentops/exportPackage.test.ts",
+    ".agentops/v1/status/export-audit.json"
+  ],
+  "tests_run": [
+    "cd frontend && ../backend/node_modules/.bin/tsx --test tests/agentops/exportPackage.test.ts",
+    "cd frontend && npx tsc --noEmit --pretty false",
+    "jq -e . .agentops/v1/status/*.json",
+    "node .agentops/scripts/check-agentops.mjs"
+  ],
+  "checks": {
+    "focused_export_package_test": "passed",
+    "frontend_typescript": "passed",
+    "v1_status_json": "passed",
+    "agentops_checker": "passed",
+    "source_index_scope": "local_only_manifested_no_supabase_overclaim",
+    "source_index_manifest_ref_integrity": "passed_orphaned_refs_fail_source_index_manifest_validation",
+    "final_export_guard": "draft_warns_final_fails_closed_until_canExportFinal_passes",
+    "audit_event_manifest_counts": "passed_per_class_counts_validate_against_audit_pack_events",
+    "external_model_calls": "not_used"
+  },
+  "blockers": [
+    "Supabase V1 document/chunk/source-link listing remains unavailable.",
+    "Source-index export consumption is wired in RemoteMatterCommandCenter for local mode, but no backend export route or Supabase source-index implementation exists.",
+    "No legal advice generation, external-provider readiness, or Supabase runtime persistence was implemented."
+  ],
+  "next_actions": [
+    "Run the AgentOps route Playwright smoke when the seeded UI smoke environment is available to verify the downloaded package includes source_index_manifest, export_authorization, audit-event class manifest counts, and source-index manifest validation end to end.",
+    "Consider a backend export route only after local UI export behavior is accepted; keep Supabase source-index unsupported until storage owners implement it.",
+    "If another Export/Audit cycle is dispatched, add a focused backend/API audit-pack boundary test only if a backend export route is introduced.",
+    "If Supabase source listing remains unavailable for launch, keep private-pilot release notes explicitly local-only."
+  ]
+}

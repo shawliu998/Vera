@@ -1,40 +1,131 @@
 {
   "agent": "v1-supervisor",
-  "status": "blocked_on_architecture_contracts",
-  "last_cycle_summary": "Validated initialized V1 coordination files, confirmed status JSON parses, checked public docs for unsafe readiness/legal-advice overclaims, and tightened launch sequencing so feature implementation waits on Architecture / Contracts.",
-  "v1_completion_estimate": "planning_started",
-  "modules": {
-    "architecture_contracts": "blocking_dependency",
-    "document_retrieval": "blocked_until_contracts",
-    "llm_agent_runtime": "blocked_until_contracts",
-    "review_studio": "blocked_until_contracts",
-    "gate_engine": "blocked_until_contracts",
-    "export_audit": "blocked_until_contracts",
-    "eval_skills": "blocked_until_contracts",
-    "deployment_docs": "planning_only_until_contracts"
+  "status": "complete_v1_local_private_pilot_validation_passed",
+  "updated_at": "2026-07-09T09:35:32Z",
+  "last_cycle_summary": "Final V1 completion report written after orchestrator final validation passed. Aletheia V1 is complete for the local/private-pilot usable target, with caveats preserved: local/private-pilot only, no legal advice, no production SaaS readiness, Supabase source listing unavailable, Supabase runtime persistence unavailable, no public persistV1RuntimeResult route or approval retry wiring, review-derived eval not durable, and external model calls off by default.",
+  "completion_decision": {
+    "v1_local_private_pilot_complete": true,
+    "production_saas_ready": false,
+    "legal_advice_ready": false,
+    "final_validation_passed": true
   },
+  "lane_classification": {
+    "architecture_contracts": {
+      "state": "done",
+      "summary": "Shared V1 facade, fixtures, guards, audit/eval/skill helpers, and module boundary docs are complete for local/private-pilot scope."
+    },
+    "document_retrieval": {
+      "state": "partial_with_caveat",
+      "summary": "Local UI/backend batch import, 24-document retrieval eval, matter-scoped retrieval, V1 source index, needs_ocr, XLSX basic parsing, and compact source preview are validation-ready. Rich spreadsheet semantics, full source page preview, and Supabase source listing remain unavailable."
+    },
+    "llm_agent_runtime": {
+      "state": "partial_with_caveat",
+      "summary": "Deterministic runtime, one-shot scheduler, local repository-level persistV1RuntimeResult, blocked external-call checkpoint persistence, trace, schema guard, and token estimates exist. Supabase runtime persistence, public route, approval retry wiring, real providers, and exact pricing adapters remain unavailable."
+    },
+    "gate_engine": {
+      "state": "done",
+      "summary": "Required gates, external-source audit path, approval payload gate snapshot IDs, and fail-closed final export behavior are complete for local/private-pilot scope."
+    },
+    "review_studio": {
+      "state": "partial_with_caveat",
+      "summary": "Local/Remote Matter unresolved review visibility and local V1 eval fixture export are present. Durable review-resolution API/status semantics remain missing, so review-derived eval is not durable."
+    },
+    "backend_api_scoping": {
+      "state": "done",
+      "summary": "Local source-index API and fail-closed unsupported storage/runtime scoping are complete for local/private-pilot scope."
+    },
+    "export_audit": {
+      "state": "done",
+      "summary": "Local source-index export caller, source-index manifest/counts, export authorization visibility, and gate-controlled export behavior are complete for local/private-pilot scope."
+    },
+    "eval_skills": {
+      "state": "partial_with_caveat",
+      "summary": "Eval fixture helpers and candidate-only skill output exist. Durable review-resolution and approved skill activation workflow remain future work."
+    },
+    "integration_owner": {
+      "state": "done",
+      "summary": "Export source-index caller wiring is complete for the local Remote Matter Command Center path."
+    },
+    "deployment_docs_demo": {
+      "state": "done",
+      "summary": "README, demo script, local/private deployment docs, and release notes carry local/private-pilot positioning and required caveats."
+    },
+    "supervisor": {
+      "state": "complete",
+      "summary": "Final completion report and validation evidence are recorded."
+    }
+  },
+  "validation_evidence": {
+    "backend": [
+      "cd backend && npm run build: passed",
+      "cd backend && npm run check:aletheia:operator: passed with only dirty-worktree warning",
+      "cd backend && npm run check:aletheia:source-provenance: passed",
+      "cd backend && npm run check:aletheia:approval-policy: passed",
+      "cd backend && npm run check:aletheia:run-trace: passed",
+      "cd backend && npm run check:aletheia:audit-integrity: ok true; warning only because default local smoke DB had no persisted matter/export rows",
+      "cd backend && node --import tsx src/scripts/aletheiaBackendApiScopingAudit.ts: passed",
+      "cd backend && node --import tsx src/scripts/aletheiaV1RuntimePersistenceAudit.ts: passed"
+    ],
+    "frontend": [
+      "cd frontend && npm run lint: passed",
+      "cd frontend && npx tsc --noEmit --pretty false: passed",
+      "cd frontend && ../backend/node_modules/.bin/tsx --test tests/agentops/exportPackage.test.ts tests/agentops/v1Contracts.test.ts tests/reviewStudio.test.ts tests/agentops/gates.test.ts tests/agentops/v1Runtime.test.ts tests/agentops/v1DocumentRetrievalAdapters.test.ts: passed, 40 tests"
+    ],
+    "ui_smoke": [
+      "Initial full UI smoke found stale Review Studio demo assertion; frontend/tests/review-studio-demo.spec.ts was updated to assert fail-closed V1 semantics.",
+      "cd frontend && ALETHEIA_UI_SMOKE_FRONTEND_PORT=5310 ALETHEIA_UI_SMOKE_BACKEND_PORT=5311 npx playwright test tests/review-studio-demo.spec.ts --config=playwright.config.ts: passed, 2 tests",
+      "cd frontend && ALETHEIA_UI_SMOKE_FRONTEND_PORT=5310 ALETHEIA_UI_SMOKE_BACKEND_PORT=5311 npx playwright test --config=playwright.config.ts: passed, 6 tests desktop/mobile",
+      "post-fix cd frontend && npm run lint: passed",
+      "post-fix cd frontend && npx tsc --noEmit --pretty false: passed"
+    ],
+    "coordination": [
+      "jq -e . .agentops/v1/status/*.json && node .agentops/scripts/check-agentops.mjs && git diff --check: passed",
+      "final supervisor post-edit jq -e . .agentops/v1/status/*.json: passed",
+      "final supervisor post-edit node .agentops/scripts/check-agentops.mjs: passed"
+    ]
+  },
+  "mandatory_caveats": [
+    "Local/private-pilot only.",
+    "No legal advice generation and no replacement for expert judgment.",
+    "No production SaaS readiness.",
+    "Supabase V1 document/chunk/source listing is unavailable.",
+    "Supabase V1 runtime persistence is unavailable.",
+    "No public persistV1RuntimeResult route or approval retry wiring exists.",
+    "Review-derived eval is not durable until review-resolution API/status semantics exist.",
+    "External model calls remain off by default for sensitive/private data and must be explicit, configurable, logged, and auditable."
+  ],
+  "heartbeats": {
+    "high_frequency_heartbeats_can_remain_stopped": true,
+    "deleted_by_orchestrator": [
+      "aletheia-v1-orchestrator-adaptive-inspection",
+      "aletheia-v1-document-retrieval-adaptive-cycle",
+      "aletheia-v1-export-audit-adaptive-cycle"
+    ],
+    "recommendation": "Do not restart high-frequency V1 lane heartbeats unless a targeted regression follow-up is needed."
+  },
+  "dirty_worktree_commit_split_recommendation": [
+    "Commit 1: V1 coordination/status docs under .agentops/v1/**.",
+    "Commit 2: Backend local document/source/runtime/audit support, including repository, routes, upload/parser changes, package scripts, and backend audit scripts.",
+    "Commit 3: Frontend V1 AgentOps/review/export UI and API wiring.",
+    "Commit 4: Focused tests and Playwright UI smoke updates.",
+    "Commit 5: Public docs, including README.md and docs/**.",
+    "Preserve caveats in every commit message body or PR section that touches user-visible claims."
+  ],
   "files_changed": [
-    ".agentops/v1/V1_PRODUCT_SPEC.md",
-    ".agentops/v1/V1_ACCEPTANCE_CRITERIA.md",
-    ".agentops/v1/V1_INTEGRATION_PLAN.md",
-    ".agentops/v1/V1_RISK_REGISTER.md",
     ".agentops/v1/SUPERVISOR_STATUS.md",
     ".agentops/v1/status/supervisor.json"
   ],
   "tests_run": [
-    "jq -e . .agentops/v1/status/supervisor.json",
-    "rg -n \"production|legal advice|replace|autonomous|private pilot|private-pilot|external model|sensitive\" README* docs .agentops"
+    "jq -e . .agentops/v1/status/*.json",
+    "node .agentops/scripts/check-agentops.mjs"
   ],
-  "blockers": [
-    "Architecture / Contracts must publish shared V1 schemas, deterministic fixtures, module boundaries, and status schema before feature implementation windows launch."
-  ],
-  "integration_risks": [
-    "Feature windows must not independently redefine shared V1 schemas or private replacement models.",
-    "README and release docs should remain truthful about private-pilot readiness."
-  ],
+  "check_results": {
+    "v1_status_json": "passed",
+    "agentops_checker": "passed"
+  },
   "next_actions": [
-    "Start V1 Architecture/Contracts thread as the next blocking dependency.",
-    "Publish canonical V1 contract shapes, fixtures, module boundaries, and status schema.",
-    "Launch Document Retrieval, LLM Runtime, and Gate Engine only after Architecture / Contracts baseline is available."
+    "Prepare final report and commit/PR materials.",
+    "Use the recommended commit split to keep review manageable.",
+    "Keep caveats visible in release notes and PR description."
   ]
 }
