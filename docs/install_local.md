@@ -99,6 +99,19 @@ Frontend:
 open http://localhost:3000/aletheia
 ```
 
+## Validation
+
+The Docker local package has been validated with:
+
+- clean-clone `docker compose config`
+- clean-clone backend production build
+- clean-clone frontend production build
+- `docker compose build`
+- `docker compose up -d`
+- backend `GET /health` returning `{"ok":true}`
+- frontend `/aletheia` returning HTTP 200
+- a minimal browser smoke check confirming the Aletheia workspace renders
+
 ## Scope
 
 The Docker local install supports the V1 local/private-pilot workflow:
