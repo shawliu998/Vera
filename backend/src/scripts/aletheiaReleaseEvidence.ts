@@ -24,6 +24,7 @@ const VALIDATION_COMMANDS = [
   "cd backend && npm run check:aletheia:restore",
   "cd backend && npm run check:aletheia:privacy",
   "cd backend && npm run check:aletheia:tool-policy",
+  "cd backend && npm run check:aletheia:approval-policy",
   "cd backend && npm run check:aletheia:evidence",
   "cd backend && npm run check:aletheia:audit-integrity",
   "cd backend && npm run check:aletheia:operator",
@@ -151,6 +152,7 @@ function main() {
         packageScript(root, "backend/package.json", "check:aletheia:restore") &&
         packageScript(root, "backend/package.json", "check:aletheia:privacy") &&
         packageScript(root, "backend/package.json", "check:aletheia:tool-policy") &&
+        packageScript(root, "backend/package.json", "check:aletheia:approval-policy") &&
         packageScript(root, "backend/package.json", "check:aletheia:evidence") &&
         packageScript(root, "backend/package.json", "test:aletheia:local") &&
         packageScript(root, "backend/package.json", "test:aletheia:restore-drill") &&
@@ -168,6 +170,7 @@ function main() {
         "npm run check:aletheia:evidence",
         "npm run check:aletheia:privacy",
         "npm run check:aletheia:tool-policy",
+        "npm run check:aletheia:approval-policy",
         "npm run test:aletheia:local",
         "npm run test:aletheia:restore-drill",
         "npm run test:aletheia:retrieval-eval",

@@ -61,6 +61,9 @@ and replayable audit records.
 - Tool Adapter policy audit that verifies the HTTP Tool Adapter and stdio MCP
   wrapper expose only the approved allowlist and keep browser, terminal,
   external web, email, and destructive file operations disabled.
+- Approval policy audit that verifies high-risk exports require approved human
+  checkpoints, playbook updates remain human-approved, external-source use stays
+  controlled, and regression/audit checks cover those gates.
 - Local audit integrity command that verifies export work products have matching
   audit events, local export files, data-directory bounded paths, and approved
   checkpoint links for high-risk exports, with byte counts and sha256 hashes for
@@ -88,6 +91,7 @@ npm run test:aletheia:restore-drill
 npm run test:aletheia:retrieval-eval
 npm run check:aletheia:privacy
 npm run check:aletheia:tool-policy
+npm run check:aletheia:approval-policy
 npm run check:aletheia:evidence
 npm run check:aletheia:audit-integrity
 npm run test:aletheia:completion

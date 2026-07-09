@@ -64,6 +64,7 @@ jobs:
           npm run check:aletheia:restore
           npm run check:aletheia:privacy
           npm run check:aletheia:tool-policy
+          npm run check:aletheia:approval-policy
           npm run check:aletheia:evidence
           npm run check:aletheia:audit-integrity
           npm run check:aletheia:operator

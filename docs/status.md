@@ -54,6 +54,12 @@ The least-privilege Tool Adapter policy audit entrypoint is:
 cd backend && npm run check:aletheia:tool-policy
 ```
 
+The high-risk approval policy audit entrypoint is:
+
+```bash
+cd backend && npm run check:aletheia:approval-policy
+```
+
 The release evidence manifest entrypoint is:
 
 ```bash
@@ -121,6 +127,7 @@ cd backend && npm run check:aletheia:backup
 cd backend && npm run check:aletheia:restore
 cd backend && npm run check:aletheia:privacy
 cd backend && npm run check:aletheia:tool-policy
+cd backend && npm run check:aletheia:approval-policy
 cd backend && npm run check:aletheia:evidence
 cd backend && npm run check:aletheia:audit-integrity
 cd backend && npm run check:aletheia:operator
@@ -149,6 +156,9 @@ Current known result:
 - Tool Adapter policy audit passes and verifies the HTTP adapter and MCP
   wrapper expose only the approved narrow allowlist while browser, terminal,
   external web, email, and destructive file operations stay disabled.
+- approval policy audit passes and verifies high-risk exports require approved
+  human checkpoints, playbook updates stay human-approved, external-source use
+  remains controlled, and regression/audit checks cover those gates.
 - release evidence manifest passes and records the current git commit,
   validation commands, screenshot hashes, deployment/attribution docs, privacy
   defaults, and approval posture.

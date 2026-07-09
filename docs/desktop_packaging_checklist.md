@@ -16,6 +16,9 @@ not a release process yet; it defines what must be true before packaging.
 - `npm run check:aletheia:tool-policy` verifies the HTTP Tool Adapter and stdio
   MCP wrapper expose only the approved allowlist and keep high-risk automation
   tools disabled.
+- `npm run check:aletheia:approval-policy` verifies high-risk export approval
+  gates, human-approved playbook updates, external-source controls, and
+  regression/audit coverage.
 - `npm run check:aletheia:evidence` produces the release evidence manifest for
   the current git commit, validation commands, screenshots, and deployment docs.
 - `npm run check:aletheia:audit-integrity` verifies that local export work
@@ -111,6 +114,7 @@ npm run check:aletheia:backup
 ALETHEIA_RESTORE_SOURCE_DIR=.data/aletheia npm run check:aletheia:restore
 npm run check:aletheia:privacy
 npm run check:aletheia:tool-policy
+npm run check:aletheia:approval-policy
 ALETHEIA_RELEASE_EVIDENCE_OUT=../release-evidence.json npm run check:aletheia:evidence
 ALETHEIA_AUDIT_SOURCE_DIR=.data/aletheia npm run check:aletheia:audit-integrity
 npm run test:aletheia:local

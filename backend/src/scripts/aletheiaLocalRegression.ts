@@ -809,6 +809,22 @@ async function main() {
     feedbackApprovalBlocked,
     "Feedback dataset export should require approval",
   );
+  let finalMemoApprovalBlocked = false;
+  try {
+    await repo.createWorkProduct(ctx, matter.id, {
+      kind: "final_memo",
+      title: "Blocked Final Memo",
+      status: "generated",
+      schemaVersion: "aletheia-final-memo-v0",
+      content: { blocked: true },
+      validationErrors: [],
+      generatedBy: "agent",
+      model: null,
+    });
+  } catch (error) {
+    finalMemoApprovalBlocked = error instanceof ApprovalRequiredError;
+  }
+  assert(finalMemoApprovalBlocked, "Final memo export should require approval");
 
   const checkpoint: any = await repo.requestApproval(ctx, matter.id, {
     action: "audit_pack_export",
