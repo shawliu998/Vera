@@ -1421,6 +1421,7 @@ export class LocalAletheiaRepository implements AletheiaRepository {
         "audit_pack_export",
         "feedback_dataset_export",
         "final_memo_export",
+        "external_model_call",
       ].includes(checkpoint.checkpoint_type)
     ) {
       throw new ApprovalRequiredError(
@@ -2249,14 +2250,6 @@ export class LocalAletheiaRepository implements AletheiaRepository {
       )
       .get(input.checkpointId, runId, matterId, ctx.userId) as any | undefined;
     if (!checkpoint) return null;
-    if (
-      checkpoint.status !== "resolved" ||
-      !["edited", "responded"].includes(String(checkpoint.decision))
-    ) {
-      throw new ApprovalRequiredError(
-        "Only edited or responded checkpoints can resume an agent run.",
-      );
-    }
 
     const timestamp = now();
     const latestSequence = this.db
@@ -2268,9 +2261,143 @@ export class LocalAletheiaRepository implements AletheiaRepository {
       `,
       )
       .get(runId) as { sequence?: number } | undefined;
+    const stepSequence = Number(latestSequence?.sequence ?? 0) + 1;
+    const checkpointType = String(checkpoint.checkpoint_type);
+
+    if (checkpointType === "external_model_call") {
+      const allowedExternalDecisions = ["approved", "edited", "responded"];
+      if (
+        !allowedExternalDecisions.includes(String(checkpoint.decision)) ||
+        !["approved", "resolved"].includes(String(checkpoint.status))
+      ) {
+        throw new ApprovalRequiredError(
+          "Only approved, edited, or responded external model call checkpoints can retry an agent run.",
+        );
+      }
+
+      const stepId = randomUUID();
+      const requestedPayload = parseObject(checkpoint.requested_payload);
+      const decisionPayload = parseObject(checkpoint.decision_payload);
+      this.db
+        .prepare(
+          `
+          insert into aletheia_agent_steps (
+            id, run_id, matter_id, user_id, step_key, title, sequence, status,
+            input, output, validation_errors, metrics, started_at, completed_at,
+            created_at
+          )
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        )
+        .run(
+          stepId,
+          runId,
+          matterId,
+          ctx.userId,
+          "retry_after_external_model_approval",
+          "Retry after external model approval",
+          stepSequence,
+          "completed",
+          json({
+            checkpointId: checkpoint.id,
+            checkpointType,
+            decision: checkpoint.decision,
+            note: input.note ?? null,
+          }),
+          json({
+            result:
+              "External model retry was authorized by a persisted human checkpoint. No external provider call was dispatched by the local resume route.",
+            providerDecision: requestedPayload.providerDecision ?? null,
+            decisionPayload,
+            nextStep: "caller_may_persist_retry_result",
+            auditEvent: "v1_runtime_retry_recorded",
+          }),
+          "[]",
+          json({ durationMs: 0, externalProviderDispatched: false }),
+          timestamp,
+          timestamp,
+          timestamp,
+        );
+      this.db
+        .prepare(
+          `
+          insert into aletheia_tool_calls (
+            id, run_id, step_id, matter_id, user_id, tool_name, risk_level,
+            status, input, output, error, metrics, started_at, completed_at,
+            created_at
+          )
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        )
+        .run(
+          randomUUID(),
+          runId,
+          stepId,
+          matterId,
+          ctx.userId,
+          "v1_approval_retry",
+          "high",
+          "completed",
+          json({
+            checkpointId: checkpoint.id,
+            decision: checkpoint.decision,
+            providerDecision: requestedPayload.providerDecision ?? null,
+          }),
+          json({
+            retryAuthorized: true,
+            externalProviderDispatched: false,
+            nextStep: "persist_v1_runtime_result_after_local_retry",
+          }),
+          null,
+          json({ durationMs: 0 }),
+          timestamp,
+          timestamp,
+          timestamp,
+        );
+      this.db
+        .prepare(
+          `
+          update aletheia_agent_runs
+          set status = 'running',
+              current_step_key = 'provider_dispatch_ready',
+              updated_at = ?
+          where id = ?
+        `,
+        )
+        .run(timestamp, runId);
+      await this.writeAuditEvent(ctx.userId, matterId, {
+        actor: "system",
+        action: "v1_runtime_retry_recorded",
+        workflowVersion: "aletheia-v1-llm-runtime",
+        model: run.model_profile ?? null,
+        details: {
+          agentRunId: runId,
+          checkpointId: checkpoint.id,
+          decision: checkpoint.decision,
+          note: input.note ?? null,
+          externalProviderDispatched: false,
+          providerDecision: requestedPayload.providerDecision ?? null,
+        },
+      });
+      this.touchMatter(ctx.userId, matterId);
+      return this.agentRunWithTrace(
+        this.db
+          .prepare("select * from aletheia_agent_runs where id = ?")
+        .get(runId),
+      );
+    }
+
+    if (
+      checkpoint.status !== "resolved" ||
+      !["edited", "responded"].includes(String(checkpoint.decision))
+    ) {
+      throw new ApprovalRequiredError(
+        "Only edited or responded checkpoints can resume an agent run.",
+      );
+    }
+
     const revisedDraft: any = await this.generateDraftMemo(ctx, matterId);
     const stepId = randomUUID();
-    const stepSequence = Number(latestSequence?.sequence ?? 0) + 1;
     this.db
       .prepare(
         `

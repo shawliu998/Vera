@@ -31,6 +31,7 @@
     "test:aletheia:completion": "tsx src/scripts/aletheiaCompletionAudit.ts",
     "test:aletheia:local": "tsx src/scripts/aletheiaLocalRegression.ts",
     "test:aletheia:batch-import-route": "tsx src/scripts/aletheiaBatchImportRouteAudit.ts",
+    "test:aletheia:v1-runtime-route": "tsx src/scripts/aletheiaV1RuntimeRouteAudit.ts",
     "test:aletheia:restore-drill": "tsx src/scripts/aletheiaRestoreDrill.ts",
     "test:aletheia:retrieval-eval": "tsx src/scripts/aletheiaRetrievalEval.ts"
   },

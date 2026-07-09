@@ -25,6 +25,7 @@ import {
   CapabilityNotAvailableError,
   LocalAdapterNotReadyError,
 } from "../lib/aletheia/repository";
+import type { V1RuntimePersistenceInput } from "../lib/aletheia/v1RuntimePersistence";
 import { requireAuth } from "../middleware/auth";
 import { multiFileUpload, singleFileUpload } from "../lib/upload";
 
@@ -107,6 +108,139 @@ function runBudgetPayload(value: unknown) {
     maxTokens: positiveNumber(payload.maxTokens),
     maxCostUsd: positiveNumber(payload.maxCostUsd),
     maxWallTimeMs: positiveNumber(payload.maxWallTimeMs),
+  };
+}
+
+const V1_RUNTIME_STATUSES = new Set([
+  "queued",
+  "working",
+  "blocked",
+  "review_needed",
+  "waiting_for_approval",
+  "done",
+  "failed",
+  "cancelled",
+]);
+
+const V1_TRACE_LEVELS = new Set(["debug", "info", "warning", "error"]);
+const V1_TOOL_STATUSES = new Set(["started", "succeeded", "failed", "skipped"]);
+const V1_AUDIT_ACTORS = new Set(["human", "agent", "system"]);
+
+function v1RuntimePayload(
+  body: unknown,
+): Omit<V1RuntimePersistenceInput, "userId" | "matterId"> | { error: string } {
+  const payload = objectPayload(body);
+  const workflow = text(payload.workflow, 120) || "legal_matter_review";
+  const goal = text(payload.goal, 2000);
+  const run = objectPayload(payload.run);
+  const runId = text(run.id, 160);
+  const agentId = text(run.agent_id, 160);
+  const startedAt = text(run.started_at, 80);
+  const runStatus = text(run.status, 40);
+
+  if (!TEMPLATES.has(workflow)) return { error: "workflow is invalid" };
+  if (!goal) return { error: "goal is required" };
+  if (!runId) return { error: "run.id is required" };
+  if (!agentId) return { error: "run.agent_id is required" };
+  if (!startedAt) return { error: "run.started_at is required" };
+  if (!V1_RUNTIME_STATUSES.has(runStatus)) {
+    return { error: "run.status is invalid" };
+  }
+
+  const traceEvents = arrayPayload(run.trace_events).map((item, index) => {
+    const event = objectPayload(item);
+    const level = text(event.level, 40) || "info";
+    return {
+      id: text(event.id, 160) || `${runId}-trace-${index + 1}`,
+      timestamp: text(event.timestamp, 80) || startedAt,
+      level: V1_TRACE_LEVELS.has(level)
+        ? (level as "debug" | "info" | "warning" | "error")
+        : "info",
+      message: text(event.message, 2000) || "V1 runtime trace event.",
+      metadata: objectPayload(event.metadata),
+    };
+  });
+
+  const toolCalls = arrayPayload(run.tool_calls).map((item, index) => {
+    const call = objectPayload(item);
+    const status = text(call.status, 40) || "skipped";
+    return {
+      id: text(call.id, 160) || `${runId}-tool-${index + 1}`,
+      name: text(call.name, 160) || "v1_runtime_tool",
+      started_at: text(call.started_at, 80) || startedAt,
+      ended_at: nullableText(call.ended_at, 80) ?? undefined,
+      status: V1_TOOL_STATUSES.has(status)
+        ? (status as "started" | "succeeded" | "failed" | "skipped")
+        : "skipped",
+      input: call.input,
+      output: call.output,
+      error: nullableText(call.error, 2000) ?? undefined,
+    };
+  });
+
+  const auditEvents = arrayPayload(payload.auditEvents).map((item, index) => {
+    const event = objectPayload(item);
+    const actor = text(event.actor_type, 40) || "system";
+    return {
+      id: text(event.id, 160) || `${runId}-audit-${index + 1}`,
+      matter_id: "",
+      actor_type: V1_AUDIT_ACTORS.has(actor)
+        ? (actor as "human" | "agent" | "system")
+        : "system",
+      actor_id: text(event.actor_id, 160) || "v1-runtime",
+      action: text(event.action, 160) || "v1_runtime_result_persisted",
+      artifact_id: nullableText(event.artifact_id, 160) ?? undefined,
+      artifact_type: nullableText(event.artifact_type, 160) ?? undefined,
+      before_hash: nullableText(event.before_hash, 240) ?? undefined,
+      after_hash: nullableText(event.after_hash, 240) ?? undefined,
+      timestamp: text(event.timestamp, 80) || startedAt,
+    };
+  });
+
+  const providerDecision = payload.providerDecision
+    ? objectPayload(payload.providerDecision)
+    : undefined;
+  const tokenUsage = objectPayload(run.token_usage);
+
+  return {
+    workflow,
+    goal,
+    now: nullableText(payload.now, 80) ?? undefined,
+    providerDecision: providerDecision
+      ? {
+          allowed: providerDecision.allowed === true,
+          reason:
+            text(providerDecision.reason, 1000) ||
+            "V1 runtime provider policy decision.",
+          externalCall: providerDecision.externalCall === true,
+          provider: text(providerDecision.provider, 160) || "deterministic",
+          model: text(providerDecision.model, 160) || "deterministic-v1",
+          privacyMode: text(providerDecision.privacyMode, 80) || "private",
+        }
+      : undefined,
+    run: {
+      id: runId,
+      matter_id: "",
+      agent_id: agentId,
+      started_at: startedAt,
+      ended_at: nullableText(run.ended_at, 80) ?? undefined,
+      status: runStatus as V1RuntimePersistenceInput["run"]["status"],
+      tool_calls: toolCalls,
+      trace_events: traceEvents,
+      model: nullableText(run.model, 160) ?? undefined,
+      token_usage:
+        tokenUsage.total_tokens !== undefined
+          ? {
+              input_tokens: positiveNumber(tokenUsage.input_tokens) ?? 0,
+              output_tokens: positiveNumber(tokenUsage.output_tokens) ?? 0,
+              total_tokens: positiveNumber(tokenUsage.total_tokens) ?? 0,
+            }
+          : undefined,
+      errors: arrayPayload(run.errors)
+        .map((item) => text(item, 1000))
+        .filter(Boolean),
+    },
+    auditEvents,
   };
 }
 
@@ -926,6 +1060,36 @@ aletheiaRouter.post(
       if (!data)
         return void res.status(404).json({ detail: "Matter not found" });
       res.status(201).json(data);
+    } catch (error) {
+      handleRouteError(res, error);
+    }
+  },
+);
+
+// POST /aletheia/matters/:matterId/v1/runtime-results
+aletheiaRouter.post(
+  "/matters/:matterId/v1/runtime-results",
+  requireAuth,
+  async (req, res) => {
+    const input = v1RuntimePayload(req.body);
+    if ("error" in input) {
+      return void res.status(400).json({ detail: input.error });
+    }
+
+    try {
+      const data = await createAletheiaRepository().persistV1RuntimeResult(
+        userContext(res),
+        req.params.matterId,
+        input,
+      );
+      if (!data) {
+        return void res.status(404).json({ detail: "Matter not found" });
+      }
+      res.status(201).json({
+        schema_version: "aletheia-v1-runtime-persistence-route-local-v0",
+        local_only: true,
+        run: data,
+      });
     } catch (error) {
       handleRouteError(res, error);
     }
