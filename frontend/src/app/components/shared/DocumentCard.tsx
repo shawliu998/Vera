@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, File, X, AlertCircle, Loader2 } from "lucide-react";
+import { FileText, File, X, AlertCircle, Loader2, Table2 } from "lucide-react";
 import type { Document } from "./types";
 
 interface Props {
@@ -16,6 +16,9 @@ function FileIcon({ fileType }: { fileType: string | null }) {
   }
   if (fileType === "docx" || fileType === "doc") {
     return <File className="h-4 w-4 text-blue-600 shrink-0" />;
+  }
+  if (fileType === "xlsx") {
+    return <Table2 className="h-4 w-4 text-emerald-600 shrink-0" />;
   }
   return <File className="h-4 w-4 text-gray-500 shrink-0" />;
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import {
     useEffect,
     useRef,
@@ -661,9 +662,12 @@ export default function SecurityPage() {
                             </div>
                             <div className="flex justify-center">
                                 <div className="flex h-48 w-48 items-center justify-center rounded-xl bg-white p-2">
-                                    <img
+                                    <Image
                                         src={enrollment.qrCode}
                                         alt="MFA QR code"
+                                        width={192}
+                                        height={192}
+                                        unoptimized
                                         className="h-full w-full"
                                     />
                                 </div>

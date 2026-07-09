@@ -111,14 +111,16 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
     useEffect(() => {
         if (isBuiltin) {
             const wf = builtinWorkflow;
-            if (!wf) {
-                setNotFound(true);
-            } else {
-                setWorkflow(wf);
-                setPromptMd(wf.prompt_md ?? "");
-                setColumns(wf.columns_config ?? []);
-            }
-            setLoading(false);
+            queueMicrotask(() => {
+                if (!wf) {
+                    setNotFound(true);
+                } else {
+                    setWorkflow(wf);
+                    setPromptMd(wf.prompt_md ?? "");
+                    setColumns(wf.columns_config ?? []);
+                }
+                setLoading(false);
+            });
             return;
         }
 

@@ -36,7 +36,10 @@ export default function AletheiaLayout({
 
     useEffect(() => {
         if (typeof window !== "undefined" && window.innerWidth >= 768) {
-            localStorage.setItem("sidebarOpen", isSidebarOpen.toString());
+            localStorage.setItem(
+                "sidebarOpen",
+                isSidebarOpenDesktop.toString(),
+            );
         }
     }, [isSidebarOpenDesktop]);
 

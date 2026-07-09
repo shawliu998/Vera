@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkMath from "remark-math";
 import remarkGfm from "remark-gfm";
@@ -66,7 +66,6 @@ function toolCallLabel(name: string): string {
  */
 function BulkEditActions({
     pending,
-    filenameByDocId,
     onViewClick,
     onResolveStart,
     onResolved,
@@ -76,7 +75,6 @@ function BulkEditActions({
         annotation: EditAnnotation;
         filename: string;
     }[];
-    filenameByDocId: Map<string, string>;
     onViewClick?: (ann: EditAnnotation, filename: string) => void;
     onResolveStart?: (args: {
         editId: string;
@@ -316,7 +314,6 @@ function EditCardsSection({
                 <div className="px-3 pt-3">
                     <BulkEditActions
                         pending={pending}
-                        filenameByDocId={filenameByDocId}
                         onViewClick={onViewClick}
                         onResolveStart={onResolveStart}
                         onResolved={onResolved}
@@ -350,16 +347,27 @@ function ResponseStatus({ status }: { status: StatusState }) {
     const isError = status === "error";
 
     useEffect(() => {
-        if (wasActiveRef.current && !isActive) {
-            setShowDone(true);
-            setDoneVisible(true);
-            const t = setTimeout(() => setDoneVisible(false), 1500);
-            return () => clearTimeout(t);
-        } else if (!wasActiveRef.current && isActive) {
-            setShowDone(false);
-            setDoneVisible(false);
-        }
+        const wasActive = wasActiveRef.current;
         wasActiveRef.current = isActive;
+
+        if (wasActive && !isActive) {
+            let hideTimer = 0;
+            const showTimer = window.setTimeout(() => {
+                setShowDone(true);
+                setDoneVisible(true);
+                hideTimer = window.setTimeout(() => setDoneVisible(false), 1500);
+            }, 0);
+            return () => {
+                window.clearTimeout(showTimer);
+                window.clearTimeout(hideTimer);
+            };
+        }
+        if (!wasActive && isActive) {
+            queueMicrotask(() => {
+                setShowDone(false);
+                setDoneVisible(false);
+            });
+        }
     }, [isActive]);
 
     return (
@@ -486,10 +494,10 @@ function ReasoningBlock({
                             <ReactMarkdown
                                 remarkPlugins={[remarkGfm]}
                                 components={{
-                                    code: ({ node, ...props }) => (
-                                        <code
-                                            className="font-serif text-gray-600"
-                                            {...props}
+                    code: ({ ...props }) => (
+                        <code
+                            className="font-serif text-gray-600"
+                            {...props}
                                         />
                                     ),
                                 }}
@@ -1024,7 +1032,7 @@ function preprocessCitations(
     citationsList: CitationAnnotation[],
 ): string {
     // Replace [N] or [N, M, ...] inline markers with internal §idx§ tokens backed by annotations
-    return text.replace(/\[(\d+(?:,\s*\d+)*)\]/g, (full, refsStr, offset) => {
+    return text.replace(/\[(\d+(?:,\s*\d+)*)\]/g, (full, refsStr) => {
         const refs = (refsStr as string)
             .split(",")
             .map((s: string) => parseInt(s.trim(), 10));
@@ -1096,7 +1104,7 @@ function MarkdownContent({
                     /^us-case-\d+$/.test(url) ? url : defaultUrlTransform(url)
                 }
                 components={{
-                    table: ({ node, ...props }) => (
+                    table: ({ ...props }) => (
                         <div className="overflow-x-auto my-4 rounded-lg">
                             <table
                                 className="min-w-full divide-y divide-gray-300 overflow-hidden"
@@ -1104,54 +1112,56 @@ function MarkdownContent({
                             />
                         </div>
                     ),
-                    thead: ({ node, ...props }) => (
+                    thead: ({ ...props }) => (
                         <thead className="bg-gray-100" {...props} />
                     ),
-                    tbody: ({ node, ...props }) => (
+                    tbody: ({ ...props }) => (
                         <tbody
                             className="divide-y divide-gray-200"
                             {...props}
                         />
                     ),
-                    tr: ({ node, ...props }) => <tr {...props} />,
-                    th: ({ node, ...props }) => (
+                    tr: ({ ...props }) => <tr {...props} />,
+                    th: ({ ...props }) => (
                         <th
                             className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900"
                             {...props}
                         />
                     ),
-                    td: ({ node, ...props }) => (
+                    td: ({ ...props }) => (
                         <td
                             className="whitespace-normal px-3 py-4 text-sm text-gray-900"
                             {...props}
                         />
                     ),
-                    h1: ({ node, ...props }) => (
+                    h1: ({ ...props }) => (
                         <h1
                             className="mt-6 mb-4 text-3xl font-serif font-semibold"
                             {...props}
                         />
                     ),
-                    h2: ({ node, ...props }) => (
+                    h2: ({ ...props }) => (
                         <h2
                             className="mt-5 mb-3 text-2xl font-serif font-semibold"
                             {...props}
                         />
                     ),
-                    h3: ({ node, ...props }) => (
+                    h3: ({ ...props }) => (
                         <h3
                             className="text-xl font-semibold mt-4 mb-2"
                             {...props}
                         />
                     ),
-                    h4: ({ node, ...props }) => (
+                    h4: ({ ...props }) => (
                         <h4
                             className="text-lg font-semibold mt-4 mb-2"
                             {...props}
                         />
                     ),
                     p: ({ node, ...props }) => {
-                        const parent = (node as any)?.parent;
+                        const parent = (
+                            node as { parent?: { type?: string } } | undefined
+                        )?.parent;
                         if (parent?.type === "listItem") {
                             return (
                                 <p
@@ -1162,28 +1172,28 @@ function MarkdownContent({
                         }
                         return <p className="mb-4 leading-7" {...props} />;
                     },
-                    ul: ({ node, ...props }) => (
+                    ul: ({ ...props }) => (
                         <ul
                             className="list-disc list-outside mb-4 pl-6"
                             {...props}
                         />
                     ),
-                    ol: ({ node, ...props }) => (
+                    ol: ({ ...props }) => (
                         <ol
                             className="list-decimal list-outside mb-4 pl-6"
                             {...props}
                         />
                     ),
-                    li: ({ node, ...props }) => (
+                    li: ({ ...props }) => (
                         <li className="mb-2 leading-7" {...props} />
                     ),
-                    strong: ({ node, ...props }) => (
+                    strong: ({ ...props }) => (
                         <strong className="font-semibold" {...props} />
                     ),
-                    em: ({ node, ...props }) => (
+                    em: ({ ...props }) => (
                         <em className="italic" {...props} />
                     ),
-                    code: ({ node, children, ...props }) => {
+                    code: ({ children, ...props }) => {
                         const text = String(children);
                         const citMatch = text.match(/^§(\d+)§$/);
                         if (citMatch) {
@@ -1214,13 +1224,13 @@ function MarkdownContent({
                             </code>
                         );
                     },
-                    blockquote: ({ node, ...props }) => (
+                    blockquote: ({ ...props }) => (
                         <blockquote
                             className="border-l-4 border-gray-300 pl-4 italic my-4"
                             {...props}
                         />
                     ),
-                    a: ({ node, href, children, ...props }) => {
+                    a: ({ href, children, ...props }) => {
                         if (href) {
                             const isInternalCaseHref = !!internalCaseHref(href);
                             const citation = findCaseCitation(href);
@@ -1288,7 +1298,7 @@ function MarkdownContent({
                             </a>
                         );
                     },
-                    hr: ({ node, ...props }) => (
+                    hr: ({ ...props }) => (
                         <hr className="my-6 border-gray-200" {...props} />
                     ),
                 }}
@@ -1521,20 +1531,27 @@ function useSmoothedReveal(text: string, active: boolean): string {
 
     useEffect(() => {
         if (!active) {
+            let cancelled = false;
             revealedFloat.current = text.length;
-            setRevealedInt(text.length);
-            return;
+            queueMicrotask(() => {
+                if (!cancelled) setRevealedInt(text.length);
+            });
+            return () => {
+                cancelled = true;
+            };
         }
 
+        let cancelled = false;
         // Defensive clamp in case the text was edited / replaced shorter.
         if (revealedFloat.current > text.length) {
             revealedFloat.current = text.length;
-            setRevealedInt(text.length);
+            queueMicrotask(() => {
+                if (!cancelled) setRevealedInt(text.length);
+            });
         }
 
         let lastTick = performance.now();
         let raf = 0;
-        let cancelled = false;
 
         const step = (now: number) => {
             if (cancelled) return;
@@ -1636,7 +1653,6 @@ interface Props {
 }
 
 export function AssistantMessage({
-    content: _content,
     events,
     isStreaming = false,
     isError = false,
@@ -1657,7 +1673,6 @@ export function AssistantMessage({
     isEditReloading,
     resolvedEditStatuses,
 }: Props) {
-    const messageKey = useId();
     const contentDivRef = useRef<HTMLDivElement | null>(null);
     const [isCopied, setIsCopied] = useState(false);
     // Per-document override of the download URL, set as Accept/Reject resolves

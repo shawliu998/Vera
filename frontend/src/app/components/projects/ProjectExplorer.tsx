@@ -10,6 +10,7 @@ import {
     ChevronDown,
     FolderPlus,
     Trash2,
+    Table2,
 } from "lucide-react";
 import type {
     Document,
@@ -36,6 +37,8 @@ function DocIcon({ fileType }: { fileType: string | null }) {
         return <FileText className="h-3.5 w-3.5 text-red-500 shrink-0" />;
     if (fileType === "docx" || fileType === "doc")
         return <File className="h-3.5 w-3.5 text-blue-500 shrink-0" />;
+    if (fileType === "xlsx")
+        return <Table2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />;
     return <File className="h-3.5 w-3.5 text-gray-400 shrink-0" />;
 }
 
@@ -96,7 +99,11 @@ export function ProjectExplorer({
     function toggleFolder(id: string) {
         setExpandedIds((prev) => {
             const next = new Set(prev);
-            next.has(id) ? next.delete(id) : next.add(id);
+            if (next.has(id)) {
+                next.delete(id);
+            } else {
+                next.add(id);
+            }
             return next;
         });
     }

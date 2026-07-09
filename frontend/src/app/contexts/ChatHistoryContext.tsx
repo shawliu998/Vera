@@ -73,14 +73,16 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         if (!user) {
-            setChats([]);
-            setChatLimit(INITIAL_CHAT_LIMIT);
-            setHasMoreChats(false);
-            setCurrentChatId(null);
+            queueMicrotask(() => {
+                setChats([]);
+                setChatLimit(INITIAL_CHAT_LIMIT);
+                setHasMoreChats(false);
+                setCurrentChatId(null);
+            });
             return;
         }
 
-        void loadChats();
+        queueMicrotask(() => void loadChats());
     }, [user, loadChats]);
 
     const loadMoreChats = useCallback(() => {

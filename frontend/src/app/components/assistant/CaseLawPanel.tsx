@@ -215,23 +215,35 @@ export function CaseLawPanel({
     const opinionContentRef = useRef<HTMLElement | null>(null);
 
     useEffect(() => {
+        let cancelled = false;
+        const setResolvedOpinions = (nextOpinions: CaseLawOpinion[]) => {
+            queueMicrotask(() => {
+                if (cancelled) return;
+                setOpinions(nextOpinions);
+                setLoading(false);
+                setError(null);
+            });
+        };
+
         if (tab.opinions?.length) {
-            setOpinions(tab.opinions);
-            setLoading(false);
-            setError(null);
-            return;
+            setResolvedOpinions(tab.opinions);
+            return () => {
+                cancelled = true;
+            };
         }
         const cached = courtlistenerOpinionsCache.get(tab.clusterId);
         if (cached?.length) {
-            setOpinions(cached);
-            setLoading(false);
-            setError(null);
-            return;
+            setResolvedOpinions(cached);
+            return () => {
+                cancelled = true;
+            };
         }
 
-        let cancelled = false;
-        setLoading(true);
-        setError(null);
+        queueMicrotask(() => {
+            if (cancelled) return;
+            setLoading(true);
+            setError(null);
+        });
         const requestKey = caseCitationRequestKey(tab);
         let request = caseOpinionsRequestCache.get(requestKey);
         if (!request) {
@@ -265,15 +277,27 @@ export function CaseLawPanel({
     }, [tab]);
 
     useEffect(() => {
+        let cancelled = false;
         const firstOpinionId =
             orderOpinions(opinions).find(
                 ({ opinion }) => typeof opinion.opinionId === "number",
             )?.opinion.opinionId ?? null;
-        setActiveOpinionId(firstOpinionId);
+        queueMicrotask(() => {
+            if (!cancelled) setActiveOpinionId(firstOpinionId);
+        });
+        return () => {
+            cancelled = true;
+        };
     }, [opinions]);
 
     useEffect(() => {
-        setRelevantQuotes(tab.quotes ?? []);
+        let cancelled = false;
+        queueMicrotask(() => {
+            if (!cancelled) setRelevantQuotes(tab.quotes ?? []);
+        });
+        return () => {
+            cancelled = true;
+        };
     }, [tab.quotes]);
 
     const title = tab.caseName;
@@ -321,12 +345,19 @@ export function CaseLawPanel({
     );
 
     useEffect(() => {
-        setQuoteIndexState({ cacheKey: quoteCacheKey, index: 0 });
+        let cancelled = false;
         const firstQuote = relevantQuotes[0];
-        setActiveQuoteKey(firstQuote ? relevantQuoteKey(firstQuote, 0) : null);
-        if (typeof firstQuote?.opinionId === "number") {
-            setActiveOpinionId(firstQuote.opinionId);
-        }
+        queueMicrotask(() => {
+            if (cancelled) return;
+            setQuoteIndexState({ cacheKey: quoteCacheKey, index: 0 });
+            setActiveQuoteKey(firstQuote ? relevantQuoteKey(firstQuote, 0) : null);
+            if (typeof firstQuote?.opinionId === "number") {
+                setActiveOpinionId(firstQuote.opinionId);
+            }
+        });
+        return () => {
+            cancelled = true;
+        };
     }, [quoteCacheKey, relevantQuotes]);
 
     useEffect(() => {

@@ -17,7 +17,6 @@ import { deleteAccount, isMfaRequiredError } from "@/app/lib/aletheiaApi";
 import {
     accountGlassDangerOutlineButtonClassName,
     accountGlassInputClassName,
-    accountGlassPrimaryButtonClassName,
 } from "./accountStyles";
 import { AccountSection } from "./AccountSection";
 

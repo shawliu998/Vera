@@ -9,7 +9,6 @@ import {
     Loader2,
     Plus,
     RefreshCw,
-    Trash2,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/app/components/shared/Modal";
@@ -31,7 +30,6 @@ import {
     updateMcpConnector,
 } from "@/app/lib/aletheiaApi";
 import {
-    accountGlassDangerButtonClassName,
     accountGlassIconButtonClassName,
     accountGlassInputClassName,
     accountGlassPrimaryButtonClassName,
@@ -179,11 +177,7 @@ export default function ConnectorsPage() {
         setClearedBearerTokenConnectorId(null);
         setShowDetailToken(false);
         setShowDetailAdvanced(false);
-    }, [
-        selectedConnector?.id,
-        selectedConnector?.name,
-        selectedConnector?.serverUrl,
-    ]);
+    }, [selectedConnector]);
 
     const replaceConnector = (
         connector: McpConnectorSummary,
@@ -278,7 +272,7 @@ export default function ConnectorsPage() {
     ): Promise<McpConnectorSummary | null> => {
         const popup = window.open(
             "about:blank",
-            "mike_mcp_oauth",
+            "aletheia_mcp_oauth",
             "popup,width=560,height=720,menubar=no,toolbar=no,location=no,status=no",
         );
         const { authorizationUrl, alreadyAuthorized } =

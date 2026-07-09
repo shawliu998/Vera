@@ -147,7 +147,7 @@ export function DisplayWorkflowModal({ workflows, workflow, onClose }: Props) {
         } else {
             setSelected(null);
         }
-    }, [workflow?.id]);
+    }, [workflow]);
 
     // Reset configure state on back
     useEffect(() => {

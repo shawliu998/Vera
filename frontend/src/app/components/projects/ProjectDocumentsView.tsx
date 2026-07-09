@@ -7,11 +7,14 @@ import {
     AlertCircle,
     ChevronDown,
     ChevronRight,
+    FileText,
     Folder,
     FolderOpen,
     FolderPlus,
+    Table2,
 } from "lucide-react";
 import {
+    createProjectOfficeDocument,
     deleteDocument,
     getProject,
     getDocumentUrl,
@@ -48,6 +51,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { WarningPopup } from "@/app/components/shared/WarningPopup";
 import { ConfirmPopup } from "@/app/components/shared/ConfirmPopup";
 import {
+    SUPPORTED_DOCUMENT_ACCEPT,
     formatUnsupportedDocumentWarning,
     partitionSupportedDocumentFiles,
 } from "@/app/lib/documentUploadValidation";
@@ -457,6 +461,9 @@ export function ProjectDocumentsView({ projectId }: Props) {
     >("idle");
     // Actions dropdown
     const [actionsOpen, setActionsOpen] = useState(false);
+    const [creatingOfficeKind, setCreatingOfficeKind] = useState<
+        "docx" | "xlsx" | null
+    >(null);
     const actionsRef = useRef<HTMLDivElement>(null);
     const search = workspace.search;
 
@@ -1087,6 +1094,24 @@ export function ProjectDocumentsView({ projectId }: Props) {
             console.error("Project document drop upload failed", err);
         } finally {
             setUploadingDroppedFilenames([]);
+        }
+    }
+
+    async function handleCreateOfficeDocument(kind: "docx" | "xlsx") {
+        if (loading || creatingOfficeKind) return;
+        setCreatingOfficeKind(kind);
+        try {
+            const created = await createProjectOfficeDocument(projectId, kind);
+            invalidateDirectoryCache();
+            handleDocsSelected([created]);
+        } catch (err) {
+            console.error("createProjectOfficeDocument failed", err);
+            setProjectActionWarning(
+                apiErrorDetail(err) ??
+                    `Could not create ${kind === "docx" ? "Word" : "Excel"} document.`,
+            );
+        } finally {
+            setCreatingOfficeKind(null);
         }
     }
 
@@ -1893,7 +1918,7 @@ export function ProjectDocumentsView({ projectId }: Props) {
     const sidePanelDoc = viewingDoc
         ? (docs.find((doc) => doc.id === viewingDoc.id) ?? viewingDoc)
         : null;
-    const versionUploadAccept = ".pdf,.docx,.doc";
+    const versionUploadAccept = SUPPORTED_DOCUMENT_ACCEPT;
     const q = search.toLowerCase();
     const filteredDocs = q
         ? docs.filter((d) => d.filename.toLowerCase().includes(q))
@@ -1961,6 +1986,30 @@ export function ProjectDocumentsView({ projectId }: Props) {
             >
                 <FolderPlus className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">Add Subfolder</span>
+            </button>
+            <button
+                onClick={() => void handleCreateOfficeDocument("docx")}
+                disabled={loading || creatingOfficeKind !== null}
+                className="flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-gray-700 transition-colors disabled:cursor-default disabled:text-gray-300 disabled:hover:text-gray-300"
+            >
+                {creatingOfficeKind === "docx" ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                    <FileText className="h-3.5 w-3.5" />
+                )}
+                <span className="hidden sm:inline">New Word</span>
+            </button>
+            <button
+                onClick={() => void handleCreateOfficeDocument("xlsx")}
+                disabled={loading || creatingOfficeKind !== null}
+                className="flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-gray-700 transition-colors disabled:cursor-default disabled:text-gray-300 disabled:hover:text-gray-300"
+            >
+                {creatingOfficeKind === "xlsx" ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                    <Table2 className="h-3.5 w-3.5" />
+                )}
+                <span className="hidden sm:inline">New Excel</span>
             </button>
             <button
                 onClick={() => setAddDocsOpen(true)}
@@ -2233,7 +2282,7 @@ export function ProjectDocumentsView({ projectId }: Props) {
                                     >
                                         <Upload className="h-8 w-8 text-gray-200 mb-3" />
                                         <p className="text-sm text-gray-400">
-                                            Drop PDF, DOCX, or DOC files here
+                                            Drop PDF, DOCX, DOC, or XLSX files here
                                         </p>
                                     </div>
                                 ) : (

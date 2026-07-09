@@ -17,6 +17,7 @@ import { DocView } from "@/app/components/shared/DocView";
 import { WarningPopup } from "@/app/components/shared/WarningPopup";
 import type { Document } from "@/app/components/shared/types";
 import type { DocumentVersion } from "@/app/lib/aletheiaApi";
+import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "./ProjectPageParts";
 
@@ -142,11 +143,13 @@ export function DocumentSidePanel({
         return () => window.removeEventListener("resize", handleWindowResize);
     }, [dataColumnWidth, mounted]);
 
+    const activeDocId = doc?.id;
+
     useEffect(() => {
-        if (!doc) return;
+        if (!activeDocId) return;
         setUploadError(null);
-        void onLoadVersions(doc.id);
-    }, [doc?.id]);
+        void onLoadVersions(activeDocId);
+    }, [activeDocId, onLoadVersions]);
 
     useEffect(() => {
         setEditingName(false);
@@ -163,7 +166,7 @@ export function DocumentSidePanel({
 
     const activeDoc = doc;
     const documentId = activeDoc.id;
-    const newVersionAccept = ".pdf,.docx,.doc";
+    const newVersionAccept = SUPPORTED_DOCUMENT_ACCEPT;
     const orderedVersions = [...versions].reverse();
     const activeVersionCount = versions.filter(
         (version) => version.deleted_at == null,
@@ -197,11 +200,16 @@ export function DocumentSidePanel({
         ? fileTypeForVersion(replaceTargetVersion, selectedFileType)
         : selectedFileType;
     const replaceVersionAccept =
-        replaceFileType === "pdf" ? ".pdf" : ".docx,.doc";
+        replaceFileType === "pdf"
+            ? ".pdf"
+            : replaceFileType === "xlsx"
+              ? ".xlsx"
+              : ".docx,.doc";
     const ownerLabel =
         doc.owner_display_name?.trim() ||
         doc.owner_email?.trim() ||
         "—";
+    const canPreviewSelectedFile = selectedFileType !== "xlsx";
 
     async function handleSaveName() {
         if (!selectedVersionId) return;
@@ -481,15 +489,42 @@ export function DocumentSidePanel({
                             "rounded-xl border border-gray-200 bg-white/55 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl",
                         )}
                     >
-                        <DocView
-                            key={`${selectedVersionId ?? "current"}:${selectedUploadedAt ?? ""}:${selectedSizeBytes ?? ""}`}
-                            doc={{
-                                document_id: doc.id,
-                                version_id: selectedVersionId,
-                            }}
-                            rounded={false}
-                            bordered={false}
-                        />
+                        {canPreviewSelectedFile ? (
+                            <DocView
+                                key={`${selectedVersionId ?? "current"}:${selectedUploadedAt ?? ""}:${selectedSizeBytes ?? ""}`}
+                                doc={{
+                                    document_id: doc.id,
+                                    version_id: selectedVersionId,
+                                }}
+                                rounded={false}
+                                bordered={false}
+                            />
+                        ) : (
+                            <div className="flex h-full min-h-[260px] flex-col items-center justify-center gap-3 px-6 text-center">
+                                <div className="text-sm font-medium text-gray-900">
+                                    {selectedFilename}
+                                </div>
+                                <div className="text-xs text-gray-500">
+                                    Preview unavailable
+                                </div>
+                                {selectedVersionId && (
+                                    <button
+                                        type="button"
+                                        onClick={() =>
+                                            void onDownloadVersion(
+                                                documentId,
+                                                selectedVersionId,
+                                                selectedFilename,
+                                            )
+                                        }
+                                        className={primaryGlassButtonClass}
+                                    >
+                                        <Download className="h-3.5 w-3.5" />
+                                        Download
+                                    </button>
+                                )}
+                            </div>
+                        )}
                     </div>
                 </section>
 
@@ -684,6 +719,8 @@ export function DocumentSidePanel({
                                             const typeLabel =
                                                 fileType === "pdf"
                                                     ? "PDF"
+                                                    : fileType === "xlsx"
+                                                      ? "XLSX"
                                                     : "DOCX";
                                             return (
                                                 <div

@@ -1,4 +1,3 @@
-import { X } from "lucide-react";
 import { createPortal } from "react-dom";
 
 interface CreditsExhaustedModalProps {
@@ -45,7 +44,7 @@ export function CreditsExhaustedModal({
                     {/* Content */}
                     <div className="space-y-4">
                         <p className="text-gray-600">
-                            You've reached your monthly message limit of 100
+                            You&apos;ve reached your monthly message limit of 100
                             messages.
                         </p>
 

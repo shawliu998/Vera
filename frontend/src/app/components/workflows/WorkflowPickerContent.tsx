@@ -57,10 +57,6 @@ export function WorkflowPickerContent({
         }
     }, [selected?.id]);
 
-    useEffect(() => {
-        setMobilePane(selected ? "details" : "list");
-    }, [selected?.id]);
-
     const normalizedSearch = search.trim().toLowerCase();
     const filteredWorkflows = normalizedSearch
         ? workflows.filter((workflow) =>

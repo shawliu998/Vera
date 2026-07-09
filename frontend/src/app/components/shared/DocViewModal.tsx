@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Download, Trash2, X } from "lucide-react";
 import { DocView } from "./DocView";
@@ -24,10 +23,7 @@ export function DocViewModal({
     onClose,
     onDelete,
 }: Props) {
-    const [mounted, setMounted] = useState(false);
-    useEffect(() => setMounted(true), []);
-
-    if (!doc || !mounted) return null;
+    if (!doc || typeof document === "undefined") return null;
 
     async function handleDownload() {
         if (!doc) return;

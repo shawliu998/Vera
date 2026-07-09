@@ -36,7 +36,7 @@ export interface Document {
   filename: string;
   owner_email?: string | null;
   owner_display_name?: string | null;
-  file_type: string | null; // pdf | docx | doc
+  file_type: string | null; // pdf | docx | doc | xlsx
   storage_path: string | null;
   pdf_storage_path: string | null;
   size_bytes: number | null;

@@ -20,27 +20,45 @@ export function MfaLoginGate({ children }: { children: ReactNode }) {
     const isVerifyPage = pathname === "/verify-mfa";
 
     useEffect(() => {
+        let cancelled = false;
+        const updateGateState = (nextState: GateState) => {
+            queueMicrotask(() => {
+                if (!cancelled) setGateState(nextState);
+            });
+        };
+
         if (!user) {
-            setGateState("idle");
-            return;
+            updateGateState("idle");
+            return () => {
+                cancelled = true;
+            };
         }
         if (loading) {
-            return;
+            return () => {
+                cancelled = true;
+            };
         }
         if (!profile?.mfaOnLogin) {
-            setGateState("idle");
-            return;
+            updateGateState("idle");
+            return () => {
+                cancelled = true;
+            };
         }
 
         if (hasRecentMfaVerification()) {
-            setGateState("verified");
-            return;
+            updateGateState("verified");
+            return () => {
+                cancelled = true;
+            };
         }
 
-        let cancelled = false;
-        setGateState((previous) =>
-            previous === "verified" ? "verified" : "checking",
-        );
+        queueMicrotask(() => {
+            if (!cancelled) {
+                setGateState((previous) =>
+                    previous === "verified" ? "verified" : "checking",
+                );
+            }
+        });
 
         async function checkLoginMfa() {
             try {
@@ -57,14 +75,14 @@ export function MfaLoginGate({ children }: { children: ReactNode }) {
         return () => {
             cancelled = true;
         };
-    }, [loading, profile?.mfaOnLogin, user?.id]);
+    }, [loading, profile?.mfaOnLogin, user]);
 
     useEffect(() => {
         if (!user || loading || !profile?.mfaOnLogin) return;
 
         if (gateState === "required" && !isVerifyPage) {
             if (hasRecentMfaVerification()) {
-                setGateState("verified");
+                queueMicrotask(() => setGateState("verified"));
                 return;
             }
             const search = searchParams.toString();

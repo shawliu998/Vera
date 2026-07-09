@@ -3,7 +3,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ColumnConfig } from "../shared/types";
-import { formatIcon, formatLabel } from "../tabular/columnFormat";
+import { FORMAT_OPTIONS, formatLabel } from "../tabular/columnFormat";
 import { Modal } from "../shared/Modal";
 
 interface Props {
@@ -12,7 +12,10 @@ interface Props {
 }
 
 export function WFColumnViewModal({ col, onClose }: Props) {
-    const FormatIcon = formatIcon(col.format ?? "text");
+    const format = col.format ?? "text";
+    const FormatIcon =
+        FORMAT_OPTIONS.find((option) => option.value === format)?.icon ??
+        FORMAT_OPTIONS[0].icon;
     return (
         <Modal
             open
@@ -33,7 +36,7 @@ export function WFColumnViewModal({ col, onClose }: Props) {
                     <p className="text-sm font-medium text-gray-500 mb-2">Format</p>
                     <span className="inline-flex items-center gap-1.5 text-sm text-gray-700">
                         <FormatIcon className="h-3.5 w-3.5 text-gray-400" />
-                        {formatLabel(col.format ?? "text")}
+                        {formatLabel(format)}
                     </span>
                 </div>
                 {col.tags && col.tags.length > 0 && (

@@ -25,16 +25,25 @@ export function useDirectoryData(enabled: boolean) {
 
     useEffect(() => {
         if (!enabled) return;
+        let cancelled = false;
 
         const now = Date.now();
         if (cache && now - cache.fetchedAt < CACHE_TTL_MS) {
-            setStandaloneDocuments(cache.standaloneDocuments);
-            setProjects(cache.projects);
-            setLoading(false);
-            return;
+            const cached = cache;
+            queueMicrotask(() => {
+                if (cancelled) return;
+                setStandaloneDocuments(cached.standaloneDocuments);
+                setProjects(cached.projects);
+                setLoading(false);
+            });
+            return () => {
+                cancelled = true;
+            };
         }
 
-        setLoading(true);
+        queueMicrotask(() => {
+            if (!cancelled) setLoading(true);
+        });
         Promise.all([listProjects(), listStandaloneDocuments()])
             .then(([ps, ds]) => {
                 const sorted = [...ds].sort((a, b) =>
@@ -42,6 +51,7 @@ export function useDirectoryData(enabled: boolean) {
                 );
                 return Promise.all(ps.map((p) => getProject(p.id))).then(
                     (fullProjects) => {
+                        if (cancelled) return;
                         cache = {
                             standaloneDocuments: sorted,
                             projects: fullProjects,
@@ -53,10 +63,16 @@ export function useDirectoryData(enabled: boolean) {
                 );
             })
             .catch(() => {
+                if (cancelled) return;
                 setStandaloneDocuments([]);
                 setProjects([]);
             })
-            .finally(() => setLoading(false));
+            .finally(() => {
+                if (!cancelled) setLoading(false);
+            });
+        return () => {
+            cancelled = true;
+        };
     }, [enabled]);
 
     return { loading, standaloneDocuments, projects };

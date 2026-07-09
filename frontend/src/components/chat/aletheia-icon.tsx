@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import type { CSSProperties } from "react";
 
 export function AletheiaIcon({
@@ -31,11 +32,12 @@ export function AletheiaIcon({
             }}
             aria-hidden="true"
         >
-            <img
+            <Image
                 src="/aletheia-mark.png"
                 alt=""
                 width={size}
                 height={size}
+                unoptimized
                 className={spin ? "animate-[spin_3s_linear_infinite]" : ""}
                 style={{
                     display: "block",

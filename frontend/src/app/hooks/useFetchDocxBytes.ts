@@ -49,8 +49,6 @@ export function useFetchDocxBytes(
 
     useEffect(() => {
         if (!documentId) {
-            setBytes(null);
-            setDownloadUrl(null);
             return;
         }
 
@@ -61,20 +59,28 @@ export function useFetchDocxBytes(
             ? `?version_id=${encodeURIComponent(versionId)}`
             : "";
         const url = `${apiBase}/single-documents/${documentId}/docx${qs}`;
+        let cancelled = false;
 
         // Cache hit: reuse bytes synchronously, no network, no spinner.
         const cached = bytesCache.get(key);
         if (cached) {
-            setBytes(cached);
-            setDownloadUrl(url);
-            setLoading(false);
-            setError(null);
-            return;
+            queueMicrotask(() => {
+                if (cancelled) return;
+                setBytes(cached);
+                setDownloadUrl(url);
+                setLoading(false);
+                setError(null);
+            });
+            return () => {
+                cancelled = true;
+            };
         }
 
-        let cancelled = false;
-        setLoading(true);
-        setError(null);
+        queueMicrotask(() => {
+            if (cancelled) return;
+            setLoading(true);
+            setError(null);
+        });
 
         const pending =
             inFlight.get(key) ??
@@ -114,6 +120,10 @@ export function useFetchDocxBytes(
             cancelled = true;
         };
     }, [documentId, versionId, refetchKey]);
+
+    if (!documentId) {
+        return { bytes: null, downloadUrl: null, loading: false, error: null };
+    }
 
     return { bytes, downloadUrl, loading, error };
 }

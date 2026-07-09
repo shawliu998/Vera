@@ -125,7 +125,7 @@ export function DocPanel({
             quote: selectedQuote.quote,
             quotes: [selectedQuote],
         });
-    }, [activeCitationQuoteId, citationQuoteId, mode]);
+    }, [activeCitationQuoteId, mode]);
 
     useEffect(() => {
         setActiveCitationQuoteId(citationQuoteId);

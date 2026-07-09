@@ -305,18 +305,27 @@ function TRResponseStatus({ isActive }: { isActive: boolean }) {
     const wasActiveRef = useRef(false);
 
     useEffect(() => {
-        if (wasActiveRef.current && !isActive) {
-            setShowDone(true);
-            setDoneVisible(true);
-            const t = setTimeout(() => setDoneVisible(false), 1500);
-            wasActiveRef.current = isActive;
-            return () => clearTimeout(t);
-        }
-        if (!wasActiveRef.current && isActive) {
-            setShowDone(false);
-            setDoneVisible(false);
-        }
+        const wasActive = wasActiveRef.current;
         wasActiveRef.current = isActive;
+
+        if (wasActive && !isActive) {
+            let hideTimer = 0;
+            const showTimer = window.setTimeout(() => {
+                setShowDone(true);
+                setDoneVisible(true);
+                hideTimer = window.setTimeout(() => setDoneVisible(false), 1500);
+            }, 0);
+            return () => {
+                window.clearTimeout(showTimer);
+                window.clearTimeout(hideTimer);
+            };
+        }
+        if (!wasActive && isActive) {
+            queueMicrotask(() => {
+                setShowDone(false);
+                setDoneVisible(false);
+            });
+        }
     }, [isActive]);
 
     return (
@@ -433,25 +442,25 @@ function TRAssistantMessage({
             <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
-                    p: ({ node, ...props }) => (
+                    p: ({ ...props }) => (
                         <p className="mb-2 leading-6" {...props} />
                     ),
-                    ul: ({ node, ...props }) => (
+                    ul: ({ ...props }) => (
                         <ul
                             className="list-disc list-outside mb-2 pl-4"
                             {...props}
                         />
                     ),
-                    ol: ({ node, ...props }) => (
+                    ol: ({ ...props }) => (
                         <ol
                             className="list-decimal list-outside mb-2 pl-4"
                             {...props}
                         />
                     ),
-                    li: ({ node, ...props }) => (
+                    li: ({ ...props }) => (
                         <li className="mb-0.5 leading-6" {...props} />
                     ),
-                    strong: ({ node, ...props }) => (
+                    strong: ({ ...props }) => (
                         <strong className="font-semibold" {...props} />
                     ),
                     code: ({ children }) => {
@@ -764,8 +773,6 @@ export function TRChatPanel({
     reviewId,
     reviewTitle,
     projectName,
-    columns: _columns,
-    documents: _documents,
     onCitationClick,
     onClose,
     initialChatId,
@@ -892,7 +899,7 @@ export function TRChatPanel({
                 setMessagesVisible(true);
             }
         }
-    }, [messages]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [messages]);
 
     useEffect(() => {
         const userEl = latestUserMessageRef.current;

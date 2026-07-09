@@ -70,6 +70,8 @@ export function DocIcon({
         return <FileText className="h-4 w-4 text-red-600 shrink-0" />;
     if (fileType === "docx" || fileType === "doc")
         return <File className="h-4 w-4 text-blue-600 shrink-0" />;
+    if (fileType === "xlsx")
+        return <Table2 className="h-4 w-4 text-emerald-600 shrink-0" />;
     return <File className="h-4 w-4 text-gray-500 shrink-0" />;
 }
 

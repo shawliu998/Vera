@@ -92,7 +92,11 @@ export function FileDirectory({
             return;
         }
         const next = new Set(selectedIds);
-        next.has(docId) ? next.delete(docId) : next.add(docId);
+        if (next.has(docId)) {
+            next.delete(docId);
+        } else {
+            next.add(docId);
+        }
         onChange(next);
     }
 
@@ -112,7 +116,11 @@ export function FileDirectory({
         if (forceExpanded) return;
         setExpandedProjects((prev) => {
             const next = new Set(prev);
-            next.has(projectId) ? next.delete(projectId) : next.add(projectId);
+            if (next.has(projectId)) {
+                next.delete(projectId);
+            } else {
+                next.add(projectId);
+            }
             return next;
         });
     }

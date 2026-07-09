@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { ALLOWED_MODEL_IDS, DEFAULT_MODEL_ID } from "../components/assistant/ModelToggle";
 
 const STORAGE_KEY = "aletheia.selectedModel";
@@ -13,11 +13,7 @@ function readStored(): string {
 }
 
 export function useSelectedModel(): [string, (id: string) => void] {
-    const [model, setModelState] = useState<string>(DEFAULT_MODEL_ID);
-
-    useEffect(() => {
-        setModelState(readStored());
-    }, []);
+    const [model, setModelState] = useState<string>(readStored);
 
     const setModel = useCallback((id: string) => {
         const next = ALLOWED_MODEL_IDS.has(id) ? id : DEFAULT_MODEL_ID;

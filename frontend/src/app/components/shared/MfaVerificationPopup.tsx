@@ -2,6 +2,7 @@
 
 import {
     useEffect,
+    useMemo,
     useRef,
     useState,
     type ClipboardEvent,
@@ -208,7 +209,10 @@ export function VerificationCodeInput({
     canSubmit?: boolean;
 }) {
     const inputsRef = useRef<Array<HTMLInputElement | null>>([]);
-    const digits = Array.from({ length: 6 }, (_, index) => value[index] ?? "");
+    const digits = useMemo(
+        () => Array.from({ length: 6 }, (_, index) => value[index] ?? ""),
+        [value],
+    );
 
     useEffect(() => {
         if (!autoFocus || disabled) return;
@@ -219,7 +223,7 @@ export function VerificationCodeInput({
             ]?.focus();
         }, 0);
         return () => window.clearTimeout(focusTimer);
-    }, [autoFocus, disabled]);
+    }, [autoFocus, digits, disabled]);
 
     function updateDigit(index: number, nextValue: string) {
         const digit = nextValue.replace(/\D/g, "").slice(-1);

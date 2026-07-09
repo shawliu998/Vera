@@ -89,8 +89,10 @@ export function WorkflowList() {
     }, []);
 
     useEffect(() => {
-        setSelectedIds([]);
-        setActionsOpen(false);
+        queueMicrotask(() => {
+            setSelectedIds([]);
+            setActionsOpen(false);
+        });
     }, [activeScope, practiceFilter, typeFilter]);
 
     useEffect(() => {

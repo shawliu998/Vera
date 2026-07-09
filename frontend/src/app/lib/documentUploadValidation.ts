@@ -1,8 +1,8 @@
-export const SUPPORTED_DOCUMENT_ACCEPT = ".pdf,.docx,.doc";
+export const SUPPORTED_DOCUMENT_ACCEPT = ".pdf,.docx,.doc,.xlsx";
 export const UNSUPPORTED_DOCUMENT_WARNING_MESSAGE =
-    "Unsupported file type. Only PDF, DOCX, and DOC files can be uploaded.";
+    "Unsupported file type. Only PDF, DOCX, DOC, and XLSX files can be uploaded.";
 
-const SUPPORTED_DOCUMENT_EXTENSIONS = new Set(["pdf", "docx", "doc"]);
+const SUPPORTED_DOCUMENT_EXTENSIONS = new Set(["pdf", "docx", "doc", "xlsx"]);
 
 export function isSupportedDocumentFile(file: File): boolean {
     const extension = file.name.split(".").pop()?.toLowerCase();

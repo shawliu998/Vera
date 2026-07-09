@@ -69,19 +69,24 @@ export function ProjectsOverview() {
 
     useEffect(() => {
         if (authLoading) {
-            setLoading(true);
+            queueMicrotask(() => setLoading(true));
             return;
         }
         if (!isAuthenticated) {
-            setProjects([]);
-            setLoadError(null);
-            setLoading(false);
+            queueMicrotask(() => {
+                setProjects([]);
+                setLoadError(null);
+                setLoading(false);
+            });
             return;
         }
 
         let cancelled = false;
-        setLoading(true);
-        setLoadError(null);
+        queueMicrotask(() => {
+            if (cancelled) return;
+            setLoading(true);
+            setLoadError(null);
+        });
         listProjects()
             .then((loaded) => {
                 if (!cancelled) setProjects(loaded);
@@ -103,7 +108,7 @@ export function ProjectsOverview() {
     }, [authLoading, isAuthenticated, user?.id]);
 
     useEffect(() => {
-        setSelectedIds([]);
+        queueMicrotask(() => setSelectedIds([]));
     }, [activeFilter]);
 
     useEffect(() => {
