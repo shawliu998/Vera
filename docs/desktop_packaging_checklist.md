@@ -19,6 +19,9 @@ not a release process yet; it defines what must be true before packaging.
 - `npm run check:aletheia:source-provenance` verifies source chunk IDs,
   document IDs, quote offsets, support status, SQLite FTS5 matter filters,
   source-linked work products, UI registry fields, and exportable provenance.
+- `npm run check:aletheia:knowledge-governance` verifies matter-scoped Matter
+  Memory, human-approved Matter Playbooks, draft-only improvement proposals, no
+  global legal memory, and no default Tool Adapter mutation path.
 - `npm run check:aletheia:tool-policy` verifies the HTTP Tool Adapter and stdio
   MCP wrapper expose only the approved allowlist and keep high-risk automation
   tools disabled.
@@ -127,6 +130,7 @@ ALETHEIA_RESTORE_SOURCE_DIR=.data/aletheia npm run check:aletheia:restore
 npm run check:aletheia:privacy
 npm run check:aletheia:ops-readiness
 npm run check:aletheia:source-provenance
+npm run check:aletheia:knowledge-governance
 npm run check:aletheia:tool-policy
 npm run check:aletheia:approval-policy
 npm run check:aletheia:matter-isolation

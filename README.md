@@ -204,6 +204,17 @@ This verifies that source-linked evidence keeps document IDs, source chunk IDs,
 quotes, quote offsets, support status, FTS5 matter filters, UI registry fields,
 and exportable provenance.
 
+Run the knowledge governance audit before changing Matter Memory or Playbooks:
+
+```bash
+cd backend
+npm run check:aletheia:knowledge-governance
+```
+
+This verifies matter-scoped memory, human-approved playbooks, draft-only
+improvement proposals, no global legal memory, and no default Tool Adapter
+mutation path for knowledge artifacts.
+
 Run the Tool Adapter policy audit before enabling agent integrations:
 
 ```bash

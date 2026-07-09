@@ -110,6 +110,10 @@ structured artifacts.
 - Playbook Improvement Proposals can be generated from reviewer feedback,
   Matter Memory, and review tags. They are stored as draft playbooks with source
   links and cannot mutate the approved source playbook automatically.
+- `npm run check:aletheia:knowledge-governance` verifies that Matter Memory
+  remains matter-scoped, Playbooks remain human-approved/versioned, proposals
+  stay draft-only, no global legal memory is introduced, and the default Tool
+  Adapter does not expose knowledge mutation tools.
 - Export-class work products are now written to local JSON files under
   `.data/aletheia/exports/<matterId>/`, and audit events retain the export
   path. This includes filtered registry snapshots, while high-risk Audit Pack,

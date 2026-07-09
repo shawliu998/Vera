@@ -67,6 +67,10 @@ Operational notes:
   parsing, evidence mapping, or work product generation. It verifies source
   chunk IDs, document IDs, quote offsets, support status, FTS5 matter filters,
   UI registry fields, and exportable provenance.
+- Run `npm run check:aletheia:knowledge-governance` before changing Matter
+  Memory or Playbooks. It verifies matter-scoped memory, human-approved
+  playbooks, draft-only improvement proposals, no global legal memory, and no
+  default Tool Adapter mutation path for knowledge artifacts.
 - Run `npm run check:aletheia:tool-policy` before enabling agent integrations.
   It verifies the HTTP Tool Adapter and stdio MCP wrapper expose only the
   approved narrow allowlist and keep browser, terminal, external web, email, and
@@ -149,6 +153,7 @@ Before upgrading:
 - run `npm run check:aletheia:privacy`;
 - run `npm run check:aletheia:ops-readiness`;
 - run `npm run check:aletheia:source-provenance`;
+- run `npm run check:aletheia:knowledge-governance`;
 - run `npm run check:aletheia:tool-policy`;
 - run `npm run check:aletheia:approval-policy`;
 - run `npm run check:aletheia:matter-isolation`;
