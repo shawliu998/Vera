@@ -9,6 +9,10 @@ Current stage: local-first MVP / private pilot candidate.
 
 It is not production-ready for the default Supabase path yet.
 
+Reviewer-facing orientation starts in `README.md`, then continues through
+`docs/reviewer_walkthrough.md`, `docs/demo_script.md`,
+`docs/deepseek_pitch.md`, and `docs/feature_map.md`.
+
 ## Continuous Engineering Loop
 
 A Codex heartbeat automation named

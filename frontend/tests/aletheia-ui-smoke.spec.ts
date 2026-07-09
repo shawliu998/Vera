@@ -112,6 +112,33 @@ test("Aletheia local workspace renders and gates high-risk exports", async ({
     page.getByRole("heading", { name: /Aletheia UI Smoke Matter/ }),
   ).toBeVisible();
 
+  await page
+    .getByTestId("aletheia-matter-workspace")
+    .getByRole("link", { name: "Command Center" })
+    .click();
+  await expect(page).toHaveURL(
+    new RegExp(`/aletheia/matters/${projectState.matterId}/agentops$`),
+  );
+  await expect(page.getByTestId("adapter-backed-command-center")).toBeVisible();
+  await expect(page.getByText("Adapter-backed matter")).toBeVisible();
+  await expect(page.getByTestId("adapter-backed-command-center")).toContainText(
+    "Aletheia UI Smoke Matter",
+  );
+  await expect(page.getByTestId("agentops-gate-checklist")).toBeVisible();
+  await expect(page.getByTestId("adapter-backed-eval-signals")).toContainText(
+    "Eval Signals",
+  );
+  await expect(page.getByTestId("adapter-backed-references")).toContainText(
+    "Matter References",
+  );
+  await expect(page.getByTestId("adapter-backed-references")).toContainText(
+    "resolved",
+  );
+  await page.getByRole("link", { name: "Matter workspace" }).click();
+  await expect(page).toHaveURL(
+    new RegExp(`/aletheia/matters/${projectState.matterId}$`),
+  );
+
   await page.goto("/aletheia/evidence");
   await expect(page.getByTestId("aletheia-evidence-registry")).toBeVisible();
   await expect(page.getByText("Local Repository")).toBeVisible();
@@ -120,6 +147,21 @@ test("Aletheia local workspace renders and gates high-risk exports", async ({
   ).toBeVisible();
   await expect(page.getByTestId("evidence-registry-results")).toContainText(
     "claim-termination-notice",
+  );
+  await expect(
+    page.getByTestId("evidence-registry-row").first(),
+  ).toHaveAttribute("id", /^evidence-[a-zA-Z0-9_-]+$/);
+  await expect(page.getByTestId("evidence-registry-results")).toContainText(
+    "Evidence ",
+  );
+  await expect(page.getByTestId("evidence-registry-results")).toContainText(
+    "Normalized fact:",
+  );
+  await expect(page.getByTestId("evidence-registry-results")).toContainText(
+    "Source chunk",
+  );
+  await expect(page.getByTestId("evidence-registry-results")).toContainText(
+    "chars",
   );
   await page.getByTestId("evidence-filter-query").fill("termination");
   await page.getByTestId("evidence-filter-support").selectOption("supports");

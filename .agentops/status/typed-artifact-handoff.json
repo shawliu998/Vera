@@ -1,0 +1,41 @@
+{
+  "agent": "typed-artifact-handoff",
+  "updatedAt": "2026-07-09T15:55:27+08:00",
+  "status": "done",
+  "scope": [
+    "frontend/src/aletheia/agentops/handoff.ts",
+    "frontend/src/aletheia/agentops/index.ts",
+    "frontend/tests/agentops/handoff.test.ts",
+    "docs/agentops/typed-artifact-handoff.md",
+    ".agentops/status/typed-artifact-handoff.json"
+  ],
+  "summary": "Typed Artifact Handoff is complete for the current view-layer product scope. The lane validates cross-artifact references, builds read-only provenance over Document -> EvidenceItem -> Issue/Risk -> DraftMemoSection -> ReviewComment -> GateResult -> AuditEvent -> EvalCase, consumes gate provenance, surfaces missing/ambiguous references and unbacked gates as blockers, and exposes a readiness summary without creating a second persisted model.",
+  "contractsChanged": [
+    "TypedHandoffProvenance",
+    "TypedHandoffSourceRecordIds",
+    "TypedHandoffProvenanceOptions.gateProvenance",
+    "buildTypedHandoffProvenance",
+    "TypedHandoffReadiness",
+    "evaluateTypedHandoffReadiness",
+    "GateProvenance to TypedHandoffProvenance source ID folding",
+    "Missing persisted gate provenance warning",
+    "WorkspaceReferenceValidation",
+    "validateWorkspaceReferences",
+    "Typed artifact handoff helpers"
+  ],
+  "testsRun": [
+    "cd frontend && npx tsc --noEmit",
+    "cd frontend && ../backend/node_modules/.bin/tsx --test tests/agentops/handoff.test.ts",
+    "cd frontend && npx eslint src/aletheia/agentops/handoff.ts tests/agentops/handoff.test.ts",
+    "node .agentops/scripts/check-agentops.mjs"
+  ],
+  "risks": [
+    "Claim and ObligationItem are not first-class AgentOps artifacts in this scope; the accepted current chain uses IssueNode/RiskItem plus ProfessionalSkill/playbook provenance.",
+    "TypedHandoffProvenance is view-only evidence for reviewers/export builders; it is not persisted approval, not a migration, and not a replacement for Aletheia source records.",
+    "Backend/audit owners still need to decide where first-class persisted gate audit events and durable handoff records live if this view-layer evidence becomes persisted product state."
+  ],
+  "needs": [
+    "None for the current view-layer typed handoff scope.",
+    "Future persistence work should map TypedHandoffProvenance and TypedHandoffReadiness outputs to existing Aletheia source records before treating them as durable audit state."
+  ]
+}

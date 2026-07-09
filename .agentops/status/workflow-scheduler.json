@@ -1,0 +1,40 @@
+{
+  "agent": "workflow-scheduler",
+  "updatedAt": "2026-07-09T15:41:17+08:00",
+  "status": "done",
+  "scope": [
+    ".agentops/workflows/red_flag_memo.v1.json",
+    ".agentops/orchestration/agent-registry.json",
+    ".agentops/orchestration/scheduler.json",
+    ".agentops/orchestration/run-manager-contract.json",
+    ".agentops/runs/red_flag_memo.demo.trace.json",
+    ".agentops/scripts/check-agentops.mjs",
+    "docs/agentops/workflow-scheduler.md",
+    ".agentops/status/workflow-scheduler.json"
+  ],
+  "summary": "Ran the 5-minute AgentOps scheduler cycle and added a Run Manager persistence semantics policy for gate provenance, Big @ reference audit candidates, typed handoff provenance, eval snapshots, and audit export packages. These helper outputs are now contractually read-only until mapped back to established Aletheia source records.",
+  "contractsChanged": [
+    "agentops.workflow.v1",
+    "agentops.agent_registry.v1",
+    "agentops.scheduler.v1",
+    "agentops.run_manager.v1",
+    "agentops.run_trace.v1",
+    "Agent status JSON validation contract",
+    "Run Manager persistenceSemanticsPolicy"
+  ],
+  "testsRun": [
+    "node .agentops/scripts/check-agentops.mjs (failed before normalization: .agentops/status/gate-engine.json used noncanonical status \"working\")",
+    "node .agentops/scripts/check-agentops.mjs",
+    "node .agentops/scripts/check-agentops.mjs (pre-change: passed with architecture-contracts legacy warning)",
+    "node .agentops/scripts/check-agentops.mjs (passed with zero warnings after architecture-contracts canonical normalization)",
+    "node .agentops/scripts/check-agentops.mjs (passed after adding Run Manager persistenceSemanticsPolicy validation)"
+  ],
+  "risks": [
+    "Workflow Scheduler normalized the last observed legacy status shape; future feature-agent status files may still reintroduce legacy fields if owners do not follow AGENT_STATUS_SCHEMA.md.",
+    "The run trace is a deterministic local simulation and is not yet wired to persisted Aletheia matter records through the adapter.",
+    "The new persistence semantics policy is an orchestration contract only; it does not add backend persistence, migrations, or API behavior."
+  ],
+  "needs": [
+    "Adapter agent should map persisted Aletheia matter/run records into this workflow trace shape before UI treats it as product truth."
+  ]
+}

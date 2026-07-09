@@ -1,0 +1,49 @@
+{
+  "agent": "audit-eval-export",
+  "updatedAt": "2026-07-09T15:48:03+08:00",
+  "status": "done",
+  "scope": [
+    "frontend/src/aletheia/agentops/exportPackage.ts",
+    "frontend/src/aletheia/agentops/index.ts",
+    "frontend/src/aletheia/agentops/adapters.ts",
+    "frontend/src/aletheia/remoteMatterTransforms.ts",
+    "frontend/src/aletheia/RemoteMatterCommandCenter.tsx",
+    "frontend/tests/agentops/exportPackage.test.ts",
+    "frontend/tests/agentops/adapters.test.ts"
+  ],
+  "summary": "Audit/Eval export is complete for the local-first MVP boundary. ExportPackage now generates AuditPack, EvalCaseExport, stable export hashes, typed handoff provenance, human approval log, tool call log, AgentRun/ToolCall/ReviewComment/GateResult-derived AuditEvents, manifest counts, and integrity validation from adapter-derived matter evidence/review/gate/run records without adding backend persistence or external services.",
+  "contractsChanged": [
+    "AgentOps AuditPack export schema aletheia-audit-pack-v1",
+    "AgentOps EvalCaseExport schema aletheia-eval-case-export-v1",
+    "AgentOps ExportPackage schema aletheia-export-package-v1",
+    "buildAgentRunAuditEvents AgentRun to AuditEvent export mapping",
+    "buildToolCallAuditEvents ToolCallLog to AuditEvent export mapping",
+    "buildReviewCommentAuditEvents ReviewComment to AuditEvent export mapping",
+    "buildGateResultAuditEvents GateResult to AuditEvent export mapping",
+    "AuditPack.typed_handoff_provenance",
+    "ExportPackage.manifest.handoff_provenance_items",
+    "validateExportPackageIntegrity export package integrity contract",
+    "ExportPackage tamper-detection test coverage for package_hash and manifest_counts",
+    "Matter-scoped Command Center can render adapter-backed ExportPackage summary from buildExportPackage",
+    "Remote matter audit_pack content now includes matterProfile, documentList, evidenceMatrix, issueMap, riskRegister, draftMemo, finalMemo, reviewComments, gateResults, agentRunTrace, toolCallLog, humanApprovalLog, auditEvents, evalCases, workProducts, and exportHash",
+    "Remote feedback_export content now includes canonical eval failure types and derived evalCases"
+  ],
+  "testsRun": [
+    "cd frontend && npx tsc --noEmit --pretty false",
+    "cd frontend && mkdir -p test-results && npm run lint",
+    "cd frontend && rm -rf /tmp/aletheia-adapter-tests && npx tsc -p tests/agentops/tsconfig.adapter.json && node --test /tmp/aletheia-adapter-tests/tests/agentops/exportPackage.test.js (11 tests passed)",
+    "node .agentops/scripts/check-agentops.mjs"
+  ],
+  "risks": [
+    "ExportPackage is a local/view-layer schema and must remain behind persisted approval gates for high-risk audit and feedback exports.",
+    "Remote export content is still generated from existing matter detail records; it does not introduce a new backend persistence contract.",
+    "The worktree contains many parallel uncommitted changes from other agents, including backend/domain, review studio, scheduler, and UI files.",
+    "ToolCall audit events are export-scoped records anchored to their AgentRun because the shared ArtifactType vocabulary does not yet include a first-class tool_call artifact.",
+    "ReviewComment and GateResult audit events are export-scoped derived records; they do not replace first-class persisted backend audit rows.",
+    "Backend export schema parity and first-class persisted export audit rows remain future route/repository owner work, not part of this local-first MVP export helper lane."
+  ],
+  "needs": [
+    "None for the export-layer MVP.",
+    "Future backend export schema parity can be considered after route/repository owners confirm persistence boundaries."
+  ]
+}

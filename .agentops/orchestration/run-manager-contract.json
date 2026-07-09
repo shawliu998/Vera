@@ -1,0 +1,93 @@
+{
+  "schemaVersion": "agentops.run_manager.v1",
+  "runManagerId": "aletheia-local-run-manager",
+  "updatedAt": "2026-07-09T15:41:17+08:00",
+  "storageMode": "repo_local_contracts_and_existing_aletheia_persistence",
+  "runLifecycle": [
+    "queued",
+    "working",
+    "review_needed",
+    "waiting_for_approval",
+    "done",
+    "blocked",
+    "failed",
+    "cancelled"
+  ],
+  "traceEventRequirements": [
+    "id",
+    "timestamp",
+    "level",
+    "phase",
+    "workflowNodeId",
+    "agentId",
+    "message",
+    "inputArtifacts",
+    "outputArtifacts",
+    "gateRefs"
+  ],
+  "checkpointPolicy": {
+    "humanReview": "required before final memo or export",
+    "failedGate": "blocks downstream export until required_action is resolved",
+    "missingMaterial": "blocks or marks review_needed; never silently passes",
+    "operatorTakeover": "allowed between every Observe/Plan/Act/Persist/Gate/Report phase"
+  },
+  "budgetPolicy": {
+    "maxWorkflowTicksPerManualRun": 1,
+    "maxWorkflowNodesPerTick": 7,
+    "maxExternalToolCalls": 0,
+    "tokenBudgetContract": "tracked when model-backed execution exists; deterministic local simulation records zero token usage"
+  },
+  "auditPolicy": {
+    "appendOnly": true,
+    "requiredArtifactRefs": [
+      "agent_run",
+      "gate_result",
+      "audit_event"
+    ],
+    "requiredHashFields": [
+      "after_hash"
+    ],
+    "statusValidation": "node .agentops/scripts/check-agentops.mjs must pass before a run is reported as contract-valid"
+  },
+  "persistenceSemanticsPolicy": {
+    "mode": "read_only_provenance_until_mapped_to_aletheia_records",
+    "durableStateBoundary": "Existing Aletheia matter, document, evidence, work product, review, checkpoint, audit event, feedback export, run trace, and approved playbook records remain the source of truth.",
+    "viewLayerOnlyUntilPersisted": [
+      "gate_provenance",
+      "big_at_reference_audit_candidate",
+      "typed_handoff_provenance",
+      "eval_snapshot",
+      "audit_export_package",
+      "route_hash_artifact_anchor"
+    ],
+    "requiredSourceRecordLinks": [
+      "matter_id",
+      "document_id",
+      "source_chunk_id",
+      "evidence_id",
+      "claim_or_issue_id",
+      "work_product_id",
+      "review_comment_id",
+      "approval_checkpoint_id",
+      "gate_result_id",
+      "audit_event_id",
+      "agent_run_id",
+      "feedback_export_id",
+      "approved_playbook_id"
+    ],
+    "gateBeforeDurableExport": [
+      "source_provenance",
+      "human_review",
+      "approval_checkpoint",
+      "audit_integrity",
+      "eval_snapshot_provenance"
+    ]
+  },
+  "p0DemoRun": {
+    "runId": "run-red-flag-memo-demo-001",
+    "workflowId": "red_flag_memo",
+    "tracePath": ".agentops/runs/red_flag_memo.demo.trace.json",
+    "expectedTerminalState": "waiting_for_approval",
+    "reason": "The P0 demo should show evidence extraction through eval handoff, but final export remains gated by expert approval."
+  }
+}

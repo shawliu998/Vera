@@ -1,0 +1,242 @@
+{
+  "schemaVersion": "agentops.run_trace.v1",
+  "runId": "run-red-flag-memo-demo-001",
+  "workflowId": "red_flag_memo",
+  "workflowVersion": "0.1.0-local",
+  "matterId": "demo-matter-red-flag-001",
+  "status": "waiting_for_approval",
+  "startedAt": "2026-07-09T14:50:00+08:00",
+  "endedAt": "2026-07-09T14:50:00+08:00",
+  "cycle": [
+    "Observe",
+    "Plan",
+    "Act",
+    "Persist",
+    "Gate",
+    "Report"
+  ],
+  "workflowNodes": [
+    "extract_evidence",
+    "map_risks",
+    "draft_memo",
+    "review",
+    "gates",
+    "audit",
+    "eval"
+  ],
+  "steps": [
+    {
+      "id": "step-001-observe",
+      "timestamp": "2026-07-09T14:50:00+08:00",
+      "phase": "Observe",
+      "workflowNodeId": "extract_evidence",
+      "agentId": "workflow-scheduler",
+      "status": "done",
+      "message": "Read AgentOps product shape, integration plan, handoff queue, conflict watch, and status files before acting.",
+      "inputArtifacts": [
+        ".agentops/PRODUCT_SHAPE.md",
+        ".agentops/INTEGRATION_PLAN.md",
+        ".agentops/HANDOFF_QUEUE.md",
+        ".agentops/CONFLICT_WATCH.md",
+        ".agentops/status/*.json"
+      ],
+      "outputArtifacts": [],
+      "gateRefs": []
+    },
+    {
+      "id": "step-002-extract-evidence",
+      "timestamp": "2026-07-09T14:50:00+08:00",
+      "phase": "Act",
+      "workflowNodeId": "extract_evidence",
+      "agentId": "evidence-mapper",
+      "status": "done",
+      "message": "Simulated extraction of source-linked evidence with quote offsets and source chunk references.",
+      "inputArtifacts": [
+        "matter:demo-matter-red-flag-001",
+        "document:demo-contract-001",
+        "source_chunk:chunk-001"
+      ],
+      "outputArtifacts": [
+        "evidence_item:evidence-demo-red-flag-001"
+      ],
+      "gateRefs": [
+        "gate:matter_isolation",
+        "gate:source_provenance"
+      ]
+    },
+    {
+      "id": "step-003-map-risks",
+      "timestamp": "2026-07-09T14:50:00+08:00",
+      "phase": "Act",
+      "workflowNodeId": "map_risks",
+      "agentId": "risk-mapper",
+      "status": "done",
+      "message": "Mapped evidence into one high-risk red flag, open question, and risk register item.",
+      "inputArtifacts": [
+        "evidence_item:evidence-demo-red-flag-001"
+      ],
+      "outputArtifacts": [
+        "issue_node:issue-demo-change-control",
+        "risk_item:risk-demo-change-control"
+      ],
+      "gateRefs": [
+        "gate:evidence_linkage",
+        "gate:missing_material"
+      ]
+    },
+    {
+      "id": "step-004-draft-memo",
+      "timestamp": "2026-07-09T14:50:00+08:00",
+      "phase": "Act",
+      "workflowNodeId": "draft_memo",
+      "agentId": "memo-drafter",
+      "status": "review_needed",
+      "message": "Prepared draft red flag memo with cited evidence and explicit missing-material caveat.",
+      "inputArtifacts": [
+        "evidence_item:evidence-demo-red-flag-001",
+        "issue_node:issue-demo-change-control",
+        "risk_item:risk-demo-change-control"
+      ],
+      "outputArtifacts": [
+        "draft_memo:memo-demo-red-flag-001"
+      ],
+      "gateRefs": [
+        "gate:citation",
+        "gate:unsupported_claims"
+      ]
+    },
+    {
+      "id": "step-005-review",
+      "timestamp": "2026-07-09T14:50:00+08:00",
+      "phase": "Persist",
+      "workflowNodeId": "review",
+      "agentId": "review-coordinator",
+      "status": "waiting_for_approval",
+      "message": "Recorded high-risk human-review requirement before export.",
+      "inputArtifacts": [
+        "draft_memo:memo-demo-red-flag-001"
+      ],
+      "outputArtifacts": [
+        "review_comment:review-demo-approval-required"
+      ],
+      "gateRefs": [
+        "gate:human_review_recorded"
+      ]
+    },
+    {
+      "id": "step-006-gates",
+      "timestamp": "2026-07-09T14:50:00+08:00",
+      "phase": "Gate",
+      "workflowNodeId": "gates",
+      "agentId": "gate-controller",
+      "status": "waiting_for_approval",
+      "message": "Export gate remains warning until authorized expert approval is recorded.",
+      "inputArtifacts": [
+        "draft_memo:memo-demo-red-flag-001",
+        "review_comment:review-demo-approval-required"
+      ],
+      "outputArtifacts": [
+        "gate_result:gate-demo-export-warning"
+      ],
+      "gateRefs": [
+        "gate:human_approval",
+        "gate:export"
+      ]
+    },
+    {
+      "id": "step-007-audit",
+      "timestamp": "2026-07-09T14:50:00+08:00",
+      "phase": "Persist",
+      "workflowNodeId": "audit",
+      "agentId": "audit-packager",
+      "status": "done",
+      "message": "Packaged simulated trace, gate result, review comment, and artifact hash into audit event.",
+      "inputArtifacts": [
+        "agent_run:run-red-flag-memo-demo-001",
+        "gate_result:gate-demo-export-warning"
+      ],
+      "outputArtifacts": [
+        "audit_event:audit-demo-gate-export-warning"
+      ],
+      "gateRefs": [
+        "gate:audit_integrity",
+        "gate:run_trace_complete"
+      ]
+    },
+    {
+      "id": "step-008-eval",
+      "timestamp": "2026-07-09T14:50:00+08:00",
+      "phase": "Report",
+      "workflowNodeId": "eval",
+      "agentId": "eval-curator",
+      "status": "done",
+      "message": "Converted approval-required review signal into an open eval case and candidate skill proposal.",
+      "inputArtifacts": [
+        "review_comment:review-demo-approval-required",
+        "gate_result:gate-demo-export-warning",
+        "audit_event:audit-demo-gate-export-warning"
+      ],
+      "outputArtifacts": [
+        "eval_case:eval-demo-human-approval-required",
+        "professional_skill:skill-candidate-red-flag-export-gate"
+      ],
+      "gateRefs": [
+        "gate:human_skill_approval_required"
+      ]
+    }
+  ],
+  "artifacts": {
+    "evidence": [
+      {
+        "id": "evidence-demo-red-flag-001",
+        "matter_id": "demo-matter-red-flag-001",
+        "source_document_id": "demo-contract-001",
+        "source_chunk_id": "chunk-001",
+        "quote_start": 128,
+        "quote_end": 244,
+        "support_status": "supports",
+        "review_status": "pending"
+      }
+    ],
+    "gateResults": [
+      {
+        "id": "gate-demo-export-warning",
+        "matter_id": "demo-matter-red-flag-001",
+        "gate_type": "export",
+        "status": "warning",
+        "reason": "High-risk red flag memo requires authorized expert approval before final export.",
+        "affected_artifact_ids": [
+          "memo-demo-red-flag-001"
+        ],
+        "required_action": "Record expert approval or keep output as draft."
+      }
+    ],
+    "auditEvents": [
+      {
+        "id": "audit-demo-gate-export-warning",
+        "matter_id": "demo-matter-red-flag-001",
+        "actor_type": "system",
+        "actor_id": "audit-packager",
+        "action": "gate_export_warning",
+        "artifact_id": "gate-demo-export-warning",
+        "artifact_type": "gate_result",
+        "after_hash": "local-demo-hash-gate-demo-export-warning",
+        "timestamp": "2026-07-09T14:50:00+08:00"
+      }
+    ],
+    "evalCases": [
+      {
+        "id": "eval-demo-human-approval-required",
+        "matter_id": "demo-matter-red-flag-001",
+        "source_run_id": "run-red-flag-memo-demo-001",
+        "failure_type": "expert_override",
+        "expected_behavior": "Future red flag memo runs must keep final export blocked until authorized expert approval is recorded.",
+        "status": "open"
+      }
+    ]
+  },
+  "validation": {
+    "checkCommand": "node .agentops/scripts/check-agentops.mjs",
+    "lastKnownResult": "passed_with_legacy_status_warnings"
+  }
+}

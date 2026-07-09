@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import {
     AlertTriangle,
@@ -7,9 +8,13 @@ import {
     ClipboardCheck,
     Download,
     FileText,
+    Flag,
     History,
+    ListChecks,
     MessageSquarePlus,
     SearchCheck,
+    ShieldAlert,
+    Workflow,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,6 +27,11 @@ import {
 } from "./exports";
 import { AletheiaShell } from "./AletheiaShell";
 import { createReviewAuditEvent, getFeedbackSummary } from "./workflow";
+import {
+    deriveReviewStudioModel,
+    type EvidenceDecision,
+    type ReviewStudioState,
+} from "./reviewStudio";
 import type {
     AuditEvent,
     EvidenceItem,
@@ -54,6 +64,12 @@ function supportClass(status: EvidenceItem["supportStatus"]) {
     return "border-amber-200 bg-amber-50 text-amber-700";
 }
 
+function decisionClass(status: EvidenceDecision) {
+    if (status === "approved") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    if (status === "rejected") return "border-red-200 bg-red-50 text-red-700";
+    return "border-gray-200 bg-gray-50 text-gray-600";
+}
+
 function titleize(value: string) {
     return value.replaceAll("_", " ");
 }
@@ -74,12 +90,89 @@ export function AletheiaWorkspace({ workspace }: { workspace: MatterWorkspace })
     const [comment, setComment] = useState(
         "Keep damages conclusion framed as risk-weighted until actual loss proof is supplied.",
     );
+    const [evidenceDecisions, setEvidenceDecisions] = useState<
+        ReviewStudioState["evidenceDecisions"]
+    >({});
+    const [factOverrides, setFactOverrides] = useState<
+        ReviewStudioState["factOverrides"]
+    >({});
+    const [riskOverrides, setRiskOverrides] = useState<
+        ReviewStudioState["riskOverrides"]
+    >({});
+    const [omittedIssueIds, setOmittedIssueIds] = useState<string[]>([]);
+    const [supplementalMaterialRequests, setSupplementalMaterialRequests] =
+        useState<string[]>([]);
+    const [finalExportApproved, setFinalExportApproved] = useState(false);
+    const [materialRequest, setMaterialRequest] = useState("Acceptance testing records");
 
     const selectedIssue = workspace.issues.find((issue) => issue.id === selectedClaimId);
     const selectedEvidence = workspace.evidence.filter(
         (item) => item.claimId === selectedClaimId,
     );
+    const activeWorkspace = useMemo(
+        () => ({ ...workspace, reviews }),
+        [reviews, workspace],
+    );
+    const reviewStudioState = useMemo<ReviewStudioState>(
+        () => ({
+            evidenceDecisions,
+            factOverrides,
+            riskOverrides,
+            omittedIssueIds,
+            supplementalMaterialRequests,
+            finalExportApproved,
+        }),
+        [
+            evidenceDecisions,
+            factOverrides,
+            finalExportApproved,
+            omittedIssueIds,
+            riskOverrides,
+            supplementalMaterialRequests,
+        ],
+    );
+    const reviewStudio = useMemo(
+        () => deriveReviewStudioModel(activeWorkspace, reviewStudioState),
+        [activeWorkspace, reviewStudioState],
+    );
     const feedback = useMemo(() => getFeedbackSummary(reviews), [reviews]);
+
+    function decideEvidence(evidenceId: string, decision: EvidenceDecision) {
+        setEvidenceDecisions((current) => ({
+            ...current,
+            [evidenceId]: decision,
+        }));
+    }
+
+    function updateFact(evidenceId: string, fact: string) {
+        setFactOverrides((current) => ({
+            ...current,
+            [evidenceId]: fact,
+        }));
+    }
+
+    function updateRisk(issueId: string, riskLevel: RiskLevel) {
+        setRiskOverrides((current) => ({
+            ...current,
+            [issueId]: riskLevel,
+        }));
+    }
+
+    function flagSelectedIssueOmission() {
+        if (!selectedIssue) return;
+        setOmittedIssueIds((current) =>
+            Array.from(new Set([...current, selectedIssue.id])),
+        );
+    }
+
+    function addMaterialRequest() {
+        const value = materialRequest.trim();
+        if (!value) return;
+        setSupplementalMaterialRequests((current) =>
+            Array.from(new Set([...current, value])),
+        );
+        setMaterialRequest("");
+    }
 
     function addReview() {
         if (!selectedIssue || !comment.trim()) return;
@@ -106,7 +199,9 @@ export function AletheiaWorkspace({ workspace }: { workspace: MatterWorkspace })
         setAuditEvents(nextAuditEvents);
         downloadJson(
             `${workspace.matter.id}-audit-pack`,
-            buildAuditPack(workspace, reviews, nextAuditEvents),
+            buildAuditPack(workspace, reviews, nextAuditEvents, {
+                reviewStudio,
+            }),
         );
     }
 
@@ -117,7 +212,9 @@ export function AletheiaWorkspace({ workspace }: { workspace: MatterWorkspace })
         setAuditEvents((current) => [event, ...current]);
         downloadJson(
             `${workspace.matter.id}-feedback-eval`,
-            buildFeedbackEvalDataset(workspace, reviews),
+            buildFeedbackEvalDataset(workspace, reviews, {
+                reviewStudio,
+            }),
         );
     }
 
@@ -143,11 +240,32 @@ export function AletheiaWorkspace({ workspace }: { workspace: MatterWorkspace })
                             <Download className="mr-2 h-4 w-4" />
                             Export Audit Pack
                         </Button>
+                        <Button
+                            asChild
+                            variant="outline"
+                            className="rounded-lg border-gray-200 text-gray-600 hover:bg-gray-50"
+                        >
+                            <Link href="/aletheia/agentops">
+                                <Workflow className="mr-2 h-4 w-4" />
+                                Command Center
+                            </Link>
+                        </Button>
                         <Badge variant="outline" className="rounded-full border-gray-200 bg-white px-2 py-0 text-[11px] text-gray-600">
                             Deterministic fallback
                         </Badge>
                         <Badge variant="outline" className={cn("rounded-full px-2 py-0 text-[11px]", riskClass(workspace.matter.riskLevel))}>
                             {workspace.matter.riskLevel} risk
+                        </Badge>
+                        <Badge
+                            variant="outline"
+                            className={cn(
+                                "rounded-full px-2 py-0 text-[11px]",
+                                reviewStudio.gate.status === "ready"
+                                    ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+                                    : "border-red-100 bg-red-50 text-red-700",
+                            )}
+                        >
+                            final export {reviewStudio.gate.status}
                         </Badge>
                     </div>
                 </div>
@@ -267,7 +385,7 @@ export function AletheiaWorkspace({ workspace }: { workspace: MatterWorkspace })
                                 <h2 className="font-semibold">Issue Map</h2>
                             </div>
                             <div className="space-y-3">
-                                {workspace.issues.map((issue) => (
+                                {reviewStudio.issues.map((issue) => (
                                     <button
                                         key={issue.id}
                                         onClick={() => setSelectedClaimId(issue.id)}
@@ -284,9 +402,11 @@ export function AletheiaWorkspace({ workspace }: { workspace: MatterWorkspace })
                                                 {issue.riskLevel}
                                             </Badge>
                                         </div>
-                                        <p className="mt-2 text-xs leading-5 text-[#6b7280]">{issue.summary}</p>
+                                        <p className="mt-2 text-xs leading-5 text-[#6b7280]">
+                                            {workspace.issues.find((item) => item.id === issue.id)?.summary}
+                                        </p>
                                         <p className="mt-2 text-xs text-[#9ca3af]">
-                                            Confidence: {issue.confidence} · Evidence: {issue.evidenceIds.length}
+                                            State: {titleize(issue.reviewState)} · Evidence: {issue.evidenceIds.length}
                                         </p>
                                     </button>
                                 ))}
@@ -330,12 +450,103 @@ export function AletheiaWorkspace({ workspace }: { workspace: MatterWorkspace })
                         </div>
                     </section>
 
+                    <section className="grid gap-4 xl:grid-cols-3">
+                        <div className="rounded-lg border border-red-100 bg-red-50 p-4">
+                            <div className="flex items-center gap-2">
+                                <Flag className="h-4 w-4 text-red-700" />
+                                <h2 className="font-semibold text-red-950">Red Flag Dashboard</h2>
+                            </div>
+                            <div className="mt-3 space-y-3">
+                                {reviewStudio.redFlags.map((flag) => (
+                                    <div key={flag.id} className="rounded-md border border-red-100 bg-white p-3">
+                                        <div className="flex items-start justify-between gap-2">
+                                            <p className="text-sm font-semibold leading-5 text-red-950">{flag.title}</p>
+                                            <Badge variant="outline" className={cn("rounded-md", riskClass(flag.severity))}>
+                                                {flag.severity}
+                                            </Badge>
+                                        </div>
+                                        <p className="mt-2 text-xs leading-5 text-red-800">{flag.reason}</p>
+                                        <p className="mt-2 text-xs leading-5 text-[#6b7280]">{flag.requestedAction}</p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="rounded-lg border border-[#e5e7eb] bg-white p-4">
+                            <div className="flex items-center gap-2">
+                                <ShieldAlert className="h-4 w-4 text-[#111827]" />
+                                <h2 className="font-semibold">Risk Register</h2>
+                            </div>
+                            <div className="mt-3 space-y-3">
+                                {reviewStudio.risks.map((risk) => (
+                                    <div key={risk.id} className="rounded-md border border-[#e5e7eb] p-3">
+                                        <div className="flex items-start justify-between gap-2">
+                                            <p className="text-sm font-medium leading-5">{risk.title}</p>
+                                            <Badge variant="outline" className={cn("rounded-md", riskClass(risk.severity))}>
+                                                {risk.severity}
+                                            </Badge>
+                                        </div>
+                                        <p className="mt-2 text-xs text-[#9ca3af]">
+                                            Likelihood: {risk.likelihood} · Status: {risk.status}
+                                        </p>
+                                        <div className="mt-2 flex flex-wrap gap-1">
+                                            {(["low", "medium", "high"] as RiskLevel[]).map((level) => (
+                                                <button
+                                                    key={level}
+                                                    type="button"
+                                                    data-testid={`set-risk-${risk.issueId}-${level}`}
+                                                    onClick={() => updateRisk(risk.issueId, level)}
+                                                    className={cn(
+                                                        "rounded-md border px-2 py-1 text-[11px] transition-colors",
+                                                        risk.severity === level
+                                                            ? "border-[#111827] bg-[#111827] text-white"
+                                                            : "border-[#e5e7eb] text-[#6b7280] hover:bg-[#f9fafb]",
+                                                    )}
+                                                >
+                                                    {level}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="rounded-lg border border-[#e5e7eb] bg-white p-4">
+                            <div className="flex items-center gap-2">
+                                <ListChecks className="h-4 w-4 text-[#111827]" />
+                                <h2 className="font-semibold">Obligations & Questions</h2>
+                            </div>
+                            <div className="mt-3 space-y-3">
+                                {reviewStudio.obligations.slice(0, 5).map((item) => (
+                                    <div key={item.id} className="rounded-md border border-[#e5e7eb] p-3">
+                                        <div className="flex items-start justify-between gap-2">
+                                            <p className="text-sm font-medium leading-5">{item.obligation}</p>
+                                            <Badge variant="outline" className={cn("rounded-md", riskClass(item.riskLevel))}>
+                                                {item.status}
+                                            </Badge>
+                                        </div>
+                                        <p className="mt-1 text-xs text-[#9ca3af]">{item.source} · {item.owner}</p>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3">
+                                <p className="text-xs font-semibold text-amber-700">Open Questions</p>
+                                <ul className="mt-2 space-y-1 text-xs leading-5 text-amber-900">
+                                    {reviewStudio.openQuestions.slice(0, 6).map((item) => (
+                                        <li key={item}>- {item}</li>
+                                    ))}
+                                </ul>
+                            </div>
+                        </div>
+                    </section>
+
                     <section className="rounded-lg border border-[#e5e7eb] bg-white p-4">
                         <div className="flex items-center justify-between gap-3">
                             <div>
                                 <h2 className="font-semibold">{workspace.memo.title}</h2>
                                 <p className="mt-1 text-sm text-[#9ca3af]">
-                                    Structured memo sections, each reviewable independently.
+                                    Structured memo sections with evidence, issue, and risk traceability for expert review.
                                 </p>
                             </div>
                             <Badge variant="outline" className="rounded-md border-amber-200 bg-amber-50 text-amber-700">
@@ -356,6 +567,34 @@ export function AletheiaWorkspace({ workspace }: { workspace: MatterWorkspace })
                                             <p key={paragraph}>{paragraph}</p>
                                         ))}
                                     </div>
+                                    {(() => {
+                                        const link = reviewStudio.memoLinks.find((item) => item.sectionId === section.id);
+                                        if (!link) return null;
+                                        return (
+                                            <div className="mt-3 flex flex-wrap gap-2 border-t border-[#e5e7eb] pt-3">
+                                                {link.unsupported && (
+                                                    <Badge variant="outline" className="rounded-md border-amber-200 bg-amber-50 text-amber-700">
+                                                        open item / needs source
+                                                    </Badge>
+                                                )}
+                                                {link.evidenceIds.map((id) => (
+                                                    <Badge key={id} variant="outline" className="rounded-md border-emerald-100 bg-emerald-50 text-emerald-700">
+                                                        evidence: {id}
+                                                    </Badge>
+                                                ))}
+                                                {link.issueIds.map((id) => (
+                                                    <Badge key={id} variant="outline" className="rounded-md border-blue-100 bg-blue-50 text-blue-700">
+                                                        issue: {id}
+                                                    </Badge>
+                                                ))}
+                                                {link.riskIds.map((id) => (
+                                                    <Badge key={id} variant="outline" className="rounded-md border-red-100 bg-red-50 text-red-700">
+                                                        risk: {id}
+                                                    </Badge>
+                                                ))}
+                                            </div>
+                                        );
+                                    })()}
                                 </article>
                             ))}
                         </div>
@@ -371,13 +610,50 @@ export function AletheiaWorkspace({ workspace }: { workspace: MatterWorkspace })
                                 <div className="mt-3 space-y-2">
                                     {selectedEvidence.map((item) => (
                                         <div key={item.id} className="rounded-md border border-[#e5e7eb] p-3">
-                                            <Badge variant="outline" className={cn("rounded-md", supportClass(item.supportStatus))}>
-                                                {item.relevance} · {item.supportStatus}
-                                            </Badge>
+                                            <div className="flex flex-wrap gap-2">
+                                                <Badge variant="outline" className={cn("rounded-md", supportClass(item.supportStatus))}>
+                                                    {item.relevance} · {item.supportStatus}
+                                                </Badge>
+                                                <Badge
+                                                    variant="outline"
+                                                    data-testid={`evidence-review-status-${item.id}`}
+                                                    className={cn(
+                                                        "rounded-md",
+                                                        decisionClass(reviewStudioState.evidenceDecisions[item.id] ?? "pending"),
+                                                    )}
+                                                >
+                                                    review: {reviewStudioState.evidenceDecisions[item.id] ?? "pending"}
+                                                </Badge>
+                                            </div>
                                             <p className="mt-2 text-sm leading-5 text-[#374151]">{item.quote}</p>
+                                            <textarea
+                                                data-testid={`fact-override-${item.id}`}
+                                                value={reviewStudioState.factOverrides[item.id] ?? item.quote}
+                                                onChange={(event) => updateFact(item.id, event.target.value)}
+                                                className="mt-3 min-h-20 w-full rounded-md border border-[#e5e7eb] p-2 text-xs leading-5 text-[#374151]"
+                                                aria-label={`Fact correction for ${item.id}`}
+                                            />
                                             <p className="mt-2 text-xs text-[#9ca3af]">
                                                 {item.documentName}, p.{item.page}
                                             </p>
+                                            <div className="mt-3 grid grid-cols-2 gap-2">
+                                                <button
+                                                    type="button"
+                                                    data-testid={`approve-evidence-${item.id}`}
+                                                    onClick={() => decideEvidence(item.id, "approved")}
+                                                    className="h-8 rounded-md border border-emerald-200 px-3 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-50"
+                                                >
+                                                    Approve
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    data-testid={`reject-evidence-${item.id}`}
+                                                    onClick={() => decideEvidence(item.id, "rejected")}
+                                                    className="h-8 rounded-md border border-red-200 px-3 text-xs font-medium text-red-700 transition-colors hover:bg-red-50"
+                                                >
+                                                    Reject
+                                                </button>
+                                            </div>
                                         </div>
                                     ))}
                                 </div>
@@ -409,17 +685,81 @@ export function AletheiaWorkspace({ workspace }: { workspace: MatterWorkspace })
                         <Button onClick={addReview} className="mt-3 w-full bg-[#111827] text-white hover:bg-[#1f2937]">
                             Add Review Tag
                         </Button>
+                        <button
+                            type="button"
+                            data-testid="flag-selected-issue-omission"
+                            onClick={flagSelectedIssueOmission}
+                            className="mt-2 h-9 w-full rounded-md border border-amber-200 px-4 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50"
+                        >
+                            Mark Selected Issue Incomplete
+                        </button>
+                        <div className="mt-4 rounded-md border border-[#e5e7eb] p-3">
+                            <p className="text-xs font-semibold text-[#9ca3af]">Supplemental Material Request</p>
+                            <input
+                                data-testid="supplemental-material-input"
+                                value={materialRequest}
+                                onChange={(event) => setMaterialRequest(event.target.value)}
+                                className="mt-2 h-9 w-full rounded-md border border-[#e5e7eb] px-3 text-sm"
+                            />
+                            <button
+                                type="button"
+                                data-testid="request-supplemental-material"
+                                onClick={addMaterialRequest}
+                                className="mt-2 h-9 w-full rounded-md border border-[#e5e7eb] px-4 text-sm font-medium text-[#374151] transition-colors hover:bg-[#f9fafb]"
+                            >
+                                Request Material
+                            </button>
+                        </div>
                         <div className="mt-4 space-y-2">
-                            {reviews.slice(0, 4).map((review) => (
-                                <div key={review.id} className="rounded-md border border-[#e5e7eb] p-3">
+                            {reviewStudio.reviewLog.slice(0, 10).map((review) => (
+                                <div
+                                    key={review.id}
+                                    data-testid={`review-log-${review.id}`}
+                                    className="rounded-md border border-[#e5e7eb] p-3"
+                                >
                                     <Badge variant="outline" className="rounded-md border-[#e5e7eb] text-[#374151]">
-                                        {titleize(review.tag)}
+                                        {titleize(review.action)}
                                     </Badge>
-                                    <p className="mt-2 text-sm leading-5 text-[#374151]">{review.comment}</p>
-                                    <p className="mt-2 text-xs text-[#9ca3af]">{review.reviewer}</p>
+                                    <p className="mt-2 text-sm leading-5 text-[#374151]">{review.summary}</p>
+                                    <p className="mt-2 text-xs text-[#9ca3af]">{review.targetId}</p>
                                 </div>
                             ))}
                         </div>
+                    </section>
+
+                    <section className="rounded-lg border border-[#e5e7eb] bg-white p-4">
+                        <div className="flex items-center gap-2">
+                            <ShieldAlert className="h-4 w-4 text-[#111827]" />
+                            <h2 className="font-semibold">Final Export Gate</h2>
+                        </div>
+                        <p className="mt-2 text-sm leading-5 text-[#6b7280]">
+                            Aletheia can prepare a reviewable work product, but final export stays blocked until an expert approves the evidence, risk posture, and caveats.
+                        </p>
+                        <Badge
+                            variant="outline"
+                            data-testid="review-studio-final-export-gate"
+                            className={cn(
+                                "mt-3 rounded-md",
+                                reviewStudio.gate.status === "ready"
+                                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                    : "border-red-200 bg-red-50 text-red-700",
+                            )}
+                        >
+                            {reviewStudio.gate.status}
+                        </Badge>
+                        <ul className="mt-3 space-y-1 text-xs leading-5 text-[#6b7280]">
+                            {reviewStudio.gate.reasons.slice(0, 5).map((reason) => (
+                                <li key={reason}>- {reason}</li>
+                            ))}
+                        </ul>
+                        <button
+                            type="button"
+                            data-testid="approve-review-studio-final-export"
+                            onClick={() => setFinalExportApproved(true)}
+                            className="mt-3 h-9 w-full rounded-md bg-[#111827] px-4 text-sm font-medium text-white transition-colors hover:bg-[#1f2937]"
+                        >
+                            Approve Final Export
+                        </button>
                     </section>
 
                     <section className="rounded-lg border border-[#e5e7eb] bg-white p-4">
@@ -446,7 +786,7 @@ export function AletheiaWorkspace({ workspace }: { workspace: MatterWorkspace })
                             <h2 className="font-semibold">Feedback Summary</h2>
                         </div>
                         <p className="mt-2 text-sm text-[#6b7280]">
-                            {feedback.total} review events, {feedback.highValueBadcases.length} high-value badcases ready for eval export.
+                            {feedback.total} review events, {reviewStudio.evalRecords.length} eval-ready review records.
                         </p>
                         <Button
                             variant="outline"
@@ -461,6 +801,18 @@ export function AletheiaWorkspace({ workspace }: { workspace: MatterWorkspace })
                                 <Badge key={tag} variant="outline" className="rounded-md border-[#e5e7eb] text-[#374151]">
                                     {titleize(tag)}: {count}
                                 </Badge>
+                            ))}
+                        </div>
+                        <div className="mt-3 space-y-2">
+                            {reviewStudio.evalRecords.slice(0, 3).map((record, index) => (
+                                <div
+                                    key={`${record.id}-${index}`}
+                                    data-testid={`eval-ready-record-${record.id}-${index}`}
+                                    className="rounded-md border border-[#e5e7eb] p-2"
+                                >
+                                    <p className="text-xs font-medium text-[#374151]">{record.failureType}</p>
+                                    <p className="mt-1 text-xs leading-5 text-[#9ca3af]">{record.expectedBehavior}</p>
+                                </div>
                             ))}
                         </div>
                     </section>

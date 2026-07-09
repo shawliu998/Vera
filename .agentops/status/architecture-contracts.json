@@ -1,0 +1,74 @@
+{
+  "agent": "architecture-contracts",
+  "updatedAt": "2026-07-09T15:29:17+08:00",
+  "status": "done",
+  "scope": [
+    "frontend/src/aletheia/agentops/types.ts",
+    "frontend/src/aletheia/agentops/schemas.ts",
+    "frontend/src/aletheia/agentops/fixtures.ts",
+    "frontend/src/aletheia/agentops/index.ts",
+    ".agentops/CONTRACTS.md",
+    ".agentops/status/architecture-contracts.json"
+  ],
+  "summary": "Added shared AgentOps TypeScript contracts, serialization and validation helpers, demo fixtures, and contract lifecycle documentation without changing existing UI imports or backend behavior.",
+  "contractsChanged": [
+    "Matter",
+    "MatterDocument",
+    "ProfessionalAgent",
+    "AgentRun",
+    "EvidenceItem",
+    "IssueNode",
+    "RiskItem",
+    "DraftMemo",
+    "ReviewComment",
+    "GateResult",
+    "AuditEvent",
+    "EvalCase",
+    "ProfessionalSkill",
+    "AgentOpsMatterWorkspace"
+  ],
+  "testsRun": [
+    "cd frontend && npx tsc --noEmit",
+    "cd frontend && npm run lint"
+  ],
+  "risks": [
+    "Architecture contracts remain handoff/view contracts until backed by existing Aletheia persistence through adapter-owned mappings."
+  ],
+  "needs": [
+    "Future persistence work should map these snake_case handoff contracts to existing backend repository records without creating a second product source of truth."
+  ],
+  "last_cycle_summary": "Added shared AgentOps TypeScript contracts, serialization and validation helpers, demo fixtures, and contract lifecycle documentation without changing existing UI imports or backend behavior.",
+  "files_changed": [
+    "frontend/src/aletheia/agentops/types.ts",
+    "frontend/src/aletheia/agentops/schemas.ts",
+    "frontend/src/aletheia/agentops/fixtures.ts",
+    "frontend/src/aletheia/agentops/index.ts",
+    ".agentops/CONTRACTS.md",
+    ".agentops/status/architecture-contracts.json"
+  ],
+  "contracts_added": [
+    "Matter",
+    "MatterDocument",
+    "ProfessionalAgent",
+    "AgentRun",
+    "EvidenceItem",
+    "IssueNode",
+    "RiskItem",
+    "DraftMemo",
+    "ReviewComment",
+    "GateResult",
+    "AuditEvent",
+    "EvalCase",
+    "ProfessionalSkill",
+    "AgentOpsMatterWorkspace"
+  ],
+  "tests_run": [
+    "cd frontend && npx tsc --noEmit",
+    "cd frontend && npm run lint"
+  ],
+  "blockers": [],
+  "next_actions": [
+    "Feature agents can import from frontend/src/aletheia/agentops for typed artifact handoff.",
+    "Future persistence work can map these snake_case handoff contracts to existing backend repository records."
+  ]
+}

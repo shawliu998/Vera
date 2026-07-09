@@ -1,0 +1,98 @@
+{
+  "agent": "gate-engine",
+  "updatedAt": "2026-07-09T16:04:45+08:00",
+  "status": "done",
+  "summary": "Backend/audit persistence blocker is cleared by backend-audit-persistence: final memo export now requires canonical persisted gate snapshot and gate authorization audit events before final work product export. Gate Engine frontend behavior remains complete and focused gate tests pass against the persisted evidence contract.",
+  "last_cycle_summary": "Backend/audit persistence landed canonical gate_results_persisted, final_export_gate_authorized, and final_export_gate_blocked audit actions plus final memo export fail-closed checks.",
+  "scope": [
+    "frontend/src/aletheia/RemoteMatterPage.tsx",
+    "frontend/src/aletheia/remoteMatterTransforms.ts",
+    "frontend/src/aletheia/agentops/gates.ts",
+    "frontend/src/components/agentops/GateChecklist.tsx",
+    "frontend/tests/agentops/gates.test.ts",
+    ".agentops/TRUST_GATES_PERSISTENCE_HANDOFF.md",
+    ".agentops/status/gate-engine.json"
+  ],
+  "contractsChanged": [
+    "Final memo export now evaluates GateResult[] before approval request and final save",
+    "Final memo work product content includes gateResults and gateSummary",
+    "Final memo approval checkpoint requestedPayload includes gateResults and gateSummary",
+    "Remote matter page displays adapter-derived final memo GateResult[] before export",
+    "GatePersistenceProvenance maps displayed gates to persisted source record refs and unresolved source requirements",
+    "Final memo approval/final content includes gateProvenance",
+    "GateChecklist displays gateProvenance summary counts",
+    "GateChecklist displays expandable source_record_refs and unresolved_source_requirements detail for each provenance-backed gate",
+    "Focused gate tests assert final export fails closed when critical gates fail after approval while draft export remains available",
+    "Backend/audit persistence blocker documented for first-class GateResult/AuditEvent storage",
+    "Backend/audit persistence owner thread assigned: 019f45e3-31ff-7232-81c8-8d94ed3a7e7b",
+    "Backend/audit persistence implemented canonical aletheia_audit_events gate snapshot contract",
+    "Final memo export authorization now resolves to persisted gateSnapshotAuditEventId and gateAuthorizationAuditEventId"
+  ],
+  "files_changed": [
+    "frontend/src/aletheia/agentops/gates.ts",
+    "frontend/src/aletheia/agentops/index.ts",
+    "frontend/src/components/agentops/GateChecklist.tsx",
+    "frontend/tests/agentops/gates.test.ts",
+    "frontend/tsconfig.json",
+    "frontend/src/aletheia/RemoteMatterPage.tsx",
+    "frontend/src/aletheia/remoteMatterTransforms.ts",
+    "docs/agentops/gate-engine.md",
+    ".agentops/TRUST_GATES_PERSISTENCE_HANDOFF.md",
+    ".agentops/status/gate-engine.json"
+  ],
+  "gates_added": [
+    "citation",
+    "human_approval",
+    "missing_material",
+    "conflict",
+    "jurisdiction",
+    "privilege",
+    "export"
+  ],
+  "tests_run": [
+    "cd frontend && node --test --experimental-strip-types tests/agentops/gates.test.ts",
+    "cd frontend && npx eslint src/components/agentops/GateChecklist.tsx src/aletheia/RemoteMatterPage.tsx tests/agentops/gates.test.ts",
+    "cd frontend && npx tsc --noEmit --pretty false",
+    "cd frontend && npx eslint tests/agentops/gates.test.ts src/aletheia/agentops/gates.ts",
+    "cd frontend && npx eslint src/aletheia/RemoteMatterPage.tsx src/components/agentops/GateChecklist.tsx src/aletheia/remoteMatterTransforms.ts src/aletheia/agentops/gates.ts tests/agentops/gates.test.ts",
+    "cd frontend && npx tsc --noEmit",
+    "cd backend && npm run check:aletheia:source-provenance",
+    "cd backend && npm run check:aletheia:approval-policy",
+    "cd backend && npm run check:aletheia:audit-workbench",
+    "node .agentops/scripts/check-agentops.mjs",
+    "cd frontend && npm run test:aletheia:ui (failed historically: missing test-results/aletheia-ui-smoke-state.json in UI smoke/agentops mobile setup and review-studio mobile expected ready but received blocked)",
+    "cd frontend && node --test --experimental-strip-types tests/agentops/gates.test.ts",
+    "cd backend && npm run build",
+    "cd backend && npm run check:aletheia:approval-policy",
+    "cd backend && ALETHEIA_AUDIT_SOURCE_DIR=/var/folders/21/lq2y7qwx7nz2czy8zxyyc6480000gn/T/aletheia-local-regression-1783584348456 npm run check:aletheia:audit-integrity",
+    "cd backend && npm run test:aletheia:local"
+  ],
+  "testsRun": [
+    "cd frontend && node --test --experimental-strip-types tests/agentops/gates.test.ts",
+    "cd frontend && npx eslint src/components/agentops/GateChecklist.tsx src/aletheia/RemoteMatterPage.tsx tests/agentops/gates.test.ts",
+    "cd frontend && npx tsc --noEmit --pretty false",
+    "cd frontend && npx eslint tests/agentops/gates.test.ts src/aletheia/agentops/gates.ts",
+    "cd frontend && npx eslint src/aletheia/RemoteMatterPage.tsx src/components/agentops/GateChecklist.tsx src/aletheia/remoteMatterTransforms.ts src/aletheia/agentops/gates.ts tests/agentops/gates.test.ts",
+    "cd frontend && npx tsc --noEmit",
+    "cd backend && npm run check:aletheia:source-provenance",
+    "cd backend && npm run check:aletheia:approval-policy",
+    "cd backend && npm run check:aletheia:audit-workbench",
+    "node .agentops/scripts/check-agentops.mjs",
+    "cd frontend && npm run test:aletheia:ui (failed historically: missing test-results/aletheia-ui-smoke-state.json in UI smoke/agentops mobile setup and review-studio mobile expected ready but received blocked)",
+    "cd frontend && node --test --experimental-strip-types tests/agentops/gates.test.ts",
+    "cd backend && npm run build",
+    "cd backend && npm run check:aletheia:approval-policy",
+    "cd backend && ALETHEIA_AUDIT_SOURCE_DIR=/var/folders/21/lq2y7qwx7nz2czy8zxyyc6480000gn/T/aletheia-local-regression-1783584348456 npm run check:aletheia:audit-integrity",
+    "cd backend && npm run test:aletheia:local"
+  ],
+  "blockers": ["None"],
+  "risks": [
+    "Gate inputs are still derived in remoteMatterTransforms rather than through the canonical AgentOps adapter acceptance path.",
+    "GateResult/GatePersistenceProvenance are still supplied by the frontend gate engine, but final memo authorization now uses server-written persisted gate audit events.",
+    "Full Aletheia UI smoke was not rerun in this backend persistence lane."
+  ],
+  "needs": ["None"],
+  "next_actions": [
+    "Use full UI smoke as a later broad regression check if UI surfaces change."
+  ]
+}

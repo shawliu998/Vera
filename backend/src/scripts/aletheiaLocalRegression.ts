@@ -924,6 +924,176 @@ async function main() {
     "Edited approval decisions should resolve checkpoints",
   );
 
+  const approvedFinalMemoCheckpoint: any = await repo.requestApproval(
+    ctx,
+    matter.id,
+    {
+      action: "final_memo_export",
+      prompt: "Approve local regression final memo export.",
+      requestedPayload: { regression: true, kind: "final_memo" },
+    },
+  );
+  await repo.decideApproval(ctx, matter.id, approvedFinalMemoCheckpoint.id, {
+    decision: "approved",
+    comment: "Approved for local regression final memo.",
+  });
+  let finalMemoGateBlocked = false;
+  try {
+    await repo.createWorkProduct(ctx, matter.id, {
+      kind: "final_memo",
+      title: "Gate Blocked Final Memo",
+      status: "accepted",
+      schemaVersion: "aletheia-final-memo-v0",
+      content: {
+        sourceDraftMemoId: draftMemo.id,
+        gateResults: [
+          {
+            id: "gate-export-regression",
+            matter_id: matter.id,
+            gate_type: "export",
+            status: "failed",
+            reason: "Regression blocked gate",
+            affected_artifact_ids: [draftMemo.id],
+            required_action: "Resolve regression gate",
+            created_at: new Date().toISOString(),
+          },
+        ],
+        gateProvenance: [
+          {
+            gate_id: "gate-export-regression",
+            gate_type: "export",
+            status: "failed",
+            displayed_reason: "Regression blocked gate",
+            source_record_refs: [
+              {
+                type: "human_checkpoint",
+                id: approvedFinalMemoCheckpoint.id,
+                role: "approval",
+              },
+            ],
+            unresolved_source_requirements: [],
+          },
+        ],
+      },
+      validationErrors: [],
+      generatedBy: "human",
+      model: null,
+      approvalCheckpointId: approvedFinalMemoCheckpoint.id,
+    });
+  } catch (error) {
+    finalMemoGateBlocked = error instanceof ApprovalRequiredError;
+  }
+  assert(
+    finalMemoGateBlocked,
+    "Final memo export should require a persisted passing gate snapshot",
+  );
+
+  const finalMemo: any = await repo.createWorkProduct(ctx, matter.id, {
+    kind: "final_memo",
+    title: "Local Regression Final Memo",
+    status: "accepted",
+    schemaVersion: "aletheia-final-memo-v0",
+    content: {
+      schemaVersion: "aletheia-final-memo-v0",
+      sourceDraftMemoId: draftMemo.id,
+      approvalCheckpointId: approvedFinalMemoCheckpoint.id,
+      gateResults: [
+        {
+          id: "gate-citation-regression",
+          matter_id: matter.id,
+          gate_type: "citation",
+          status: "passed",
+          reason: "Regression evidence is source-linked.",
+          affected_artifact_ids: [evidence.id],
+          created_at: new Date().toISOString(),
+        },
+        {
+          id: "gate-human-approval-regression",
+          matter_id: matter.id,
+          gate_type: "human_approval",
+          status: "passed",
+          reason: "Regression checkpoint approved.",
+          affected_artifact_ids: [draftMemo.id],
+          created_at: new Date().toISOString(),
+        },
+        {
+          id: "gate-export-regression",
+          matter_id: matter.id,
+          gate_type: "export",
+          status: "passed",
+          reason: "Regression final export is approved and evidence-bound.",
+          affected_artifact_ids: [draftMemo.id],
+          created_at: new Date().toISOString(),
+        },
+      ],
+      gateProvenance: [
+        {
+          gate_id: "gate-citation-regression",
+          gate_type: "citation",
+          status: "passed",
+          displayed_reason: "Regression evidence is source-linked.",
+          source_record_refs: [
+            { type: "matter", id: matter.id, role: "input" },
+            { type: "work_product", id: draftMemo.id, role: "input" },
+            {
+              type: "evidence_item",
+              id: evidence.id,
+              role: "provenance",
+              document_id: evidence.document_id,
+              source_chunk_id: evidence.source_chunk_id,
+              quote_start: evidence.quote_start,
+              quote_end: evidence.quote_end,
+              claim_id: evidence.claim_id,
+            },
+          ],
+          unresolved_source_requirements: [],
+        },
+        {
+          gate_id: "gate-human-approval-regression",
+          gate_type: "human_approval",
+          status: "passed",
+          displayed_reason: "Regression checkpoint approved.",
+          source_record_refs: [
+            { type: "matter", id: matter.id, role: "input" },
+            { type: "work_product", id: draftMemo.id, role: "input" },
+            {
+              type: "human_checkpoint",
+              id: approvedFinalMemoCheckpoint.id,
+              role: "approval",
+            },
+          ],
+          unresolved_source_requirements: [],
+        },
+        {
+          gate_id: "gate-export-regression",
+          gate_type: "export",
+          status: "passed",
+          displayed_reason: "Regression final export is approved.",
+          source_record_refs: [
+            { type: "matter", id: matter.id, role: "input" },
+            { type: "work_product", id: draftMemo.id, role: "input" },
+            {
+              type: "human_checkpoint",
+              id: approvedFinalMemoCheckpoint.id,
+              role: "approval",
+            },
+          ],
+          unresolved_source_requirements: [],
+        },
+      ],
+    },
+    validationErrors: [],
+    generatedBy: "human",
+    model: null,
+    approvalCheckpointId: approvedFinalMemoCheckpoint.id,
+  });
+  assert(finalMemo.kind === "final_memo", "Approved final memo should persist");
+  assert(
+    typeof finalMemo.content?.persistedGateEvidence
+      ?.gateSnapshotAuditEventId === "string",
+    "Final memo should retain persisted gate snapshot evidence",
+  );
+
   const detail: any = await repo.getMatterDetail(ctx, matter.id);
   const exportEvent = detail.auditEvents.find(
     (event: any) => event.action === "audit_pack_exported",
@@ -940,7 +1110,8 @@ async function main() {
     (event: any) => event.action === "feedback_dataset_exported",
   );
   assert(
-    feedbackExportEvent?.details?.approvalCheckpointId === feedbackCheckpoint.id,
+    feedbackExportEvent?.details?.approvalCheckpointId ===
+      feedbackCheckpoint.id,
     "Feedback dataset export event should retain the approved checkpoint ID",
   );
   const registrySnapshotEvent = detail.auditEvents.find(
@@ -949,6 +1120,34 @@ async function main() {
   assert(
     typeof registrySnapshotEvent?.details?.exportPath === "string",
     "Registry snapshot audit event should include export path",
+  );
+  const blockedFinalExportEvent = detail.auditEvents.find(
+    (event: any) => event.action === "final_export_gate_blocked",
+  );
+  assert(
+    blockedFinalExportEvent?.details?.gateSnapshotAuditEventId,
+    "Blocked final memo attempt should retain the persisted gate snapshot event ID",
+  );
+  const finalMemoExportEvent = detail.auditEvents.find(
+    (event: any) => event.action === "final_memo_exported",
+  );
+  assert(
+    finalMemoExportEvent?.details?.approvalCheckpointId ===
+      approvedFinalMemoCheckpoint.id,
+    "Final memo export event should retain the approved checkpoint ID",
+  );
+  assert(
+    typeof finalMemoExportEvent?.details?.gateSnapshotAuditEventId === "string",
+    "Final memo export event should retain the persisted gate snapshot ID",
+  );
+  assert(
+    detail.auditEvents.some(
+      (event: any) =>
+        event.id ===
+          finalMemoExportEvent.details.gateAuthorizationAuditEventId &&
+        event.action === "final_export_gate_authorized",
+    ),
+    "Final memo export should resolve to a gate authorization audit event",
   );
 
   await runTemplateWorkProductSmoke({

@@ -1,0 +1,22 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": false,
+    "allowJs": false,
+    "declaration": false,
+    "incremental": false,
+    "isolatedModules": false,
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "noEmit": false,
+    "outDir": "/tmp/aletheia-adapter-tests",
+    "rootDir": "../..",
+    "target": "ES2022"
+  },
+  "include": [
+    "adapters.test.ts",
+    "exportPackage.test.ts",
+    "handoff.test.ts",
+    "skillsEval.test.ts"
+  ]
+}

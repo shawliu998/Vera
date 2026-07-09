@@ -20,10 +20,12 @@ const HIGH_RISK_POLICY_ACTIONS = [
   "external_source_use",
 ];
 
-const HIGH_RISK_WORK_PRODUCTS = [
-  "audit_pack",
-  "feedback_export",
-  "final_memo",
+const HIGH_RISK_WORK_PRODUCTS = ["audit_pack", "feedback_export", "final_memo"];
+
+const FINAL_EXPORT_GATE_ACTIONS = [
+  "gate_results_persisted",
+  "final_export_gate_authorized",
+  "final_export_gate_blocked",
 ];
 
 function repoRoot() {
@@ -59,7 +61,10 @@ function main() {
     "backend/src/lib/aletheia/supabaseRepository.ts",
   );
   const routes = readText(root, "backend/src/routes/aletheia.ts");
-  const regression = readText(root, "backend/src/scripts/aletheiaLocalRegression.ts");
+  const regression = readText(
+    root,
+    "backend/src/scripts/aletheiaLocalRegression.ts",
+  );
   const auditIntegrity = readText(
     root,
     "backend/src/scripts/aletheiaAuditIntegrity.ts",
@@ -115,19 +120,25 @@ function main() {
     check(
       "playbook-human-approval-route",
       routes.includes("/matters/:matterId/playbooks/:playbookId/approve") &&
-        localRepository.includes("action: \"playbook_approved\"") &&
-        supabaseRepository.includes("action: \"playbook_approved\"") &&
+        localRepository.includes('action: "playbook_approved"') &&
+        supabaseRepository.includes('action: "playbook_approved"') &&
         localRepository.includes("status = 'approved'") &&
-        supabaseRepository.includes("status: \"approved\""),
+        supabaseRepository.includes('status: "approved"'),
       "Playbook approval must remain an explicit human route with audited approved status.",
     ),
     check(
       "regression-covers-approval-gates",
       regression.includes("Audit pack should require approval") &&
-        regression.includes("Feedback dataset export should require approval") &&
+        regression.includes(
+          "Feedback dataset export should require approval",
+        ) &&
         regression.includes("Final memo export should require approval") &&
-        regression.includes("Playbook improvement proposal should remain draft") &&
-        regression.includes("Playbook proposal must not mutate the approved source playbook"),
+        regression.includes(
+          "Playbook improvement proposal should remain draft",
+        ) &&
+        regression.includes(
+          "Playbook proposal must not mutate the approved source playbook",
+        ),
       "Local regression must cover export approval blocking and draft-only playbook improvement proposals.",
     ),
     check(
@@ -136,6 +147,38 @@ function main() {
         auditIntegrity.includes("approvalCheckpointId") &&
         hasAll(auditIntegrity, EXPORT_APPROVAL_ACTIONS),
       "Audit integrity must verify high-risk exports resolve to approved checkpoint links.",
+    ),
+    check(
+      "final-memo-requires-persisted-gate-snapshot",
+      hasAll(domain, [
+        "GATE_SNAPSHOT_SCHEMA_VERSION",
+        ...FINAL_EXPORT_GATE_ACTIONS,
+        "buildGateSnapshotAuditDetails",
+        "frontendOnlyPayloadAccepted: false",
+      ]) &&
+        hasAll(localRepository, [
+          "persistFinalMemoGateAuthorization",
+          "persistGateSnapshot",
+          "GATE_AUDIT_ACTIONS.resultsPersisted",
+          "GATE_AUDIT_ACTIONS.finalExportAuthorized",
+          "GATE_AUDIT_ACTIONS.finalExportBlocked",
+          "gateSnapshotAuditEventId",
+        ]) &&
+        hasAll(supabaseRepository, [
+          "persistFinalMemoGateAuthorization",
+          "persistGateSnapshot",
+          "GATE_AUDIT_ACTIONS.resultsPersisted",
+          "GATE_AUDIT_ACTIONS.finalExportAuthorized",
+          "GATE_AUDIT_ACTIONS.finalExportBlocked",
+          "gateSnapshotAuditEventId",
+        ]) &&
+        routes.includes("/matters/:matterId/gate-snapshots") &&
+        hasAll(auditIntegrity, [
+          "final-memo-exports-have-persisted-gate-snapshots",
+          "final-memo-gate-snapshots-pass",
+          "final-memo-exports-have-gate-authorization-events",
+        ]),
+      "Final memo export must persist and audit a passing gate snapshot in both repositories before final export authorization.",
     ),
     check(
       "docs-approval-posture",

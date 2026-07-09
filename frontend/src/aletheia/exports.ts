@@ -6,6 +6,11 @@ import {
     validateIssueMap,
 } from "./schemas";
 import type { AuditEvent, MatterWorkspace, ReviewItem } from "./types";
+import type { ReviewStudioModel } from "./reviewStudio";
+
+type ReviewStudioExportOptions = {
+    reviewStudio?: ReviewStudioModel;
+};
 
 function toFilenamePart(value: string) {
     return value
@@ -51,6 +56,7 @@ export function buildAuditPack(
     workspace: MatterWorkspace,
     reviews: ReviewItem[],
     auditEvents: AuditEvent[],
+    options: ReviewStudioExportOptions = {},
 ) {
     return {
         schemaVersion: "aletheia-audit-pack-v0",
@@ -63,9 +69,27 @@ export function buildAuditPack(
             issues: workspace.issues,
             evidence: workspace.evidence,
             memo: workspace.memo,
+            riskRegister: options.reviewStudio?.risks ?? [],
+            obligationRegister: options.reviewStudio?.obligations ?? [],
+            redFlagRegister: options.reviewStudio?.redFlags ?? [],
+            openQuestions: options.reviewStudio?.openQuestions ?? [],
+            draftMemoTraceability: options.reviewStudio?.memoLinks ?? [],
+            finalExportGate: options.reviewStudio?.gate ?? null,
         },
         reviewLog: reviews,
+        reviewStudioLog: options.reviewStudio?.reviewLog ?? [],
         auditLog: auditEvents,
+        reviewStudioAuditTrail:
+            options.reviewStudio?.reviewLog.map((entry) => ({
+                id: `audit-${entry.id}`,
+                matterId: workspace.matter.id,
+                actor: "human",
+                action: entry.action,
+                targetId: entry.targetId,
+                summary: entry.summary,
+                evalReady: entry.evalReady,
+            })) ?? [],
+        evalRecords: options.reviewStudio?.evalRecords ?? [],
         validation: {
             agentPlan: validateAgentPlan(workspace.plan),
             issueMap: validateIssueMap(workspace.issues),
@@ -76,7 +100,11 @@ export function buildAuditPack(
     };
 }
 
-export function buildFeedbackEvalDataset(workspace: MatterWorkspace, reviews: ReviewItem[]) {
+export function buildFeedbackEvalDataset(
+    workspace: MatterWorkspace,
+    reviews: ReviewItem[],
+    options: ReviewStudioExportOptions = {},
+) {
     return {
         schemaVersion: "aletheia-feedback-eval-v0",
         exportedAt: new Date().toISOString(),
@@ -115,6 +143,15 @@ export function buildFeedbackEvalDataset(workspace: MatterWorkspace, reviews: Re
                 }),
             };
         }),
+        reviewStudioRecords:
+            options.reviewStudio?.evalRecords.map((record) => ({
+                id: record.id,
+                sourceReviewId: record.sourceReviewId,
+                failureType: record.failureType,
+                targetId: record.targetId,
+                expectedBehavior: record.expectedBehavior,
+                source: "review_studio",
+            })) ?? [],
     };
 }
 

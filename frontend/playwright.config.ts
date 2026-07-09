@@ -26,7 +26,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: "npm run dev",
+      command: `node -e 'require("fs").rmSync(${JSON.stringify(dataDir)}, { recursive: true, force: true })' && npm run dev`,
       cwd: path.join(repoRoot, "backend"),
       url: `${backendUrl}/health`,
       timeout: 120_000,

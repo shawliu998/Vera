@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 function npmCommand() {
@@ -32,7 +32,6 @@ export default async function globalSetup() {
   const stateDir = path.join(frontendDir, "test-results");
   const statePath = path.join(stateDir, "aletheia-ui-smoke-state.json");
 
-  if (existsSync(dataDir)) rmSync(dataDir, { recursive: true, force: true });
   mkdirSync(stateDir, { recursive: true });
 
   const env = {

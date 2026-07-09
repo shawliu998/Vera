@@ -8,9 +8,11 @@ import {
   Database,
   FileSearch,
   History,
+  ShieldAlert,
   Plus,
   Search,
   Upload,
+  Workflow,
 } from "lucide-react";
 import { AletheiaShell } from "./AletheiaShell";
 import { RemoteMatterRunTrace } from "./RemoteMatterRunTrace";
@@ -18,11 +20,19 @@ import { RemoteMatterSidebar } from "./RemoteMatterSidebar";
 import {
   buildAuditPack,
   buildFeedbackDataset,
+  buildFinalMemoGateInput,
   buildFinalMemo,
+  buildGatePersistenceProvenance,
   draftMemoSections,
+  evidenceMatrixRows,
+  formatGateBlockMessage,
   highRiskCheckpoints,
   issueMapIssues,
+  materialChecklist,
+  openQuestions,
   runTraceCounts,
+  summarizeGateResults,
+  sourceMapDocuments,
   stringArray,
   titleize,
 } from "./remoteMatterTransforms";
@@ -54,6 +64,8 @@ import {
 } from "@/app/lib/aletheiaApi";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { GateChecklist } from "@/components/agentops/GateChecklist";
+import { canExportFinal, runGates } from "@/aletheia/agentops/gates";
 
 export function RemoteMatterPage({ matterId }: { matterId: string }) {
   const [detail, setDetail] = useState<AletheiaMatterDetail | null>(null);
@@ -130,6 +142,22 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
   const latestIssueMapIssues = useMemo(
     () => (latestIssueMap ? issueMapIssues(latestIssueMap.content) : []),
     [latestIssueMap],
+  );
+  const materialChecklistItems = useMemo(
+    () => (detail ? materialChecklist(detail) : []),
+    [detail],
+  );
+  const sourceMapItems = useMemo(
+    () => (detail ? sourceMapDocuments(detail) : []),
+    [detail],
+  );
+  const evidenceRows = useMemo(
+    () => (detail ? evidenceMatrixRows(detail) : []),
+    [detail],
+  );
+  const matterOpenQuestions = useMemo(
+    () => (detail ? openQuestions(detail) : []),
+    [detail],
   );
   const issueReviewsByClaim = useMemo(() => {
     const reviewsByClaim: Record<string, AletheiaReviewRecord[]> = {};
@@ -220,6 +248,33 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
       finalMemoApprovals.find((checkpoint) => checkpoint.status === "open") ??
       null,
     [finalMemoApprovals],
+  );
+  const finalMemoGateResults = useMemo(
+    () =>
+      detail && latestDraftMemo
+        ? runGates(
+            buildFinalMemoGateInput({
+              detail,
+              draftMemo: latestDraftMemo,
+              issueMap: latestIssueMap,
+              exportIntent: "final",
+              humanApproved: Boolean(approvedFinalMemoApproval),
+            }),
+          )
+        : [],
+    [approvedFinalMemoApproval, detail, latestDraftMemo, latestIssueMap],
+  );
+  const finalMemoGateProvenance = useMemo(
+    () =>
+      detail && latestDraftMemo
+        ? buildGatePersistenceProvenance({
+            detail,
+            gateResults: finalMemoGateResults,
+            draftMemoId: latestDraftMemo.id,
+            approvalCheckpointId: approvedFinalMemoApproval?.id,
+          })
+        : [],
+    [approvedFinalMemoApproval?.id, detail, finalMemoGateResults, latestDraftMemo],
   );
 
   useEffect(() => {
@@ -332,6 +387,16 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
         );
         return;
       }
+      const blockingGateResults = finalMemoGateResults.filter(
+        (gate) =>
+          gate.status === "failed" &&
+          (approvedFinalMemoApproval ||
+            !["human_approval", "export"].includes(gate.gate_type)),
+      );
+      if (blockingGateResults.length > 0) {
+        setSaveMessage(formatGateBlockMessage(blockingGateResults));
+        return;
+      }
       if (!approvedFinalMemoApproval) {
         if (openFinalMemoApproval) {
           setSaveMessage("Final memo export is waiting for human approval.");
@@ -345,11 +410,18 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
             matterTitle: detail.matter.title,
             workProductKind: "final_memo",
             sourceDraftMemoId: latestDraftMemo.id,
+            gateSummary: summarizeGateResults(finalMemoGateResults),
+            gateResults: finalMemoGateResults,
+            gateProvenance: finalMemoGateProvenance,
           },
         });
         const refreshed = await getAletheiaMatter(matterId);
         setDetail(refreshed);
         setSaveMessage("Final memo export approval requested.");
+        return;
+      }
+      if (!canExportFinal(finalMemoGateResults)) {
+        setSaveMessage(formatGateBlockMessage(finalMemoGateResults));
         return;
       }
 
@@ -363,6 +435,8 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
           draftMemoId: latestDraftMemo.id,
           draftContent: latestDraftMemo.content,
           approvalCheckpointId: approvedFinalMemoApproval.id,
+          gateResults: finalMemoGateResults,
+          gateProvenance: finalMemoGateProvenance,
         }),
         validationErrors: [],
         generatedBy: "human",
@@ -782,12 +856,20 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
                       {detail.matter.objective}
                     </p>
                   </div>
-                  <Badge
-                    variant="outline"
-                    className="rounded-md border-[#e5e7eb] text-[#374151]"
-                  >
-                    {titleize(detail.matter.status)}
-                  </Badge>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={`/aletheia/matters/${matterId}/agentops`}>
+                        <Workflow className="h-4 w-4" />
+                        Command Center
+                      </Link>
+                    </Button>
+                    <Badge
+                      variant="outline"
+                      className="rounded-md border-[#e5e7eb] text-[#374151]"
+                    >
+                      {titleize(detail.matter.status)}
+                    </Badge>
+                  </div>
                 </div>
 
                 <div className="mt-5 grid gap-4 md:grid-cols-4">
@@ -827,16 +909,89 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
                     </div>
                   ))}
                 </div>
+
+                <div className="mt-5 grid gap-4 md:grid-cols-3">
+                  <div className="rounded-md border border-[#e5e7eb] p-4">
+                    <p className="text-xs font-semibold uppercase text-[#9ca3af]">
+                      Matter Profile
+                    </p>
+                    <dl className="mt-3 space-y-2 text-sm">
+                      <div className="flex justify-between gap-3">
+                        <dt className="text-[#6b7280]">Client / Project</dt>
+                        <dd className="text-right text-[#374151]">
+                          {detail.matter.client_or_project ?? "Unspecified"}
+                        </dd>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <dt className="text-[#6b7280]">Template</dt>
+                        <dd className="text-right text-[#374151]">
+                          {titleize(detail.matter.template)}
+                        </dd>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <dt className="text-[#6b7280]">Risk</dt>
+                        <dd className="text-right text-[#374151]">
+                          {detail.matter.risk_level ?? "unscoped"}
+                        </dd>
+                      </div>
+                    </dl>
+                  </div>
+
+                  <div className="rounded-md border border-[#e5e7eb] p-4">
+                    <p className="text-xs font-semibold uppercase text-[#9ca3af]">
+                      Initial Risk Scope
+                    </p>
+                    <ul className="mt-3 space-y-2 text-sm leading-5 text-[#374151]">
+                      <li>
+                        {detail.matter.template === "deal_due_diligence"
+                          ? "MVP path: contract and diligence red flag memo."
+                          : "MVP path: source-backed professional review memo."}
+                      </li>
+                      <li>
+                        {detail.evidence.filter(
+                          (item) => item.support_status !== "supports",
+                        ).length}{" "}
+                        mapped evidence items need contradiction or sufficiency
+                        review.
+                      </li>
+                      <li>
+                        {detail.reviews.length} human review tags are available
+                        for gates and eval export.
+                      </li>
+                    </ul>
+                  </div>
+
+                  <div className="rounded-md border border-[#e5e7eb] p-4">
+                    <p className="text-xs font-semibold uppercase text-[#9ca3af]">
+                      Open Questions
+                    </p>
+                    {matterOpenQuestions.length === 0 ? (
+                      <p className="mt-3 text-sm text-[#6b7280]">
+                        No open questions recorded yet.
+                      </p>
+                    ) : (
+                      <ul className="mt-3 space-y-2 text-sm leading-5 text-[#374151]">
+                        {matterOpenQuestions.slice(0, 4).map((question) => (
+                          <li key={question}>- {question}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
               </section>
+
+              {latestDraftMemo && finalMemoGateResults.length > 0 && (
+                <GateChecklist
+                  gateResults={finalMemoGateResults}
+                  gateProvenance={finalMemoGateProvenance}
+                />
+              )}
 
               {(() => {
                 const plan = detail.workProducts.find(
                   (item) => item.kind === "agent_plan",
                 );
                 if (!plan) return null;
-                const requiredDocuments = stringArray(
-                  plan.content.requiredDocuments,
-                );
                 const missingMaterials = stringArray(
                   plan.content.missingMaterials,
                 );
@@ -862,11 +1017,23 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
                     <div className="mt-4 grid gap-3 md:grid-cols-3">
                       <div className="rounded-md border border-[#e5e7eb] p-3">
                         <p className="text-xs font-semibold text-[#9ca3af]">
-                          Required Documents
+                          Material Checklist
                         </p>
                         <ul className="mt-2 space-y-1 text-sm text-[#374151]">
-                          {requiredDocuments.map((item) => (
-                            <li key={item}>- {item}</li>
+                          {materialChecklistItems.map((item) => (
+                            <li key={item.label}>
+                              <span
+                                className={
+                                  item.status === "present"
+                                    ? "text-emerald-700"
+                                    : "text-amber-700"
+                                }
+                              >
+                                {item.status === "present" ? "Present" : "Missing"}
+                              </span>
+                              {": "}
+                              {item.label}
+                            </li>
                           ))}
                         </ul>
                       </div>
@@ -915,8 +1082,11 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
                       Local Documents
                     </p>
                     <h2 className="mt-1 text-lg font-semibold">
-                      Document Registry
+                      Document Index / Source Map
                     </h2>
+                    <p className="mt-1 text-xs text-[#9ca3af]">
+                      Document Registry
+                    </p>
                   </div>
                   <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-[#e5e7eb] px-3 py-2 text-sm font-medium text-[#374151] hover:bg-[#f9fafb]">
                     <Upload className="h-4 w-4" />
@@ -936,33 +1106,63 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
                 </div>
 
                 <div className="mt-4 grid gap-3">
-                  {detail.documents.length === 0 ? (
+                  {sourceMapItems.length === 0 ? (
                     <p className="rounded-md border border-dashed border-[#d1d5db] p-4 text-sm text-[#6b7280]">
                       No source documents uploaded yet.
                     </p>
                   ) : (
-                    detail.documents.map((document) => (
+                    sourceMapItems.map((document) => (
                       <div
                         key={document.id}
                         className="rounded-md border border-[#e5e7eb] p-3"
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <p className="text-sm font-medium">{document.name}</p>
-                          <Badge
-                            variant="outline"
-                            className="rounded-md border-[#e5e7eb] text-[#374151]"
-                          >
-                            {document.parsed_status}
-                          </Badge>
+                          <div className="flex flex-wrap gap-2">
+                            <Badge
+                              variant="outline"
+                              className="rounded-md border-[#e5e7eb] text-[#374151]"
+                            >
+                              {document.parsedStatus}
+                            </Badge>
+                            <Badge
+                              variant="outline"
+                              className={
+                                document.searchable
+                                  ? "rounded-md border-emerald-200 bg-emerald-50 text-emerald-800"
+                                  : "rounded-md border-amber-200 bg-amber-50 text-amber-800"
+                              }
+                            >
+                              {document.searchable ? "searchable" : "not indexed"}
+                            </Badge>
+                          </div>
                         </div>
                         <p className="mt-2 text-sm leading-5 text-[#6b7280]">
                           {document.summary}
                         </p>
-                        <p className="mt-2 text-xs text-[#9ca3af]">
-                          {typeof document.metadata.chunkCount === "number"
-                            ? `${document.metadata.chunkCount} chunks`
-                            : "Chunk count unavailable"}
-                        </p>
+                        <div className="mt-2 flex flex-wrap gap-2 text-xs text-[#6b7280]">
+                          <span>{titleize(document.documentType)}</span>
+                          <span>
+                            {document.chunkCount === null
+                              ? "Chunk count unavailable"
+                              : `${document.chunkCount} chunks`}
+                          </span>
+                          <span>{document.evidenceCount} evidence items</span>
+                        </div>
+                        {document.sensitiveMaterialFlags.length > 0 && (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {document.sensitiveMaterialFlags.map((flag) => (
+                              <Badge
+                                key={flag}
+                                variant="outline"
+                                className="rounded-md border-red-200 bg-red-50 text-red-700"
+                              >
+                                <ShieldAlert className="h-3 w-3" />
+                                {titleize(flag)}
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     ))
                   )}
@@ -1138,6 +1338,7 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
               canProposePlaybookImprovement={canProposePlaybookImprovement}
               latestIssueMap={latestIssueMap}
               latestIssueMapIssues={latestIssueMapIssues}
+              evidenceRows={evidenceRows}
               issueReviewsByClaim={issueReviewsByClaim}
               reviewingIssueId={reviewingIssueId}
               latestDraftMemo={latestDraftMemo}

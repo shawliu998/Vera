@@ -1,0 +1,55 @@
+{
+  "agent": "agentops-adapter",
+  "updatedAt": "2026-07-09T15:50:36+08:00",
+  "status": "done",
+  "scope": [
+    "frontend/src/aletheia/agentops/adapters.ts",
+    "frontend/src/aletheia/agentops/gateProvenance.ts",
+    "frontend/src/aletheia/agentops/handoff.ts",
+    "frontend/src/aletheia/agentops/exportPackage.ts",
+    "frontend/src/aletheia/agentops/types.ts",
+    "frontend/src/aletheia/agentops/index.ts",
+    "frontend/src/aletheia/RemoteMatterCommandCenter.tsx",
+    "frontend/src/app/aletheia/matters/[matterId]/agentops/page.tsx",
+    "frontend/tests/agentops/adapters.test.ts",
+    "frontend/tests/agentops/handoff.test.ts",
+    "frontend/tests/agentops/exportPackage.test.ts",
+    "frontend/tests/agentops/tsconfig.adapter.json",
+    "frontend/tests/aletheia-agentops-route.spec.ts"
+  ],
+  "summary": "Completed a verified adapter-backed demo path from persisted Aletheia matter/work-product data into AgentOps artifacts. The matter-scoped Command Center now fetches a live Aletheia matter, adapts Evidence -> Issue/Risk -> Memo -> Review -> Gate -> Audit -> Eval, exposes gate-backed typed_handoff_provenance in the audit export package, previews the handoff payload, and downloads the full JSON export.",
+  "contractsChanged": [
+    "AgentOpsMatterWorkspace view adapter",
+    "GateResult to persisted Aletheia provenance map",
+    "Reusable gateProvenance helper export",
+    "TypedHandoffProvenanceOptions.gateProvenance",
+    "AuditPack.typed_handoff_provenance",
+    "ExportPackage.manifest.handoff_provenance_items",
+    "buildAuditPack optional typed handoff provenance options",
+    "buildExportPackage optional typed handoff provenance options",
+    "Matter-scoped Command Center adapter-backed export package summary",
+    "Matter-scoped Command Center export package JSON download",
+    "Matter-scoped Command Center typed handoff payload preview",
+    "Focused adapter-backed route Playwright export package preview/download coverage"
+  ],
+  "testsRun": [
+    "cd frontend && npx tsc --noEmit",
+    "cd frontend && npx eslint src/aletheia/RemoteMatterCommandCenter.tsx src/aletheia/agentops/exportPackage.ts src/aletheia/agentops/handoff.ts tests/aletheia-agentops-route.spec.ts tests/agentops/exportPackage.test.ts tests/agentops/handoff.test.ts",
+    "cd frontend && rm -rf /tmp/aletheia-adapter-tests && npx tsc -p tests/agentops/tsconfig.adapter.json && node --test /tmp/aletheia-adapter-tests/tests/agentops/adapters.test.js /tmp/aletheia-adapter-tests/tests/agentops/handoff.test.js /tmp/aletheia-adapter-tests/tests/agentops/exportPackage.test.js /tmp/aletheia-adapter-tests/tests/agentops/skillsEval.test.js",
+    "cd frontend && rm -rf .next-ui-smoke test-results/aletheia-ui-smoke-state.json && if [ -d test-results ]; then find test-results -maxdepth 1 -name 'aletheia-agentops-route-*' -exec rm -rf {} +; fi && npx playwright test tests/aletheia-agentops-route.spec.ts --project=desktop-chromium",
+    "cd frontend && rm -rf .next-ui-smoke test-results/aletheia-ui-smoke-state.json && if [ -d test-results ]; then find test-results -maxdepth 1 -name 'aletheia-agentops-route-*' -exec rm -rf {} +; fi && npx playwright test tests/aletheia-agentops-route.spec.ts --project=mobile-chromium",
+    "node .agentops/scripts/check-agentops.mjs"
+  ],
+  "risks": [
+    "Adapter is frontend/view-model only; it does not persist AgentOps artifacts as source-of-truth records.",
+    "Generic /aletheia/agentops still defaults to sampleAgentOpsWorkspace; the adapter-backed product path is matter-scoped under /aletheia/matters/[matterId]/agentops.",
+    "The AgentOps snapshot is an audit observation over existing Aletheia records; it is not a new source-of-truth AgentOps persistence model.",
+    "Gate Provenance is read-only mapping from displayed gate results back to persisted checkpoints, validations, reviews, and audit events.",
+    "Export package consumers must tolerate the additive AuditPack.typed_handoff_provenance and manifest.handoff_provenance_items fields.",
+    "Desktop and mobile Chromium route smoke cover the adapter-backed export package panel; WebKit/Firefox responsive behavior remains unverified.",
+    "Operator health may still report dirty worktree warnings from parallel feature-agent work; split commits before handoff."
+  ],
+  "needs": [
+    "None"
+  ]
+}
