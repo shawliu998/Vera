@@ -11,6 +11,9 @@ Review**. Compliance, audit, regulatory response, and litigation chronology are
 better described as Domain Packs on the same Kernel, not as separate product
 categories.
 
+In V1, the user-facing shape is an Agent Workspace for local/private-pilot
+document review, not a chat-first or mock-first product surface.
+
 Core analogy:
 
 ```text
