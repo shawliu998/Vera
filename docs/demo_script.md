@@ -74,6 +74,41 @@ Current stage: local-first MVP / private pilot candidate.
     - "The feedback export turns review tags and badcases into eval data, so
       future changes to retrieval, drafting, review, and gates can be tested."
 
+## 2-3 Minute Video Path
+
+Use this path for a short reviewer video where the viewer may only watch the
+first 60-90 seconds.
+
+1. Open `/aletheia`.
+   - Show that the first screen is a matter-based professional workspace.
+
+2. Create or open a Due Diligence Matter.
+   - Use a contract-heavy matter so the workflow reads as deal review, not a
+     generic chat demo.
+
+3. Upload or load a contract.
+   - Show the document registry and source material before showing any agent
+     output.
+
+4. Open the Evidence Matrix.
+   - Highlight source-linked evidence, support status, quotes, document IDs,
+     and claim links.
+
+5. Open the Red Flag Memo.
+   - Show that the memo is a structured diligence work product tied back to
+     evidence, not a free-form answer.
+
+6. Show the failed gate.
+   - Use a missing human approval or unsupported-claim state to show the system
+     fails closed before export.
+
+7. Add human approval.
+   - Show the reviewer decision changing the checkpoint/gate state.
+
+8. Export the Audit Pack and Feedback Eval Dataset.
+   - Close on the proof trail: documents, evidence, memo, approval, run trace,
+     audit events, and eval-ready feedback.
+
 ## 60-Second Reviewer Version
 
 "Aletheia is a local-first professional AgentOps + Evidence Workspace. It is

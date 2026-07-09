@@ -15,12 +15,10 @@ Reviewer-facing orientation starts in `README.md`, then continues through
 
 ## Continuous Engineering Loop
 
-A Codex heartbeat automation named
-`aletheia-continuous-professional-local-agent-loop` is active for this
-thread on a five-minute cadence. Each wakeup should run the operator health
-check first, inspect the current worktree and docs, then choose the smallest
-useful implementation or documentation improvement before running the relevant
-validation commands.
+A local operator loop pattern is documented for continuous engineering
+validation. Before each development cycle, run the operator health check,
+inspect the worktree, choose the smallest useful improvement, and run relevant
+validations.
 
 The fast operator health entrypoint is:
 
