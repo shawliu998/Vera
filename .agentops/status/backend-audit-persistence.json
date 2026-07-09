@@ -1,0 +1,52 @@
+{
+  "agent": "backend-audit-persistence",
+  "updatedAt": "2026-07-09T16:04:45+08:00",
+  "status": "done",
+  "scope": [
+    "backend/src/lib/aletheia/domain.ts",
+    "backend/src/lib/aletheia/repository.ts",
+    "backend/src/lib/aletheia/localRepository.ts",
+    "backend/src/lib/aletheia/supabaseRepository.ts",
+    "backend/src/routes/aletheia.ts",
+    "backend/src/scripts/aletheiaAuditIntegrity.ts",
+    "backend/src/scripts/aletheiaApprovalPolicyAudit.ts",
+    "backend/src/scripts/aletheiaLocalRegression.ts",
+    ".agentops/status/backend-audit-persistence.json",
+    ".agentops/status/gate-engine.json"
+  ],
+  "summary": "Implemented first-class persisted GateResult evidence through canonical aletheia_audit_events actions rather than a new gate snapshot table. Final memo export now requires an approved checkpoint plus a server-persisted passing gate snapshot and gate authorization audit event before the final work product/export audit event is written.",
+  "contractsChanged": [
+    "Canonical gate audit action gate_results_persisted",
+    "Canonical gate audit action final_export_gate_authorized",
+    "Canonical gate audit action final_export_gate_blocked",
+    "Persisted gate snapshot schema aletheia-gate-snapshot-v0",
+    "AletheiaRepository.persistGateSnapshot API",
+    "Local/Supabase createWorkProduct(final_memo) requires persisted passing gate snapshot evidence",
+    "Final memo content persistedGateEvidence includes gateSnapshotAuditEventId and gateAuthorizationAuditEventId",
+    "final_memo_exported audit details include approvalCheckpointId, gateSnapshotAuditEventId, and gateAuthorizationAuditEventId",
+    "POST /aletheia/matters/:matterId/gate-snapshots route persists canonical gate snapshot audit events",
+    "Audit integrity checks verify final memo exports resolve to passing gate snapshots and gate authorization events"
+  ],
+  "testsRun": [
+    "cd backend && npm run build",
+    "cd backend && npm run check:aletheia:approval-policy",
+    "cd backend && npm run check:aletheia:audit-integrity",
+    "cd backend && ALETHEIA_AUDIT_SOURCE_DIR=/var/folders/21/lq2y7qwx7nz2czy8zxyyc6480000gn/T/aletheia-local-regression-1783584348456 npm run check:aletheia:audit-integrity",
+    "cd backend && npm run check:aletheia:source-provenance",
+    "cd backend && npm run check:aletheia:run-trace",
+    "cd backend && npm run check:aletheia:operator",
+    "cd backend && npm run check:aletheia:audit-workbench",
+    "cd backend && npm run test:aletheia:local",
+    "cd frontend && node --test --experimental-strip-types tests/agentops/gates.test.ts"
+  ],
+  "risks": [
+    "No migration-backed gate snapshot table was added; the canonical persistence source is aletheia_audit_events details with schemaVersion aletheia-gate-snapshot-v0.",
+    "GateResult payloads are still supplied by the existing deterministic frontend gate engine, but final authorization now uses the server-written audit event IDs generated during createWorkProduct(final_memo).",
+    "The broader worktree contains many unrelated parallel uncommitted changes from other owners; this lane did not revert them.",
+    "Full frontend UI smoke was not rerun in this lane because no frontend UI files were changed."
+  ],
+  "needs": [
+    "Gate Engine owner can now remove the backend/audit persistence blocker and treat persisted gate snapshot evidence as the final memo authorization contract.",
+    "Future hardening can add database constraints or a dedicated gate snapshot table if audit volume/querying requires it, but it is not required for the current first-class persistence closure."
+  ]
+}

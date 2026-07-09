@@ -1,0 +1,281 @@
+{
+  "schemaVersion": "agentops.workflow.v1",
+  "workflowId": "red_flag_memo",
+  "version": "0.1.0-local",
+  "name": "Red Flag Memo MVP",
+  "description": "Local-first deterministic workflow contract for the P0 Aletheia red flag memo demo path.",
+  "productLoop": [
+    "Evidence",
+    "Issue/Risk",
+    "Draft",
+    "Review",
+    "Gate",
+    "Audit",
+    "Eval"
+  ],
+  "runtimePosture": {
+    "mode": "local_first_deterministic",
+    "externalServices": "disallowed",
+    "backgroundDaemon": false,
+    "humanTakeover": "required_at_review_and_failed_gates",
+    "sourceOfTruth": "Aletheia matter records and run traces; AgentOps configs are orchestration contracts, not product truth."
+  },
+  "artifactContracts": [
+    "evidence_item",
+    "issue_node",
+    "risk_item",
+    "draft_memo",
+    "review_comment",
+    "gate_result",
+    "audit_event",
+    "eval_case",
+    "agent_run"
+  ],
+  "nodes": [
+    {
+      "id": "extract_evidence",
+      "agentId": "evidence-mapper",
+      "stage": "Evidence",
+      "purpose": "Extract source-backed evidence items with document IDs, source chunk IDs, quote offsets, support status, and confidence.",
+      "inputs": [
+        "matter",
+        "document",
+        "source_chunk"
+      ],
+      "outputs": [
+        "evidence_item",
+        "agent_run"
+      ],
+      "requiredFields": [
+        "matter_id",
+        "source_document_id",
+        "source_chunk_id",
+        "quote",
+        "quote_start",
+        "quote_end",
+        "normalized_fact",
+        "supports_claim_ids",
+        "confidence",
+        "review_status"
+      ],
+      "gates": [
+        "matter_isolation",
+        "source_provenance"
+      ],
+      "humanCheckpoint": "on_low_confidence_or_missing_quote"
+    },
+    {
+      "id": "map_risks",
+      "agentId": "risk-mapper",
+      "stage": "Issue/Risk",
+      "purpose": "Map evidence into issue nodes, open questions, red flags, severity, likelihood, and mitigation recommendations.",
+      "inputs": [
+        "evidence_item"
+      ],
+      "outputs": [
+        "issue_node",
+        "risk_item",
+        "agent_run"
+      ],
+      "requiredFields": [
+        "related_evidence_ids",
+        "open_questions",
+        "risk_level",
+        "severity",
+        "likelihood",
+        "recommendation"
+      ],
+      "gates": [
+        "evidence_linkage",
+        "missing_material"
+      ],
+      "humanCheckpoint": "on_high_risk_or_missing_material"
+    },
+    {
+      "id": "draft_memo",
+      "agentId": "memo-drafter",
+      "stage": "Draft",
+      "purpose": "Draft a structured red flag memo that cites evidence for every substantive claim and marks assumptions or unsupported claims.",
+      "inputs": [
+        "evidence_item",
+        "issue_node",
+        "risk_item"
+      ],
+      "outputs": [
+        "draft_memo",
+        "agent_run"
+      ],
+      "requiredFields": [
+        "sections",
+        "evidence_reference_ids",
+        "issue_reference_ids",
+        "citation_coverage_score",
+        "unsupported_claim_count",
+        "review_status"
+      ],
+      "gates": [
+        "citation",
+        "unsupported_claims"
+      ],
+      "humanCheckpoint": "always_before_finalization"
+    },
+    {
+      "id": "review",
+      "agentId": "review-coordinator",
+      "stage": "Review",
+      "purpose": "Route draft memo, issue map, risk register, and evidence matrix to expert review while preserving review tags for eval.",
+      "inputs": [
+        "draft_memo",
+        "issue_node",
+        "risk_item",
+        "evidence_item"
+      ],
+      "outputs": [
+        "review_comment",
+        "agent_run"
+      ],
+      "requiredFields": [
+        "artifact_id",
+        "artifact_type",
+        "comment",
+        "severity",
+        "status",
+        "review_tag"
+      ],
+      "gates": [
+        "human_review_recorded"
+      ],
+      "humanCheckpoint": "required"
+    },
+    {
+      "id": "gates",
+      "agentId": "gate-controller",
+      "stage": "Gate",
+      "purpose": "Fail closed unless citation, missing material, conflict, privilege, export, and human approval requirements are satisfied.",
+      "inputs": [
+        "draft_memo",
+        "review_comment",
+        "risk_item",
+        "evidence_item"
+      ],
+      "outputs": [
+        "gate_result",
+        "agent_run"
+      ],
+      "requiredFields": [
+        "gate_type",
+        "status",
+        "reason",
+        "affected_artifact_ids",
+        "required_action"
+      ],
+      "gates": [
+        "citation",
+        "human_approval",
+        "missing_material",
+        "conflict",
+        "privilege",
+        "export"
+      ],
+      "humanCheckpoint": "required_for_failed_or_warning_gate"
+    },
+    {
+      "id": "audit",
+      "agentId": "audit-packager",
+      "stage": "Audit",
+      "purpose": "Persist run trace, tool calls, gate decisions, review events, and artifact hashes into an audit pack.",
+      "inputs": [
+        "agent_run",
+        "gate_result",
+        "review_comment",
+        "draft_memo"
+      ],
+      "outputs": [
+        "audit_event",
+        "audit_pack",
+        "agent_run"
+      ],
+      "requiredFields": [
+        "actor_type",
+        "actor_id",
+        "action",
+        "artifact_id",
+        "artifact_type",
+        "after_hash",
+        "timestamp"
+      ],
+      "gates": [
+        "audit_integrity",
+        "run_trace_complete"
+      ],
+      "humanCheckpoint": "on_integrity_gap"
+    },
+    {
+      "id": "eval",
+      "agentId": "eval-curator",
+      "stage": "Eval",
+      "purpose": "Convert unresolved review comments and gate failures into regression eval cases and candidate skill proposals without auto-approval.",
+      "inputs": [
+        "review_comment",
+        "gate_result",
+        "audit_event"
+      ],
+      "outputs": [
+        "eval_case",
+        "professional_skill",
+        "agent_run"
+      ],
+      "requiredFields": [
+        "source_run_id",
+        "failure_type",
+        "input_snapshot",
+        "expected_behavior",
+        "expert_feedback",
+        "status"
+      ],
+      "gates": [
+        "human_skill_approval_required"
+      ],
+      "humanCheckpoint": "before_skill_approval"
+    }
+  ],
+  "edges": [
+    {
+      "from": "extract_evidence",
+      "to": "map_risks",
+      "handoff": "evidence_item[]"
+    },
+    {
+      "from": "map_risks",
+      "to": "draft_memo",
+      "handoff": "issue_node[] + risk_item[] + evidence_item[]"
+    },
+    {
+      "from": "draft_memo",
+      "to": "review",
+      "handoff": "draft_memo + cited artifacts"
+    },
+    {
+      "from": "review",
+      "to": "gates",
+      "handoff": "review_comment[] + draft_memo"
+    },
+    {
+      "from": "gates",
+      "to": "audit",
+      "handoff": "gate_result[] + run trace"
+    },
+    {
+      "from": "audit",
+      "to": "eval",
+      "handoff": "audit_event[] + review/gate failures"
+    }
+  ],
+  "completionCriteria": [
+    "Every draft memo section has evidence_reference_ids or an explicit unsupported_claim_count.",
+    "High-risk outputs have human review comments or explicit waiting_for_approval status.",
+    "Failed or warning gate results include required_action.",
+    "Audit pack contains workflow node trace, artifact refs, gate results, and status validation outcome.",
+    "Eval cases preserve review tag, claim ID, evidence ID, and source chunk context when available."
+  ]
+}

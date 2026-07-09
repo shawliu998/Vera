@@ -1,0 +1,48 @@
+{
+  "agent": "matter-document-evidence",
+  "updatedAt": "2026-07-09T15:52:39+08:00",
+  "status": "done",
+  "scope": [
+    "backend/src/lib/aletheia/documentParser.ts",
+    "backend/src/lib/aletheia/domain.ts",
+    "backend/src/lib/aletheia/localRepository.ts",
+    "backend/src/lib/aletheia/supabaseRepository.ts",
+    "frontend/src/aletheia/RemoteMatterPage.tsx",
+    "frontend/src/aletheia/RemoteMatterSidebar.tsx",
+    "frontend/src/aletheia/remoteMatterTransforms.ts",
+    "frontend/src/aletheia/agentops/adapters.ts",
+    "frontend/src/aletheia/agentops/exportPackage.ts",
+    "frontend/src/aletheia/AletheiaEvidenceRegistry.tsx",
+    "frontend/tests/aletheia-ui-smoke.spec.ts"
+  ],
+  "summary": "Completed the local-first MVP Matter/Document/Evidence lane: users can create/open a Matter, inspect Matter Profile, material checklist, document registry/source map, searchable source corpus, sensitive flags, enriched Evidence Matrix, and Evidence Registry rows with stable EvidenceItem anchors. Final validation passed full desktop/mobile Aletheia UI smoke plus source-provenance, type, lint, and AgentOps status checks.",
+  "contractsChanged": [
+    "Aletheia local document metadata now includes sensitiveMaterialFlags",
+    "Aletheia evidence metadata now includes normalizedFact and sensitiveMaterialFlags",
+    "Evidence matrix content now exposes normalizedFact, supportsClaim, confidence, reviewStatus, and sensitiveMaterialFlags",
+    "Remote Matter UI now exposes Matter Profile, Material Checklist, Initial Risk Scope, Open Questions, Source Map, and enriched Evidence Matrix",
+    "AgentOps adapter export adaptAletheiaMatterDetailToAgentOpsWorkspace",
+    "AgentOps adapter provenance summary summarizeAdapterProvenance",
+    "Evidence Registry rows now expose EvidenceItem normalizedFact/source_chunk_id/quote offsets/confidence/sensitiveMaterialFlags",
+    "Evidence Registry connected rows now expose stable DOM anchors of the form evidence-<evidence_id> and visible Evidence <id> badges",
+    "Evidence Registry search now matches EvidenceItem IDs and stable evidence row anchors",
+    "Aletheia UI smoke now asserts Evidence Registry reference anchors: evidence row anchor, visible evidence ID, normalized fact, source chunk, and quote character range",
+    "Evidence Registry filter copy preserves source-provenance audit coverage while adding evidence ID support"
+  ],
+  "testsRun": [
+    "cd frontend && npx tsc --noEmit",
+    "cd frontend && npx eslint src/aletheia/AletheiaEvidenceRegistry.tsx tests/aletheia-ui-smoke.spec.ts",
+    "cd backend && npm run check:aletheia:source-provenance",
+    "node .agentops/scripts/check-agentops.mjs",
+    "cd frontend && ALETHEIA_UI_SMOKE_FRONTEND_PORT=5410 ALETHEIA_UI_SMOKE_BACKEND_PORT=5411 npm run test:aletheia:ui (6 passed: desktop/mobile matter-scoped AgentOps route, Aletheia local workspace, and Review Studio demo)"
+  ],
+  "risks": [
+    "Sensitive material flags are deterministic keyword flags, not a legal privilege determination.",
+    "Supabase document upload/search remains fail-closed; parity applies when existing source chunks are converted to evidence.",
+    "Evidence Registry stable anchors are in-page DOM anchors, not first-class artifact detail routes.",
+    "Persistence-level document sensitivity fields remain a later contract decision if deterministic keyword metadata is insufficient for gates."
+  ],
+  "needs": [
+    "None"
+  ]
+}

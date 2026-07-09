@@ -1,0 +1,152 @@
+{
+  "schemaVersion": "agentops.agent_registry.v1",
+  "registryId": "aletheia-local-agent-registry",
+  "updatedAt": "2026-07-09T14:50:00+08:00",
+  "runtimePosture": "bounded_local_first_agents_with_observable_runs",
+  "agents": [
+    {
+      "id": "workflow-scheduler",
+      "name": "Workflow Scheduler",
+      "owner": "AgentOps Orchestration Layer",
+      "role": "scheduler",
+      "status": "available",
+      "allowedTools": [
+        "read_agentops_context",
+        "validate_status_json",
+        "simulate_workflow_tick",
+        "write_run_trace",
+        "write_status_json"
+      ],
+      "disallowedTools": [
+        "external_network",
+        "background_daemon",
+        "autonomous_playbook_write"
+      ],
+      "takeoverPolicy": "Operator can stop after any cycle phase; no infinite local process is started by this contract."
+    },
+    {
+      "id": "evidence-mapper",
+      "name": "Evidence Mapper",
+      "owner": "Adapter / Evidence Agent",
+      "role": "evidence",
+      "status": "available",
+      "allowedTools": [
+        "read_matter_documents",
+        "read_source_chunks",
+        "write_evidence_items",
+        "append_trace_event"
+      ],
+      "disallowedTools": [
+        "external_network",
+        "final_memo_export"
+      ],
+      "takeoverPolicy": "Pause on missing source chunk, quote offset mismatch, or low confidence evidence."
+    },
+    {
+      "id": "risk-mapper",
+      "name": "Risk Mapper",
+      "owner": "Trust / Gate Agent",
+      "role": "risk",
+      "status": "available",
+      "allowedTools": [
+        "read_evidence_items",
+        "write_issue_nodes",
+        "write_risk_items",
+        "append_trace_event"
+      ],
+      "disallowedTools": [
+        "final_memo_export"
+      ],
+      "takeoverPolicy": "Pause on high-risk issue, missing material, or contradiction."
+    },
+    {
+      "id": "memo-drafter",
+      "name": "Memo Drafter",
+      "owner": "Typed Artifact Handoff Agent",
+      "role": "memo",
+      "status": "available",
+      "allowedTools": [
+        "read_evidence_items",
+        "read_issue_nodes",
+        "read_risk_items",
+        "write_draft_memo",
+        "append_trace_event"
+      ],
+      "disallowedTools": [
+        "uncited_claim",
+        "final_memo_export"
+      ],
+      "takeoverPolicy": "Always hands off to expert review before finalization."
+    },
+    {
+      "id": "review-coordinator",
+      "name": "Review Coordinator",
+      "owner": "Command Center Agent",
+      "role": "review",
+      "status": "available",
+      "allowedTools": [
+        "read_draft_memo",
+        "write_review_comment",
+        "append_trace_event"
+      ],
+      "disallowedTools": [
+        "auto_approve_high_risk_output",
+        "bypass_failed_gate"
+      ],
+      "takeoverPolicy": "Human review is required for high-risk red flag memo outputs."
+    },
+    {
+      "id": "gate-controller",
+      "name": "Gate Controller",
+      "owner": "Gate Agent",
+      "role": "gate",
+      "status": "available",
+      "allowedTools": [
+        "read_review_comments",
+        "read_draft_memo",
+        "write_gate_result",
+        "append_trace_event"
+      ],
+      "disallowedTools": [
+        "bypass_failed_gate"
+      ],
+      "takeoverPolicy": "Failed or warning gates stop export until required_action is satisfied or explicitly accepted by an authorized human."
+    },
+    {
+      "id": "audit-packager",
+      "name": "Audit Packager",
+      "owner": "Audit Agent",
+      "role": "audit",
+      "status": "available",
+      "allowedTools": [
+        "read_run_trace",
+        "read_gate_results",
+        "write_audit_event",
+        "write_audit_pack"
+      ],
+      "disallowedTools": [
+        "modify_prior_trace_event",
+        "bypass_failed_gate"
+      ],
+      "takeoverPolicy": "Pause on missing artifact hash, missing actor, or incomplete run trace."
+    },
+    {
+      "id": "eval-curator",
+      "name": "Eval Curator",
+      "owner": "Eval Agent",
+      "role": "eval",
+      "status": "available",
+      "allowedTools": [
+        "read_review_comments",
+        "read_gate_results",
+        "write_eval_case",
+        "propose_candidate_skill"
+      ],
+      "disallowedTools": [
+        "auto_approve_skill",
+        "global_memory_write"
+      ],
+      "takeoverPolicy": "Skill proposals remain candidate status until an authorized human approves them."
+    }
+  ]
+}

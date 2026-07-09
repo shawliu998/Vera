@@ -20,6 +20,8 @@ coverage
 .data
 backend/.data
 frontend/.next-ui-smoke
+frontend/.next-review-studio
+frontend/.next-agentops-route
 test-results
 frontend/test-results
 playwright-report

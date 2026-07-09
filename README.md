@@ -1,19 +1,66 @@
 # Aletheia 明证
 
-Aletheia 明证 is an Agent Workspace for high-stakes professional work.
+**Aletheia 明证 is not a legal chatbot.** It is a local-first MVP and private
+pilot candidate for a high-stakes professional Agent Workspace: an AgentOps +
+Evidence Workspace for expert-led work.
 
-It turns complex documents into verifiable, reviewable, and auditable expert work products.
+Aletheia turns documents and bounded agent runs into evidence-linked,
+reviewed, gated, audited, and eval-ready deliverables. The product is designed
+for legal, compliance, audit, due diligence, and regulatory workflows where a
+final answer is not enough: reviewers need citations, unsupported-claim flags,
+human approvals, gate decisions, audit packs, and feedback loops.
 
-This is not a legal chatbot. It demonstrates how agentic systems can support legal matter review, compliance impact assessment, and deal due diligence through evidence-grounded workflows, human review, and audit-ready artifacts.
+The core product loop is:
+
+```text
+Evidence -> Issue/Risk -> Draft -> Review -> Gate -> Audit -> Eval
+```
+
+The repository demonstrates a professional agent-system pattern inspired by
+Herdr-style multi-agent observability, Tutti-style shared context and handoff,
+and Hermes-style skills/memory loops, rebuilt around evidence, expert control,
+local-first operation, audit readiness, and eval-driven improvement.
+
+Current stage: **local-first MVP / private pilot candidate**. Aletheia is not
+positioned as production-ready legal advice software or as a replacement for
+qualified professionals.
+
+## What A Reviewer Should Notice
+
+- Aletheia makes matter files, source documents, agent traces, work products,
+  review decisions, gates, audit events, and eval exports visible in one
+  workspace.
+- Claims are expected to remain bound to source evidence, support status, and
+  human review decisions.
+- High-risk exports are blocked until citation and human approval gates pass.
+- Expert review feedback becomes structured eval material instead of getting
+  lost in comments.
+- The demo generalizes beyond legal review into compliance impact assessment,
+  audit review, deal due diligence, and regulatory workflows.
 
 ## Demo Flow
 
 1. Open `/aletheia`.
-2. Use the Aletheia nav: Matters, Templates, Evidence, Reviews, and Audit.
-3. Open the Legal Matter Review demo matter.
-4. Inspect the agent plan, issue map, evidence matrix, draft memo, human review panel, audit log, and feedback summary.
-5. Export the Audit Pack JSON and Feedback JSON from the demo workspace.
-6. Open the Compliance Impact Review and Deal Due Diligence templates for workflow previews, or create local matters from those templates to generate source-linked Compliance Register and Red Flag Memo work products.
+2. Open or create a Matter from the Matter Queue.
+3. Load the sample Legal Matter Review documents or create a local matter with
+   uploaded source files.
+4. Show the Matter Command Center: document registry, agent plan, run trace,
+   issue map, evidence matrix, work products, review queue, gate state, and
+   audit log.
+5. Use the Evidence Agent flow to map source chunks into evidence items.
+6. Use the Issue/Risk flow to generate the Issue Map and Red Flag Register.
+7. Use the Memo flow to draft a Red Flag Memo or legal review memo.
+8. Show the Review Agent flagging unsupported or weakly supported claims.
+9. Show the Gate Engine blocking final export until citation and human approval
+   gates pass.
+10. Approve or edit as the expert reviewer.
+11. Export the Audit Pack JSON and Feedback Eval Dataset from the workspace.
+12. Open the Compliance Impact Review and Deal Due Diligence templates for
+    adjacent workflow previews.
+
+See `docs/reviewer_walkthrough.md`, `docs/demo_script.md`,
+`docs/feature_map.md`, and `docs/deepseek_pitch.md` for reviewer-facing
+walkthrough and positioning material.
 
 ## Workflow Templates
 

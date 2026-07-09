@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "agentops.scheduler.v1",
+  "schedulerId": "aletheia-local-five-minute-cycle",
+  "updatedAt": "2026-07-09T14:50:00+08:00",
+  "mode": "manual_tick_simulation",
+  "intervalSeconds": 300,
+  "startsBackgroundProcess": false,
+  "cycle": [
+    {
+      "phase": "Observe",
+      "contract": "Read .agentops/PRODUCT_SHAPE.md, .agentops/INTEGRATION_PLAN.md, .agentops/HANDOFF_QUEUE.md, .agentops/CONFLICT_WATCH.md, and .agentops/status/*.json before acting."
+    },
+    {
+      "phase": "Plan",
+      "contract": "Select the smallest local-first orchestration slice and check conflicts with Supervisor, Adapter, Command Center, Gate, and Eval lanes."
+    },
+    {
+      "phase": "Act",
+      "contract": "Apply deterministic workflow, scheduler, registry, run-manager, status, trace, or validation changes without external services."
+    },
+    {
+      "phase": "Persist",
+      "contract": "Write updated contracts, simulated trace, audit/eval handoff records, and .agentops/status/workflow-scheduler.json."
+    },
+    {
+      "phase": "Gate",
+      "contract": "Run the smallest feasible validation, at minimum node .agentops/scripts/check-agentops.mjs."
+    },
+    {
+      "phase": "Report",
+      "contract": "Report files changed, checks run, risks, and next handoff."
+    }
+  ],
+  "tickContract": {
+    "input": {
+      "workflow": ".agentops/workflows/red_flag_memo.v1.json",
+      "agentRegistry": ".agentops/orchestration/agent-registry.json",
+      "runManager": ".agentops/orchestration/run-manager-contract.json"
+    },
+    "output": {
+      "trace": ".agentops/runs/red_flag_memo.demo.trace.json",
+      "status": ".agentops/status/workflow-scheduler.json"
+    },
+    "idempotency": "A tick may rewrite deterministic demo trace/status but must not mutate source matter data or start a daemon.",
+    "operatorControl": "Each phase is resumable and inspectable. An operator can take over at any gate or humanCheckpoint."
+  },
+  "requiredChecks": [
+    "node .agentops/scripts/check-agentops.mjs"
+  ]
+}

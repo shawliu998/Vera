@@ -1,0 +1,84 @@
+{
+  "agent": "matter-command-center",
+  "updatedAt": "2026-07-09T15:43:26+08:00",
+  "status": "done",
+  "scope": [
+    "frontend/src/components/agentops/MatterCommandCenter.tsx",
+    "frontend/src/components/agentops/AgentStatusCard.tsx",
+    "frontend/src/components/agentops/EvalWorkbench.tsx",
+    "frontend/src/components/agentops/SkillCandidateList.tsx",
+    "frontend/src/aletheia/RemoteMatterCommandCenter.tsx",
+    "frontend/src/aletheia/AletheiaWorkspace.tsx",
+    "frontend/src/app/aletheia/agentops/page.tsx",
+    "frontend/src/app/aletheia/matters/[matterId]/agentops/page.tsx",
+    "frontend/tests/aletheia-agentops-route.spec.ts",
+    "docs/agentops/matter-command-center.md",
+    ".agentops/status/matter-command-center.json"
+  ],
+  "summary": "Matter Command Center is complete for the current view-layer product goal. It has a fixture-backed demo route, an adapter-backed matter-scoped route, professional agent cards, status filters, blocker/review/completed visibility, eval/workflow/artifact sections, route-aware artifact anchors, local-demo and live-matter navigation, and current desktop/mobile adapter-backed smoke coverage.",
+  "contractsChanged": [
+    "MatterCommandCenter workspace/sourceLabel/artifactBasePath props",
+    "MatterCommandCenter artifactAnchorId helper",
+    "AgentStatusCard artifactHref prop",
+    "Matter-scoped /aletheia/matters/[matterId]/agentops route",
+    "Fixture-backed /aletheia/agentops route",
+    "Agent status filter UI contract",
+    "AgentOps route Playwright assertions for adapter-backed route, eval workbench, gates, references, and matter-scoped artifact hrefs"
+  ],
+  "testsRun": [
+    "cd frontend && npx eslint src/components/agentops/MatterCommandCenter.tsx src/components/agentops/AgentStatusCard.tsx src/aletheia/RemoteMatterCommandCenter.tsx tests/aletheia-agentops-route.spec.ts",
+    "cd frontend && npx tsc --noEmit --pretty false",
+    "cd frontend && npm run build",
+    "Playwright via system Chrome: /aletheia/agentops evidence artifact link href was /aletheia/agentops#artifact-evidence-item-evidence-notice-window and landed on the matching artifact queue entry",
+    "cd frontend && rm -rf .next-ui-smoke test-results/aletheia-ui-smoke-state.json && if [ -d test-results ]; then find test-results -maxdepth 1 -name 'aletheia-agentops-route-*' -exec rm -rf {} +; fi && npx playwright test tests/aletheia-agentops-route.spec.ts --project=desktop-chromium",
+    "cd frontend && rm -rf .next-ui-smoke test-results/aletheia-ui-smoke-state.json && if [ -d test-results ]; then find test-results -maxdepth 1 -name 'aletheia-agentops-route-*' -exec rm -rf {} +; fi && npx playwright test tests/aletheia-agentops-route.spec.ts --project=mobile-chromium"
+  ],
+  "risks": [
+    "Matter Command Center remains a view-layer surface over existing Aletheia records; it is not a new persisted AgentOps source of truth.",
+    "Generic /aletheia/agentops is intentionally fixture-backed for the local demo; the product-truth path is /aletheia/matters/[matterId]/agentops.",
+    "Artifact links are route-aware hash anchors into the Command Center artifact queue until first-class matter artifact detail pages exist.",
+    "Desktop and mobile Chromium are covered; WebKit/Firefox are not part of this lane's acceptance evidence."
+  ],
+  "needs": [
+    "Persistence owners should decide when GateResult, unresolved Big @ references, typed handoff provenance, eval snapshots, and export provenance become first-class persisted audit records.",
+    "Future artifact-detail routes can replace the current hash anchors without changing the card-to-artifact relationship model.",
+    "Downstream docs/release owners can now present /aletheia/matters/[matterId]/agentops as the adapter-backed reviewer path."
+  ],
+  "last_cycle_summary": "Ran current desktop and mobile adapter-backed route smoke tests and marked the Matter Command Center lane done for the view-layer product goal.",
+  "files_changed": [
+    "frontend/src/components/agentops/MatterCommandCenter.tsx",
+    "frontend/src/components/agentops/AgentStatusCard.tsx",
+    "frontend/src/components/agentops/EvalWorkbench.tsx",
+    "frontend/src/components/agentops/SkillCandidateList.tsx",
+    "frontend/src/aletheia/RemoteMatterCommandCenter.tsx",
+    "frontend/src/aletheia/AletheiaWorkspace.tsx",
+    "frontend/src/app/aletheia/agentops/page.tsx",
+    "frontend/src/app/aletheia/matters/[matterId]/agentops/page.tsx",
+    "frontend/tests/aletheia-agentops-route.spec.ts",
+    "docs/agentops/matter-command-center.md",
+    ".agentops/status/matter-command-center.json"
+  ],
+  "features_added": [
+    "Fixture-backed Matter Command Center route for deterministic demo review.",
+    "Adapter-backed matter-scoped Command Center route for persisted matter detail review.",
+    "Professional agent status cards for Intake, Evidence, Issue, Research, Risk, Memo, Review, Audit, and Eval.",
+    "All, Blocked, Review Needed, and Completed filters with counts.",
+    "Blocked reason, expert-attention, last-run, next-action, and related-artifact visibility.",
+    "Route-aware artifact anchors for fixture and matter-scoped routes.",
+    "Eval Workbench and skills loop summary inside the Command Center.",
+    "Navigation from local demo and remote matter workspaces into the Command Center."
+  ],
+  "tests_run": [
+    "cd frontend && npx eslint src/components/agentops/MatterCommandCenter.tsx src/components/agentops/AgentStatusCard.tsx src/aletheia/RemoteMatterCommandCenter.tsx tests/aletheia-agentops-route.spec.ts",
+    "cd frontend && npx tsc --noEmit --pretty false",
+    "cd frontend && npm run build",
+    "Playwright via system Chrome: /aletheia/agentops evidence artifact link href was /aletheia/agentops#artifact-evidence-item-evidence-notice-window and landed on the matching artifact queue entry",
+    "cd frontend && rm -rf .next-ui-smoke test-results/aletheia-ui-smoke-state.json && if [ -d test-results ]; then find test-results -maxdepth 1 -name 'aletheia-agentops-route-*' -exec rm -rf {} +; fi && npx playwright test tests/aletheia-agentops-route.spec.ts --project=desktop-chromium",
+    "cd frontend && rm -rf .next-ui-smoke test-results/aletheia-ui-smoke-state.json && if [ -d test-results ]; then find test-results -maxdepth 1 -name 'aletheia-agentops-route-*' -exec rm -rf {} +; fi && npx playwright test tests/aletheia-agentops-route.spec.ts --project=mobile-chromium"
+  ],
+  "blockers": [],
+  "next_actions": [
+    "Persistence owners should promote accepted provenance records into first-class audit storage when schema ownership is ready.",
+    "Replace hash anchors with first-class artifact detail routes if those pages are added later."
+  ]
+}

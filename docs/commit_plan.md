@@ -17,6 +17,52 @@ groups. It intentionally does not stage or commit files by itself.
 - Tests, smoke fixtures, screenshots, and documentation should remain separate
   so release evidence does not obscure runtime code review.
 
+## Post-P0 AgentOps Addendum
+
+Updated by the Supervisor cycle at `2026-07-09T08:14:32Z`.
+
+This plan predates the final AgentOps P0 closeout. Use
+`.agentops/WORKTREE_HANDOFF.md` as the acceptance wrapper and include the
+current AgentOps/coordination additions below when splitting the dirty
+worktree. Do not fold these files silently into older runtime commits.
+The currently observed dirty-path bucket map lives in
+`.agentops/WORKTREE_SPLIT_MANIFEST.md`.
+
+Suggested additional grouping:
+
+1. AgentOps Command Center and review surfaces
+   - `frontend/src/aletheia/RemoteMatterCommandCenter.tsx`
+   - `frontend/src/aletheia/agentops/**`
+   - `frontend/src/aletheia/reviewStudio.ts`
+   - `frontend/src/app/aletheia/agentops/**`
+   - `frontend/src/app/aletheia/matters/[matterId]/agentops/**`
+   - `frontend/src/components/agentops/**`
+   - `frontend/src/lib/agentops/**`
+   - `frontend/tests/agentops/**`
+   - `frontend/tests/aletheia-agentops-route.spec.ts`
+   - `frontend/tests/review-studio-demo.spec.ts`
+   - `frontend/tests/reviewStudio.test.ts`
+
+2. AgentOps coordination and reviewer docs
+   - `.agentops/**`
+   - `docs/agentops/**`
+   - `docs/deepseek_pitch.md`
+   - `docs/feature_map.md`
+   - `docs/reviewer_walkthrough.md`
+
+Minimum validation for the addendum:
+
+```bash
+cd frontend && npm run lint
+cd frontend && npx tsc --noEmit
+cd frontend && npm run test:aletheia:ui
+node .agentops/scripts/check-agentops.mjs
+```
+
+Keep the P0 positioning unchanged while packaging: Aletheia supports
+professional expert review with evidence, gates, audit, and eval loops. It does
+not replace experts or provide autonomous final legal/compliance advice.
+
 ## Commit 1: Backend Local-First Agent Runtime
 
 Suggested message:

@@ -1,34 +1,107 @@
-# 90 Second Demo Script
+# Demo Script
+
+## Opening Position
+
+"Aletheia 明证 is not a legal chatbot. It is a professional AgentOps +
+Evidence Workspace for high-stakes work. The product turns documents and
+bounded agent runs into evidence-linked, reviewed, gated, audited, and
+eval-ready deliverables."
+
+Current stage: local-first MVP / private pilot candidate.
+
+## Five-Minute Demo Path
 
 1. Open `/aletheia`.
-   - "Aletheia 明证 is an agent workspace for high-stakes professional work. It is not a chatbot."
+   - "This is the Matter Queue. Aletheia is organized around matters and work
+     products, not a blank chat box."
 
-2. Choose Legal Matter Review.
-   - "The demo matter is a software development agreement dispute."
+2. Create or open a Matter.
+   - "For the demo, I will use a Legal Matter Review matter. The same workspace
+     pattern also supports compliance impact review and deal due diligence."
 
-3. Show uploaded documents.
-   - "The workspace starts from a document registry: agreement, payment record, email chain, and demand letter."
+3. Upload or load sample documents.
+   - "The workflow starts from a document registry: agreements, emails,
+     payment records, demand letters, policy documents, VDR files, or
+     regulatory materials."
 
-4. Show Agent Plan.
-   - "Before drafting, the agent exposes assumptions, required documents, missing materials, and workflow steps."
+4. Show the Matter Command Center.
+   - "This is the command center: matter profile, documents, agent plan, run
+     trace, issue map, evidence matrix, draft work product, review queue, gate
+     state, and audit log."
+   - "For live matter data, use the matter-scoped Command Center route. The
+     generic `/aletheia/agentops` route is a fixture-backed prototype view, not
+     the source of truth. The local deterministic demo matter may link there
+     intentionally because it is fixture-backed."
+   - "Artifact links in the current Command Center are in-page hash anchors
+     into the artifact queue, not durable artifact-detail routes."
 
-5. Show Issue Map and Evidence Matrix.
-   - "Each issue is risk-weighted and linked to evidence. Evidence is classified as supporting, contradicting, or insufficient."
+5. Run or inspect the Evidence Agent output.
+   - "The Evidence Agent maps source chunks into evidence items. Evidence is
+     not just text; it includes source document IDs, quotes, support status,
+     claim links, and provenance."
 
-6. Show Draft Memo.
-   - "The output is a structured work product, not a one-shot answer."
+6. Show Issue/Risk Agent artifacts.
+   - "The Issue/Risk Agent converts evidence into an Issue Map and Red Flag
+     Register. Issues are grouped by risk and linked back to evidence."
 
-7. Add Human Review tag.
-   - "Experts can tag unsupported claims, missing facts, overclaims, or accepted analysis."
+7. Show Memo Agent draft.
+   - "The Memo Agent drafts a Red Flag Memo or legal review memo. The key point
+     is that the memo is a structured work product with citations, not a
+     one-shot answer."
 
-8. Export the Audit Pack.
-   - "The workspace can package the matter profile, documents, workflow artifacts, review log, audit log, and validation status into one reviewable JSON artifact."
+8. Show Review Agent findings.
+   - "The Review Agent and the human reviewer can flag unsupported claims,
+     missing facts, contradictions, and overclaims. Expert judgment stays in
+     the workflow."
 
-9. Export Feedback JSON.
-   - "Human review tags become structured eval data, so badcases can feed future regression tests instead of disappearing in comments."
+9. Show the Gate Engine blocking final export.
+   - "The Gate Engine blocks high-risk exports until citation and human
+     approval gates pass. If a memo has unsupported claims or missing approval,
+     the system fails closed."
+   - "Where gate provenance is visible, present it as read-only mapping back to
+     existing Aletheia records, not as a new persisted gate source of truth."
 
-10. Show Audit Log.
-   - "Matter creation, generation, evidence mapping, memo generation, and review are all auditable."
+10. Expert approves or edits.
+    - "The expert can approve, edit, reject, or tag the work. Aletheia is built
+      for expert-in-the-loop review, not unsupervised legal advice."
 
-11. Generalize.
-   - "The same workspace pattern extends to compliance impact review and deal due diligence."
+11. Generate Audit Pack.
+    - "The Audit Pack packages matter profile, documents, evidence, work
+      products, review tags, gate decisions, run trace, audit events, and
+      validation status."
+
+12. Generate Eval Cases.
+    - "The feedback export turns review tags and badcases into eval data, so
+      future changes to retrieval, drafting, review, and gates can be tested."
+
+## 60-Second Reviewer Version
+
+"Aletheia is a local-first professional AgentOps + Evidence Workspace. It is
+not a chatbot. It demonstrates how agents can support legal, compliance, audit,
+due diligence, and regulatory work by making every deliverable evidence-bound,
+human-reviewed, gate-controlled, audit-ready, and eval-driven.
+
+The demo path is simple: open a matter, load documents, inspect the Matter
+Command Center, map evidence, generate an Issue Map and Red Flag Register,
+draft a memo, flag unsupported claims, block export until gates pass, approve as
+the expert, then export the Audit Pack and Eval Cases."
+
+For a reviewer-facing path through the repository, use
+`docs/reviewer_walkthrough.md`.
+
+## Screenshot Checklist
+
+- Matter Queue with Legal Matter Review visible.
+- Matter workspace with document registry and agent plan.
+- Matter-scoped adapter-backed Command Center.
+- Source Map or material checklist when source documents are loaded.
+- Evidence Matrix with source-linked evidence and support status.
+- Issue Map or Red Flag Register with risk grouping.
+- Draft Memo with citations.
+- Review Queue showing unsupported-claim or missing-fact tags.
+- Trust Gates checklist or gate state showing blocked or approved export.
+- Gate provenance on the adapter-backed Command Center, when available.
+- Audit Workbench or Audit Pack export state.
+- Feedback/Eval export state.
+- Eval Signals and Big @ reference previews when showing the Command Center.
+- In-page artifact queue hash anchors when showing Command Center navigation.

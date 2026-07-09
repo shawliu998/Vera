@@ -1,0 +1,65 @@
+{
+  "agent": "demo-readme-pitch",
+  "updatedAt": "2026-07-09T15:45:08+08:00",
+  "status": "done",
+  "scope": [
+    "README.md",
+    "docs/status.md",
+    "docs/demo_script.md",
+    "docs/deepseek_pitch.md",
+    "docs/feature_map.md",
+    "docs/reviewer_walkthrough.md",
+    ".agentops/status/demo-readme-pitch.json"
+  ],
+  "summary": "Kept README/demo/pitch docs aligned with the current implementation by documenting fixture-backed local demo navigation, adapter-backed matter routes, read-only gate provenance, in-page artifact anchors, and the current full-smoke recovery boundary.",
+  "contractsChanged": [
+    "Reviewer-facing documentation path",
+    "Demo screenshot checklist",
+    "Gate provenance reviewer wording",
+    "Artifact anchor reviewer wording",
+    "Full UI smoke caveat",
+    "Canonical demo-readme-pitch status JSON"
+  ],
+  "testsRun": [
+    "jq . .agentops/status/demo-readme-pitch.json",
+    "rg -n \"production-ready|legal advice|private pilot|chatbot|Agent Workspace|reviewer_walkthrough|fixture-backed|matter-scoped|gate provenance|source of truth|hash anchors|full UI smoke\" README.md docs/status.md docs/demo_script.md docs/deepseek_pitch.md docs/feature_map.md docs/reviewer_walkthrough.md",
+    "node .agentops/scripts/check-agentops.mjs"
+  ],
+  "risks": [
+    "Reviewer docs must continue to avoid production-readiness or legal-advice claims.",
+    "Several parallel AgentOps feature surfaces remain in progress and should not be described as persisted AgentOps source of truth.",
+    "The generic /aletheia/agentops route remains fixture-backed and should be presented as a prototype/demo surface, while /aletheia/matters/[matterId]/agentops is the adapter-backed reviewer path.",
+    "Gate provenance is read-only view-layer mapping until backend/audit owners add first-class persisted GateResult audit events.",
+    "Command Center artifact links are in-page hash anchors until first-class artifact detail routes exist.",
+    "Full UI smoke is under recovery triage; focused route smoke should not be described as full release validation."
+  ],
+  "needs": [
+    "Add or verify current demo screenshots against the updated screenshot checklist after full UI smoke recovery.",
+    "Keep future README/demo updates aligned with status rollup if AgentOps view-layer helpers become persisted contracts."
+  ],
+  "last_cycle_summary": "Refreshed reviewer walkthrough and demo screenshot checklist for fixture-backed local demo navigation, adapter-backed matter Command Center routes, read-only gate provenance, in-page artifact anchors, and full UI smoke recovery caveat. Preserved the local-first MVP/private pilot and not-a-legal-chatbot boundaries.",
+  "files_changed": [
+    "README.md",
+    "docs/status.md",
+    "docs/demo_script.md",
+    "docs/deepseek_pitch.md",
+    "docs/feature_map.md",
+    "docs/reviewer_walkthrough.md",
+    ".agentops/status/demo-readme-pitch.json"
+  ],
+  "docs_added": [
+    "docs/deepseek_pitch.md",
+    "docs/feature_map.md",
+    "docs/reviewer_walkthrough.md"
+  ],
+  "tests_run": [
+    "jq . .agentops/status/demo-readme-pitch.json",
+    "rg -n \"production-ready|legal advice|private pilot|chatbot|Agent Workspace|reviewer_walkthrough|fixture-backed|matter-scoped|gate provenance|source of truth|hash anchors|full UI smoke\" README.md docs/status.md docs/demo_script.md docs/deepseek_pitch.md docs/feature_map.md docs/reviewer_walkthrough.md",
+    "node .agentops/scripts/check-agentops.mjs"
+  ],
+  "blockers": [],
+  "next_actions": [
+    "Add or verify current demo screenshots against the updated screenshot checklist after full UI smoke recovery.",
+    "Keep future README/demo updates aligned with status rollup if AgentOps view-layer helpers become persisted contracts."
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "agent": "big-at-context",
+  "updatedAt": "2026-07-09T15:59:06+08:00",
+  "status": "done",
+  "scope": [
+    "frontend/src/aletheia/RemoteMatterCommandCenter.tsx",
+    "frontend/src/aletheia/agentops/gateProvenance.ts",
+    "frontend/src/aletheia/agentops/matterMemory.ts",
+    "frontend/src/aletheia/agentops/references.ts",
+    "frontend/src/components/agentops/ReferencePreview.tsx",
+    "frontend/tests/aletheia-agentops-route.spec.ts",
+    "frontend/tests/agentops/adapters.test.ts",
+    "frontend/tests/agentops/references.test.ts",
+    "docs/agentops/big-at-context.md"
+  ],
+  "summary": "Big @ Context remains done for the P0 demo path after a fresh coordination and implementation check: references are parsed and resolved from adapter-backed matter memory, rendered in the matter-scoped Command Center through ReferencePreview, visible with resolved/ambiguous/missing semantics, exposed with read-only autocomplete candidates, and preserved as explicit audit candidates without silently binding ambiguous or missing references.",
+  "contractsChanged": [
+    "Adapter-backed Matter References UI now renders read-only Big @ autocomplete candidates",
+    "Autocomplete candidates are generated from createBigAtAutocompleteCandidates over the adapter-derived matter memory index",
+    "Autocomplete UI is display-only and does not mutate memo, audit, or professional output state",
+    "Ambiguous and missing Big @ references remain explicit audit candidates and are not promoted into referenced_artifacts",
+    "P0 demo coverage includes desktop and mobile matter-scoped AgentOps route validation for Big @ visibility"
+  ],
+  "testsRun": [
+    "cd frontend && npx tsc --noEmit",
+    "cd frontend && npx tsx tests/agentops/references.test.ts",
+    "cd frontend && ALETHEIA_UI_SMOKE_FRONTEND_PORT=3520 ALETHEIA_UI_SMOKE_BACKEND_PORT=3521 npx playwright test --config=playwright.config.ts tests/aletheia-agentops-route.spec.ts --project=desktop-chromium",
+    "cd frontend && ALETHEIA_UI_SMOKE_FRONTEND_PORT=3530 ALETHEIA_UI_SMOKE_BACKEND_PORT=3531 npx playwright test --config=playwright.config.ts tests/aletheia-agentops-route.spec.ts --project=mobile-chromium",
+    "node .agentops/scripts/check-agentops.mjs"
+  ],
+  "risks": [
+    "Big @ is complete for the P0 adapter-backed demo path but remains view-layer/local resolution until unresolved reference persistence semantics are accepted.",
+    "@Clause is not a new persisted ArtifactType; it currently resolves to supporting evidence_item refs with clause/chunk metadata.",
+    "Autocomplete candidates are currently visible suggestions only; there is no note or memo editor insertion behavior yet."
+  ],
+  "needs": [
+    "Post-P0: wire createBigAtAutocompleteCandidates into an actual note or memo editor insertion workflow once that editor surface is owned.",
+    "Post-P0: persist unresolved and ambiguous reference records through the approved audit/reference persistence contract."
+  ]
+}

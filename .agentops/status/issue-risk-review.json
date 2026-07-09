@@ -1,0 +1,37 @@
+{
+  "agent": "issue-risk-review",
+  "updatedAt": "2026-07-09T15:46:05+08:00",
+  "status": "done",
+  "scope": [
+    "frontend/src/aletheia/exports.ts",
+    "frontend/src/aletheia/reviewStudio.ts",
+    "frontend/src/aletheia/AletheiaWorkspace.tsx",
+    "frontend/tests/reviewStudio.test.ts",
+    "frontend/tests/review-studio-demo.spec.ts"
+  ],
+  "summary": "Done-lane calibration confirmed the local P0 demo path for Evidence -> Issue/Risk -> Draft Memo -> Human Review -> Gate/Audit/Eval handoff remains intact. The workspace exposes deterministic issue/risk/obligation/red-flag/open-question registers, draft memo traceability, review actions, export gate state, review log, audit trail payloads, and eval-ready records.",
+  "contractsChanged": [
+    "ReviewStudioState local view model",
+    "ReviewStudioModel deterministic handoff",
+    "Draft memo traceability display",
+    "Review log to eval-ready record derivation",
+    "Demo audit pack reviewStudioLog/reviewStudioAuditTrail/evalRecords payload",
+    "Demo feedback dataset reviewStudioRecords payload",
+    "Review Studio Playwright demo path"
+  ],
+  "testsRun": [
+    "cd frontend && ../backend/node_modules/.bin/tsx --test tests/reviewStudio.test.ts",
+    "cd frontend && npx eslint src/aletheia/reviewStudio.ts src/aletheia/AletheiaWorkspace.tsx tests/reviewStudio.test.ts",
+    "cd frontend && npm run lint",
+    "cd frontend && npx tsc --noEmit",
+    "cd frontend && npx playwright test tests/review-studio-demo.spec.ts --config=playwright.config.ts --project=desktop-chromium",
+    "node .agentops/scripts/check-agentops.mjs"
+  ],
+  "risks": [
+    "This slice is a local/demo Review Studio view model; persisted backend review/audit/gate rows remain owned by backend/gate/audit follow-up work.",
+    "The Playwright proof covers desktop Chromium; mobile layout is expected to render responsively but was not rerun for this new spec in this cycle."
+  ],
+  "needs": [
+    "Backend/gate/audit owners can now map reviewStudioLog, reviewStudioAuditTrail, evalRecords, and reviewStudioRecords into persisted rows when schema ownership is available."
+  ]
+}

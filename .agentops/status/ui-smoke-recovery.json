@@ -1,0 +1,42 @@
+{
+  "agent": "ui-smoke-recovery",
+  "updatedAt": "2026-07-09T16:02:10+08:00",
+  "status": "done",
+  "scope": [
+    ".agentops/VALIDATION_BLOCKERS.md",
+    ".agentops/UI_SMOKE_RECOVERY_PLAN.md",
+    ".agentops/status/ui-smoke-recovery.json",
+    "frontend/tests/aletheia-ui-smoke.spec.ts",
+    "frontend/tests/aletheia-ui-smoke.global-setup.ts",
+    "frontend/tests/review-studio-demo.spec.ts",
+    "frontend/src/aletheia/AletheiaEvidenceRegistry.tsx",
+    "frontend/src/aletheia/reviewStudio.ts",
+    "frontend/src/aletheia/RemoteMatterPage.tsx",
+    "frontend/src/app/lib/aletheiaApi.ts",
+    "backend/src/routes/aletheia.ts",
+    "backend/src/lib/aletheia/localRepository.ts"
+  ],
+  "summary": "Full Aletheia UI smoke now passes on explicit clean ports for desktop and mobile. The mobile Evidence Registry save path produced a matter-scoped evidence snapshot without Failed to fetch, and the mobile Review Studio final export gate became ready after explicit valid approval before returning to blocked when later reviewer actions introduced blockers.",
+  "contractsChanged": [
+    "No product contract changed in this recovery pass; current local checkout already preserves registry_snapshot persistence through createAletheiaWorkProduct without high-risk export approval requirements.",
+    "Review Studio approval remains derived by deriveReviewStudioModel and stays fail-closed when rejected evidence, omitted issues, unsupported links, or missing approval are present."
+  ],
+  "testsRun": [
+    "cd frontend && ALETHEIA_UI_SMOKE_FRONTEND_PORT=5710 ALETHEIA_UI_SMOKE_BACKEND_PORT=5711 npm run test:aletheia:ui",
+    "frontend/test-results/aletheia-ui-smoke-state.json was written with frontendPort 5710, backendPort 5711, and separate desktop/mobile matter IDs",
+    "desktop-chromium: tests/aletheia-agentops-route.spec.ts, tests/aletheia-ui-smoke.spec.ts, and tests/review-studio-demo.spec.ts passed",
+    "mobile-chromium: tests/aletheia-agentops-route.spec.ts, tests/aletheia-ui-smoke.spec.ts, and tests/review-studio-demo.spec.ts passed",
+    "cd frontend && npm run lint",
+    "cd frontend && npx tsc --noEmit",
+    "node .agentops/scripts/check-agentops.mjs"
+  ],
+  "risks": [
+    "This is local explicit-port Chromium evidence; WebKit/Firefox and deployed environments remain outside this acceptance lane.",
+    "The backend still applies approval enforcement only to audit_pack, feedback_export, and final_memo work products; registry_snapshot remains a local repository snapshot artifact, not a final export.",
+    "Review Studio demo approval does not fake approval or bypass blockers; later reviewer mutations correctly return the final export gate to blocked."
+  ],
+  "needs": [
+    "Continue using explicit unused ports for broad UI smoke reruns.",
+    "Keep full UI smoke as the release/private-pilot acceptance command when UI, route, registry, or gate behavior changes."
+  ]
+}
