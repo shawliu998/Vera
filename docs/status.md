@@ -66,6 +66,12 @@ The Matter Memory / Playbook knowledge governance audit entrypoint is:
 cd backend && npm run check:aletheia:knowledge-governance
 ```
 
+The Audit Workbench / registry snapshot audit entrypoint is:
+
+```bash
+cd backend && npm run check:aletheia:audit-workbench
+```
+
 The least-privilege Tool Adapter policy audit entrypoint is:
 
 ```bash
@@ -159,6 +165,7 @@ cd backend && npm run check:aletheia:privacy
 cd backend && npm run check:aletheia:ops-readiness
 cd backend && npm run check:aletheia:source-provenance
 cd backend && npm run check:aletheia:knowledge-governance
+cd backend && npm run check:aletheia:audit-workbench
 cd backend && npm run check:aletheia:tool-policy
 cd backend && npm run check:aletheia:approval-policy
 cd backend && npm run check:aletheia:matter-isolation
@@ -200,6 +207,9 @@ Current known result:
   human-approved Matter Playbooks, draft-only improvement proposals, no global
   legal memory, no mutation tools in the default Tool Adapter, and regression
   coverage for non-mutating proposals.
+- Audit Workbench audit passes and verifies Evidence, Reviews, and Audit
+  registry filters, filtered JSON exports, matter-scoped `registry_snapshot`
+  saves, UI smoke coverage, and local snapshot audit events.
 - Tool Adapter policy audit passes and verifies the HTTP adapter and MCP
   wrapper expose only the approved narrow allowlist while browser, terminal,
   external web, email, and destructive file operations stay disabled.

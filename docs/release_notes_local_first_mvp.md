@@ -109,6 +109,7 @@ npm run check:aletheia:privacy
 npm run check:aletheia:ops-readiness
 npm run check:aletheia:source-provenance
 npm run check:aletheia:knowledge-governance
+npm run check:aletheia:audit-workbench
 npm run check:aletheia:tool-policy
 npm run check:aletheia:approval-policy
 npm run check:aletheia:matter-isolation

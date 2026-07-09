@@ -71,6 +71,10 @@ Operational notes:
   Memory or Playbooks. It verifies matter-scoped memory, human-approved
   playbooks, draft-only improvement proposals, no global legal memory, and no
   default Tool Adapter mutation path for knowledge artifacts.
+- Run `npm run check:aletheia:audit-workbench` before changing Evidence,
+  Reviews, or Audit registry pages. It verifies registry filters, filtered JSON
+  exports, matter readiness packets, matter-scoped `registry_snapshot` saves,
+  UI smoke coverage, and local snapshot audit events.
 - Run `npm run check:aletheia:tool-policy` before enabling agent integrations.
   It verifies the HTTP Tool Adapter and stdio MCP wrapper expose only the
   approved narrow allowlist and keep browser, terminal, external web, email, and
@@ -154,6 +158,7 @@ Before upgrading:
 - run `npm run check:aletheia:ops-readiness`;
 - run `npm run check:aletheia:source-provenance`;
 - run `npm run check:aletheia:knowledge-governance`;
+- run `npm run check:aletheia:audit-workbench`;
 - run `npm run check:aletheia:tool-policy`;
 - run `npm run check:aletheia:approval-policy`;
 - run `npm run check:aletheia:matter-isolation`;

@@ -114,6 +114,10 @@ structured artifacts.
   remains matter-scoped, Playbooks remain human-approved/versioned, proposals
   stay draft-only, no global legal memory is introduced, and the default Tool
   Adapter does not expose knowledge mutation tools.
+- `npm run check:aletheia:audit-workbench` verifies Evidence, Reviews, and
+  Audit registry filters, filtered JSON exports, matter readiness packets,
+  matter-scoped `registry_snapshot` saves, UI smoke coverage, and local
+  snapshot audit events.
 - Export-class work products are now written to local JSON files under
   `.data/aletheia/exports/<matterId>/`, and audit events retain the export
   path. This includes filtered registry snapshots, while high-risk Audit Pack,

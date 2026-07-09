@@ -26,6 +26,7 @@ const VALIDATION_COMMANDS = [
   "cd backend && npm run check:aletheia:ops-readiness",
   "cd backend && npm run check:aletheia:source-provenance",
   "cd backend && npm run check:aletheia:knowledge-governance",
+  "cd backend && npm run check:aletheia:audit-workbench",
   "cd backend && npm run check:aletheia:tool-policy",
   "cd backend && npm run check:aletheia:approval-policy",
   "cd backend && npm run check:aletheia:matter-isolation",
@@ -176,6 +177,11 @@ function main() {
         packageScript(
           root,
           "backend/package.json",
+          "check:aletheia:audit-workbench",
+        ) &&
+        packageScript(
+          root,
+          "backend/package.json",
           "check:aletheia:tool-policy",
         ) &&
         packageScript(
@@ -228,6 +234,7 @@ function main() {
         "npm run check:aletheia:ops-readiness",
         "npm run check:aletheia:source-provenance",
         "npm run check:aletheia:knowledge-governance",
+        "npm run check:aletheia:audit-workbench",
         "npm run check:aletheia:tool-policy",
         "npm run check:aletheia:approval-policy",
         "npm run check:aletheia:matter-isolation",

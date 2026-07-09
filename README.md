@@ -215,6 +215,18 @@ This verifies matter-scoped memory, human-approved playbooks, draft-only
 improvement proposals, no global legal memory, and no default Tool Adapter
 mutation path for knowledge artifacts.
 
+Run the Audit Workbench audit before changing registry pages, export packets,
+or local audit review UI:
+
+```bash
+cd backend
+npm run check:aletheia:audit-workbench
+```
+
+This verifies Evidence, Reviews, and Audit registry filters, filtered JSON
+exports, matter-scoped `registry_snapshot` saves, UI smoke coverage, and local
+snapshot audit events.
+
 Run the Tool Adapter policy audit before enabling agent integrations:
 
 ```bash

@@ -93,6 +93,18 @@ The audit verifies document IDs, source chunk IDs, quote offsets, support
 status, SQLite FTS5 matter filters, source-linked work products, UI registry
 fields, and exportable provenance.
 
+Before changing Evidence, Reviews, or Audit registry pages, run the Audit
+Workbench audit:
+
+```bash
+cd backend
+npm run check:aletheia:audit-workbench
+```
+
+The audit verifies registry filters, filtered JSON exports, matter readiness
+packets, matter-scoped `registry_snapshot` saves, UI smoke coverage, and local
+snapshot audit events.
+
 One-command local launcher:
 
 ```bash

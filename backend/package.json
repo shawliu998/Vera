@@ -19,6 +19,7 @@
     "check:aletheia:ops-readiness": "tsx src/scripts/aletheiaOpsReadinessAudit.ts",
     "check:aletheia:source-provenance": "tsx src/scripts/aletheiaSourceProvenanceAudit.ts",
     "check:aletheia:knowledge-governance": "tsx src/scripts/aletheiaKnowledgeGovernanceAudit.ts",
+    "check:aletheia:audit-workbench": "tsx src/scripts/aletheiaAuditWorkbenchAudit.ts",
     "check:aletheia:tool-policy": "tsx src/scripts/aletheiaToolPolicyAudit.ts",
     "check:aletheia:approval-policy": "tsx src/scripts/aletheiaApprovalPolicyAudit.ts",
     "check:aletheia:matter-isolation": "tsx src/scripts/aletheiaMatterIsolationAudit.ts",

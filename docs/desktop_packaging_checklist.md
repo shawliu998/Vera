@@ -22,6 +22,10 @@ not a release process yet; it defines what must be true before packaging.
 - `npm run check:aletheia:knowledge-governance` verifies matter-scoped Matter
   Memory, human-approved Matter Playbooks, draft-only improvement proposals, no
   global legal memory, and no default Tool Adapter mutation path.
+- `npm run check:aletheia:audit-workbench` verifies Evidence, Reviews, and
+  Audit registry filters, filtered JSON exports, matter readiness packets,
+  matter-scoped `registry_snapshot` saves, UI smoke coverage, and local
+  snapshot audit events.
 - `npm run check:aletheia:tool-policy` verifies the HTTP Tool Adapter and stdio
   MCP wrapper expose only the approved allowlist and keep high-risk automation
   tools disabled.
@@ -131,6 +135,7 @@ npm run check:aletheia:privacy
 npm run check:aletheia:ops-readiness
 npm run check:aletheia:source-provenance
 npm run check:aletheia:knowledge-governance
+npm run check:aletheia:audit-workbench
 npm run check:aletheia:tool-policy
 npm run check:aletheia:approval-policy
 npm run check:aletheia:matter-isolation

@@ -214,6 +214,56 @@ function main() {
       ],
     }),
     item({
+      id: "audit-workbench-registries",
+      requirement:
+        "Audit Workbench, Evidence Registry, and Review Registry expose filterable local records, JSON exports, persisted registry snapshots, and UI smoke coverage.",
+      evidence: [
+        "frontend/src/aletheia/AletheiaAuditWorkbench.tsx",
+        "frontend/src/aletheia/AletheiaEvidenceRegistry.tsx",
+        "frontend/src/aletheia/AletheiaReviewRegistry.tsx",
+        "frontend/tests/aletheia-ui-smoke.spec.ts",
+      ],
+      checks: [
+        contains(root, "frontend/src/aletheia/AletheiaAuditWorkbench.tsx", [
+          "aletheia-audit-workbench",
+          "audit-filter-query",
+          "audit-filter-action",
+          "export-filtered-audit",
+          "save-audit-snapshot",
+          "aletheia-audit-workbench-snapshot-v0",
+          "audit-matter-packets",
+        ]),
+        contains(root, "frontend/src/aletheia/AletheiaEvidenceRegistry.tsx", [
+          "aletheia-evidence-registry",
+          "export-filtered-evidence",
+          "save-evidence-snapshot",
+          "aletheia-evidence-registry-snapshot-v0",
+        ]),
+        contains(root, "frontend/src/aletheia/AletheiaReviewRegistry.tsx", [
+          "aletheia-review-registry",
+          "export-filtered-reviews",
+          "save-review-snapshot",
+          "aletheia-review-registry-snapshot-v0",
+        ]),
+        contains(root, "frontend/tests/aletheia-ui-smoke.spec.ts", [
+          "export-filtered-evidence",
+          "save-evidence-snapshot",
+          "export-filtered-reviews",
+          "save-review-snapshot",
+          "export-filtered-audit",
+          "save-audit-snapshot",
+        ]),
+        contains(root, "backend/src/lib/aletheia/localRepository.ts", [
+          "registry_snapshot",
+          "exportPath",
+          "auditActionForWorkProduct(input.kind)",
+        ]),
+        contains(root, "docs/status.md", [
+          "npm run check:aletheia:audit-workbench",
+        ]),
+      ],
+    }),
+    item({
       id: "tool-adapter-mcp",
       requirement:
         "Aletheia exposes a narrow least-privilege Tool Adapter and stdio MCP wrapper without terminal/browser/web/email/destructive tools.",
@@ -307,6 +357,11 @@ function main() {
         packageScript(
           root,
           "backend/package.json",
+          "check:aletheia:audit-workbench",
+        ),
+        packageScript(
+          root,
+          "backend/package.json",
           "check:aletheia:tool-policy",
         ),
         packageScript(
@@ -351,6 +406,7 @@ function main() {
           "npm run check:aletheia:ops-readiness",
           "npm run check:aletheia:source-provenance",
           "npm run check:aletheia:knowledge-governance",
+          "npm run check:aletheia:audit-workbench",
           "npm run check:aletheia:tool-policy",
           "npm run check:aletheia:approval-policy",
           "npm run check:aletheia:matter-isolation",
@@ -372,6 +428,7 @@ function main() {
           "npm run check:aletheia:ops-readiness",
           "npm run check:aletheia:source-provenance",
           "npm run check:aletheia:knowledge-governance",
+          "npm run check:aletheia:audit-workbench",
           "npm run check:aletheia:tool-policy",
           "npm run check:aletheia:approval-policy",
           "npm run check:aletheia:matter-isolation",
