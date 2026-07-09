@@ -1,0 +1,39 @@
+{
+  "agent": "v1-gate-engine-2",
+  "status": "baseline_ready_external_source_audit_regression_guarded",
+  "last_cycle_summary": "Re-read Gate Engine status and v1Contracts, inspected RemoteMatterPage and the approval policy audit, then added a static approval-policy regression that verifies the frontend persists a final memo gate snapshot before requesting approval and carries gateSnapshotAuditEventId into the approval payload. Required V1 gates are represented, external-source gate decisions enter the persisted audit path, and final export remains fail-closed.",
+  "required_gate_map": {
+    "citation": "implemented in runGates using calculateCitationCoverage; failed citation gate blocks final export through canExportFinal",
+    "human_approval": "implemented in runGates; high-risk final export and unresolved memo review comments fail closed",
+    "missing_material": "implemented in runGates; failed documents, open issue questions, and missing-material risk language fail high-risk/final export",
+    "conflict": "implemented in runGates; conflict markers in evidence, issues, risks, or open review comments fail closed",
+    "scope_jurisdiction": "implemented as jurisdiction gate; unclear professional standard or matter type other warns/blocks depending on final/high-risk context",
+    "privilege_confidentiality": "implemented as privilege gate; warning remains visible with export caution and persisted sensitive-material provenance",
+    "external_source": "implemented this cycle; external document source_uri, evidence metadata, and explicit external-source markers warn, and unapproved final export fails closed",
+    "export": "implemented in runGates; draft export can proceed with visible warnings, final export fails if any prior gate failed"
+  },
+  "files_changed": [
+    "frontend/src/aletheia/agentops/types.ts",
+    "frontend/src/aletheia/agentops/gates.ts",
+    "frontend/src/aletheia/agentops/finalMemoApprovalPayload.ts",
+    "frontend/src/aletheia/RemoteMatterPage.tsx",
+    "frontend/src/aletheia/remoteMatterTransforms.ts",
+    "frontend/src/app/lib/aletheiaApi.ts",
+    "frontend/tests/agentops/gates.test.ts",
+    "backend/src/scripts/aletheiaApprovalPolicyAudit.ts",
+    ".agentops/v1/status/gate-engine.json"
+  ],
+  "tests_run": [
+    "cd frontend && ../backend/node_modules/.bin/tsx --test tests/agentops/gates.test.ts",
+    "cd frontend && npx tsc --noEmit --pretty false",
+    "cd backend && npm run check:aletheia:approval-policy",
+    "jq -e . .agentops/v1/status/gate-engine.json"
+  ],
+  "blockers": [
+    "No Gate Engine baseline blocker remains for required V1 gate representation, external-source gate audit persistence, or fail-closed final export.",
+    "Privilege/confidentiality remains a visible export caution rather than a post-approval blocking gate; no large privilege/confidentiality policy refactor was attempted in this lane."
+  ],
+  "next_actions": [
+    "Consider a dedicated final-export approval field for external-source and privilege/confidentiality review instead of overloading humanApproved."
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "agent": "v1-deployment-docs-demo",
+  "status": "done_bounded_cycle_v1_private_pilot_docs_updated",
+  "updated_at": "2026-07-09T09:26:32Z",
+  "last_cycle_summary": "Completed one bounded Deployment/Docs/Demo cycle. Re-read V1 planning/status files, README, demo script, local/private deployment notes, release notes, package scripts, and AgentOps checker entrypoint. Added truthful V1 private-pilot operator caveats to README, demo, release, and deployment docs, including the local source-index export manifest path and the remaining Supabase/runtime/review-eval/UI-smoke limitations. No product behavior changed.",
+  "files_changed": [
+    "README.md",
+    "docs/demo_script.md",
+    "docs/local_deployment.md",
+    "docs/private_deployment.md",
+    "docs/release_notes_local_first_mvp.md",
+    ".agentops/v1/status/deployment-docs-demo.json"
+  ],
+  "checks_run": [
+    "jq -e . .agentops/v1/status/*.json",
+    "node .agentops/scripts/check-agentops.mjs"
+  ],
+  "check_results": {
+    "v1_status_json": "passed",
+    "agentops_checker": "passed",
+    "docs_only_change": true,
+    "playwright_route_spec": "not_run_final_validation_item"
+  },
+  "scope_completed": [
+    "README now includes a V1 Private Pilot Snapshot with working local scope, unavailable scope, and final UI-smoke caveat.",
+    "Demo script now describes the local audit_pack.source_index_manifest export path and labels review-derived eval material as local/helper fixture output.",
+    "Local and private deployment docs now carry the Supabase, runtime persistence, approval retry, external-provider, and not-legal-advice boundaries.",
+    "Release notes now distinguish the V1 local source-index export manifest update from production/Supabase/runtime readiness."
+  ],
+  "mandatory_caveats_carried": [
+    "Review-derived eval cases still lack durable review-resolution API/status semantics and are not claimed as a persisted review-to-eval workflow.",
+    "Supabase V1 document/chunk/source listing is unavailable.",
+    "Supabase V1 runtime persistence is unavailable.",
+    "No public persistV1RuntimeResult route or approval retry wiring exists.",
+    "No legal advice generation, no production SaaS readiness, and no guaranteed legal correctness.",
+    "External model calls remain off by default for sensitive/private data and must stay explicit, configurable, logged, and auditable.",
+    "The updated Playwright route spec was not run; full UI smoke remains a final validation item."
+  ],
+  "blockers": [
+    "No docs blocker remains for local/private-pilot handoff.",
+    "Final UI smoke validation is still required before a final release acceptance claim.",
+    "Production SaaS, Supabase V1 source listing, Supabase V1 runtime persistence, public runtime persistence route, approval retry wiring, real external providers, durable review-resolution semantics, and legal correctness remain out of scope."
+  ],
+  "final_validation_recommendation": [
+    "Run jq over .agentops/v1/status/*.json and node .agentops/scripts/check-agentops.mjs after this docs cycle.",
+    "Before final handoff, run focused frontend export/source-index tests and the updated Playwright route/UI smoke in a seeded local environment.",
+    "Do not publish release language beyond local/private-pilot scope until Supabase source listing/runtime persistence, public runtime route/retry semantics, durable review-resolution state, and external-provider approval policy are implemented and verified."
+  ],
+  "next_actions": [
+    "Orchestrator should run final validation planning and include full UI smoke as an explicit remaining item.",
+    "Future docs updates can add an acceptance matrix after final validation results are available."
+  ]
+}

@@ -1,0 +1,85 @@
+{
+  "agent": "v1-document-ingestion-retrieval",
+  "status": "bounded_cycle_done",
+  "last_cycle_summary": "Completed a thirteenth bounded Document Retrieval cycle after re-reading V1 planning/status and the shared V1 contract facade. Strengthened V1 source-index export validation so document and chunk entries are checked through validateV1ArtifactShape from v1Contracts, and added a focused export-package test that fails closed on invalid DocumentRecord/DocumentChunk shapes.",
+  "capability_map": {
+    "multi_file_import_20_100_documents": {
+      "status": "implemented_local_ui_and_backend_batch",
+      "evidence": "The retrieval eval seeds a 24-document representative due diligence matter and verifies a targeted search ranks the expected source document first with V1 retrieval aliases. RemoteMatterPage supports selecting multiple files in one upload action, and multi-file selections now call /aletheia/matters/:matterId/documents/batch, which imports each file through the existing matter-scoped document parser/repository path and returns per-file successes/errors. test:aletheia:batch-import-route covers the real route and confirms source-index resolution for both imported documents."
+    },
+    "document_record_creation": {
+      "status": "implemented_local_backend_and_frontend_adapter",
+      "evidence": "Local aletheia_matter_documents records preserve filename, type, parsed_status, summary, size, mime type, storage path, parser, chunk count, and sensitive flags in metadata. The backend /aletheia/matters/:matterId/v1/source-index path returns V1-shaped document records, the frontend API client types them as shared DocumentRecord objects, v1DocumentRecords maps remote matter documents while preserving needs_ocr, and source-index manifest validation now reuses validateV1ArtifactShape for DocumentRecord entries."
+    },
+    "document_chunk_creation": {
+      "status": "implemented_local_backend_and_frontend_adapter",
+      "evidence": "Local uploads create aletheia_document_chunks with matter_id, document_id, chunk_index, page, section, text, quote_start, quote_end, and metadata, plus FTS5 rows. The local V1 source index lists source chunks directly, the frontend API client types them as shared DocumentChunk objects, v1DocumentChunkFromSearchResult maps source search results into the same contract, and source-index manifest validation now reuses validateV1ArtifactShape for DocumentChunk entries."
+    },
+    "matter_scoped_retrieval": {
+      "status": "implemented_local",
+      "evidence": "searchKeywordRows filters FTS5 results by f.matter_id; local semantic index files are matter-specific. Existing matter isolation audit covers this path."
+    },
+    "retrieval_diagnostics_and_ranking_basis": {
+      "status": "implemented_local_v1_aliases_added",
+      "evidence": "Search results include retrieval_rank, retrieval_score, retrieval_score_direction, retrieval_layers, retrieval_mode, retrieval_explanation.basis, plus V1-compatible id, quote_preview, method, and ranking_basis fields. v1RetrievalResultFromSearchResult validates this shape against the shared RetrievalResult contract."
+    },
+    "source_linked_evidence": {
+      "status": "implemented_local_backend_and_frontend_adapter",
+      "evidence": "createEvidenceItem resolves a source chunk, stores document_id/source_chunk_id/page/section/quote/quote offsets, and audits the evidence mapping. The local V1 source index now has regression coverage for EvidenceItem source links, and v1EvidenceSourceChunks maps evidence back to shared DocumentChunk objects for source preview/resolution."
+    },
+    "needs_ocr_detection": {
+      "status": "improved_this_cycle",
+      "evidence": "Local PDF uploads that extract no text now persist parsed_status needs_ocr, metadata.needsOcr true, parseFailureReason pdf_without_text_layer, and no chunks."
+    },
+    "table_metadata": {
+      "status": "implemented_local_xlsx_basic",
+      "evidence": "The backend parser now recognizes xlsx, extracts populated workbook rows into searchable text, and stores parserMetadata, sheetCount, sectionCount, and parsed status in local document metadata. Local regression uploads an XLSX obligations table and verifies sheet metadata plus table text search."
+    },
+    "source_preview": {
+      "status": "implemented_v1_chunk_panel_page_image_view_missing",
+      "evidence": "RemoteMatterPage soft-loads the backend local V1 source index, renders compact source chunk previews under each document, and now includes a document-level source preview panel that shows all indexed DocumentChunk text with page/section/offset metadata. It still does not render original PDF page images or native document layout."
+    },
+    "supabase_storage_mode": {
+      "status": "missing",
+      "evidence": "Supabase uploadMatterDocument, searchMatterDocuments, and listV1SourceIndex still throw CapabilityNotAvailableError; V1 private pilot document retrieval is currently local-storage only."
+    }
+  },
+  "files_changed": [
+    "backend/src/lib/aletheia/localRepository.ts",
+    "backend/src/scripts/aletheiaLocalRegression.ts",
+    "frontend/src/app/lib/aletheiaApi.ts",
+    "frontend/src/aletheia/remoteMatterTransforms.ts",
+    "frontend/src/aletheia/agentops/exportPackage.ts",
+    "frontend/src/aletheia/agentops/adapters.ts",
+    "frontend/tests/agentops/v1DocumentRetrievalAdapters.test.ts",
+    "frontend/tests/agentops/exportPackage.test.ts",
+    "backend/src/scripts/aletheiaRetrievalEval.ts",
+    "backend/src/scripts/aletheiaBatchImportRouteAudit.ts",
+    "backend/src/lib/aletheia/documentParser.ts",
+    "frontend/src/aletheia/RemoteMatterPage.tsx",
+    "backend/src/lib/upload.ts",
+    "backend/src/lib/aletheia/repository.ts",
+    "backend/src/lib/aletheia/supabaseRepository.ts",
+    "backend/src/routes/aletheia.ts",
+    "backend/package.json",
+    ".agentops/v1/status/document-retrieval.json"
+  ],
+  "tests_run": [
+    "cd frontend && npx tsx --test tests/agentops/exportPackage.test.ts",
+    "cd frontend && npx tsc --noEmit --pretty false",
+    "cd backend && npm run build",
+    "jq -e . .agentops/v1/status/document-retrieval.json",
+    "node .agentops/scripts/check-agentops.mjs"
+  ],
+  "blockers": [
+    "XLSX support is local and basic: rows are flattened for search and sheet/section counts are stored, but rich table structure, formulas, merged-cell semantics, and Supabase XLSX retrieval are not implemented.",
+    "Source preview is V1 chunk-text based and does not render original PDF page images or native document layout.",
+    "Supabase storage mode document upload/search/source-index remains fail-closed and unimplemented; batch import reports per-file capability errors in that mode."
+  ],
+  "next_actions": [
+    "Add native document/page image rendering only if private-pilot reviewers need visual PDF layout beyond V1 chunk text.",
+    "Add source-index contract validation tests at the API boundary if the endpoint becomes an export/audit dependency.",
+    "Extend the batch route audit to include mixed success/failure cases if per-file error semantics become a formal private-pilot contract.",
+    "If richer spreadsheet review is needed, add a dedicated table adapter that preserves worksheet/table/range structure without changing the shared V1 DocumentRecord/DocumentChunk contracts."
+  ]
+}

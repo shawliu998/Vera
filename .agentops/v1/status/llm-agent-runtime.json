@@ -1,0 +1,93 @@
+{
+  "agent": "v1-llm-agent-runtime",
+  "status": "local_backend_persistence_approval_baseline_ready_supabase_api_blocked",
+  "last_cycle_summary": "Fourth bounded cycle re-read V1 status/docs, v1Contracts, and backend repository/API/runtime surfaces. Added a persistV1RuntimeResult repository method and local SQLite implementation that transactionally inserts the V1 runtime persistence plan into existing agent run, step, tool-call, audit-event, and human-checkpoint tables. Blocked private/sensitive external-provider decisions now persist as blocked runs with failed provider-policy tool calls, no model call, a blocked audit event, and an open external_model_call approval checkpoint. Supabase remains explicitly unavailable for this V1 method.",
+  "capability_map": {
+    "deterministic_provider_without_api_keys": {
+      "status": "implemented_this_cycle",
+      "evidence": "runV1StructuredModelCycle defaults to deterministic:deterministic-v1, requires no providerCall or API key, validates output through validateV1ArtifactShape, and records AgentRun/ToolCall/AuditEvent traces."
+    },
+    "external_provider_interface_configurable": {
+      "status": "contract_added",
+      "evidence": "createV1ModelProviderConfig defines deterministic, openai, deepseek, anthropic, local, and custom provider metadata with explicit enabled, external, endpoint, model, and allowSensitiveExternal controls. No external API implementation was added."
+    },
+    "external_calls_off_by_default_for_private_sensitive_data": {
+      "status": "implemented_this_cycle",
+      "evidence": "evaluateV1ProviderPolicy blocks disabled providers and blocks private/sensitive external calls unless allowSensitiveExternal is explicitly true. Blocked runs end with status blocked before v1_model_call is recorded."
+    },
+    "structured_output_guard": {
+      "status": "implemented_this_cycle",
+      "evidence": "runV1StructuredModelCycle calls validateV1ArtifactShape for the requested shared V1/P0 artifact type and records v1_structured_output_guard as a ToolCall."
+    },
+    "repair_retry": {
+      "status": "partial",
+      "evidence": "The facade supports bounded repair attempts through budget.repairAttempts and a caller-supplied repairOutput function. It does not yet include a built-in model-based repair provider."
+    },
+    "bounded_agent_cycle_trace": {
+      "status": "implemented",
+      "evidence": "Successful deterministic cycles write Observe, Plan, Act, Persist, Gate, and Report trace events on the shared AgentRun shape. Blocked and failed runs write the relevant subset and terminal status."
+    },
+    "bounded_scheduler_cycle": {
+      "status": "implemented_this_cycle",
+      "evidence": "planV1SchedulerCycle and runV1SchedulerCycle observe the provided queue, select one queued job by priority, dispatch at most one runV1StructuredModelCycle call, and record skipped jobs, blocked budget decisions, dispatched run refs, and terminal status in AgentRun/ToolCall/AuditEvent records."
+    },
+    "budget_token_cost_metadata": {
+      "status": "partial",
+      "evidence": "The facade accepts V1ModelBudget and records estimated input/output/total token_usage on AgentRun. Scheduler maxRunsPerCycle budget blocks dispatch when exhausted. Cost accounting is represented in the budget contract but not calculated because no external provider pricing adapter exists yet."
+    },
+    "backend_persistence_trace_support": {
+      "status": "implemented_local_this_cycle",
+      "evidence": "backend/src/lib/aletheia/v1RuntimePersistence.ts maps V1 runtime output into existing row shapes, and LocalAletheiaRepository.persistV1RuntimeResult transactionally inserts those rows and returns the hydrated run trace."
+    },
+    "persisted_external_call_approval": {
+      "status": "implemented_local_this_cycle",
+      "evidence": "Blocked private/sensitive external provider decisions produce and locally persist an open external_model_call human checkpoint with provider/model/privacy approval payload. The focused audit verifies no v1_model_call is persisted for the blocked path."
+    },
+    "scheduler_loop": {
+      "status": "intentionally_not_added",
+      "evidence": "The scheduler helper is one-shot and dispatches at most one job from caller-provided input. No infinite scheduler loop, sleep, polling worker, or background queue was introduced."
+    }
+  },
+  "provider_abstraction_gaps": [
+    "Local backend now persists V1 runtime row plans transactionally, but Supabase V1 runtime persistence is still unavailable.",
+    "No API route exposes persistV1RuntimeResult yet; it is repository-level only.",
+    "No real external OpenAI, DeepSeek, Anthropic, local, or custom provider transport is implemented for Aletheia V1 runtime; the provider interface is only configurable and testable.",
+    "No built-in structured-output repair provider exists; repair currently requires a caller-supplied repairOutput function.",
+    "Token usage is estimated locally; exact provider token/cost metadata requires provider response adapters.",
+    "External-call approval is represented as a planned human checkpoint row, but there is no retry/decision wiring from that checkpoint back into scheduler dispatch."
+  ],
+  "files_changed": [
+    "backend/src/lib/aletheia/repository.ts",
+    "backend/src/lib/aletheia/localRepository.ts",
+    "backend/src/lib/aletheia/supabaseRepository.ts",
+    "backend/src/lib/aletheia/v1RuntimePersistence.ts",
+    "backend/src/scripts/aletheiaV1RuntimePersistenceAudit.ts",
+    "frontend/src/aletheia/agentops/v1Runtime.ts",
+    "frontend/src/aletheia/agentops/index.ts",
+    "frontend/tests/agentops/v1Runtime.test.ts",
+    ".agentops/v1/status/llm-agent-runtime.json"
+  ],
+  "tests_run": [
+    "cd frontend && npx tsc --noEmit --pretty false",
+    "cd frontend && npx tsx --test tests/agentops/v1Runtime.test.ts",
+    "cd frontend && npx tsx --test tests/agentops/v1Contracts.test.ts",
+    "cd backend && npx tsx src/scripts/aletheiaV1RuntimePersistenceAudit.ts",
+    "cd backend && npm run build",
+    "jq -e . .agentops/v1/status/*.json",
+    "node .agentops/scripts/check-agentops.mjs"
+  ],
+  "blockers": [
+    "Local V1 runtime persistence is implemented, but Supabase storage mode does not persist V1 runtime results yet.",
+    "No authenticated API route invokes persistV1RuntimeResult yet; createAgentRun still creates the P0 deterministic scaffold.",
+    "Real external provider transports and pricing/token adapters remain unimplemented by design until persisted approval and audit policy are in place.",
+    "Sensitive/private external-call approval is persisted locally as an open checkpoint, but approval decision and scheduler retry wiring are not implemented."
+  ],
+  "next_actions": [
+    "Add a narrow authenticated backend route or internal create/resume integration that invokes persistV1RuntimeResult for one-shot V1 scheduler output.",
+    "Implement Supabase persistence for persistV1RuntimeResult or formally mark V1 runtime persistence as local-only for private pilot.",
+    "Wire runV1SchedulerCycle into the create/resume agent-run path as a single-step dispatcher, keeping maxRunsPerCycle bounded and external provider calls disabled by default.",
+    "Wire external_model_call checkpoint decisions into scheduler retry policy before enabling any sensitive/private external provider call path.",
+    "Add provider adapters one at a time behind the same fail-closed policy, starting with a no-network local/custom adapter test double.",
+    "Extend run trace UI or export/audit pack mapping to display V1 provider_decision and structured-output guard/repair ToolCalls."
+  ]
+}

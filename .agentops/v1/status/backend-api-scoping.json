@@ -1,0 +1,68 @@
+{
+  "agent": "v1-backend-api-scoping",
+  "status": "done_local_source_index_contract_ready_export_eval_local_only",
+  "last_cycle_summary": "Completed one bounded backend/API scoping cycle. Re-read V1 docs/status, backend Aletheia routes, repository interfaces, local/Supabase repositories, runtime persistence, document chunk migrations, and the shared V1 contract facade. Implemented a narrow authenticated V1 source-index route for local storage that lists matter-scoped DocumentRecord-like documents, DocumentChunk-like chunks, and evidence source links for Export/Audit and Eval/Skills consumers. Supabase V1 source listing remains explicitly unavailable and fails closed.",
+  "decision": {
+    "minimum_contract": "Add a read-only authenticated source-index API before downstream Export/Audit and Eval/Skills work. Do not block those lanes on Supabase retrieval or a public persistV1RuntimeResult API for the local/private pilot.",
+    "implemented_route": {
+      "method": "GET",
+      "path": "/aletheia/matters/:matterId/v1/source-index",
+      "auth": "requireAuth",
+      "storage_mode": "local_only",
+      "query": {
+        "includeChunks": "optional boolean, default true",
+        "includeEvidenceLinks": "optional boolean, default true",
+        "chunkLimit": "optional number, clamped to 0..2000",
+        "documentId": "optional repeatable document ID filter"
+      },
+      "response_contract": [
+        "schema_version",
+        "storage_driver",
+        "matter_id",
+        "generated_at",
+        "documents",
+        "chunks",
+        "source_links",
+        "limitations"
+      ]
+    },
+    "runtime_api_scope": "No new public persistV1RuntimeResult route was added this cycle. Existing authenticated create/resume agent-run routes remain P0 scaffold/resume paths; local repository-level persistV1RuntimeResult is available for runtime owners, but Supabase and retry-from-approval wiring remain blocked.",
+    "supabase_scope": "Supabase V1 document/chunk/source listing, upload/search, and V1 runtime persistence remain unimplemented and return CapabilityNotAvailableError where reached."
+  },
+  "files_changed": [
+    "backend/src/lib/aletheia/repository.ts",
+    "backend/src/lib/aletheia/localRepository.ts",
+    "backend/src/lib/aletheia/supabaseRepository.ts",
+    "backend/src/routes/aletheia.ts",
+    "backend/src/scripts/aletheiaBackendApiScopingAudit.ts",
+    ".agentops/v1/status/backend-api-scoping.json"
+  ],
+  "checks_run": [
+    "cd backend && npx tsx src/scripts/aletheiaBackendApiScopingAudit.ts",
+    "cd backend && npm run build"
+  ],
+  "checks": {
+    "focused_backend_api_scoping_audit": "passed",
+    "backend_typescript_build": "passed",
+    "external_model_calls": "unchanged_disabled_fail_closed_by_default",
+    "supabase_overclaim": "avoided_by_explicit_capability_not_available_errors"
+  },
+  "blockers": [
+    "Supabase V1 document upload/search/source listing is still unavailable.",
+    "Supabase persistV1RuntimeResult is still unavailable.",
+    "No authenticated public route invokes persistV1RuntimeResult yet.",
+    "No create/resume integration retries a run from an external_model_call approval checkpoint.",
+    "No real external provider transport was implemented, by design."
+  ],
+  "launch_recommendation": {
+    "export_audit": "can_start_local_private_pilot_scope",
+    "eval_skills": "can_start_after_or_alongside_review_studio_using_local_source_index_and_existing_review_surfaces",
+    "required_caveat": "Downstream lanes must label Supabase/runtime API gaps as local-only limitations and must not claim external-provider or Supabase readiness."
+  },
+  "next_actions": [
+    "Export/Audit should consume GET /aletheia/matters/:matterId/v1/source-index for source document/chunk/evidence-link manifests in local mode.",
+    "Eval/Skills should use the local source index plus ReviewComment/eval helper contracts, keeping skill candidates inactive until human approval.",
+    "A future backend cycle can add a guarded internal persistV1RuntimeResult API or one-shot scheduler create/resume integration if downstream work proves it is required.",
+    "A future storage cycle must either implement Supabase V1 document retrieval/runtime persistence or keep release docs explicitly local-only."
+  ]
+}

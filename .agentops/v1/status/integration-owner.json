@@ -1,0 +1,50 @@
+{
+  "agent": "v1-integration-owner",
+  "status": "bounded_cycle_done_export_source_index_caller_wired_review_eval_handoff_scoped",
+  "updated_at": "2026-07-09T09:21:48Z",
+  "last_cycle_summary": "Completed one bounded integration-owner cycle. Re-read V1 planning/status, shared contracts, export package helper, frontend API source-index client, Remote Matter export package caller, Review Studio/eval status, and backend source-index route. Wired the local-only V1 source-index API into the actual RemoteMatterCommandCenter export package caller and passed the response to buildExportPackage, so downloaded AgentOps export packages now include the hashed source-index manifest when local source-index retrieval succeeds. Review-derived eval persistence remains explicitly scoped as a remaining caveat and is not claimed as durable.",
+  "integration_increment": {
+    "implemented": "RemoteMatterCommandCenter now fetches GET /aletheia/matters/:matterId/v1/source-index through listAletheiaV1SourceIndex and passes the returned V1SourceIndexSnapshot to buildExportPackage.",
+    "caller_path": "frontend/src/aletheia/RemoteMatterCommandCenter.tsx",
+    "api_contract_typing": "frontend/src/app/lib/aletheiaApi.ts now types AletheiaV1SourceIndex as V1SourceIndexSnapshot, matching the exportPackage consumer contract.",
+    "user_visible_result": "The AgentOps export package panel shows source-index document/chunk/source-link counts and the downloaded JSON includes audit_pack.source_index_manifest plus matching package manifest counts in local storage mode.",
+    "supabase_behavior": "If source-index retrieval fails, the UI states that the source-index manifest is omitted and that Supabase V1 source listing remains unavailable. No Supabase readiness is claimed."
+  },
+  "files_changed": [
+    "frontend/src/app/lib/aletheiaApi.ts",
+    "frontend/src/aletheia/RemoteMatterCommandCenter.tsx",
+    "frontend/tests/aletheia-agentops-route.spec.ts",
+    ".agentops/v1/status/integration-owner.json"
+  ],
+  "checks_run": [
+    "cd frontend && ../backend/node_modules/.bin/tsx --test tests/agentops/exportPackage.test.ts tests/agentops/v1Contracts.test.ts",
+    "cd frontend && npx tsc --noEmit --pretty false"
+  ],
+  "check_results": {
+    "focused_export_eval_contract_tests": "passed",
+    "frontend_typescript": "passed",
+    "playwright_route_spec": "updated_not_run_this_cycle"
+  },
+  "preserved_constraints": [
+    "No legal advice generation was implemented.",
+    "Final export gate semantics were not loosened; buildExportPackage and Gate Engine fail-closed behavior remain unchanged.",
+    "ProfessionalSkill activation was not changed; skills remain candidate-only until explicit expert approval.",
+    "No production SaaS, Supabase source-index, Supabase runtime persistence, external-provider, or legal-correctness readiness is claimed."
+  ],
+  "remaining_caveats": [
+    "Review-derived eval cases still do not have durable review-resolution API/status semantics, so Deployment/Docs/Demo must not claim persisted review-derived eval workflows.",
+    "Supabase V1 document/chunk/source listing remains unavailable and must be documented as fail-closed/unimplemented.",
+    "Supabase V1 runtime persistence remains unavailable.",
+    "No public persistV1RuntimeResult route or approval retry wiring exists.",
+    "The updated Playwright route spec was not run in this bounded cycle because it depends on the UI smoke server/state setup."
+  ],
+  "launch_recommendation": {
+    "deployment_docs_demo": "can_start_with_explicit_local_private_pilot_caveats_after_supervisor_rollup",
+    "reason": "The concrete export caller now consumes the local source-index route end-to-end. Deployment/Docs/Demo may document and demo that local export path, but must explicitly label review-derived eval persistence, Supabase source listing, Supabase runtime persistence, public runtime persistence, approval retry wiring, and external providers as unavailable or planned."
+  },
+  "next_actions": [
+    "Supervisor should refresh the V1 rollup and decide whether Deployment/Docs/Demo can launch with the remaining caveats.",
+    "Deployment/Docs/Demo must describe the source-index manifest as local/private-pilot only and avoid persisted review-derived eval workflow claims.",
+    "A future backend/API or Review Studio cycle can add durable review-resolution state before eval docs claim persisted review-to-eval workflows."
+  ]
+}
