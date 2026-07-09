@@ -103,6 +103,17 @@ local search, evidence mapping, evidence matrix, draft memo, Matter Memory,
 Matter Playbooks, run trace, approval gates, local export files, and the stdio
 MCP wrapper. The synthetic document fixtures cover TXT, DOCX, and PDF parsing.
 
+Run the restore drill when validating private-deployment readiness:
+
+```bash
+cd backend
+npm run test:aletheia:restore-drill
+```
+
+This creates a real temporary local matter through the regression workflow, then
+runs backup manifest, restore preflight, and audit integrity against that same
+non-empty data directory.
+
 Run the local retrieval eval:
 
 ```bash
@@ -196,9 +207,9 @@ local export files are reported with byte counts and sha256 hashes.
 
 The same validation posture is enforced on `main` and pull requests through
 `.github/workflows/aletheia-local-ci.yml`. The CI workflow installs backend and
-frontend dependencies, builds both apps, runs the local regression and retrieval
-eval, executes privacy, package, evidence, integrity, and completion checks,
-then runs frontend lint and the Aletheia UI smoke suite.
+frontend dependencies, builds both apps, runs the local regression, restore
+drill, and retrieval eval, executes privacy, package, evidence, integrity, and
+completion checks, then runs frontend lint and the Aletheia UI smoke suite.
 
 Create a screenshot-ready local UI smoke matter:
 

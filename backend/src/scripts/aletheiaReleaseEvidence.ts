@@ -27,6 +27,7 @@ const VALIDATION_COMMANDS = [
   "cd backend && npm run check:aletheia:audit-integrity",
   "cd backend && npm run check:aletheia:operator",
   "cd backend && npm run test:aletheia:local",
+  "cd backend && npm run test:aletheia:restore-drill",
   "cd backend && npm run test:aletheia:retrieval-eval",
   "cd backend && npm run test:aletheia:package",
   "cd backend && npm run test:aletheia:completion",
@@ -150,6 +151,7 @@ function main() {
         packageScript(root, "backend/package.json", "check:aletheia:privacy") &&
         packageScript(root, "backend/package.json", "check:aletheia:evidence") &&
         packageScript(root, "backend/package.json", "test:aletheia:local") &&
+        packageScript(root, "backend/package.json", "test:aletheia:restore-drill") &&
         packageScript(root, "backend/package.json", "test:aletheia:retrieval-eval") &&
         packageScript(root, "backend/package.json", "test:aletheia:package") &&
         packageScript(root, "backend/package.json", "test:aletheia:completion") &&
@@ -164,11 +166,12 @@ function main() {
         "npm run check:aletheia:evidence",
         "npm run check:aletheia:privacy",
         "npm run test:aletheia:local",
+        "npm run test:aletheia:restore-drill",
         "npm run test:aletheia:retrieval-eval",
         "npm run test:aletheia:completion",
         "npm run test:aletheia:ui",
       ]),
-      "CI must run release evidence, local regression, retrieval eval, completion audit, and UI smoke.",
+      "CI must run release evidence, local regression, restore drill, retrieval eval, completion audit, and UI smoke.",
     ),
     check(
       "status-doc-lists-evidence-check",

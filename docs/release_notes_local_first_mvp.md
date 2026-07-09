@@ -62,6 +62,9 @@ and replayable audit records.
   audit events, local export files, data-directory bounded paths, and approved
   checkpoint links for high-risk exports, with byte counts and sha256 hashes for
   exported JSON files.
+- Real-data restore drill that creates a temporary local matter, writes a backup
+  manifest, validates restore preflight, and runs audit integrity on the same
+  non-empty SQLite/filesystem state.
 - Completion audit command that verifies the repository still contains evidence
   for local-first storage, real document workflows, Matter Memory, Playbooks,
   Run Trace, approval gates, Tool Adapter/MCP, retrieval eval, private
@@ -78,6 +81,7 @@ and replayable audit records.
 ```bash
 cd backend
 npm run test:aletheia:local
+npm run test:aletheia:restore-drill
 npm run test:aletheia:retrieval-eval
 npm run check:aletheia:privacy
 npm run check:aletheia:evidence

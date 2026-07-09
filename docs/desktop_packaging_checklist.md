@@ -20,6 +20,9 @@ not a release process yet; it defines what must be true before packaging.
   links for high-risk exports. Its output includes byte counts and sha256 hashes
   for local export files.
 - `npm run test:aletheia:local` passes.
+- `npm run test:aletheia:restore-drill` proves backup, restore, and audit
+  integrity against a real generated local matter, not just an empty data
+  directory.
 - `npm run seed:aletheia:ui-smoke` creates a screenshot-ready matter.
 - `npm run dev:aletheia:local` starts or reuses local frontend/backend servers.
 - `npm run mcp:aletheia` works as a stdio MCP server.
@@ -107,6 +110,7 @@ npm run check:aletheia:privacy
 ALETHEIA_RELEASE_EVIDENCE_OUT=../release-evidence.json npm run check:aletheia:evidence
 ALETHEIA_AUDIT_SOURCE_DIR=.data/aletheia npm run check:aletheia:audit-integrity
 npm run test:aletheia:local
+npm run test:aletheia:restore-drill
 npm run seed:aletheia:ui-smoke
 npm run package:aletheia:local
 npm run test:aletheia:package

@@ -272,7 +272,7 @@ function main() {
     item({
       id: "automation-validation",
       requirement:
-        "Automated validation exists for backend build, local regression, retrieval eval, package preflight, frontend lint/build, and UI smoke.",
+        "Automated validation exists for backend build, local regression, restore drill, retrieval eval, package preflight, frontend lint/build, and UI smoke.",
       evidence: [
         "backend/package.json",
         "frontend/package.json",
@@ -295,6 +295,7 @@ function main() {
         ),
         packageScript(root, "backend/package.json", "check:aletheia:operator"),
         packageScript(root, "backend/package.json", "test:aletheia:package"),
+        packageScript(root, "backend/package.json", "test:aletheia:restore-drill"),
         packageScript(root, "frontend/package.json", "lint"),
         packageScript(root, "frontend/package.json", "build"),
         packageScript(root, "frontend/package.json", "test:aletheia:ui"),
@@ -307,6 +308,7 @@ function main() {
           "npm run check:aletheia:evidence",
           "npm run check:aletheia:audit-integrity",
           "npm run test:aletheia:local",
+          "npm run test:aletheia:restore-drill",
           "npm run test:aletheia:retrieval-eval",
           "npm run test:aletheia:package",
           "npm run test:aletheia:completion",
@@ -320,6 +322,7 @@ function main() {
           "npm run check:aletheia:evidence",
           "npm run check:aletheia:audit-integrity",
           "npm run test:aletheia:local",
+          "npm run test:aletheia:restore-drill",
           "npm run check:aletheia:operator",
           "npm run test:aletheia:retrieval-eval",
           "npm run test:aletheia:package",

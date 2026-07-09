@@ -128,12 +128,13 @@ function main() {
         packageScript(root, "backend/package.json", "check:aletheia:evidence") &&
         packageScript(root, "backend/package.json", "check:aletheia:audit-integrity") &&
         packageScript(root, "backend/package.json", "test:aletheia:local") &&
+        packageScript(root, "backend/package.json", "test:aletheia:restore-drill") &&
         packageScript(root, "backend/package.json", "test:aletheia:retrieval-eval") &&
         packageScript(root, "backend/package.json", "test:aletheia:completion") &&
         packageScript(root, "frontend/package.json", "lint") &&
         packageScript(root, "frontend/package.json", "build") &&
         packageScript(root, "frontend/package.json", "test:aletheia:ui"),
-      "Build, local regression, retrieval eval, completion audit, lint, frontend build, and UI smoke scripts must exist.",
+      "Build, local regression, restore drill, retrieval eval, completion audit, lint, frontend build, and UI smoke scripts must exist.",
     ),
     check(
       "ci-validation",
@@ -143,10 +144,11 @@ function main() {
           "npm run test:aletheia:retrieval-eval",
           "npm run check:aletheia:privacy",
           "npm run test:aletheia:package",
-        "npm run test:aletheia:completion",
+          "npm run test:aletheia:restore-drill",
+          "npm run test:aletheia:completion",
         "npm run test:aletheia:ui",
       ]),
-      "GitHub Actions must run the local-first validation matrix on main and pull requests.",
+      "GitHub Actions must run the local-first validation matrix, including the restore drill, on main and pull requests.",
     ),
     check(
       "dirty-worktree",
@@ -180,6 +182,7 @@ function main() {
           "cd backend && npm run check:aletheia:evidence",
           "cd backend && npm run check:aletheia:audit-integrity",
           "cd backend && npm run test:aletheia:local",
+          "cd backend && npm run test:aletheia:restore-drill",
           "cd backend && npm run test:aletheia:retrieval-eval",
           "cd backend && npm run test:aletheia:completion",
           "cd frontend && npm run lint",

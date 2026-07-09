@@ -60,6 +60,12 @@ The local audit integrity entrypoint is:
 cd backend && npm run check:aletheia:audit-integrity
 ```
 
+The real-data restore drill entrypoint is:
+
+```bash
+cd backend && npm run test:aletheia:restore-drill
+```
+
 Main branch pushes and pull requests are also covered by
 `.github/workflows/aletheia-local-ci.yml`, which runs the backend local-first
 checks, package preflight, frontend lint/build, and Playwright UI smoke.
@@ -112,6 +118,7 @@ cd backend && npm run check:aletheia:evidence
 cd backend && npm run check:aletheia:audit-integrity
 cd backend && npm run check:aletheia:operator
 cd backend && npm run test:aletheia:local
+cd backend && npm run test:aletheia:restore-drill
 cd backend && npm run test:aletheia:retrieval-eval
 cd backend && npm run test:aletheia:package
 cd backend && npm run test:aletheia:completion
@@ -139,6 +146,10 @@ Current known result:
   file paths, local data-directory boundaries, and approved checkpoint links for
   high-risk exports when a local database is present. It also reports local
   export file byte counts and sha256 hashes for review packets.
+- real-data restore drill passes by creating an isolated local regression
+  matter, writing a backup manifest with a SQLite hash, running restore
+  preflight with zero warnings, and running audit integrity with real export
+  files and approved high-risk checkpoints.
 - fast operator health check passes, with a warning when the worktree contains
   uncommitted local changes that still need review/splitting.
 - GitHub Actions local CI is configured for `main` and pull requests.
