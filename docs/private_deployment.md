@@ -181,6 +181,18 @@ Before upgrading:
 - Local-first support is implemented for Aletheia routes.
 - Aletheia routes support local `single_user` mode and private bearer-token mode
   for controlled single-tenant deployments.
+- V1 source-index listing is available for local Aletheia storage and can be
+  included in local AgentOps export packages as
+  `audit_pack.source_index_manifest`.
+- Supabase V1 document/chunk/source listing is unavailable.
+- Supabase V1 runtime persistence is unavailable.
+- No public `persistV1RuntimeResult` route or approval retry wiring exists.
+- Review-derived eval cases remain local/helper fixture output until durable
+  review-resolution API/status semantics exist.
+- External model calls remain off by default for sensitive/private data and
+  must stay explicit, configurable, logged, and auditable if enabled later.
+- Aletheia is a professional expert-support workspace, not legal advice
+  generation, production SaaS, or a guarantee of legal correctness.
 - Broader inherited app routes may still assume Supabase-backed services.
 - Node 22 currently emits an ExperimentalWarning for `node:sqlite`.
 - SQLite FTS5 keyword retrieval is the default. The optional local-json

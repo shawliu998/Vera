@@ -25,6 +25,41 @@ Current stage: **local-first MVP / private pilot candidate**. Aletheia is not
 positioned as production-ready legal advice software or as a replacement for
 qualified professionals.
 
+## V1 Private Pilot Snapshot
+
+As of 2026-07-09, the V1 private-pilot path is usable for a bounded local
+operator demo with explicit caveats. It should be presented as an
+expert-support workspace, not production SaaS and not legal advice.
+
+Working local/private-pilot scope:
+
+- Local matters can ingest source documents, preserve document/chunk metadata,
+  search matter-scoped source chunks, and map retrieved chunks into
+  source-linked evidence.
+- The V1 source-index API is available in local mode at
+  `GET /aletheia/matters/:matterId/v1/source-index` for documents, chunks, and
+  evidence source links.
+- The Remote Matter Command Center export path fetches that local source index
+  and can include `audit_pack.source_index_manifest` plus source-index manifest
+  counts in downloaded local AgentOps export packages.
+- Deterministic runtime, gate summaries, review visibility, export/audit
+  helpers, and local eval-case fixture helpers are available for focused
+  private-pilot validation without external model keys.
+
+Unavailable or partial V1 scope:
+
+- Supabase V1 document/chunk/source listing is unavailable.
+- Supabase V1 runtime persistence is unavailable.
+- `persistV1RuntimeResult` exists only below the public API boundary; there is
+  no public route or approval retry wiring for it.
+- Review-derived eval cases are local/helper fixture output until durable
+  review-resolution API/status semantics exist; do not describe this as a
+  persisted review-to-eval workflow.
+- External model calls remain off by default for sensitive/private data and
+  must be explicitly configured, logged, and auditable if enabled later.
+- Full Playwright UI smoke for the updated V1 route/export flow remains a final
+  validation item.
+
 ## What A Reviewer Should Notice
 
 - Aletheia makes matter files, source documents, agent traces, work products,

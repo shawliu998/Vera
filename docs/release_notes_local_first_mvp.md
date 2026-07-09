@@ -2,6 +2,23 @@
 
 This note summarizes the current Aletheia local-first MVP.
 
+## V1 Private-Pilot Update
+
+The V1 private-pilot path is launchable for local operator review with explicit
+caveats. The local Remote Matter Command Center export path now fetches
+`GET /aletheia/matters/:matterId/v1/source-index` and passes the returned source
+index into the export package builder. Downloaded local AgentOps export packages
+can include `audit_pack.source_index_manifest` with document, chunk, and
+source-link manifest counts.
+
+This does not mean V1 is production SaaS or Supabase-ready. Supabase V1
+document/chunk/source listing is unavailable, Supabase V1 runtime persistence
+is unavailable, and there is no public `persistV1RuntimeResult` route or
+approval retry wiring. Review-derived eval cases remain local/helper fixture
+output until durable review-resolution API/status semantics exist. External
+model calls remain off by default for sensitive/private data and must stay
+explicit, configurable, logged, and auditable.
+
 ## Product Positioning
 
 Aletheia 明证 is a private, auditable professional agent workspace for legal,
@@ -97,6 +114,8 @@ and replayable audit records.
   optional local-json semantic/hybrid retrieval, and cross-matter isolation.
 - UI smoke seed command, screenshot evidence, and committed Playwright browser
   smoke across desktop and mobile Chromium with screenshot baselines.
+- Local V1 source-index export manifest support for the Remote Matter Command
+  Center export path.
 
 ## Commands
 
@@ -151,8 +170,16 @@ npm run build
 - Node 22 emits an ExperimentalWarning for `node:sqlite`.
 - SQLite FTS5 is the default retrieval layer; optional semantic or hybrid
   retrieval requires explicit enablement of the local-json prototype adapter.
+- V1 source-index export manifest support is local-only. Supabase V1
+  document/chunk/source listing is not implemented.
+- Supabase V1 runtime persistence is not implemented.
+- `persistV1RuntimeResult` is not exposed through a public route, and blocked
+  external-provider approval retry wiring is not implemented.
+- Review-derived eval cases are not yet a persisted review-to-eval workflow.
 - Browser UI smoke is committed as a Playwright test across desktop and mobile
   with screenshot baseline assertions for the initial workspace render.
+- The updated V1 route/export Playwright spec still needs final UI smoke
+  validation before handoff.
 - Signed installer distribution and production SSO/session policy are still
   outside the prototype package.
 

@@ -69,10 +69,35 @@ Current stage: local-first MVP / private pilot candidate.
     - "The Audit Pack packages matter profile, documents, evidence, work
       products, review tags, gate decisions, run trace, audit events, and
       validation status."
+    - "In the V1 local private-pilot path, the Remote Matter Command Center can
+      fetch the local source-index route and include
+      audit_pack.source_index_manifest with document, chunk, and source-link
+      counts in the downloaded AgentOps export package."
+    - "This source-index manifest path is local-only today; do not present it
+      as Supabase-backed or production export infrastructure."
 
 12. Generate Eval Cases.
-    - "The feedback export turns review tags and badcases into eval data, so
-      future changes to retrieval, drafting, review, and gates can be tested."
+    - "The feedback export and V1 helper fixtures can turn open review comments
+      and failed gates into local replayable eval material, so future changes
+      to retrieval, drafting, review, and gates can be tested."
+    - "Review-derived eval material is not yet a persisted review-to-eval
+      workflow because durable review-resolution API/status semantics are still
+      missing."
+
+## V1 Private-Pilot Demo Caveats
+
+- This demo is local/private-pilot only; it is not production SaaS.
+- Aletheia supports expert review and auditability, not legal advice generation
+  or guaranteed legal correctness.
+- Supabase V1 document/chunk/source listing and Supabase V1 runtime persistence
+  are unavailable.
+- There is no public `persistV1RuntimeResult` route and no approval retry
+  wiring for blocked external-provider calls.
+- External model calls stay off by default for sensitive/private data. Any
+  future external-provider use must be explicit, configurable, logged, and
+  auditable.
+- The updated Playwright route spec still needs to be run as part of final UI
+  smoke validation.
 
 ## 2-3 Minute Video Path
 

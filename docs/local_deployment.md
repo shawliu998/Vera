@@ -160,6 +160,10 @@ http://localhost:3000/aletheia
 
 - Local Aletheia CRUD is implemented for matters, work products, source-linked
   evidence items, reviews, audit events, and agent runs.
+- The V1 local source-index API is available at
+  `GET /aletheia/matters/:matterId/v1/source-index` and can feed the Remote
+  Matter Command Center export path so local AgentOps export packages include
+  `audit_pack.source_index_manifest` with source-index counts.
 - Source document upload, parsing, chunking, and FTS5 keyword search are
   implemented for Aletheia routes.
 - Search results can be mapped into `aletheia_evidence_items` with source chunk
@@ -182,5 +186,12 @@ http://localhost:3000/aletheia
 - Audit Pack, Feedback Export, and Final Memo work products are persisted to
   `.data/aletheia/exports/<matterId>/` in local mode, with file paths recorded
   in audit event details.
+- Review-derived eval cases are local/helper fixture output until durable
+  review-resolution API/status semantics are implemented.
+- Supabase V1 document/chunk/source listing is unavailable.
+- Supabase V1 runtime persistence is unavailable.
+- No public `persistV1RuntimeResult` route or approval retry wiring exists.
+- External model calls remain off by default for sensitive/private data and
+  must stay explicit, configurable, logged, and auditable if enabled later.
 - The broader inherited app still has Supabase-dependent routes. Local mode
   currently applies to Aletheia routes.
