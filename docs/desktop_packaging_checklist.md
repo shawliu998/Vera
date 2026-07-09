@@ -16,6 +16,9 @@ not a release process yet; it defines what must be true before packaging.
 - `npm run check:aletheia:ops-readiness` verifies the local doctor, local
   launcher, `/health`, private-token auth boundary, package metadata,
   backup/restore/audit integrity chain, and private deployment runbook.
+- `npm run check:aletheia:source-provenance` verifies source chunk IDs,
+  document IDs, quote offsets, support status, SQLite FTS5 matter filters,
+  source-linked work products, UI registry fields, and exportable provenance.
 - `npm run check:aletheia:tool-policy` verifies the HTTP Tool Adapter and stdio
   MCP wrapper expose only the approved allowlist and keep high-risk automation
   tools disabled.
@@ -123,6 +126,7 @@ npm run check:aletheia:backup
 ALETHEIA_RESTORE_SOURCE_DIR=.data/aletheia npm run check:aletheia:restore
 npm run check:aletheia:privacy
 npm run check:aletheia:ops-readiness
+npm run check:aletheia:source-provenance
 npm run check:aletheia:tool-policy
 npm run check:aletheia:approval-policy
 npm run check:aletheia:matter-isolation

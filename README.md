@@ -192,6 +192,18 @@ This verifies the local doctor, local launcher, `/health` endpoint, private
 token auth boundary, package manifest, backup/restore/audit integrity chain,
 and private deployment runbook coverage.
 
+Run the source provenance audit before changing document parsing, evidence
+mapping, or work product generation:
+
+```bash
+cd backend
+npm run check:aletheia:source-provenance
+```
+
+This verifies that source-linked evidence keeps document IDs, source chunk IDs,
+quotes, quote offsets, support status, FTS5 matter filters, UI registry fields,
+and exportable provenance.
+
 Run the Tool Adapter policy audit before enabling agent integrations:
 
 ```bash

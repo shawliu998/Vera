@@ -63,6 +63,10 @@ Operational notes:
   packaging. It verifies local doctor coverage, the local launcher, `/health`,
   private-token auth boundaries, package metadata, backup/restore/audit
   integrity, and runbook coverage.
+- Run `npm run check:aletheia:source-provenance` before changing document
+  parsing, evidence mapping, or work product generation. It verifies source
+  chunk IDs, document IDs, quote offsets, support status, FTS5 matter filters,
+  UI registry fields, and exportable provenance.
 - Run `npm run check:aletheia:tool-policy` before enabling agent integrations.
   It verifies the HTTP Tool Adapter and stdio MCP wrapper expose only the
   approved narrow allowlist and keep browser, terminal, external web, email, and
@@ -144,6 +148,7 @@ Before upgrading:
 - run `ALETHEIA_RESTORE_SOURCE_DIR=.data/aletheia npm run check:aletheia:restore`;
 - run `npm run check:aletheia:privacy`;
 - run `npm run check:aletheia:ops-readiness`;
+- run `npm run check:aletheia:source-provenance`;
 - run `npm run check:aletheia:tool-policy`;
 - run `npm run check:aletheia:approval-policy`;
 - run `npm run check:aletheia:matter-isolation`;

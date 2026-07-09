@@ -688,7 +688,7 @@ export class SupabaseAletheiaRepository implements AletheiaRepository {
       .insert({
         matter_id: matterId,
         work_product_id: input.workProductId ?? null,
-        document_id: null,
+        document_id: chunk.matter_document_id,
         source_chunk_id: chunk.id,
         claim_id: claimId,
         document_name: document?.name ?? null,

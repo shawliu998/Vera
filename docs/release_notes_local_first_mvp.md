@@ -61,6 +61,9 @@ and replayable audit records.
 - Operational readiness audit that verifies local doctor coverage, the local
   launcher, `/health`, private-token auth boundaries, package metadata,
   backup/restore/audit integrity, and private deployment runbook coverage.
+- Source provenance audit that verifies parser chunk offsets, document IDs,
+  source chunk IDs, quote offsets, support status, SQLite FTS5 matter filters,
+  source-linked work products, UI registry fields, and exportable provenance.
 - Tool Adapter policy audit that verifies the HTTP Tool Adapter and stdio MCP
   wrapper expose only the approved allowlist and keep browser, terminal,
   external web, email, and destructive file operations disabled.
@@ -100,6 +103,7 @@ npm run test:aletheia:restore-drill
 npm run test:aletheia:retrieval-eval
 npm run check:aletheia:privacy
 npm run check:aletheia:ops-readiness
+npm run check:aletheia:source-provenance
 npm run check:aletheia:tool-policy
 npm run check:aletheia:approval-policy
 npm run check:aletheia:matter-isolation

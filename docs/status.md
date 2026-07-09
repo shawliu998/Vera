@@ -54,6 +54,12 @@ The private deployment operational readiness audit entrypoint is:
 cd backend && npm run check:aletheia:ops-readiness
 ```
 
+The source provenance audit entrypoint is:
+
+```bash
+cd backend && npm run check:aletheia:source-provenance
+```
+
 The least-privilege Tool Adapter policy audit entrypoint is:
 
 ```bash
@@ -145,6 +151,7 @@ cd backend && npm run check:aletheia:backup
 cd backend && npm run check:aletheia:restore
 cd backend && npm run check:aletheia:privacy
 cd backend && npm run check:aletheia:ops-readiness
+cd backend && npm run check:aletheia:source-provenance
 cd backend && npm run check:aletheia:tool-policy
 cd backend && npm run check:aletheia:approval-policy
 cd backend && npm run check:aletheia:matter-isolation
@@ -178,6 +185,10 @@ Current known result:
   launcher, `/health` endpoint, private-token Aletheia auth boundary, package
   manifest, backup/restore/audit integrity chain, and private deployment
   runbook coverage.
+- source provenance audit passes and verifies parser chunk offsets, source
+  chunk IDs, document IDs, quote offsets, support status, SQLite FTS5 matter
+  filters, source-linked work products, UI registry fields, and exportable
+  provenance.
 - Tool Adapter policy audit passes and verifies the HTTP adapter and MCP
   wrapper expose only the approved narrow allowlist while browser, terminal,
   external web, email, and destructive file operations stay disabled.

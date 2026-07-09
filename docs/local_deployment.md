@@ -81,6 +81,18 @@ The audit verifies doctor coverage, the local launcher, `/health`, private-token
 auth boundaries, package metadata, backup/restore/audit integrity, and runbook
 coverage.
 
+Before changing document parsing or evidence mapping, run the source provenance
+audit:
+
+```bash
+cd backend
+npm run check:aletheia:source-provenance
+```
+
+The audit verifies document IDs, source chunk IDs, quote offsets, support
+status, SQLite FTS5 matter filters, source-linked work products, UI registry
+fields, and exportable provenance.
+
 One-command local launcher:
 
 ```bash
