@@ -1,5 +1,4 @@
-const { app, BrowserWindow, dialog, shell } = require("electron");
-const { spawn } = require("node:child_process");
+const { app, BrowserWindow, dialog, shell, utilityProcess } = require("electron");
 const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
@@ -155,27 +154,27 @@ function assertPortFree(port) {
   });
 }
 
-function spawnNode(label, args, options) {
-  const child = spawn(process.execPath, args, {
-    ...options,
+function forkUtility(label, modulePath, args, options) {
+  const child = utilityProcess.fork(modulePath, args, {
+    cwd: options.cwd,
     env: {
       ...process.env,
-      ELECTRON_RUN_AS_NODE: "1",
       ...options.env,
     },
-    stdio: ["ignore", "pipe", "pipe"],
+    serviceName: `Aletheia ${label}`,
+    stdio: "pipe",
   });
   children.add(child);
-  child.stdout.on("data", (chunk) =>
+  child.stdout?.on("data", (chunk) =>
     console.log(`[${label}] ${chunk.toString().trimEnd()}`),
   );
-  child.stderr.on("data", (chunk) =>
+  child.stderr?.on("data", (chunk) =>
     console.error(`[${label}] ${chunk.toString().trimEnd()}`),
   );
-  child.once("exit", (code, signal) => {
+  child.once("exit", (code) => {
     children.delete(child);
-    if (code !== 0 && signal !== "SIGTERM") {
-      console.error(`[${label}] exited with code=${code} signal=${signal}`);
+    if (code !== 0) {
+      console.error(`[${label}] exited with code=${code}`);
     }
   });
   return child;
@@ -206,7 +205,7 @@ async function startServices() {
   fs.mkdirSync(dataDir, { recursive: true });
 
   const backendDir = path.join(root, "backend");
-  spawnNode("backend", [path.join(backendDir, "dist", "index.js")], {
+  forkUtility("backend", path.join(backendDir, "dist", "index.js"), [], {
     cwd: backendDir,
     env: {
       NODE_ENV: "production",
@@ -235,16 +234,10 @@ async function startServices() {
   await waitForHttp(`${BACKEND_URL}/health`, 45_000);
 
   const frontendDir = path.join(root, "frontend");
-  spawnNode(
+  forkUtility(
     "frontend",
-    [
-      path.join(frontendDir, "node_modules", "next", "dist", "bin", "next"),
-      "start",
-      "-H",
-      HOST,
-      "-p",
-      String(FRONTEND_PORT),
-    ],
+    path.join(frontendDir, "node_modules", "next", "dist", "bin", "next"),
+    ["start", "-H", HOST, "-p", String(FRONTEND_PORT)],
     {
       cwd: frontendDir,
       env: {
@@ -267,7 +260,7 @@ async function startServices() {
 
 function stopServices() {
   for (const child of children) {
-    if (!child.killed) child.kill("SIGTERM");
+    child.kill();
   }
 }
 

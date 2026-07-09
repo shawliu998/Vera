@@ -29,15 +29,15 @@ Developer ID signing, hardened runtime, and notarization.
 
 Download from the GitHub Release page:
 
-- `Aletheia-1.0.0-arm64.dmg`
-- or `Aletheia-1.0.0-arm64.zip`
-- `Aletheia-1.0.0-SHA256SUMS.txt`
+- `Aletheia-1.0.1-arm64.dmg`
+- or `Aletheia-1.0.1-arm64.zip`
+- `Aletheia-1.0.1-SHA256SUMS.txt`
 
 Verify the download:
 
 ```bash
 cd ~/Downloads
-shasum -a 256 -c Aletheia-1.0.0-SHA256SUMS.txt
+shasum -a 256 -c Aletheia-1.0.1-SHA256SUMS.txt
 ```
 
 Open the app:

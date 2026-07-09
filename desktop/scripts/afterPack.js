@@ -25,5 +25,6 @@ exports.default = async function afterPack(context) {
   execFileSync("ditto", ["--norsrc", stagedAppPath, appPath], {
     stdio: "inherit",
   });
+  execFileSync("xattr", ["-cr", appPath], { stdio: "inherit" });
   fs.rmSync(stagingDir, { recursive: true, force: true });
 };
