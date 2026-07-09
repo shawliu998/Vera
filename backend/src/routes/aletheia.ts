@@ -1025,6 +1025,37 @@ aletheiaRouter.post(
   },
 );
 
+// POST /aletheia/matters/:matterId/skills/approve-candidate
+aletheiaRouter.post(
+  "/matters/:matterId/skills/approve-candidate",
+  requireAuth,
+  async (req, res) => {
+    const candidate = objectPayload(req.body?.candidate);
+    if (Object.keys(candidate).length === 0) {
+      return void res
+        .status(400)
+        .json({ detail: "candidate skill payload is required" });
+    }
+
+    try {
+      const data = await createAletheiaRepository().approveSkillCandidate(
+        userContext(res),
+        req.params.matterId,
+        {
+          candidate,
+          approvalComment: nullableText(req.body?.approvalComment, 4000),
+        },
+      );
+      if (!data) {
+        return void res.status(404).json({ detail: "Matter not found" });
+      }
+      res.status(201).json(data);
+    } catch (error) {
+      handleRouteError(res, error);
+    }
+  },
+);
+
 // POST /aletheia/matters/:matterId/agent-runs
 aletheiaRouter.post(
   "/matters/:matterId/agent-runs",

@@ -38,6 +38,7 @@ import type {
   AletheiaRepository,
   AletheiaUserContext,
   AppendAuditEventInput,
+  ApproveSkillCandidateInput,
   CreateDurableEvalExportInput,
   CreateLocalExportPackageInput,
   CreateAgentRunInput,
@@ -136,6 +137,16 @@ function parseArray(value: unknown): unknown[] {
 function stringArrayFromObject(value: unknown) {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function stringValue(value: unknown, max = 400) {
+  return typeof value === "string" ? value.trim().slice(0, max) : "";
+}
+
+function stringArrayValue(value: unknown, max = 400) {
+  return Array.isArray(value)
+    ? value.map((item) => stringValue(item, max)).filter(Boolean)
     : [];
 }
 
@@ -1610,6 +1621,138 @@ export class LocalAletheiaRepository implements AletheiaRepository {
         .prepare("select * from aletheia_playbooks where id = ?")
         .get(playbookId),
     );
+  }
+
+  async approveSkillCandidate(
+    ctx: AletheiaUserContext,
+    matterId: string,
+    input: ApproveSkillCandidateInput,
+  ) {
+    const matter = this.loadOwnedMatter(ctx, matterId);
+    if (!matter) return null;
+
+    const candidate = this.normalizeSkillCandidate(input.candidate);
+    if (candidate.approval_status !== "candidate") {
+      throw new ApprovalRequiredError(
+        "Only candidate skills can enter the local approved skill activation workflow.",
+      );
+    }
+    if (candidate.created_from_eval_case_ids.length === 0) {
+      throw new ApprovalRequiredError(
+        "Approved skill activation requires at least one persisted review-derived eval case.",
+      );
+    }
+
+    const sourceEvalCases = this.loadEvalCasesByIds(
+      ctx,
+      matterId,
+      candidate.created_from_eval_case_ids,
+    );
+    if (sourceEvalCases.length !== candidate.created_from_eval_case_ids.length) {
+      throw new ApprovalRequiredError(
+        "Approved skill activation requires eval case IDs that belong to this local matter.",
+      );
+    }
+
+    const timestamp = now();
+    const playbookId = randomUUID();
+    const activeSkill = {
+      ...candidate,
+      approval_status: "approved",
+      version: this.approvedSkillVersion(candidate.version),
+      activated_at: timestamp,
+      activated_by: ctx.userId,
+      active: true,
+    };
+    const content = {
+      schemaVersion: "aletheia-approved-skill-playbook-local-v1",
+      localOnly: true,
+      professionalSkillId: candidate.id,
+      skillId: candidate.id,
+      professionalSkill: activeSkill,
+      sourceEvalCaseIds: candidate.created_from_eval_case_ids,
+      sourceEvalCases: sourceEvalCases.map((evalCase) => ({
+        id: evalCase.id,
+        failure_type: evalCase.failure_type,
+        status: evalCase.status,
+        source_review_item_id: evalCase.source_review_item_id,
+        source_audit_event_id: evalCase.source_audit_event_id,
+      })),
+      approval: {
+        status: "approved",
+        approvedBy: ctx.userId,
+        approvedAt: timestamp,
+        comment: input.approvalComment ?? null,
+      },
+      controls: {
+        matterScoped: true,
+        candidateRemainsInactiveUntilApproval: true,
+        activeOnlyAfterHumanApproval: true,
+        agentMayAutoApproveSkill: false,
+      },
+    };
+
+    this.db
+      .prepare(
+        `
+        insert into aletheia_playbooks (
+          id, matter_id, user_id, name, description, version, status, content,
+          approved_by, approved_at, created_at, updated_at
+        )
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      )
+      .run(
+        playbookId,
+        matterId,
+        ctx.userId,
+        candidate.name,
+        candidate.description,
+        activeSkill.version,
+        "approved",
+        json(content),
+        ctx.userId,
+        timestamp,
+        timestamp,
+        timestamp,
+      );
+
+    const auditEvent = (await this.writeAuditEvent(ctx.userId, matterId, {
+      actor: "human",
+      action: "approved_skill_activated",
+      workflowVersion: "aletheia-approved-skill-activation-local-v1",
+      model: null,
+      details: {
+        schemaVersion: "aletheia-approved-skill-activation-local-v1",
+        localOnly: true,
+        candidateSkillId: candidate.id,
+        playbookId,
+        sourceEvalCaseIds: candidate.created_from_eval_case_ids,
+        approvalStatus: "approved",
+        active: true,
+        approvalComment: input.approvalComment ?? null,
+      },
+    })) as { id: string } | null;
+    this.touchMatter(ctx.userId, matterId);
+
+    const playbook = this.playbook(
+      this.db
+        .prepare("select * from aletheia_playbooks where id = ?")
+        .get(playbookId),
+    );
+
+    return {
+      schema_version: "aletheia-approved-skill-activation-local-v1",
+      local_only: true,
+      storage_driver: "local",
+      matter_id: matterId,
+      candidate_skill_id: candidate.id,
+      active: true,
+      active_skill: activeSkill,
+      playbook,
+      audit_event: auditEvent,
+      source_eval_cases: sourceEvalCases,
+    };
   }
 
   async proposePlaybookImprovement(
@@ -3755,6 +3898,66 @@ export class LocalAletheiaRepository implements AletheiaRepository {
     return this.db
       .prepare(`select * from ${table} where matter_id = ? order by ${order}`)
       .all(matterId);
+  }
+
+  private normalizeSkillCandidate(candidate: Record<string, unknown>) {
+    const id = stringValue(candidate.id, 160);
+    const name = stringValue(candidate.name, 240);
+    const description = stringValue(candidate.description, 2000);
+    const approvalStatus = stringValue(candidate.approval_status, 40);
+    const evalCaseIds = stringArrayValue(
+      candidate.created_from_eval_case_ids,
+      160,
+    );
+
+    if (!id || !name || !description) {
+      throw new ApprovalRequiredError(
+        "Skill candidate approval requires id, name, and description.",
+      );
+    }
+
+    return {
+      id,
+      name,
+      description,
+      trigger_conditions: stringArrayValue(candidate.trigger_conditions, 1000),
+      required_inputs: stringArrayValue(candidate.required_inputs, 120),
+      expected_outputs: stringArrayValue(candidate.expected_outputs, 120),
+      evidence_requirements: stringArrayValue(
+        candidate.evidence_requirements,
+        1000,
+      ),
+      approval_status: approvalStatus || "candidate",
+      created_from_eval_case_ids: [...new Set(evalCaseIds)].sort(),
+      version: stringValue(candidate.version, 80) || "0.1.0",
+    };
+  }
+
+  private approvedSkillVersion(version: string) {
+    if (!version || version.startsWith("1.")) return version || "1.0.0";
+    return "1.0.0";
+  }
+
+  private loadEvalCasesByIds(
+    ctx: AletheiaUserContext,
+    matterId: string,
+    evalCaseIds: string[],
+  ) {
+    if (evalCaseIds.length === 0) return [];
+    const placeholders = evalCaseIds.map(() => "?").join(",");
+    return (
+      this.db
+        .prepare(
+          `
+          select * from aletheia_eval_cases
+          where matter_id = ?
+            and user_id = ?
+            and id in (${placeholders})
+          order by created_at asc
+        `,
+        )
+        .all(matterId, ctx.userId, ...evalCaseIds) as any[]
+    ).map((row) => this.evalCase(row));
   }
 
   private matter(row: any) {

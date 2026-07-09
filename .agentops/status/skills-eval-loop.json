@@ -1,64 +1,40 @@
 {
   "agent": "skills-eval-loop",
-  "updatedAt": "2026-07-09T15:46:19+08:00",
+  "updatedAt": "2026-07-09T20:29:52+08:00",
   "status": "done",
   "scope": [
-    "frontend/src/lib/agentops/eval.ts",
-    "frontend/src/lib/agentops/skills.ts",
-    "frontend/src/lib/agentops/index.ts",
-    "frontend/src/components/agentops/EvalWorkbench.tsx",
-    "frontend/src/components/agentops/SkillCandidateList.tsx",
-    "frontend/src/components/agentops/MatterCommandCenter.tsx",
-    "frontend/tests/agentops/skillsEval.test.ts",
-    "frontend/tests/agentops/tsconfig.adapter.json",
-    "frontend/tests/aletheia-agentops-route.spec.ts",
-    "frontend/src/aletheia/agentops/fixtures.ts",
-    "frontend/src/app/aletheia/docs/page.tsx",
+    "backend/src/lib/aletheia/repository.ts",
+    "backend/src/lib/aletheia/localRepository.ts",
+    "backend/src/lib/aletheia/supabaseRepository.ts",
+    "backend/src/routes/aletheia.ts",
+    "backend/src/scripts/aletheiaApprovedSkillActivationAudit.ts",
+    "backend/src/scripts/aletheiaApprovalPolicyAudit.ts",
+    "backend/package.json",
     "docs/agentops/professional-skills-loop.md",
     ".agentops/status/skills-eval-loop.json"
   ],
-  "summary": "Added a deterministic human-approved playbook mapping helper for ProfessionalSkill records. The mapper keeps candidate skills inactive and marks skills active only when backed by an approved playbook record with approval identity and timestamp.",
+  "summary": "Completed the V1 local-only approved skill activation workflow: review-derived eval cases can feed a candidate skill, explicit human approval activates it as an approved matter-scoped playbook skill, and the activation writes an auditable local event.",
   "contractsChanged": [
-    "SkillPlaybookApprovalRecord view contract",
-    "SkillPlaybookApprovalState view contract",
-    "mapSkillsToPlaybookApprovalState helper",
-    "Human-approved playbook activation test coverage"
+    "POST /aletheia/matters/:matterId/skills/approve-candidate local route",
+    "AletheiaRepository.approveSkillCandidate local-only contract",
+    "aletheia-approved-skill-activation-local-v1 response contract",
+    "aletheia-approved-skill-playbook-local-v1 playbook content contract",
+    "approved_skill_activated audit event contract"
   ],
   "testsRun": [
-    "cd frontend && rm -rf /tmp/aletheia-adapter-tests && npx tsc -p tests/agentops/tsconfig.adapter.json && node --test /tmp/aletheia-adapter-tests/tests/agentops/adapters.test.js /tmp/aletheia-adapter-tests/tests/agentops/handoff.test.js /tmp/aletheia-adapter-tests/tests/agentops/exportPackage.test.js /tmp/aletheia-adapter-tests/tests/agentops/skillsEval.test.js",
-    "cd frontend && npx eslint src/lib/agentops/skills.ts tests/agentops/skillsEval.test.ts",
-    "cd frontend && npx tsc --noEmit --pretty false"
+    "cd backend && npm run check:aletheia:approved-skill-activation",
+    "cd backend && npm run check:aletheia:approval-policy",
+    "node .agentops/scripts/check-agentops.mjs",
+    "git diff --check",
+    "cd backend && npm run build"
   ],
   "risks": [
-    "Playbook mapping is a frontend deterministic view/helper; it does not persist playbooks or approve skills.",
-    "Generated skill suggestions remain candidate-only and must be mapped to human-approved matter playbooks before activation.",
-    "Generic /aletheia/agentops still has fixture-backed behavior through MatterCommandCenter defaults; product-truth use should stay on the matter-scoped adapter-backed route."
+    "The activation workflow is local-only and matter-scoped; it does not implement a production/global skill registry.",
+    "Supabase eval/skill persistence intentionally remains unavailable for V1 local-only.",
+    "Real-provider eval loops and pricing/provider adapters remain outside this local workflow."
   ],
   "needs": [
-    "Feed persisted AletheiaPlaybookRecord data into the approval-state mapper where an Eval Snapshot or playbook review UI needs explicit active/inactive state.",
-    "Add audit snapshot provenance for candidate skill IDs and approved playbook IDs before treating eval snapshots as durable learning records."
-  ],
-  "last_cycle_summary": "Added playbook approval-state mapping for ProfessionalSkill records and tests proving candidates stay inactive while approved playbook-backed skills become active.",
-  "files_changed": [
-    "frontend/src/lib/agentops/skills.ts",
-    "frontend/tests/agentops/skillsEval.test.ts",
-    ".agentops/status/skills-eval-loop.json"
-  ],
-  "eval_features_added": [
-    "None this cycle; eval metric behavior remained unchanged."
-  ],
-  "skills_features_added": [
-    "mapSkillsToPlaybookApprovalState maps skills to persisted playbook approval records without mutating skill approval status.",
-    "Runtime test coverage proves candidate skills remain inactive and approved skills require approved playbook backing."
-  ],
-  "tests_run": [
-    "cd frontend && rm -rf /tmp/aletheia-adapter-tests && npx tsc -p tests/agentops/tsconfig.adapter.json && node --test /tmp/aletheia-adapter-tests/tests/agentops/adapters.test.js /tmp/aletheia-adapter-tests/tests/agentops/handoff.test.js /tmp/aletheia-adapter-tests/tests/agentops/exportPackage.test.js /tmp/aletheia-adapter-tests/tests/agentops/skillsEval.test.js",
-    "cd frontend && npx eslint src/lib/agentops/skills.ts tests/agentops/skillsEval.test.ts",
-    "cd frontend && npx tsc --noEmit --pretty false"
-  ],
-  "blockers": [],
-  "next_actions": [
-    "Feed persisted AletheiaPlaybookRecord data into the approval-state mapper in the Eval Workbench or snapshot provenance layer.",
-    "Add candidate skill and approved playbook IDs to eval snapshot provenance before persistence."
+    "Keep production/Supabase/global governance work separate from V1 local-only acceptance.",
+    "Future UI wiring can call the approved skill activation route from Eval Workbench without changing the backend approval invariant."
   ]
 }

@@ -75,6 +75,18 @@ The local helpers live under `frontend/src/lib/agentops/`:
 - `skills.ts` groups repeated eval, review, and gate feedback into candidate
   skill suggestions without approving them.
 
+The local backend completes the approval workflow:
+
+- review resolution persists review-derived eval cases in local storage;
+- `POST /aletheia/matters/:matterId/skills/approve-candidate` accepts only
+  candidate skills linked to persisted eval case IDs for that matter;
+- approval creates an approved, matter-scoped playbook with an active
+  `professionalSkill` payload;
+- the approval writes an `approved_skill_activated` audit event.
+
 Sample eval cases and skills live in `frontend/src/aletheia/agentops/fixtures.ts`.
 They demonstrate a candidate missing-citation skill and an explicitly approved
 high-risk human approval export gate.
+
+Supabase and production/global skill registry behavior are intentionally outside
+the V1 local-only workflow.

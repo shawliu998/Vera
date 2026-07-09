@@ -137,6 +137,11 @@ export type ProposePlaybookImprovementInput = {
   includeReviewTags?: string[];
 };
 
+export type ApproveSkillCandidateInput = {
+  candidate: Record<string, unknown>;
+  approvalComment?: string | null;
+};
+
 export type UploadMatterDocumentInput = {
   filename: string;
   mimeType: string;
@@ -266,6 +271,11 @@ export interface AletheiaRepository {
     ctx: AletheiaUserContext,
     matterId: string,
     playbookId: string,
+  ): Promise<unknown | null>;
+  approveSkillCandidate(
+    ctx: AletheiaUserContext,
+    matterId: string,
+    input: ApproveSkillCandidateInput,
   ): Promise<unknown | null>;
   proposePlaybookImprovement(
     ctx: AletheiaUserContext,

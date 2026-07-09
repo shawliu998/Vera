@@ -65,6 +65,10 @@ function main() {
     root,
     "backend/src/scripts/aletheiaLocalRegression.ts",
   );
+  const approvedSkillActivation = readText(
+    root,
+    "backend/src/scripts/aletheiaApprovedSkillActivationAudit.ts",
+  );
   const auditIntegrity = readText(
     root,
     "backend/src/scripts/aletheiaAuditIntegrity.ts",
@@ -134,6 +138,23 @@ function main() {
         localRepository.includes("status = 'approved'") &&
         supabaseRepository.includes('status: "approved"'),
       "Playbook approval must remain an explicit human route with audited approved status.",
+    ),
+    check(
+      "approved-skill-activation-local-workflow",
+      routes.includes("/matters/:matterId/skills/approve-candidate") &&
+        routes.includes("approveSkillCandidate") &&
+        localRepository.includes("normalizeSkillCandidate") &&
+        localRepository.includes("loadEvalCasesByIds") &&
+        localRepository.includes('action: "approved_skill_activated"') &&
+        localRepository.includes(
+          "aletheia-approved-skill-playbook-local-v1",
+        ) &&
+        supabaseRepository.includes(
+          "Approved skill activation is currently available only in local Aletheia storage mode.",
+        ) &&
+        approvedSkillActivation.includes("created_from_eval_case_ids: []") &&
+        approvedSkillActivation.includes("approved_skill_activated"),
+      "Approved skill activation must require a local review-derived eval case, explicit human route approval, approved playbook persistence, and an audit event.",
     ),
     check(
       "regression-covers-approval-gates",

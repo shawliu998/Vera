@@ -24,6 +24,7 @@ import type {
   AletheiaRepository,
   AletheiaUserContext,
   AppendAuditEventInput,
+  ApproveSkillCandidateInput,
   CreateDurableEvalExportInput,
   CreateLocalExportPackageInput,
   CreateAgentRunInput,
@@ -561,6 +562,16 @@ export class SupabaseAletheiaRepository implements AletheiaRepository {
     });
     await this.touchMatter(matterId, ctx.userId);
     return data;
+  }
+
+  async approveSkillCandidate(
+    _ctx: AletheiaUserContext,
+    _matterId: string,
+    _input: ApproveSkillCandidateInput,
+  ) {
+    throw new CapabilityNotAvailableError(
+      "Approved skill activation is currently available only in local Aletheia storage mode.",
+    );
   }
 
   async proposePlaybookImprovement(
