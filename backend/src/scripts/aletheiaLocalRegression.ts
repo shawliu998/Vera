@@ -5,6 +5,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { Document as DocxDocument, Packer, Paragraph, TextRun } from "docx";
+import ExcelJS from "exceljs";
 import { createAletheiaRepository } from "../lib/aletheia";
 import {
   ApprovalRequiredError,
@@ -139,6 +140,20 @@ async function createDocxFixture(text: string) {
     ],
   });
   return Packer.toBuffer(doc);
+}
+
+async function createXlsxFixture() {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Obligations");
+  worksheet.addRow(["Clause", "Owner", "Deadline"]);
+  worksheet.addRow([
+    "Escrow source code release",
+    "Vendor",
+    "Bankruptcy trigger",
+  ]);
+  worksheet.addRow(["Incident notice", "Vendor", "48 hours"]);
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
 }
 
 async function runMcpSmoke(dataDir: string, expectedMatterTitle: string) {
@@ -466,6 +481,48 @@ async function main() {
   });
   assert(pdfDocument.parsed_status === "parsed", "PDF document should parse");
 
+  const xlsxBuffer = await createXlsxFixture();
+  const xlsxDocument: any = await repo.uploadMatterDocument(ctx, matter.id, {
+    filename: "synthetic-obligations-table.xlsx",
+    mimeType:
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    sizeBytes: xlsxBuffer.length,
+    buffer: xlsxBuffer,
+  });
+  assert(xlsxDocument.parsed_status === "parsed", "XLSX document should parse");
+  assert(
+    xlsxDocument.metadata.sheetCount === 1,
+    "XLSX metadata should preserve sheet count",
+  );
+  assert(
+    xlsxDocument.metadata.sectionCount === 1,
+    "XLSX metadata should preserve populated sheet count",
+  );
+
+  const scannedPdfBuffer = createPdfFixture("");
+  const scannedPdfDocument: any = await repo.uploadMatterDocument(
+    ctx,
+    matter.id,
+    {
+      filename: "synthetic-scanned-record.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: scannedPdfBuffer.length,
+      buffer: scannedPdfBuffer,
+    },
+  );
+  assert(
+    scannedPdfDocument.parsed_status === "needs_ocr",
+    "PDF without a text layer should be marked needs_ocr",
+  );
+  assert(
+    scannedPdfDocument.metadata.needsOcr === true,
+    "needs_ocr document metadata should advertise the OCR requirement",
+  );
+  assert(
+    scannedPdfDocument.metadata.chunkCount === 0,
+    "needs_ocr document should not create searchable chunks",
+  );
+
   const searchResults: any[] | null = await repo.searchMatterDocuments(
     ctx,
     matter.id,
@@ -488,6 +545,25 @@ async function main() {
     searchResults[0].retrieval_explanation?.basis ===
       "SQLite FTS5 BM25 keyword match",
     "Keyword retrieval should expose an audit-readable ranking basis",
+  );
+  assert(
+    typeof searchResults[0].id === "string" &&
+      searchResults[0].id.startsWith("retrieval:"),
+    "Search result should expose a V1 retrieval result id",
+  );
+  assert(
+    searchResults[0].method === "keyword",
+    "Search result should expose the V1 retrieval method",
+  );
+  assert(
+    typeof searchResults[0].quote_preview === "string" &&
+      searchResults[0].quote_preview.includes("termination clause"),
+    "Search result should expose a V1 quote preview",
+  );
+  assert(
+    searchResults[0].ranking_basis ===
+      searchResults[0].retrieval_explanation?.basis,
+    "Search result should expose V1 ranking_basis",
   );
   try {
     await repo.searchMatterDocuments(ctx, matter.id, {
@@ -574,6 +650,15 @@ async function main() {
     { query: "board approval", limit: 5 },
   );
   assert(pdfSearch && pdfSearch.length > 0, "PDF text should be searchable");
+  const xlsxSearch: any[] | null = await repo.searchMatterDocuments(
+    ctx,
+    matter.id,
+    { query: "escrow source code release", limit: 5 },
+  );
+  assert(
+    xlsxSearch && xlsxSearch.length > 0,
+    "XLSX table text should be searchable",
+  );
 
   const evidence: any = await repo.createEvidenceItem(ctx, matter.id, {
     sourceChunkId: searchResults[0].chunk_id,
@@ -590,6 +675,45 @@ async function main() {
   assert(
     evidence.claim_id === "claim-termination-notice",
     "Evidence should derive claim ID from the source chunk when none is supplied",
+  );
+  const sourceIndex: any = await repo.listV1SourceIndex(ctx, matter.id, {
+    includeChunks: true,
+    includeEvidenceLinks: true,
+    chunkLimit: 25,
+  });
+  assert(sourceIndex, "V1 source index should load for the local matter");
+  assert(
+    sourceIndex.documents.some(
+      (item: any) =>
+        item.id === document.id &&
+        item.matter_id === matter.id &&
+        item.status === "parsed",
+    ),
+    "V1 source index should include parsed DocumentRecord entries",
+  );
+  assert(
+    sourceIndex.documents.some(
+      (item: any) =>
+        item.id === scannedPdfDocument.id && item.status === "needs_ocr",
+    ),
+    "V1 source index should preserve needs_ocr DocumentRecord status",
+  );
+  assert(
+    sourceIndex.chunks.some(
+      (item: any) =>
+        item.id === searchResults[0].chunk_id &&
+        item.document_id === document.id &&
+        item.text.includes("termination clause"),
+    ),
+    "V1 source index should include source DocumentChunk text",
+  );
+  assert(
+    sourceIndex.source_links.some(
+      (item: any) =>
+        item.evidence_item_id === evidence.id &&
+        item.source_chunk_id === searchResults[0].chunk_id,
+    ),
+    "V1 source index should resolve EvidenceItem source links",
   );
 
   const issueMap: any = await repo.generateIssueMap(ctx, matter.id);

@@ -16,6 +16,16 @@ export type ParsedMatterDocument = {
   chunks: ParsedDocumentChunk[];
 };
 
+export type MatterDocumentExtraction = {
+  text: string;
+  metadata: {
+    parser: "pdf" | "docx" | "xlsx" | "deterministic";
+    pageCount?: number;
+    sheetCount?: number;
+    sectionCount?: number;
+  };
+};
+
 const MAX_CHUNK_LENGTH = 1200;
 const CHUNK_OVERLAP = 160;
 
@@ -28,6 +38,7 @@ export function documentTypeForFilename(filename: string) {
   if (ext === "pdf") return "pdf";
   if (ext === "docx") return "docx";
   if (ext === "doc") return "doc";
+  if (ext === "xlsx") return "xlsx";
   if (ext === "txt" || ext === "md") return "text";
   return "other";
 }
@@ -57,14 +68,39 @@ export async function extractMatterDocumentText(args: {
   filename: string;
   buffer: Buffer;
 }) {
+  return (await extractMatterDocument(args)).text;
+}
+
+export async function extractMatterDocument(args: {
+  filename: string;
+  buffer: Buffer;
+}): Promise<MatterDocumentExtraction> {
   const ext = extension(args.filename);
-  if (ext === "pdf") return extractPdfText(args.buffer);
-  if (ext === "docx" || ext === "doc") return extractDocxText(args.buffer);
-  if (ext === "txt" || ext === "md") return args.buffer.toString("utf8");
-  return args.buffer.toString("utf8");
+  if (ext === "pdf") return extractPdfDocument(args.buffer);
+  if (ext === "docx" || ext === "doc") {
+    return {
+      text: await extractDocxText(args.buffer),
+      metadata: { parser: "docx" },
+    };
+  }
+  if (ext === "xlsx") return extractXlsxDocument(args.buffer);
+  if (ext === "txt" || ext === "md") {
+    return {
+      text: args.buffer.toString("utf8"),
+      metadata: { parser: "deterministic" },
+    };
+  }
+  return {
+    text: args.buffer.toString("utf8"),
+    metadata: { parser: "deterministic" },
+  };
 }
 
 async function extractPdfText(buffer: Buffer) {
+  return (await extractPdfDocument(buffer)).text;
+}
+
+async function extractPdfDocument(buffer: Buffer): Promise<MatterDocumentExtraction> {
   const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs" as string);
   const pdfjsRoot = path.dirname(require.resolve("pdfjs-dist/package.json"));
   const pdf = await (
@@ -95,7 +131,10 @@ async function extractPdfText(buffer: Buffer) {
       .trim();
     if (text) pages.push(`[Page ${i}]\n${text}`);
   }
-  return pages.join("\n\n");
+  return {
+    text: pages.join("\n\n"),
+    metadata: { parser: "pdf", pageCount: pdf.numPages },
+  };
 }
 
 async function extractDocxText(buffer: Buffer) {
@@ -103,6 +142,66 @@ async function extractDocxText(buffer: Buffer) {
   const normalized = await normalizeDocxZipPaths(buffer);
   const result = await mammoth.extractRawText({ buffer: normalized });
   return result.value.trim();
+}
+
+async function extractXlsxDocument(buffer: Buffer): Promise<MatterDocumentExtraction> {
+  const ExcelJS = (await import("exceljs")).default;
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(
+    buffer as unknown as Parameters<typeof workbook.xlsx.load>[0],
+  );
+  const sections: string[] = [];
+  workbook.eachSheet((worksheet) => {
+    const rows: string[] = [];
+    worksheet.eachRow((row, rowNumber) => {
+      const cells = Array.isArray(row.values) ? row.values.slice(1) : [];
+      const text = cells
+        .map((cell) => cellText(cell))
+        .filter(Boolean)
+        .join(" | ");
+      if (text) rows.push(`Row ${rowNumber}: ${text}`);
+    });
+    if (rows.length) {
+      sections.push(`[Sheet ${worksheet.name}]\n${rows.join("\n")}`);
+    }
+  });
+  return {
+    text: sections.join("\n\n"),
+    metadata: {
+      parser: "xlsx",
+      sheetCount: workbook.worksheets.length,
+      sectionCount: sections.length,
+    },
+  };
+}
+
+function cellText(value: unknown): string {
+  if (value == null) return "";
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value).trim();
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (typeof record.text === "string") return record.text.trim();
+    if (typeof record.result === "string" || typeof record.result === "number") {
+      return String(record.result).trim();
+    }
+    if (typeof record.hyperlink === "string" && typeof record.text === "string") {
+      return record.text.trim();
+    }
+    if (Array.isArray(record.richText)) {
+      return record.richText
+        .map((item) =>
+          item && typeof item === "object" && "text" in item
+            ? String((item as { text?: unknown }).text ?? "")
+            : "",
+        )
+        .join("")
+        .trim();
+    }
+  }
+  return "";
 }
 
 export function chunkMatterDocument(text: string): ParsedDocumentChunk[] {

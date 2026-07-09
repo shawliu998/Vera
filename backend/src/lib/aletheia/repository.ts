@@ -1,3 +1,5 @@
+import type { V1RuntimePersistenceInput } from "./v1RuntimePersistence";
+
 export type AletheiaUserContext = {
   userId: string;
   userEmail?: string;
@@ -136,6 +138,13 @@ export type SearchMatterDocumentsInput = {
   mode?: "keyword" | "hybrid" | "semantic";
 };
 
+export type ListV1SourceIndexInput = {
+  includeChunks?: boolean;
+  includeEvidenceLinks?: boolean;
+  chunkLimit?: number;
+  documentIds?: string[];
+};
+
 export interface AletheiaRepository {
   listMatters(ctx: AletheiaUserContext): Promise<unknown[]>;
   createMatter(
@@ -170,6 +179,11 @@ export interface AletheiaRepository {
     ctx: AletheiaUserContext,
     matterId: string,
     input: CreateAgentRunInput,
+  ): Promise<unknown | null>;
+  persistV1RuntimeResult(
+    ctx: AletheiaUserContext,
+    matterId: string,
+    input: Omit<V1RuntimePersistenceInput, "userId" | "matterId">,
   ): Promise<unknown | null>;
   resumeAgentRun(
     ctx: AletheiaUserContext,
@@ -235,6 +249,11 @@ export interface AletheiaRepository {
     matterId: string,
     input: SearchMatterDocumentsInput,
   ): Promise<unknown[] | null>;
+  listV1SourceIndex(
+    ctx: AletheiaUserContext,
+    matterId: string,
+    input?: ListV1SourceIndexInput,
+  ): Promise<unknown | null>;
 }
 
 export class LocalAdapterNotReadyError extends Error {

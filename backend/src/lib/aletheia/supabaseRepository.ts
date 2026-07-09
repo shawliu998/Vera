@@ -31,6 +31,7 @@ import type {
   ProposePlaybookImprovementInput,
   CreateWorkProductInput,
   DecideApprovalInput,
+  ListV1SourceIndexInput,
   PersistGateSnapshotInput,
   ResumeAgentRunInput,
   RequestApprovalInput,
@@ -701,6 +702,12 @@ export class SupabaseAletheiaRepository implements AletheiaRepository {
     };
   }
 
+  async persistV1RuntimeResult() {
+    throw new CapabilityNotAvailableError(
+      "V1 runtime result persistence is currently available only in local Aletheia storage mode.",
+    );
+  }
+
   async resumeAgentRun(
     _ctx: AletheiaUserContext,
     _matterId: string,
@@ -924,6 +931,16 @@ export class SupabaseAletheiaRepository implements AletheiaRepository {
   ): Promise<unknown[] | null> {
     throw new CapabilityNotAvailableError(
       "Aletheia document search is available in local storage mode; Supabase document search is not implemented yet.",
+    );
+  }
+
+  async listV1SourceIndex(
+    _ctx: AletheiaUserContext,
+    _matterId: string,
+    _input: ListV1SourceIndexInput = {},
+  ): Promise<unknown | null> {
+    throw new CapabilityNotAvailableError(
+      "V1 document/chunk/source listing is currently available only in local Aletheia storage mode; Supabase V1 document retrieval is not implemented yet.",
     );
   }
 

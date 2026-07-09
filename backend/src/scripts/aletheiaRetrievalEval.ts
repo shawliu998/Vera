@@ -26,6 +26,15 @@ type EvalResult = EvalCase & {
   error?: string;
 };
 
+type CompactLoadFixtureResult = {
+  matterId: string;
+  documentCount: number;
+  targetDocument: string;
+  targetQuery: string;
+  topDocument: string | null;
+  v1AliasesPassed: boolean;
+};
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
@@ -60,6 +69,105 @@ async function createMatterWithDocument(args: {
   );
   assert(document.parsed_status === "parsed", `${args.filename} should parse`);
   return { matter, document };
+}
+
+function compactLoadFixtureDocuments() {
+  return [
+    ["asset-purchase-agreement", "The asset transfer schedule lists assumed contracts and excluded liabilities."],
+    ["board-consent", "The board consent authorizes officers to execute closing certificates."],
+    ["cap-table-summary", "The capitalization summary identifies preferred shares and option grants."],
+    ["customer-contract-index", "The customer contract index marks renewal terms and assignment consents."],
+    ["data-processing-addendum", "The data processing addendum limits subprocessors and audit requests."],
+    ["disclosure-schedule", "The disclosure schedule lists pending disputes and regulatory notices."],
+    ["escrow-source-code-release", "Escrow source code release is triggered by uncured vendor bankruptcy or service cessation."],
+    ["employment-agreement", "The employment agreement includes invention assignment and non-solicit covenants."],
+    ["financial-statements", "The unaudited financial statements include revenue recognition notes."],
+    ["insurance-certificate", "The insurance certificate lists cyber liability and errors omissions coverage."],
+    ["ip-assignment", "The intellectual property assignment transfers platform source materials."],
+    ["lease-summary", "The lease summary identifies renewal options and landlord consent requirements."],
+    ["litigation-memo", "The litigation memo describes threatened claims and settlement posture."],
+    ["material-contract-review", "The material contract review flags change of control restrictions."],
+    ["open-source-inventory", "The open source inventory flags copyleft license review items."],
+    ["privacy-policy", "The privacy policy describes consumer deletion requests and retention periods."],
+    ["security-report", "The security report summarizes penetration test remediation status."],
+    ["tax-certificate", "The tax certificate confirms sales tax nexus assumptions."],
+    ["transition-services-agreement", "The transition services agreement defines migration support milestones."],
+    ["vendor-master-agreement", "The vendor master agreement requires incident notice within forty eight hours."],
+    ["warranty-schedule", "The warranty schedule excludes beta features and customer modifications."],
+    ["working-capital-schedule", "The working capital schedule defines normalized inventory adjustments."],
+    ["export-control-memo", "The export control memo confirms encryption classification review."],
+    ["regulatory-permit-index", "The regulatory permit index lists state operating approvals."],
+  ].map(([slug, sentence], index) => ({
+    filename: `v1-load-${String(index + 1).padStart(2, "0")}-${slug}.txt`,
+    body: [
+      `V1 compact load fixture document ${index + 1}.`,
+      sentence,
+      "This representative due diligence record is intentionally small but source-citable.",
+    ].join("\n"),
+  }));
+}
+
+async function createCompactLoadFixture(args: {
+  ctx: AletheiaUserContext;
+  repo: ReturnType<typeof createAletheiaRepository>;
+}): Promise<CompactLoadFixtureResult> {
+  const matter: any = await args.repo.createMatter(args.ctx, {
+    title: "V1 Retrieval Compact Load Fixture",
+    objective: "Verify representative 20-100 document private-pilot retrieval.",
+    template: "deal_due_diligence",
+    status: "draft",
+    riskLevel: "high",
+    clientOrProject: "Retrieval eval",
+    sourceProjectId: null,
+    sharedWith: [],
+    metadata: { evalSuite: "aletheia-retrieval-eval-v1-compact-load" },
+  });
+
+  const documents = compactLoadFixtureDocuments();
+  for (const document of documents) {
+    const uploaded: any = await args.repo.uploadMatterDocument(
+      args.ctx,
+      matter.id,
+      {
+        filename: document.filename,
+        mimeType: "text/plain",
+        sizeBytes: Buffer.byteLength(document.body, "utf8"),
+        buffer: Buffer.from(document.body, "utf8"),
+      },
+    );
+    assert(uploaded.parsed_status === "parsed", `${document.filename} should parse`);
+    assert(
+      uploaded.metadata?.chunkCount >= 1,
+      `${document.filename} should create at least one source chunk`,
+    );
+  }
+
+  const targetDocument = "v1-load-07-escrow-source-code-release.txt";
+  const targetQuery = "escrow source code release bankruptcy";
+  const results: any[] | null = await args.repo.searchMatterDocuments(
+    args.ctx,
+    matter.id,
+    { query: targetQuery, limit: 5 },
+  );
+  const top = results?.[0] ?? null;
+  const v1AliasesPassed =
+    typeof top?.id === "string" &&
+    top.id.startsWith("retrieval:") &&
+    typeof top.quote_preview === "string" &&
+    top.method === "keyword" &&
+    typeof top.ranking_basis === "string";
+
+  assert(top?.document_name === targetDocument, "Load fixture query should rank escrow document first");
+  assert(v1AliasesPassed, "Load fixture retrieval should expose V1 retrieval aliases");
+
+  return {
+    matterId: matter.id,
+    documentCount: documents.length,
+    targetDocument,
+    targetQuery,
+    topDocument: top?.document_name ?? null,
+    v1AliasesPassed,
+  };
 }
 
 async function runEvalCase(
@@ -157,6 +265,7 @@ async function main() {
       "Customer data retention is capped at twenty four months.",
     ].join("\n"),
   });
+  const compactLoadFixture = await createCompactLoadFixture({ ctx, repo });
 
   let failClosedPassed = false;
   try {
@@ -232,11 +341,14 @@ async function main() {
       "matter-scoped search",
       "cross-matter isolation",
       "retrieval diagnostics",
+      "20-100 representative compact load fixture",
     ],
     matters: {
       alpha: alpha.matter.id,
       beta: beta.matter.id,
+      compactLoadFixture: compactLoadFixture.matterId,
     },
+    compactLoadFixture,
     results,
   };
   console.log(JSON.stringify(output, null, 2));

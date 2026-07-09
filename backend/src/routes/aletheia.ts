@@ -26,7 +26,7 @@ import {
   LocalAdapterNotReadyError,
 } from "../lib/aletheia/repository";
 import { requireAuth } from "../middleware/auth";
-import { singleFileUpload } from "../lib/upload";
+import { multiFileUpload, singleFileUpload } from "../lib/upload";
 
 export const aletheiaRouter = Router();
 
@@ -70,6 +70,22 @@ function positiveNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? value
     : undefined;
+}
+
+function booleanQuery(value: unknown, fallback: boolean) {
+  if (value === undefined) return fallback;
+  if (value === true || value === "true" || value === "1") return true;
+  if (value === false || value === "false" || value === "0") return false;
+  return fallback;
+}
+
+function stringQueryList(value: unknown, maxLength: number) {
+  const values = Array.isArray(value)
+    ? value
+    : value === undefined
+      ? []
+      : [value];
+  return values.map((item) => text(item, maxLength)).filter(Boolean);
 }
 
 function runBudgetPayload(value: unknown) {
@@ -985,6 +1001,41 @@ aletheiaRouter.post(
   },
 );
 
+// GET /aletheia/matters/:matterId/v1/source-index
+aletheiaRouter.get(
+  "/matters/:matterId/v1/source-index",
+  requireAuth,
+  async (req, res) => {
+    const rawLimit =
+      typeof req.query.chunkLimit === "string"
+        ? Number(req.query.chunkLimit)
+        : undefined;
+    const documentIds = stringQueryList(req.query.documentId, 120);
+
+    try {
+      const data = await createAletheiaRepository().listV1SourceIndex(
+        userContext(res),
+        req.params.matterId,
+        {
+          includeChunks: booleanQuery(req.query.includeChunks, true),
+          includeEvidenceLinks: booleanQuery(
+            req.query.includeEvidenceLinks,
+            true,
+          ),
+          chunkLimit: Number.isFinite(rawLimit) ? rawLimit : undefined,
+          documentIds,
+        },
+      );
+      if (!data) {
+        return void res.status(404).json({ detail: "Matter not found" });
+      }
+      res.json(data);
+    } catch (error) {
+      handleRouteError(res, error);
+    }
+  },
+);
+
 // POST /aletheia/matters/:matterId/documents
 aletheiaRouter.post(
   "/matters/:matterId/documents",
@@ -1013,6 +1064,57 @@ aletheiaRouter.post(
     } catch (error) {
       handleRouteError(res, error);
     }
+  },
+);
+
+// POST /aletheia/matters/:matterId/documents/batch
+aletheiaRouter.post(
+  "/matters/:matterId/documents/batch",
+  requireAuth,
+  multiFileUpload("files", 100),
+  async (req, res) => {
+    const files = Array.isArray(req.files)
+      ? (req.files as Express.Multer.File[])
+      : [];
+    if (files.length === 0) {
+      return void res.status(400).json({ detail: "files are required" });
+    }
+
+    const repo = createAletheiaRepository();
+    const ctx = userContext(res);
+    const documents: unknown[] = [];
+    const errors: Array<{ filename: string; detail: string }> = [];
+
+    for (const file of files) {
+      try {
+        const data = await repo.uploadMatterDocument(ctx, req.params.matterId, {
+          filename: file.originalname,
+          mimeType: file.mimetype,
+          sizeBytes: file.size,
+          buffer: file.buffer,
+        });
+        if (!data) {
+          return void res.status(404).json({ detail: "Matter not found" });
+        }
+        documents.push(data);
+      } catch (error) {
+        errors.push({
+          filename: file.originalname,
+          detail:
+            error instanceof Error ? error.message : "Document upload failed",
+        });
+      }
+    }
+
+    res.status(errors.length > 0 ? 207 : 201).json({
+      schema_version: "aletheia-document-import-batch-v0",
+      matter_id: req.params.matterId,
+      total: files.length,
+      imported: documents.length,
+      failed: errors.length,
+      documents,
+      errors,
+    });
   },
 );
 

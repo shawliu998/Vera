@@ -69,6 +69,15 @@ function main() {
     root,
     "backend/src/scripts/aletheiaAuditIntegrity.ts",
   );
+  const frontendApi = readText(root, "frontend/src/app/lib/aletheiaApi.ts");
+  const remoteMatterPage = readText(
+    root,
+    "frontend/src/aletheia/RemoteMatterPage.tsx",
+  );
+  const finalMemoApprovalPayload = readText(
+    root,
+    "frontend/src/aletheia/agentops/finalMemoApprovalPayload.ts",
+  );
   const docs = [
     "docs/local_first_runtime.md",
     "docs/private_deployment.md",
@@ -179,6 +188,18 @@ function main() {
           "final-memo-exports-have-gate-authorization-events",
         ]),
       "Final memo export must persist and audit a passing gate snapshot in both repositories before final export authorization.",
+    ),
+    check(
+      "frontend-final-memo-approval-links-gate-snapshot",
+      frontendApi.includes("persistAletheiaGateSnapshot") &&
+        frontendApi.includes("/aletheia/matters/${matterId}/gate-snapshots") &&
+        remoteMatterPage.includes("persistAletheiaGateSnapshot") &&
+        remoteMatterPage.indexOf("persistAletheiaGateSnapshot") <
+          remoteMatterPage.indexOf("requestAletheiaApproval(matterId") &&
+        remoteMatterPage.includes("buildFinalMemoApprovalRequestedPayload") &&
+        remoteMatterPage.includes("gateSnapshotAuditEvent.id") &&
+        finalMemoApprovalPayload.includes("gateSnapshotAuditEventId"),
+      "Frontend final memo approval request must persist a gate snapshot first and carry gateSnapshotAuditEventId into the approval payload.",
     ),
     check(
       "docs-approval-posture",

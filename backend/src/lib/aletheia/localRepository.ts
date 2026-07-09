@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   chunkMatterDocument,
   documentTypeForFilename,
-  extractMatterDocumentText,
+  extractMatterDocument,
   sensitiveMaterialFlagsForText,
   writeMatterDocumentFile,
 } from "./documentParser";
@@ -27,6 +27,10 @@ import {
   ApprovalRequiredError,
   CapabilityNotAvailableError,
 } from "./repository";
+import {
+  createV1RuntimePersistencePlan,
+  type V1RuntimePersistenceInput,
+} from "./v1RuntimePersistence";
 import type {
   AddMatterMemoryInput,
   AddReviewInput,
@@ -41,6 +45,7 @@ import type {
   ProposePlaybookImprovementInput,
   CreateWorkProductInput,
   DecideApprovalInput,
+  ListV1SourceIndexInput,
   PersistGateSnapshotInput,
   ResumeAgentRunInput,
   RequestApprovalInput,
@@ -51,6 +56,7 @@ import type {
 type JsonObject = Record<string, unknown>;
 type RetrievalMode = "keyword" | "hybrid" | "semantic";
 type RetrievalScoreDirection = "lower_is_better" | "higher_is_better";
+type LocalDocumentParseStatus = "parsed" | "failed" | "needs_ocr";
 type LocalSemanticChunk = {
   chunk_id: string;
   matter_id: string;
@@ -218,6 +224,29 @@ function retrievalExplanation(args: {
     basis,
     layers: args.layers,
   };
+}
+
+function quotePreview(text: unknown) {
+  return String(text ?? "").replace(/\s+/g, " ").trim().slice(0, 360);
+}
+
+function parsedStatusForUpload(args: {
+  filename: string;
+  parsedText: string;
+  extractionFailed: boolean;
+}): LocalDocumentParseStatus {
+  if (args.extractionFailed) return "failed";
+  if (args.parsedText.trim()) return "parsed";
+  return documentTypeForFilename(args.filename) === "pdf"
+    ? "needs_ocr"
+    : "failed";
+}
+
+function parseFailureSummary(status: LocalDocumentParseStatus) {
+  if (status === "needs_ocr") {
+    return "PDF uploaded but no text layer was detected; OCR is required before indexing.";
+  }
+  return "Document uploaded but text extraction failed.";
 }
 
 function localSemanticIndexPath(matterId: string) {
@@ -756,6 +785,73 @@ export class LocalAletheiaRepository implements AletheiaRepository {
         matterId,
         "created_at desc",
       ).map((row) => this.playbook(row)),
+    };
+  }
+
+  async listV1SourceIndex(
+    ctx: AletheiaUserContext,
+    matterId: string,
+    input: ListV1SourceIndexInput = {},
+  ) {
+    const matter = this.loadOwnedMatter(ctx, matterId);
+    if (!matter) return null;
+
+    const includeChunks = input.includeChunks ?? true;
+    const includeEvidenceLinks = input.includeEvidenceLinks ?? true;
+    const chunkLimit = Math.min(Math.max(input.chunkLimit ?? 500, 0), 2000);
+    const documentIds = (input.documentIds ?? [])
+      .map((id) => id.trim())
+      .filter(Boolean);
+    const documentFilter = documentIds.length
+      ? ` and id in (${documentIds.map(() => "?").join(",")})`
+      : "";
+    const documentRows = this.db
+      .prepare(
+        `
+        select * from aletheia_matter_documents
+        where matter_id = ?
+          and user_id = ?
+          ${documentFilter}
+        order by created_at asc
+      `,
+      )
+      .all(matterId, ctx.userId, ...documentIds) as any[];
+    const selectedDocumentIds = new Set(
+      documentRows.map((row) => String(row.id)),
+    );
+    const documents = documentRows.map((row) => this.v1DocumentRecord(row));
+
+    const chunks =
+      includeChunks && chunkLimit > 0 && selectedDocumentIds.size
+        ? this.v1DocumentChunks({
+            matterId,
+            userId: ctx.userId,
+            documentIds: [...selectedDocumentIds],
+            limit: chunkLimit,
+          })
+        : [];
+
+    const sourceLinks =
+      includeEvidenceLinks && selectedDocumentIds.size
+        ? this.v1SourceLinks({
+            matterId,
+            userId: ctx.userId,
+            documentIds: [...selectedDocumentIds],
+          })
+        : [];
+
+    return {
+      schema_version: "aletheia-v1-source-index-local-v0",
+      storage_driver: "local",
+      matter_id: matterId,
+      generated_at: now(),
+      documents,
+      chunks,
+      source_links: sourceLinks,
+      limitations: [
+        "Local source index lists parsed document records, chunks, and evidence source links; full document/page preview remains a separate UI concern.",
+        "Supabase V1 document retrieval/listing is not implemented for the private pilot.",
+      ],
     };
   }
 
@@ -1537,6 +1633,180 @@ export class LocalAletheiaRepository implements AletheiaRepository {
     );
   }
 
+  async persistV1RuntimeResult(
+    ctx: AletheiaUserContext,
+    matterId: string,
+    input: Omit<V1RuntimePersistenceInput, "userId" | "matterId">,
+  ) {
+    const matter = this.loadOwnedMatter(ctx, matterId);
+    if (!matter) return null;
+    const plan = createV1RuntimePersistencePlan({
+      ...input,
+      userId: ctx.userId,
+      matterId,
+    });
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db
+        .prepare(
+          `
+          insert into aletheia_agent_runs (
+            id, matter_id, user_id, workflow, goal, status, current_step_key,
+            model_profile, storage_driver, budget, metadata, started_at,
+            completed_at, created_at, updated_at
+          )
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        )
+        .run(
+          plan.agentRun.id,
+          plan.agentRun.matter_id,
+          plan.agentRun.user_id,
+          plan.agentRun.workflow,
+          plan.agentRun.goal,
+          plan.agentRun.status,
+          plan.agentRun.current_step_key,
+          plan.agentRun.model_profile,
+          plan.agentRun.storage_driver,
+          json(plan.agentRun.budget),
+          json(plan.agentRun.metadata),
+          plan.agentRun.started_at,
+          plan.agentRun.completed_at,
+          plan.agentRun.created_at,
+          plan.agentRun.updated_at,
+        );
+
+      for (const step of plan.steps) {
+        this.db
+          .prepare(
+            `
+            insert into aletheia_agent_steps (
+              id, run_id, matter_id, user_id, step_key, title, sequence, status,
+              input, output, validation_errors, metrics, started_at, completed_at,
+              created_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `,
+          )
+          .run(
+            step.id,
+            step.run_id,
+            step.matter_id,
+            step.user_id,
+            step.step_key,
+            step.title,
+            step.sequence,
+            step.status,
+            json(step.input),
+            json(step.output),
+            json(step.validation_errors),
+            json(step.metrics),
+            step.started_at,
+            step.completed_at,
+            step.created_at,
+          );
+      }
+
+      for (const call of plan.toolCalls) {
+        this.db
+          .prepare(
+            `
+            insert into aletheia_tool_calls (
+              id, run_id, step_id, matter_id, user_id, tool_name, risk_level,
+              status, input, output, error, metrics, started_at, completed_at,
+              created_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `,
+          )
+          .run(
+            call.id,
+            call.run_id,
+            call.step_id,
+            call.matter_id,
+            call.user_id,
+            call.tool_name,
+            call.risk_level,
+            call.status,
+            json(call.input),
+            json(call.output),
+            call.error,
+            json(call.metrics),
+            call.started_at,
+            call.completed_at,
+            call.created_at,
+          );
+      }
+
+      for (const checkpoint of plan.humanCheckpoints) {
+        this.db
+          .prepare(
+            `
+            insert into aletheia_human_checkpoints (
+              id, run_id, step_id, matter_id, user_id, checkpoint_type, status,
+              prompt, decision, requested_payload, decision_payload, decided_by,
+              decided_at, created_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `,
+          )
+          .run(
+            checkpoint.id,
+            checkpoint.run_id,
+            checkpoint.step_id,
+            checkpoint.matter_id,
+            checkpoint.user_id,
+            checkpoint.checkpoint_type,
+            checkpoint.status,
+            checkpoint.prompt,
+            checkpoint.decision,
+            json(checkpoint.requested_payload),
+            json(checkpoint.decision_payload),
+            checkpoint.decided_by,
+            checkpoint.decided_at,
+            checkpoint.created_at,
+          );
+      }
+
+      for (const event of plan.auditEvents) {
+        this.db
+          .prepare(
+            `
+            insert into aletheia_audit_events (
+              id, matter_id, user_id, actor, action, workflow_version, model,
+              details, created_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `,
+          )
+          .run(
+            event.id,
+            event.matter_id,
+            event.user_id,
+            event.actor,
+            event.action,
+            event.workflow_version,
+            event.model,
+            json(event.details),
+            event.created_at,
+          );
+      }
+
+      this.touchMatter(ctx.userId, matterId);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+
+    return this.agentRunWithTrace(
+      this.db
+        .prepare("select * from aletheia_agent_runs where id = ?")
+        .get(plan.agentRun.id),
+    );
+  }
+
   async resumeAgentRun(
     ctx: AletheiaUserContext,
     matterId: string,
@@ -1937,23 +2207,30 @@ export class LocalAletheiaRepository implements AletheiaRepository {
     });
 
     let parsedText = "";
-    let parsedStatus: "parsed" | "failed" = "parsed";
+    let parserMetadata: Record<string, unknown> = {};
+    let extractionFailed = false;
     try {
-      parsedText = await extractMatterDocumentText({
+      const extracted = await extractMatterDocument({
         filename: input.filename,
         buffer: input.buffer,
       });
-      if (!parsedText.trim()) parsedStatus = "failed";
+      parsedText = extracted.text;
+      parserMetadata = extracted.metadata;
     } catch {
-      parsedStatus = "failed";
+      extractionFailed = true;
     }
+    const parsedStatus = parsedStatusForUpload({
+      filename: input.filename,
+      parsedText,
+      extractionFailed,
+    });
 
     const chunks =
       parsedStatus === "parsed" ? chunkMatterDocument(parsedText) : [];
     const summary =
       parsedStatus === "parsed"
         ? parsedText.replace(/\s+/g, " ").trim().slice(0, 400)
-        : "Document uploaded but text extraction failed.";
+        : parseFailureSummary(parsedStatus);
     const sensitiveMaterialFlags = sensitiveMaterialFlagsForText({
       filename: input.filename,
       text: parsedText,
@@ -1984,6 +2261,18 @@ export class LocalAletheiaRepository implements AletheiaRepository {
           storagePath: filePath,
           chunkCount: chunks.length,
           parser: "aletheia-local-v0",
+          parserMetadata,
+          sheetCount: parserMetadata.sheetCount ?? null,
+          sectionCount: parserMetadata.sectionCount ?? null,
+          pageCount: parserMetadata.pageCount ?? null,
+          parseStatus: parsedStatus,
+          parseFailureReason:
+            parsedStatus === "needs_ocr"
+              ? "pdf_without_text_layer"
+              : parsedStatus === "failed"
+                ? "text_extraction_failed"
+                : null,
+          needsOcr: parsedStatus === "needs_ocr",
           sensitiveMaterialFlags,
         }),
         timestamp,
@@ -2043,6 +2332,12 @@ export class LocalAletheiaRepository implements AletheiaRepository {
         documentId: id,
         filename: input.filename,
         parsedStatus,
+        parseFailureReason:
+          parsedStatus === "needs_ocr"
+            ? "pdf_without_text_layer"
+            : parsedStatus === "failed"
+              ? "text_extraction_failed"
+              : null,
         chunkCount: chunks.length,
       },
     });
@@ -2128,17 +2423,24 @@ export class LocalAletheiaRepository implements AletheiaRepository {
       const layers = Array.isArray(row.retrieval_layers)
         ? row.retrieval_layers.map((layer) => String(layer))
         : [];
+      const explanation = retrievalExplanation({
+        mode,
+        rank,
+        score,
+        layers,
+      });
+      const matterId = String(row.matter_id ?? "");
+      const chunkId = String(row.chunk_id ?? "");
       return {
         ...row,
+        id: `retrieval:${matterId}:${chunkId}:${mode}:${rank}`,
+        quote_preview: quotePreview(row.text),
+        method: mode,
+        ranking_basis: explanation.basis,
         retrieval_rank: rank,
         retrieval_score: score,
         retrieval_score_direction: retrievalScoreDirection(mode),
-        retrieval_explanation: retrievalExplanation({
-          mode,
-          rank,
-          score,
-          layers,
-        }),
+        retrieval_explanation: explanation,
       };
     });
   }
@@ -2694,6 +2996,151 @@ export class LocalAletheiaRepository implements AletheiaRepository {
       summary: row.summary ?? null,
       metadata: parseObject(row.metadata),
     };
+  }
+
+  private v1DocumentRecord(row: any) {
+    const metadata = parseObject(row.metadata);
+    return {
+      id: row.id,
+      matter_id: row.matter_id,
+      title: row.name,
+      filename: row.name,
+      document_type: row.document_type,
+      status: row.parsed_status,
+      uploaded_at: row.created_at,
+      hash:
+        typeof metadata.hash === "string"
+          ? metadata.hash
+          : typeof metadata.sha256 === "string"
+            ? metadata.sha256
+            : undefined,
+      mime_type:
+        typeof metadata.mimeType === "string" ? metadata.mimeType : undefined,
+      byte_size:
+        typeof metadata.sizeBytes === "number" ? metadata.sizeBytes : undefined,
+      page_count:
+        typeof metadata.pageCount === "number" ? metadata.pageCount : undefined,
+      sheet_count:
+        typeof metadata.sheetCount === "number" ? metadata.sheetCount : undefined,
+      section_count:
+        typeof metadata.sectionCount === "number"
+          ? metadata.sectionCount
+          : undefined,
+      parser: "deterministic",
+      parse_error:
+        typeof metadata.parseFailureReason === "string"
+          ? metadata.parseFailureReason
+          : undefined,
+      metadata: {
+        ...metadata,
+        local_document_id: row.document_id ?? null,
+        summary: row.summary ?? null,
+        source_storage_driver: "local",
+      },
+    };
+  }
+
+  private v1DocumentChunks(args: {
+    matterId: string;
+    userId: string;
+    documentIds: string[];
+    limit: number;
+  }) {
+    const placeholders = args.documentIds.map(() => "?").join(",");
+    return (
+      this.db
+        .prepare(
+          `
+          select * from aletheia_document_chunks
+          where matter_id = ?
+            and user_id = ?
+            and document_id in (${placeholders})
+          order by document_id asc, chunk_index asc
+          limit ?
+        `,
+        )
+        .all(args.matterId, args.userId, ...args.documentIds, args.limit) as any[]
+    ).map((row) => {
+      const metadata = parseObject(row.metadata);
+      return {
+        id: row.id,
+        matter_id: row.matter_id,
+        document_id: row.document_id,
+        text: row.text,
+        page: row.page ?? undefined,
+        section: row.section ?? undefined,
+        start_offset: row.quote_start,
+        end_offset: row.quote_end,
+        token_count:
+          typeof metadata.tokenCount === "number" ? metadata.tokenCount : undefined,
+        hash:
+          typeof metadata.hash === "string"
+            ? metadata.hash
+            : typeof metadata.sha256 === "string"
+              ? metadata.sha256
+              : undefined,
+        metadata: {
+          ...metadata,
+          chunk_index: row.chunk_index,
+          source_storage_driver: "local",
+        },
+      };
+    });
+  }
+
+  private v1SourceLinks(args: {
+    matterId: string;
+    userId: string;
+    documentIds: string[];
+  }) {
+    const placeholders = args.documentIds.map(() => "?").join(",");
+    return (
+      this.db
+        .prepare(
+          `
+          select
+            e.id as evidence_item_id,
+            e.document_id,
+            e.source_chunk_id,
+            e.claim_id,
+            e.page,
+            e.section,
+            e.quote,
+            e.quote_start,
+            e.quote_end,
+            e.relevance,
+            e.support_status,
+            e.confidence,
+            e.metadata,
+            e.created_at
+          from aletheia_evidence_items e
+          where e.matter_id = ?
+            and e.source_chunk_id is not null
+            and e.document_id in (${placeholders})
+          order by e.created_at asc
+        `,
+        )
+        .all(args.matterId, ...args.documentIds) as any[]
+    ).map((row) => ({
+      evidence_item_id: row.evidence_item_id,
+      matter_id: args.matterId,
+      document_id: row.document_id,
+      source_chunk_id: row.source_chunk_id,
+      claim_id: row.claim_id ?? null,
+      page: row.page ?? null,
+      section: row.section ?? null,
+      quote: row.quote,
+      start_offset: row.quote_start ?? null,
+      end_offset: row.quote_end ?? null,
+      relevance: row.relevance,
+      support_status: row.support_status,
+      confidence: row.confidence ?? null,
+      metadata: {
+        ...parseObject(row.metadata),
+        source_storage_driver: "local",
+      },
+      created_at: row.created_at,
+    }));
   }
 
   private workProduct(row: any) {
