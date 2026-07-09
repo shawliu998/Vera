@@ -285,6 +285,7 @@ function main() {
         packageScript(root, "backend/package.json", "check:aletheia:backup"),
         packageScript(root, "backend/package.json", "check:aletheia:restore"),
         packageScript(root, "backend/package.json", "check:aletheia:evidence"),
+        packageScript(root, "backend/package.json", "check:aletheia:audit-integrity"),
         packageScript(root, "backend/package.json", "test:aletheia:local"),
         packageScript(
           root,
@@ -302,6 +303,7 @@ function main() {
           "npm run check:aletheia:backup",
           "npm run check:aletheia:restore",
           "npm run check:aletheia:evidence",
+          "npm run check:aletheia:audit-integrity",
           "npm run test:aletheia:local",
           "npm run test:aletheia:retrieval-eval",
           "npm run test:aletheia:package",
@@ -313,6 +315,7 @@ function main() {
           "npm run check:aletheia:backup",
           "npm run check:aletheia:restore",
           "npm run check:aletheia:evidence",
+          "npm run check:aletheia:audit-integrity",
           "npm run test:aletheia:local",
           "npm run check:aletheia:operator",
           "npm run test:aletheia:retrieval-eval",

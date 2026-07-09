@@ -63,6 +63,7 @@ jobs:
           npm run check:aletheia:backup
           npm run check:aletheia:restore
           npm run check:aletheia:evidence
+          npm run check:aletheia:audit-integrity
           npm run check:aletheia:operator
           npm run test:aletheia:local
           npm run test:aletheia:retrieval-eval

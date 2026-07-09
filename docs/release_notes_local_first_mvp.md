@@ -55,6 +55,9 @@ and replayable audit records.
 - Release evidence manifest command that records the current git commit,
   validation commands, deployment/attribution docs, screenshot hashes, privacy
   defaults, and high-risk approval posture.
+- Local audit integrity command that verifies export work products have matching
+  audit events, local export files, data-directory bounded paths, and approved
+  checkpoint links for high-risk exports.
 - Completion audit command that verifies the repository still contains evidence
   for local-first storage, real document workflows, Matter Memory, Playbooks,
   Run Trace, approval gates, Tool Adapter/MCP, retrieval eval, private
@@ -73,6 +76,7 @@ cd backend
 npm run test:aletheia:local
 npm run test:aletheia:retrieval-eval
 npm run check:aletheia:evidence
+npm run check:aletheia:audit-integrity
 npm run test:aletheia:completion
 npm run seed:aletheia:ui-smoke
 npm run dev:aletheia:local

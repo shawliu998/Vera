@@ -170,6 +170,18 @@ This emits a reviewable JSON manifest for the current git commit, validation
 commands, demo screenshots with hashes, deployment/attribution documents,
 privacy defaults, and approval posture.
 
+Run the audit integrity check after a real local matter workflow or before
+handoff:
+
+```bash
+cd backend
+ALETHEIA_AUDIT_SOURCE_DIR=.data/aletheia npm run check:aletheia:audit-integrity
+```
+
+This validates the local audit chain without mutating data: export work products
+must have matching audit events, export files must exist under the local data
+directory, and high-risk exports must resolve to approved human checkpoints.
+
 The same validation posture is enforced on `main` and pull requests through
 `.github/workflows/aletheia-local-ci.yml`. The CI workflow installs backend and
 frontend dependencies, builds both apps, runs the local regression and retrieval

@@ -12,6 +12,9 @@ not a release process yet; it defines what must be true before packaging.
   copying, overwriting, or deleting local data.
 - `npm run check:aletheia:evidence` produces the release evidence manifest for
   the current git commit, validation commands, screenshots, and deployment docs.
+- `npm run check:aletheia:audit-integrity` verifies that local export work
+  products have audit events, export files, local paths, and approved checkpoint
+  links for high-risk exports.
 - `npm run test:aletheia:local` passes.
 - `npm run seed:aletheia:ui-smoke` creates a screenshot-ready matter.
 - `npm run dev:aletheia:local` starts or reuses local frontend/backend servers.
@@ -84,6 +87,7 @@ Restore should verify:
 - documents can be searched;
 - evidence items retain source chunk IDs;
 - audit events still reference export paths;
+- high-risk export audit events retain approved checkpoint IDs;
 - run traces still render.
 
 ## Preflight
@@ -95,6 +99,7 @@ npm run check:aletheia:doctor
 npm run check:aletheia:backup
 ALETHEIA_RESTORE_SOURCE_DIR=.data/aletheia npm run check:aletheia:restore
 ALETHEIA_RELEASE_EVIDENCE_OUT=../release-evidence.json npm run check:aletheia:evidence
+ALETHEIA_AUDIT_SOURCE_DIR=.data/aletheia npm run check:aletheia:audit-integrity
 npm run test:aletheia:local
 npm run seed:aletheia:ui-smoke
 npm run package:aletheia:local

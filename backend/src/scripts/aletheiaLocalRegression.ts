@@ -916,6 +916,17 @@ async function main() {
     typeof exportEvent?.details?.exportPath === "string",
     "Audit event should include export path",
   );
+  assert(
+    exportEvent?.details?.approvalCheckpointId === checkpoint.id,
+    "Audit pack export event should retain the approved checkpoint ID",
+  );
+  const feedbackExportEvent = detail.auditEvents.find(
+    (event: any) => event.action === "feedback_dataset_exported",
+  );
+  assert(
+    feedbackExportEvent?.details?.approvalCheckpointId === feedbackCheckpoint.id,
+    "Feedback dataset export event should retain the approved checkpoint ID",
+  );
   const registrySnapshotEvent = detail.auditEvents.find(
     (event: any) => event.action === "registry_snapshot_saved",
   );

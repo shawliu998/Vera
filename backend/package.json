@@ -16,6 +16,7 @@
     "check:aletheia:backup": "ALETHEIA_STORAGE_DRIVER=local ALETHEIA_AUTH_MODE=single_user tsx src/scripts/aletheiaBackupManifest.ts",
     "check:aletheia:restore": "ALETHEIA_STORAGE_DRIVER=local ALETHEIA_AUTH_MODE=single_user tsx src/scripts/aletheiaRestorePreflight.ts",
     "check:aletheia:evidence": "tsx src/scripts/aletheiaReleaseEvidence.ts",
+    "check:aletheia:audit-integrity": "ALETHEIA_STORAGE_DRIVER=local ALETHEIA_AUTH_MODE=single_user tsx src/scripts/aletheiaAuditIntegrity.ts",
     "test:aletheia:completion": "tsx src/scripts/aletheiaCompletionAudit.ts",
     "test:aletheia:local": "tsx src/scripts/aletheiaLocalRegression.ts",
     "test:aletheia:retrieval-eval": "tsx src/scripts/aletheiaRetrievalEval.ts"

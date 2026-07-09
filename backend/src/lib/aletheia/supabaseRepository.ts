@@ -252,6 +252,7 @@ export class SupabaseAletheiaRepository implements AletheiaRepository {
         kind: input.kind,
         title: input.title,
         status: input.status,
+        approvalCheckpointId: input.approvalCheckpointId ?? null,
       },
     });
     await this.touchMatter(matterId, ctx.userId);

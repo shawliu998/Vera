@@ -841,6 +841,7 @@ export class LocalAletheiaRepository implements AletheiaRepository {
         kind: input.kind,
         title: input.title,
         status: input.status,
+        approvalCheckpointId: input.approvalCheckpointId ?? null,
         exportPath,
       },
     });

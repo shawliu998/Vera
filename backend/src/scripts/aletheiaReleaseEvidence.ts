@@ -23,6 +23,7 @@ const VALIDATION_COMMANDS = [
   "cd backend && npm run check:aletheia:backup",
   "cd backend && npm run check:aletheia:restore",
   "cd backend && npm run check:aletheia:evidence",
+  "cd backend && npm run check:aletheia:audit-integrity",
   "cd backend && npm run check:aletheia:operator",
   "cd backend && npm run test:aletheia:local",
   "cd backend && npm run test:aletheia:retrieval-eval",
