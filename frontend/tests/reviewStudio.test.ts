@@ -39,6 +39,57 @@ test("deriveReviewStudioModel links evidence to issues, risks, red flags, and me
   assert.ok(missingLink.riskIds.length > 0);
 });
 
+test("deriveReviewStudioModel exposes unresolved source-linked review comments", () => {
+  const model = deriveReviewStudioModel(
+    {
+      ...legalWorkspace,
+      reviews: [
+        ...legalWorkspace.reviews,
+        {
+          id: "review-memo-analysis",
+          matterId: legalWorkspace.matter.id,
+          targetType: "memo_section",
+          targetId: "memo-analysis",
+          tag: "unsupported_claim",
+          comment: "Analysis section overstates damages without tying the caveat to loss proof.",
+          reviewer: "Senior Reviewer",
+          createdAt: "2026-07-08T09:11:00.000Z",
+        },
+      ],
+    },
+    {
+      ...defaultReviewStudioState,
+      finalExportApproved: true,
+    },
+  );
+
+  const claimComment = model.unresolvedComments.find(
+    (comment) => comment.id === "review-1",
+  );
+  assert.ok(claimComment);
+  assert.equal(claimComment.severity, "medium");
+  assert.deepEqual(claimComment.sourceEvidenceIds, ["ev-5", "ev-7"]);
+
+  const evidenceComment = model.unresolvedComments.find(
+    (comment) => comment.id === "review-2",
+  );
+  assert.ok(evidenceComment);
+  assert.equal(evidenceComment.severity, "high");
+  assert.deepEqual(evidenceComment.sourceEvidenceIds, ["ev-7"]);
+
+  const analysisLink = model.memoLinks.find(
+    (link) => link.sectionId === "memo-analysis",
+  );
+  assert.ok(analysisLink);
+  assert.deepEqual(analysisLink.unresolvedReviewIds, ["review-memo-analysis"]);
+  assert.equal(model.gate.status, "blocked");
+  assert.ok(
+    model.gate.reasons.some((reason) =>
+      reason.includes("Unresolved review on memo_section memo-analysis"),
+    ),
+  );
+});
+
 test("human review actions update risk, gate, review log, and eval records", () => {
   const model = deriveReviewStudioModel(legalWorkspace, {
     ...defaultReviewStudioState,

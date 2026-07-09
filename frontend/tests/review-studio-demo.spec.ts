@@ -16,14 +16,26 @@ test("demo Review Studio completes approval path and records blockers", async ({
   await expect(page.getByTestId("review-studio-final-export-gate")).toHaveText(
     "blocked",
   );
+  await expect(
+    page.getByText("Final export requires explicit expert approval."),
+  ).toBeVisible();
 
   await page.getByTestId("approve-review-studio-final-export").click();
   await expect(page.getByTestId("review-studio-final-export-gate")).toHaveText(
-    "ready",
+    "blocked",
+  );
+  await expect(
+    page.getByText("Final export requires explicit expert approval."),
+  ).not.toBeVisible();
+  await expect(
+    page.getByText("Unresolved review on", { exact: false }).first(),
+  ).toBeVisible();
+
+  await page.goto("/aletheia/matters/matter-demo-legal-001");
+  await expect(page.getByTestId("review-studio-final-export-gate")).toHaveText(
+    "blocked",
   );
 
-  await page.reload();
-  await page.getByText("Final Export Gate", { exact: true }).waitFor();
   await page.getByTestId("fact-override-ev-1").fill(
     "Reviewer narrowed this fact to the delivery date only.",
   );

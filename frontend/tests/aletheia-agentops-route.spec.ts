@@ -139,6 +139,18 @@ test("matter-scoped AgentOps route renders adapter-backed artifacts", async ({
   await expect(page.getByTestId("adapter-backed-export-package")).toContainText(
     "eval cases",
   );
+  await expect(page.getByTestId("adapter-backed-export-package")).toContainText(
+    "Source documents",
+  );
+  await expect(
+    page.getByTestId("agentops-export-authorization-status"),
+  ).toContainText("Export authorization");
+  await expect(
+    page.getByTestId("agentops-export-authorization-status"),
+  ).toContainText("final export remains");
+  await expect(page.getByTestId("agentops-source-index-status")).toContainText(
+    "Local-only V1 source index included",
+  );
   await page.getByText("Preview handoff payload").click();
   await expect(page.getByTestId("agentops-export-preview")).toContainText(
     "typed_handoff_provenance",
@@ -148,6 +160,15 @@ test("matter-scoped AgentOps route renders adapter-backed artifacts", async ({
   );
   await expect(page.getByTestId("agentops-export-preview")).toContainText(
     "gateResultIds",
+  );
+  await expect(page.getByTestId("agentops-export-preview")).toContainText(
+    "source_index_documents",
+  );
+  await expect(page.getByTestId("agentops-export-preview")).toContainText(
+    "source_index_manifest",
+  );
+  await expect(page.getByTestId("agentops-export-preview")).toContainText(
+    "export_authorization",
   );
   const downloadPromise = page.waitForEvent("download");
   await page.getByTestId("download-agentops-export-package").click();
@@ -162,10 +183,25 @@ test("matter-scoped AgentOps route renders adapter-backed artifacts", async ({
   const downloadedPackage = JSON.parse(readFileSync(downloadPath, "utf8")) as {
     schema_version?: string;
     audit_pack?: {
+      source_index_manifest?: {
+        local_only?: boolean;
+        document_count?: number;
+        chunk_count?: number;
+        source_link_count?: number;
+        limitations?: string[];
+      };
+      export_authorization?: {
+        final_export_allowed?: boolean;
+        status?: string;
+      };
       typed_handoff_provenance?: unknown[];
     };
     manifest?: {
       handoff_provenance_items?: number;
+      source_index_documents?: number;
+      source_index_chunks?: number;
+      source_index_source_links?: number;
+      final_export_allowed?: boolean;
     };
   };
   expect(downloadedPackage.schema_version).toBe("aletheia-export-package-v1");
@@ -175,6 +211,32 @@ test("matter-scoped AgentOps route renders adapter-backed artifacts", async ({
   expect(downloadedPackage.manifest?.handoff_provenance_items).toBe(
     downloadedPackage.audit_pack?.typed_handoff_provenance?.length,
   );
+  expect(downloadedPackage.audit_pack?.source_index_manifest?.local_only).toBe(
+    true,
+  );
+  expect(downloadedPackage.manifest?.source_index_documents).toBe(
+    downloadedPackage.audit_pack?.source_index_manifest?.document_count,
+  );
+  expect(downloadedPackage.manifest?.source_index_chunks).toBe(
+    downloadedPackage.audit_pack?.source_index_manifest?.chunk_count,
+  );
+  expect(downloadedPackage.manifest?.source_index_source_links).toBe(
+    downloadedPackage.audit_pack?.source_index_manifest?.source_link_count,
+  );
+  expect(downloadedPackage.manifest?.final_export_allowed).toBe(
+    downloadedPackage.audit_pack?.export_authorization?.final_export_allowed,
+  );
+  expect(downloadedPackage.audit_pack?.export_authorization?.status).toMatch(
+    /authorized|blocked|warning/,
+  );
+  expect(
+    downloadedPackage.audit_pack?.source_index_manifest?.limitations?.some(
+      (item) =>
+        item.includes(
+          "Supabase V1 document, chunk, and source-link listing remains unavailable",
+        ),
+    ),
+  ).toBe(true);
   await expect(page.getByTestId("agentops-export-status")).toContainText(
     "Export package JSON prepared",
   );
