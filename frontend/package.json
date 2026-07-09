@@ -7,6 +7,8 @@
         "build": "next build",
         "start": "next start",
         "lint": "eslint",
+        "test:aletheia:ui": "playwright test --config=playwright.config.ts",
+        "test:aletheia:ui:install": "playwright install chromium",
         "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
         "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
         "upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
@@ -55,6 +57,7 @@
         "tiptap-markdown": "^0.9.0"
     },
     "devDependencies": {
+        "@playwright/test": "^1.61.1",
         "@tailwindcss/postcss": "^4",
         "@types/marked": "^5.0.2",
         "@types/node": "^20",

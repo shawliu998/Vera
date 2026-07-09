@@ -17,3 +17,10 @@ next-env.d.ts
 .DS_Store
 .vercel
 coverage
+.data
+backend/.data
+frontend/.next-ui-smoke
+test-results
+frontend/test-results
+playwright-report
+frontend/playwright-report
