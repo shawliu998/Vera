@@ -62,6 +62,18 @@ Set `ALETHEIA_DEMO_SEED_ENABLED=false` in `.env` before starting Docker for a
 blank workspace. See `docs/install_local.md` for data reset, private-token
 mode, and validation details.
 
+## Desktop App Packaging
+
+For a local macOS desktop build that does not require Docker:
+
+```bash
+./scripts/package-desktop-mac.sh
+```
+
+The packaged app starts the bundled backend and frontend locally, stores data in
+the app user-data directory, and opens `/aletheia`. See `docs/desktop_app.md`
+for ports, scope, and packaging notes.
+
 ## V1 Private Pilot Snapshot
 
 As of 2026-07-09, the V1 local/private-pilot candidate is completed for

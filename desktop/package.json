@@ -1,0 +1,81 @@
+{
+  "name": "aletheia-desktop",
+  "version": "0.1.5",
+  "private": true,
+  "description": "Aletheia local/private-pilot desktop app.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist:mac": "electron-builder --mac",
+    "pack:mac": "electron-builder --mac --dir"
+  },
+  "devDependencies": {
+    "electron": "^39.2.7",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "ai.aletheia.local",
+    "productName": "Aletheia",
+    "asar": true,
+    "files": [
+      "main.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../backend/dist",
+        "to": "aletheia/backend/dist"
+      },
+      {
+        "from": "../backend/node_modules",
+        "to": "aletheia/backend/node_modules"
+      },
+      {
+        "from": "../backend/package.json",
+        "to": "aletheia/backend/package.json"
+      },
+      {
+        "from": "../backend/schema.sql",
+        "to": "aletheia/backend/schema.sql"
+      },
+      {
+        "from": "../backend/migrations",
+        "to": "aletheia/backend/migrations"
+      },
+      {
+        "from": "../frontend/.next",
+        "to": "aletheia/frontend/.next"
+      },
+      {
+        "from": "../frontend/node_modules",
+        "to": "aletheia/frontend/node_modules"
+      },
+      {
+        "from": "../frontend/package.json",
+        "to": "aletheia/frontend/package.json"
+      },
+      {
+        "from": "../frontend/public",
+        "to": "aletheia/frontend/public"
+      },
+      {
+        "from": "../frontend/next.config.ts",
+        "to": "aletheia/frontend/next.config.ts"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "identity": null,
+      "artifactName": "Aletheia-${version}-${arch}.${ext}"
+    },
+    "dmg": {
+      "artifactName": "Aletheia-${version}-${arch}.${ext}"
+    }
+  }
+}
