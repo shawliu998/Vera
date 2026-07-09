@@ -8,6 +8,8 @@ not a release process yet; it defines what must be true before packaging.
 - `npm run check:aletheia:doctor` passes in the target local/private
   environment.
 - `npm run check:aletheia:backup` produces the backup scope manifest.
+- `npm run check:aletheia:restore` validates the restore source without
+  copying, overwriting, or deleting local data.
 - `npm run test:aletheia:local` passes.
 - `npm run seed:aletheia:ui-smoke` creates a screenshot-ready matter.
 - `npm run dev:aletheia:local` starts or reuses local frontend/backend servers.
@@ -72,6 +74,10 @@ Back up together:
 
 Restore should verify:
 
+- the restore source stays inside the expected local data boundary;
+- backup content does not contain symlinks that escape the workspace;
+- SQLite `quick_check` passes;
+- core Aletheia tables exist;
 - matters load;
 - documents can be searched;
 - evidence items retain source chunk IDs;
@@ -85,6 +91,7 @@ cd backend
 npm run build
 npm run check:aletheia:doctor
 npm run check:aletheia:backup
+ALETHEIA_RESTORE_SOURCE_DIR=.data/aletheia npm run check:aletheia:restore
 npm run test:aletheia:local
 npm run seed:aletheia:ui-smoke
 npm run package:aletheia:local

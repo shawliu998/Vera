@@ -61,6 +61,7 @@ jobs:
         run: |
           npm run check:aletheia:doctor
           npm run check:aletheia:backup
+          npm run check:aletheia:restore
           npm run check:aletheia:operator
           npm run test:aletheia:local
           npm run test:aletheia:retrieval-eval

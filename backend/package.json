@@ -14,6 +14,7 @@
     "check:aletheia:operator": "tsx src/scripts/aletheiaOperatorHealth.ts",
     "check:aletheia:doctor": "ALETHEIA_STORAGE_DRIVER=local ALETHEIA_AUTH_MODE=single_user tsx src/scripts/aletheiaLocalDoctor.ts",
     "check:aletheia:backup": "ALETHEIA_STORAGE_DRIVER=local ALETHEIA_AUTH_MODE=single_user tsx src/scripts/aletheiaBackupManifest.ts",
+    "check:aletheia:restore": "ALETHEIA_STORAGE_DRIVER=local ALETHEIA_AUTH_MODE=single_user tsx src/scripts/aletheiaRestorePreflight.ts",
     "test:aletheia:completion": "tsx src/scripts/aletheiaCompletionAudit.ts",
     "test:aletheia:local": "tsx src/scripts/aletheiaLocalRegression.ts",
     "test:aletheia:retrieval-eval": "tsx src/scripts/aletheiaRetrievalEval.ts"

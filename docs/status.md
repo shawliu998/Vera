@@ -36,6 +36,12 @@ The local backup manifest entrypoint is:
 cd backend && npm run check:aletheia:backup
 ```
 
+The restore preflight entrypoint is:
+
+```bash
+cd backend && npm run check:aletheia:restore
+```
+
 Main branch pushes and pull requests are also covered by
 `.github/workflows/aletheia-local-ci.yml`, which runs the backend local-first
 checks, package preflight, frontend lint/build, and Playwright UI smoke.
@@ -82,6 +88,7 @@ Run before demos or packaging:
 cd backend && npm run build
 cd backend && npm run check:aletheia:doctor
 cd backend && npm run check:aletheia:backup
+cd backend && npm run check:aletheia:restore
 cd backend && npm run check:aletheia:operator
 cd backend && npm run test:aletheia:local
 cd backend && npm run test:aletheia:retrieval-eval
@@ -98,6 +105,9 @@ Current known result:
 - local deployment doctor passes for local/private runtime readiness.
 - local backup manifest check passes and reports the backup scope for
   `aletheia.db`, `documents/`, `exports/`, and `index/`.
+- restore preflight passes and validates required backup directories, path
+  boundaries, symlink-free backup content, SQLite integrity, and core Aletheia
+  schema when a local database is present.
 - fast operator health check passes, with a warning when the worktree contains
   uncommitted local changes that still need review/splitting.
 - GitHub Actions local CI is configured for `main` and pull requests.

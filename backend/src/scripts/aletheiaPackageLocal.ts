@@ -69,7 +69,7 @@ or model credentials.
 ## Required Preflight
 
 \`\`\`bash
-cd backend && npm run build && npm run check:aletheia:doctor && npm run check:aletheia:backup && npm run test:aletheia:local
+cd backend && npm run build && npm run check:aletheia:doctor && npm run check:aletheia:backup && npm run check:aletheia:restore && npm run test:aletheia:local
 cd frontend && npm run build
 \`\`\`
 
@@ -252,6 +252,7 @@ function main() {
       "cd backend && npm run build",
       "cd backend && npm run check:aletheia:doctor",
       "cd backend && npm run check:aletheia:backup",
+      "cd backend && npm run check:aletheia:restore",
       "cd backend && npm run test:aletheia:local",
       "cd backend && npm run test:aletheia:retrieval-eval",
       "cd frontend && npm run build",

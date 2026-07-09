@@ -147,6 +147,18 @@ This emits a machine-readable backup scope for `aletheia.db`, `documents/`,
 `exports/`, and `index/`, including directory sizes and a SQLite sha256 when a
 local database exists.
 
+Run the restore preflight before pointing a new local/private deployment at a
+restored data directory:
+
+```bash
+cd backend
+ALETHEIA_RESTORE_SOURCE_DIR=.data/aletheia npm run check:aletheia:restore
+```
+
+This validates the restore source without copying or deleting data. It checks
+the local data boundary, required backup directories, symlink-free content,
+SQLite `quick_check`, core Aletheia tables, and an optional backup manifest.
+
 The same validation posture is enforced on `main` and pull requests through
 `.github/workflows/aletheia-local-ci.yml`. The CI workflow installs backend and
 frontend dependencies, builds both apps, runs the local regression and retrieval

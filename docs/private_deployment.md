@@ -49,6 +49,8 @@ Operational notes:
 - Back up `.data/aletheia/aletheia.db`, `documents/`, and `exports/` together.
 - Run `npm run check:aletheia:backup` to produce a machine-readable backup
   manifest before handoff or migration.
+- Run `ALETHEIA_RESTORE_SOURCE_DIR=.data/aletheia npm run check:aletheia:restore`
+  before pointing a new deployment at a restored data directory.
 - Treat `exports/` as client-sensitive output.
 - Do not enable external web/model tools unless the deployment owner explicitly
   configures them.
@@ -111,6 +113,7 @@ Before upgrading:
 - run `npm run build`;
 - run `npm run check:aletheia:doctor`;
 - run `npm run check:aletheia:backup`;
+- run `ALETHEIA_RESTORE_SOURCE_DIR=.data/aletheia npm run check:aletheia:restore`;
 - run `npm run test:aletheia:local`;
 - run `npm run test:aletheia:package` after frontend build output exists;
 - start the backend and inspect `/health`;
