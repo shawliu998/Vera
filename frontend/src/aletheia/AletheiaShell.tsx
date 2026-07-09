@@ -9,6 +9,7 @@ import {
     Library,
     Menu,
     Scale,
+    Workflow,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AletheiaIcon } from "@/components/chat/aletheia-icon";
@@ -18,6 +19,7 @@ const navItems = [
     { href: "/aletheia/templates", label: "Templates", icon: Library },
     { href: "/aletheia/evidence", label: "Evidence", icon: FileSearch },
     { href: "/aletheia/reviews", label: "Reviews", icon: ClipboardCheck },
+    { href: "/aletheia/agentops", label: "Command Center", icon: Workflow },
     { href: "/aletheia/audit", label: "Audit", icon: History },
 ];
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Download, FileSearch } from "lucide-react";
+import { ArrowRight, Download, FileSearch, ShieldAlert } from "lucide-react";
 import {
   createAletheiaWorkProduct,
   getAletheiaMatter,
@@ -40,6 +40,34 @@ function riskClass(risk?: string | null) {
   if (risk === "high") return "border-red-100 bg-red-50 text-red-700";
   if (risk === "medium") return "border-amber-100 bg-amber-50 text-amber-700";
   return "border-gray-200 bg-gray-50 text-gray-600";
+}
+
+function stringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function evidenceNormalizedFact(item: AletheiaEvidenceRecord) {
+  return typeof item.metadata.normalizedFact === "string" &&
+    item.metadata.normalizedFact.trim()
+    ? item.metadata.normalizedFact.trim()
+    : item.quote.replace(/\s+/g, " ").trim().slice(0, 220);
+}
+
+function evidenceSensitiveFlags(item: AletheiaEvidenceRecord) {
+  return stringArray(item.metadata.sensitiveMaterialFlags);
+}
+
+function evidenceQuoteRange(item: AletheiaEvidenceRecord) {
+  return typeof item.quote_start === "number" &&
+    typeof item.quote_end === "number"
+    ? `${item.quote_start}-${item.quote_end}`
+    : null;
+}
+
+function evidenceAnchorId(evidenceId: string) {
+  return `evidence-${evidenceId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 }
 
 function detailToEvidenceRows(detail: AletheiaMatterDetail): EvidenceRow[] {
@@ -95,8 +123,13 @@ export function AletheiaEvidenceRegistry() {
       const searchable = [
         item.matterTitle,
         item.document_name,
+        item.id,
+        evidenceAnchorId(item.id),
         item.claim_id,
         item.quote,
+        evidenceNormalizedFact(item),
+        item.source_chunk_id,
+        evidenceSensitiveFlags(item).join(" "),
         item.support_status,
       ]
         .filter(Boolean)
@@ -260,7 +293,7 @@ export function AletheiaEvidenceRegistry() {
           data-testid="evidence-filter-query"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Filter by matter, source, claim, or quote"
+          placeholder="Filter by matter, source, claim, or quote; evidence ID supported"
           className="h-9 min-w-0 rounded-md border border-gray-200 px-3 text-sm text-gray-800 outline-none placeholder:text-gray-400 focus:border-gray-400"
         />
         <select
@@ -277,7 +310,7 @@ export function AletheiaEvidenceRegistry() {
       </div>
 
       <div className="min-w-0 overflow-x-auto">
-        <div className="min-w-[980px]" data-testid="evidence-registry-results">
+        <div className="min-w-[1120px]" data-testid="evidence-registry-results">
           <div className="flex h-8 items-center border-b border-gray-200 pr-8 text-xs font-medium text-gray-500">
             <div className="w-8 shrink-0" />
             <div className="w-64 shrink-0 pl-2 pr-4">Source</div>
@@ -291,6 +324,8 @@ export function AletheiaEvidenceRegistry() {
             ? filteredEvidence.map((item) => (
                 <Link
                   key={item.id}
+                  id={evidenceAnchorId(item.id)}
+                  data-testid="evidence-registry-row"
                   href={item.href}
                   className="group flex min-h-16 items-center border-b border-gray-50 pr-8 transition-colors hover:bg-gray-50"
                 >
@@ -314,6 +349,54 @@ export function AletheiaEvidenceRegistry() {
                     <p className="mt-0.5 line-clamp-2 text-xs leading-5 text-gray-500">
                       {item.quote}
                     </p>
+                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-gray-600">
+                      <span className="font-medium text-gray-700">
+                        Normalized fact:
+                      </span>{" "}
+                      {evidenceNormalizedFact(item)}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <Badge
+                        variant="outline"
+                        className="rounded-md border-blue-100 bg-blue-50 px-1.5 py-0 text-[11px] text-blue-700"
+                      >
+                        Evidence {item.id}
+                      </Badge>
+                      {item.source_chunk_id && (
+                        <Badge
+                          variant="outline"
+                          className="rounded-md border-gray-200 bg-white px-1.5 py-0 text-[11px] text-gray-600"
+                        >
+                          Source chunk {item.source_chunk_id.slice(0, 8)}
+                        </Badge>
+                      )}
+                      {evidenceQuoteRange(item) && (
+                        <Badge
+                          variant="outline"
+                          className="rounded-md border-gray-200 bg-white px-1.5 py-0 text-[11px] text-gray-600"
+                        >
+                          chars {evidenceQuoteRange(item)}
+                        </Badge>
+                      )}
+                      {item.confidence && (
+                        <Badge
+                          variant="outline"
+                          className="rounded-md border-gray-200 bg-white px-1.5 py-0 text-[11px] text-gray-600"
+                        >
+                          confidence {item.confidence}
+                        </Badge>
+                      )}
+                      {evidenceSensitiveFlags(item).map((flag) => (
+                        <Badge
+                          key={flag}
+                          variant="outline"
+                          className="rounded-md border-red-100 bg-red-50 px-1.5 py-0 text-[11px] text-red-700"
+                        >
+                          <ShieldAlert className="h-3 w-3" />
+                          {titleize(flag)}
+                        </Badge>
+                      ))}
+                    </div>
                   </div>
                   <div className="w-32 shrink-0">
                     <Badge

@@ -1,6 +1,6 @@
 "use client";
 
-import { FileCheck2 } from "lucide-react";
+import { FileCheck2, ShieldAlert } from "lucide-react";
 import type {
   AletheiaHumanCheckpointRecord,
   AletheiaMatterDetail,
@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   type IssueMapIssue,
+  type EvidenceMatrixRow,
   titleize,
   traceStatusClass,
 } from "./remoteMatterTransforms";
@@ -42,6 +43,7 @@ interface RemoteMatterSidebarProps {
   canProposePlaybookImprovement: boolean;
   latestIssueMap: AletheiaWorkProductRecord | null;
   latestIssueMapIssues: IssueMapIssue[];
+  evidenceRows: EvidenceMatrixRow[];
   issueReviewsByClaim: Record<string, AletheiaReviewRecord[]>;
   reviewingIssueId: string | null;
   latestDraftMemo: AletheiaWorkProductRecord | null;
@@ -93,6 +95,7 @@ export function RemoteMatterSidebar({
   canProposePlaybookImprovement,
   latestIssueMap,
   latestIssueMapIssues,
+  evidenceRows,
   issueReviewsByClaim,
   reviewingIssueId,
   latestDraftMemo,
@@ -582,34 +585,82 @@ export function RemoteMatterSidebar({
       <section className="rounded-lg border border-[#e5e7eb] bg-white p-4">
         <h2 className="font-semibold">Evidence Matrix</h2>
         <div className="mt-3 space-y-3">
-          {detail.evidence.length === 0 ? (
+          {evidenceRows.length === 0 ? (
             <p className="text-sm text-[#6b7280]">
               No source-linked evidence mapped yet.
             </p>
           ) : (
-            detail.evidence.map((item) => (
+            evidenceRows.map((item) => (
               <div
                 key={item.id}
                 className="rounded-md border border-[#e5e7eb] p-3"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm font-medium">
-                    {item.claim_id ?? "Unassigned claim"}
+                    {item.supportsClaim}
                   </p>
                   <Badge
                     variant="outline"
                     className="rounded-md border-[#b7c9c2] text-[#315a51]"
                   >
-                    {titleize(item.support_status)}
+                    {titleize(item.supportStatus)}
                   </Badge>
                 </div>
                 <p className="mt-2 text-xs font-medium text-[#6b7280]">
-                  {item.document_name ?? "Source document"}
+                  {item.documentName}
                   {item.page ? ` · p.${item.page}` : ""}
+                  {item.section ? ` · ${item.section}` : ""}
                 </p>
-                <p className="mt-2 line-clamp-4 text-sm leading-5 text-[#374151]">
+                <p className="mt-2 text-sm leading-5 text-[#374151]">
+                  {item.normalizedFact}
+                </p>
+                <p className="mt-2 line-clamp-3 border-l-2 border-[#dbe7e2] pl-3 text-xs leading-5 text-[#6b7280]">
                   {item.quote}
                 </p>
+                <div className="mt-3 flex flex-wrap gap-2 text-xs text-[#6b7280]">
+                  <Badge
+                    variant="outline"
+                    className={`rounded-md ${traceStatusClass(item.reviewStatus)}`}
+                  >
+                    {titleize(item.reviewStatus)}
+                  </Badge>
+                  <Badge
+                    variant="outline"
+                    className="rounded-md border-[#e5e7eb] text-[#374151]"
+                  >
+                    confidence: {item.confidence}
+                  </Badge>
+                  {item.sourceChunkId && (
+                    <Badge
+                      variant="outline"
+                      className="rounded-md border-[#e5e7eb] text-[#374151]"
+                    >
+                      chunk {item.sourceChunkId.slice(0, 8)}
+                    </Badge>
+                  )}
+                  {item.quoteRange && (
+                    <Badge
+                      variant="outline"
+                      className="rounded-md border-[#e5e7eb] text-[#374151]"
+                    >
+                      chars {item.quoteRange}
+                    </Badge>
+                  )}
+                </div>
+                {item.sensitiveMaterialFlags.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {item.sensitiveMaterialFlags.map((flag) => (
+                      <Badge
+                        key={flag}
+                        variant="outline"
+                        className="rounded-md border-red-200 bg-red-50 text-red-700"
+                      >
+                        <ShieldAlert className="h-3 w-3" />
+                        {titleize(flag)}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
               </div>
             ))
           )}

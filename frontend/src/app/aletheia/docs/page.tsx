@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowLeft, BookOpen, FileText, Workflow } from "lucide-react";
+import { ArrowLeft, BookOpen, FileText, GraduationCap, Workflow } from "lucide-react";
 
 const docs = [
     {
@@ -22,6 +22,13 @@ const docs = [
         description: "A 90-second walkthrough for the Legal Matter Review demo.",
         icon: FileText,
     },
+    {
+        title: "Professional Skills Loop",
+        file: "docs/agentops/professional-skills-loop.md",
+        description:
+            "How expert feedback becomes eval cases, candidate skills, and human-approved playbook updates.",
+        icon: GraduationCap,
+    },
 ];
 
 export default function AletheiaDocsPage() {
@@ -38,7 +45,7 @@ export default function AletheiaDocsPage() {
                         These files live in the repository under `docs/` and explain the product thesis,
                         architecture, workflow templates, attribution, and demo script.
                     </p>
-                    <div className="mt-6 grid gap-4 md:grid-cols-3">
+                    <div className="mt-6 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                         {docs.map((doc) => (
                             <div key={doc.title} className="rounded-lg border border-[#e5e7eb] p-4">
                                 <doc.icon className="h-5 w-5 text-[#111827]" />
