@@ -76,9 +76,19 @@ jobs:
           npm run check:aletheia:evidence
           npm run check:aletheia:audit-integrity
           npm run check:aletheia:operator
+          npm run check:aletheia:legal-source-control
+          npx tsx src/scripts/legalSourceAdapterAudit.ts
+          npm run test:vera:legal-research-broker
           npm run test:aletheia:local
+          npm run test:desktop-backup
           npm run test:aletheia:restore-drill
           npm run test:aletheia:retrieval-eval
+          npm run test:aletheia:litigation-domain
+          npm run test:aletheia:legal-authority-versions
+          npm run test:aletheia:litigation-audit-package
+          npm run test:aletheia:court-calendar-calculation
+          npm run test:aletheia:deadline-rules
+          npm run test:aletheia:litigation-export-integrity
           npm run test:aletheia:package
           npm run test:aletheia:completion
 
@@ -89,3 +99,38 @@ jobs:
       - name: Run Aletheia UI smoke
         working-directory: frontend
         run: npm run test:aletheia:ui
+
+  desktop-package-validation:
+    name: Vera macOS package validation
+    runs-on: macos-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+            desktop/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Audit desktop legal-source configuration
+        run: node desktop/scripts/productRenameAudit.js
+
+      - name: Build and validate local-only Vera package
+        env:
+          VERA_RELEASE_SIGNING: "false"
+        run: ./scripts/package-desktop-mac.sh

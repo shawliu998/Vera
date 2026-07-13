@@ -120,7 +120,7 @@ export default function WordAddinPage() {
       const selectedTextHash = await sha256(selected);
       const requestAudit = await appendAletheiaAuditEvent(matterId, {
         actor: "human",
-        action: "word_addin_handoff_requested",
+        action: "human_note.word_addin_handoff_requested",
         workflowVersion: "hermes-word-addin-officejs-v1",
         details: {
           documentId: selectedDocument.id,
@@ -172,8 +172,8 @@ export default function WordAddinPage() {
       const validation = validateAnduParityContracts({ wordAddinHandoffs: [handoff] });
       if (validation.some((item) => item.status === "failed")) throw new Error("Word handoff provenance validation failed before persistence.");
       await appendAletheiaAuditEvent(matterId, {
-        actor: "system",
-        action: "word_addin_handoff_persisted",
+        actor: "human",
+        action: "human_note.word_addin_handoff_persisted",
         workflowVersion: "hermes-word-addin-officejs-v1",
         details: { workpaperId: workpaper.id, reviewCommentId: review.id, requestAuditEventId: requestAudit.id, handoff, validation, wordClientApplied: false, officeRuntime: "Office.js" },
       });

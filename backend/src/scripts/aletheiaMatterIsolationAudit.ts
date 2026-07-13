@@ -35,10 +35,6 @@ function main() {
     root,
     "backend/src/lib/aletheia/localRepository.ts",
   );
-  const supabaseRepository = readText(
-    root,
-    "backend/src/lib/aletheia/supabaseRepository.ts",
-  );
   const domain = readText(root, "backend/src/lib/aletheia/domain.ts");
   const retrievalEval = readText(
     root,
@@ -65,7 +61,9 @@ function main() {
       localRepository.includes(
         "select * from aletheia_matters where id = ? and user_id = ?",
       ) &&
-        localRepository.includes("const matter = this.loadOwnedMatter(ctx, matterId)") &&
+        localRepository.includes(
+          "const matter = this.loadOwnedMatter(ctx, matterId)",
+        ) &&
         localRepository.includes("if (!matter) return null"),
       "Local repository methods must gate matter-scoped operations through loadOwnedMatter.",
     ),
@@ -73,13 +71,17 @@ function main() {
       "local-keyword-retrieval-matter-filter",
       localRepository.includes("from aletheia_document_chunks_fts f") &&
         localRepository.includes("and f.matter_id = ?") &&
-        localRepository.includes(".all(query, matterId, limit)"),
+        localRepository.includes(".all(ftsQuery, matterId, limit)"),
       "SQLite FTS5 retrieval must filter by matter_id before ranking results.",
     ),
     check(
       "local-semantic-index-per-matter",
-      localRepository.includes("function localSemanticIndexPath(matterId: string)") &&
-        localRepository.includes("`${safeFilePart(matterId) || matterId}.json`") &&
+      localRepository.includes(
+        "function localSemanticIndexPath(matterId: string)",
+      ) &&
+        localRepository.includes(
+          "`${safeFilePart(matterId) || matterId}.json`",
+        ) &&
         localRepository.includes("where c.matter_id = ?") &&
         localRepository.includes(".all(matterId)"),
       "Optional local semantic indexes must be stored and rebuilt per matter.",
@@ -93,15 +95,6 @@ function main() {
         "where matter_id = ? and user_id = ? and status = 'approved'",
       ]),
       "Matter Memory and Playbook reads/writes must remain matter- and user-scoped.",
-    ),
-    check(
-      "supabase-access-boundary",
-      supabaseRepository.includes("loadMatterForAccess") &&
-        supabaseRepository.includes("data.user_id === ctx.userId") &&
-        supabaseRepository.includes("sharedWith.includes(ctx.userEmail)") &&
-        supabaseRepository.includes("if (!matter || matter.user_id !== ctx.userId) return null") &&
-        supabaseRepository.includes("Aletheia document search is available in local storage mode"),
-      "Supabase adapter must gate owned write paths and fail closed for document search.",
     ),
     check(
       "runtime-cross-matter-memory-disabled",
@@ -120,8 +113,12 @@ function main() {
     check(
       "local-regression-matter-scoped-memory-playbooks",
       localRegression.includes("Matter memory should persist") &&
-        localRegression.includes("Playbook proposal must not mutate the approved source playbook") &&
-        localRegression.includes("Matter-scoped registry snapshots should persist"),
+        localRegression.includes(
+          "Playbook proposal must not mutate the approved source playbook",
+        ) &&
+        localRegression.includes(
+          "Matter-scoped registry snapshots should persist",
+        ),
       "Local regression must cover matter memory, playbook proposal isolation, and matter-scoped snapshots.",
     ),
     check(

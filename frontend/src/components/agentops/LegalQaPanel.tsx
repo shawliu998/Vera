@@ -109,7 +109,7 @@ export function LegalQaPanel({
   const persisted = useMemo(() => {
     const auditByWorkpaper = new Map<string, LegalQaAuditDetails>();
     for (const event of detail.auditEvents) {
-      if (event.action !== "legal_qa_answer_persisted") continue;
+      if (event.action !== "human_note.legal_qa_answer_persisted") continue;
       const audit = event.details as LegalQaAuditDetails;
       if (audit.workpaperId) auditByWorkpaper.set(audit.workpaperId, audit);
     }
@@ -209,7 +209,7 @@ export function LegalQaPanel({
       const sourceHashes = await Promise.all(sources.map((source) => sha256(source.text)));
       const requestAudit = await appendAletheiaAuditEvent(matterId, {
         actor: "human",
-        action: "legal_qa_draft_requested",
+        action: "human_note.legal_qa_draft_requested",
         workflowVersion: "hermes-legal-qa-v0",
         details: {
           question: normalizedQuestion,
@@ -265,8 +265,8 @@ export function LegalQaPanel({
         throw new Error("Legal Q&A provenance validation failed before persistence.");
       }
       await appendAletheiaAuditEvent(matterId, {
-        actor: "system",
-        action: "legal_qa_answer_persisted",
+        actor: "human",
+        action: "human_note.legal_qa_answer_persisted",
         workflowVersion: "hermes-legal-qa-v0",
         details: {
           workpaperId: workpaper.id,

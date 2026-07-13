@@ -15,10 +15,7 @@ index into the export package builder. Local export package and durable eval
 export routes write JSON export files, SQLite export metadata, source-index
 manifests, export hashes, and audit events.
 
-This does not mean V1 is production SaaS or Supabase-ready. Supabase V1
-document/chunk/source listing is unavailable, Supabase V1 runtime persistence
-is unavailable, and Supabase review-derived eval/export persistence is
-unavailable. The local runtime-result route records authorization and trace
+This does not mean V1 is production SaaS. The local runtime-result route records authorization and trace
 state for approval retry/resume flows without dispatching a real external
 provider. External model calls remain off by default for sensitive/private data
 and must stay explicit, configurable, logged, and auditable.
@@ -170,8 +167,8 @@ npm run build
 - High-risk exports require approval checkpoints.
 - External web search, browser automation, terminal execution, email, and
   destructive file operations are not exposed through the Aletheia Tool Adapter.
-- Local mode applies to Aletheia routes; inherited application routes may still
-  require Supabase-backed services.
+- The local-only boundary applies to Aletheia routes; inherited application
+  routes are outside this product path.
 
 ## Evidence
 
@@ -186,14 +183,12 @@ npm run build
 - Node 22 emits an ExperimentalWarning for `node:sqlite`.
 - SQLite FTS5 is the default retrieval layer; optional semantic or hybrid
   retrieval requires explicit enablement of the local-json prototype adapter.
-- V1 source-index export manifest support is local-only. Supabase V1
-  document/chunk/source listing is not implemented.
-- Supabase V1 runtime persistence is not implemented.
+- V1 source-index export manifest support uses local parsed records only.
 - Local runtime approval retry records authorization and trace state only; it
   does not dispatch a real external provider.
 - Review-derived eval, export persistence, and approved skill activation are
-  local-only; Supabase parity, production/global skill registry governance, and
-  production/SaaS export infrastructure are not claimed.
+  local-only; production/global skill registry governance and production SaaS
+  export infrastructure are not claimed.
 - Browser UI smoke is committed as a Playwright test across desktop and mobile
   with screenshot baseline assertions for the initial workspace render.
 - The updated V1 route/export Playwright spec passed full desktop/mobile UI

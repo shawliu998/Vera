@@ -5,17 +5,18 @@ import { expect, test } from "@playwright/test";
 type SmokeState = {
   projects: Record<
     string,
-    {
+    Record<"agentops", {
       matterId: string;
       matterUrl: string;
-    }
+      matterTitle: string;
+    }>
   >;
 };
 
 function smokeState(): SmokeState {
   return JSON.parse(
     readFileSync(
-      path.join(process.cwd(), "test-results", "aletheia-ui-smoke-state.json"),
+      path.join(process.cwd(), ".next-ui-smoke-state.json"),
       "utf8",
     ),
   ) as SmokeState;
@@ -25,7 +26,7 @@ test("matter-scoped AgentOps route renders adapter-backed artifacts", async ({
   page,
 }, testInfo) => {
   const state = smokeState();
-  const projectState = state.projects[testInfo.project.name];
+  const projectState = state.projects[testInfo.project.name]?.agentops;
   if (!projectState) {
     throw new Error(`Missing UI smoke state for ${testInfo.project.name}`);
   }
@@ -38,7 +39,7 @@ test("matter-scoped AgentOps route renders adapter-backed artifacts", async ({
 
   await page.goto(`/aletheia/matters/${projectState.matterId}/agentops`);
 
-  await expect(page).toHaveTitle(/Aletheia/);
+  await expect(page).toHaveTitle(/Vera/);
   await expect(page).toHaveURL(
     new RegExp(`/aletheia/matters/${projectState.matterId}/agentops$`),
   );
@@ -48,9 +49,9 @@ test("matter-scoped AgentOps route renders adapter-backed artifacts", async ({
   await expect(page.getByText("1/1 source-linked evidence")).toBeVisible();
 
   const commandCenter = page.getByTestId("adapter-backed-command-center");
-  await expect(commandCenter).toContainText("Aletheia UI Smoke Matter");
+  await expect(commandCenter).toContainText(projectState.matterTitle);
   await expect(commandCenter).toContainText("Matter Command Center");
-  await expect(commandCenter).toContainText("Professional Workflow");
+  await expect(commandCenter).toContainText("Professional workflow");
   await expect(commandCenter).toContainText("Evidence");
   await expect(commandCenter).toContainText("Issue");
   await expect(commandCenter).toContainText("Risk");
@@ -60,14 +61,14 @@ test("matter-scoped AgentOps route renders adapter-backed artifacts", async ({
   await expect(commandCenter).toContainText("Audit");
   await expect(commandCenter).toContainText("Eval");
   await expect(commandCenter).toContainText(
-    "Synthetic source record for Aletheia UI smoke",
+    "Aletheia local demo source record.",
   );
   await expect(commandCenter).toContainText("Termination notice requirement");
   await expect(commandCenter).toContainText("Draft Memo");
   await expect(commandCenter).toContainText("audit_pack_exported");
   await expect(commandCenter).toContainText("memo_generated");
   await expect(page.getByTestId("external-source-workpaper-panel")).toContainText(
-    "Automated network retrieval remains disabled",
+    "Captures remain review-only. Automatic retrieval requires a configured HTTPS allowlist.",
   );
   await page
     .getByTestId("external-source-query")
@@ -83,18 +84,21 @@ test("matter-scoped AgentOps route renders adapter-backed artifacts", async ({
   await expect(
     page.getByTestId("external-source-workpaper-status"),
   ).toContainText("External-source workpaper recorded");
-  await expect(page.getByTestId("external-source-workpaper-record")).toContainText(
+  const externalSourceRecord = page
+    .getByTestId("external-source-workpaper-record")
+    .first();
+  await expect(externalSourceRecord).toContainText(
     "https://example.test/issuer",
   );
-  await expect(page.getByTestId("external-source-workpaper-record")).toContainText(
+  await expect(externalSourceRecord).toContainText(
     "needs review",
   );
-  await expect(page.getByTestId("external-source-workpaper-record")).toContainText(
+  await expect(externalSourceRecord).toContainText(
     "Provenance validated",
   );
   await expect(
     commandCenter
-      .getByRole("link", { name: /Synthetic source record for Aletheia UI smoke/ })
+      .getByRole("link", { name: /Aletheia local demo source record/ })
       .first(),
   ).toHaveAttribute(
     "href",
@@ -105,7 +109,7 @@ test("matter-scoped AgentOps route renders adapter-backed artifacts", async ({
 
   await expect(page.getByTestId("agentops-gate-checklist")).toBeVisible();
   await expect(page.getByTestId("agentops-gate-checklist")).toContainText(
-    "Trust Gates",
+    "Trust gates",
   );
   await expect(page.getByTestId("agentops-gate-checklist")).toContainText(
     "Final export blocked",
@@ -114,7 +118,7 @@ test("matter-scoped AgentOps route renders adapter-backed artifacts", async ({
     "Gate Provenance",
   );
   await expect(page.getByTestId("agentops-gate-provenance")).toContainText(
-    "Displayed gates mapped back to persisted Aletheia records.",
+    "Displayed gates mapped back to persisted Vera records.",
   );
   await expect(page.getByTestId("agentops-gate-provenance")).toContainText(
     "backed",
@@ -259,7 +263,7 @@ test("matter-scoped AgentOps route renders adapter-backed artifacts", async ({
     downloadedPackage.audit_pack?.source_index_manifest?.limitations?.some(
       (item) =>
         item.includes(
-          "Supabase V1 document, chunk, and source-link listing remains unavailable",
+          "original document/page preview is not embedded",
         ),
     ),
   ).toBe(true);
@@ -274,13 +278,13 @@ test("matter-scoped AgentOps route renders adapter-backed artifacts", async ({
     "Citation Coverage",
   );
   await expect(page.getByTestId("agentops-eval-workbench")).toContainText(
-    "Candidate Skills",
+    "Candidate skills",
   );
   await expect(page.getByTestId("agentops-eval-workbench")).toContainText(
     "Approval required",
   );
   await expect(page.getByTestId("agentops-eval-workbench")).toContainText(
-    "Approved Playbook Skills",
+    "Approved playbook skills",
   );
 
   await expect(page.getByTestId("adapter-backed-references")).toContainText(

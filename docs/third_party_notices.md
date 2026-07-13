@@ -14,13 +14,20 @@ availability obligations for modified versions.
 Aletheia-specific additions include:
 
 - matter workspace routes and UI;
-- Aletheia database schema and migrations;
+- Aletheia local SQLite schema maintained by the application runtime;
 - audit pack and feedback eval exports;
 - repository abstraction and local SQLite adapter;
-- agent runtime schema skeleton;
+- durable local agent runtime state;
 - local-first deployment documentation.
 - matter-scoped Matter Memory and human-approved Matter Playbooks;
 - Aletheia Tool Adapter HTTP surface.
+
+## SQLCipher binding
+
+Optional encrypted database mode uses `@signalapp/sqlcipher`, version 3.3.9,
+under AGPL-3.0-only. Its license is distributed in the installed package. The
+adapter reports the linked SQLCipher version and provider at runtime; Aletheia
+does not describe the default `node:sqlite` mode as encrypted.
 
 ## Hermes-Inspired Design
 

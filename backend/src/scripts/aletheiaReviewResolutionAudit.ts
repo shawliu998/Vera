@@ -7,7 +7,6 @@ import express from "express";
 const dataDir = mkdtempSync(path.join(tmpdir(), "aletheia-review-resolution-"));
 
 process.env.ALETHEIA_DATA_DIR = dataDir;
-process.env.ALETHEIA_STORAGE_DRIVER = "local";
 process.env.ALETHEIA_AUTH_MODE = "single_user";
 process.env.ALETHEIA_LOCAL_USER_ID = "review-resolution-audit-user";
 

@@ -63,12 +63,8 @@ git diff --check
 - Local/private-pilot only.
 - No legal advice generation and no replacement for expert judgment.
 - No production SaaS readiness is claimed.
-- Supabase V1 document/chunk/source listing is unavailable.
-- Supabase V1 runtime persistence is unavailable.
 - Local runtime approval retry records authorization and trace state only; it
   does not dispatch a real external provider.
-- Supabase review-derived eval, export persistence, and skill activation are
-  unavailable.
 - External model calls remain off by default for sensitive/private data and
   must be explicit, configurable, logged, and auditable if enabled later.
 

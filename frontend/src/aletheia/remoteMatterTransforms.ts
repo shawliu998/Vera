@@ -89,7 +89,9 @@ function v1DocumentParser(
 }
 
 function optionalNumber(value: number | null): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 function optionalString(value: string | null): string | undefined {
@@ -374,11 +376,13 @@ export function buildAuditPack(
   detail: AletheiaMatterDetail,
 ): Record<string, unknown> {
   const latestDraftMemo =
-    [...detail.workProducts].reverse().find((item) => item.kind === "draft_memo") ??
-    null;
+    [...detail.workProducts]
+      .reverse()
+      .find((item) => item.kind === "draft_memo") ?? null;
   const latestFinalMemo =
-    [...detail.workProducts].reverse().find((item) => item.kind === "final_memo") ??
-    null;
+    [...detail.workProducts]
+      .reverse()
+      .find((item) => item.kind === "final_memo") ?? null;
   const packWithoutHash = {
     schemaVersion: "aletheia-audit-pack-v0",
     exportedAt: new Date().toISOString(),
@@ -632,9 +636,9 @@ function externalSourceRefs(
     const externalSource =
       Boolean(
         evidence.metadata &&
-          typeof evidence.metadata === "object" &&
-          !Array.isArray(evidence.metadata) &&
-          (evidence.metadata as Record<string, unknown>).externalSource,
+        typeof evidence.metadata === "object" &&
+        !Array.isArray(evidence.metadata) &&
+        (evidence.metadata as Record<string, unknown>).externalSource,
       ) || Boolean(sourceUrl?.startsWith("http"));
     if (externalSource) {
       addGateSourceRef(refs, evidenceRef(evidence, "provenance"));
@@ -651,7 +655,9 @@ export function buildGatePersistenceProvenance(args: {
   const documentsByAnyId = new Map(
     args.detail.documents.flatMap((document) => [
       [document.id, document] as const,
-      ...(document.document_id ? [[document.document_id, document] as const] : []),
+      ...(document.document_id
+        ? [[document.document_id, document] as const]
+        : []),
     ]),
   );
   const evidenceById = new Map(
@@ -784,7 +790,9 @@ export function buildGatePersistenceProvenance(args: {
         });
       }
       if (gate.status === "passed" && checkpoints.length === 0) {
-        unresolved.add("No persisted human checkpoint found for passed approval/export gate.");
+        unresolved.add(
+          "No persisted human checkpoint found for passed approval/export gate.",
+        );
       }
     }
 
@@ -834,17 +842,26 @@ export function buildGatePersistenceProvenance(args: {
     }
 
     if (gate.status === "failed" && refs.length <= (args.draftMemoId ? 2 : 1)) {
-      unresolved.add("Failed gate needs persisted blocker IDs beyond matter/draft memo context.");
+      unresolved.add(
+        "Failed gate needs persisted blocker IDs beyond matter/draft memo context.",
+      );
     }
     if (
       gate.status === "passed" &&
       (gate.gate_type === "human_approval" || gate.gate_type === "export") &&
       !refs.some((ref) => ref.type === "audit_event")
     ) {
-      unresolved.add("No audit_event_id found for passed approval/export gate.");
+      unresolved.add(
+        "No audit_event_id found for passed approval/export gate.",
+      );
     }
-    if (gate.gate_type === "citation" && !refs.some((ref) => ref.type === "evidence_item")) {
-      unresolved.add("Citation gate has no evidence_item_id/source_chunk_id provenance.");
+    if (
+      gate.gate_type === "citation" &&
+      !refs.some((ref) => ref.type === "evidence_item")
+    ) {
+      unresolved.add(
+        "Citation gate has no evidence_item_id/source_chunk_id provenance.",
+      );
     }
 
     return {
@@ -903,13 +920,8 @@ export function recordArray(value: unknown): Array<Record<string, unknown>> {
     : [];
 }
 
-function latestWorkProduct(
-  detail: AletheiaMatterDetail,
-  kind: string,
-) {
-  return [...detail.workProducts]
-    .reverse()
-    .find((item) => item.kind === kind);
+function latestWorkProduct(detail: AletheiaMatterDetail, kind: string) {
+  return [...detail.workProducts].reverse().find((item) => item.kind === kind);
 }
 
 function metadataFlags(value: unknown) {
@@ -954,7 +966,8 @@ export function materialChecklist(detail: AletheiaMatterDetail) {
     const tokens = meaningfulTokens(label);
     const matchedDocumentNames = detail.documents
       .filter((document) => {
-        const searchable = `${document.name} ${document.summary ?? ""}`.toLowerCase();
+        const searchable =
+          `${document.name} ${document.summary ?? ""}`.toLowerCase();
         return tokens.some((token) => searchable.includes(token));
       })
       .map((document) => document.name);
@@ -976,6 +989,9 @@ export type SourceMapDocument = {
   evidenceCount: number;
   searchable: boolean;
   sensitiveMaterialFlags: string[];
+  parseAttemptCount: number;
+  lastParseError: string | null;
+  lastParseCompletedAt: string | null;
 };
 
 export function sourceMapDocuments(detail: AletheiaMatterDetail) {
@@ -1003,11 +1019,27 @@ export function sourceMapDocuments(detail: AletheiaMatterDetail) {
       evidenceCount: evidenceByDocument.get(document.id)?.length ?? 0,
       searchable: document.parsed_status === "parsed" && Boolean(chunkCount),
       sensitiveMaterialFlags: metadataFlags(document.metadata),
+      parseAttemptCount:
+        typeof document.metadata.parseAttemptCount === "number"
+          ? document.metadata.parseAttemptCount
+          : 0,
+      lastParseError:
+        typeof document.metadata.lastParseError === "string"
+          ? document.metadata.lastParseError
+          : typeof document.metadata.parseFailureReason === "string"
+            ? document.metadata.parseFailureReason
+            : null,
+      lastParseCompletedAt:
+        typeof document.metadata.lastParseCompletedAt === "string"
+          ? document.metadata.lastParseCompletedAt
+          : null,
     } satisfies SourceMapDocument;
   });
 }
 
-export function v1DocumentRecords(detail: AletheiaMatterDetail): DocumentRecord[] {
+export function v1DocumentRecords(
+  detail: AletheiaMatterDetail,
+): DocumentRecord[] {
   return detail.documents.map((document) => {
     const metadata = document.metadata ?? {};
     const parseFailureReason = stringMetadata(metadata, "parseFailureReason");
@@ -1029,8 +1061,9 @@ export function v1DocumentRecords(detail: AletheiaMatterDetail): DocumentRecord[
       parser: v1DocumentParser(document),
       parse_error:
         parseFailureReason ??
-        (document.parsed_status === "failed" || document.parsed_status === "needs_ocr"
-          ? document.summary ?? undefined
+        (document.parsed_status === "failed" ||
+        document.parsed_status === "needs_ocr"
+          ? (document.summary ?? undefined)
           : undefined),
       metadata: {
         ...metadata,
@@ -1315,7 +1348,11 @@ function agentOpsRiskLevel(value: string | null | undefined): RiskLevel {
 }
 
 function agentOpsReviewStatus(value: string | undefined): ReviewStatus {
-  if (value === "accepted" || value === "approved" || value === "source_linked") {
+  if (
+    value === "accepted" ||
+    value === "approved" ||
+    value === "source_linked"
+  ) {
     return "approved";
   }
   if (value === "needs_revision" || value === "needs_human_review") {
@@ -1363,7 +1400,7 @@ function agentOpsMatter(detail: AletheiaMatterDetail): Matter {
           ? "active"
           : detail.matter.status === "completed"
             ? "approved"
-          : detail.matter.status,
+            : detail.matter.status,
     documents,
     created_at: detail.matter.created_at,
     updated_at: detail.matter.updated_at,
@@ -1439,7 +1476,9 @@ function agentOpsIssues(
         ),
         open_questions:
           hasAcceptedReview && !needsReview ? [] : issue.openQuestions,
-        risk_level: needsReview ? "high" : agentOpsRiskLevel(detail.matter.risk_level),
+        risk_level: needsReview
+          ? "high"
+          : agentOpsRiskLevel(detail.matter.risk_level),
         review_status: hasAcceptedReview
           ? "approved"
           : agentOpsReviewStatus(issue.reviewStatus),
@@ -1450,7 +1489,10 @@ function agentOpsIssues(
   const evidenceByClaim = new Map<string, EvidenceItem[]>();
   for (const item of agentOpsEvidence(detail)) {
     const claimId = item.supports_claim_ids[0] ?? `claim-${item.id}`;
-    evidenceByClaim.set(claimId, [...(evidenceByClaim.get(claimId) ?? []), item]);
+    evidenceByClaim.set(claimId, [
+      ...(evidenceByClaim.get(claimId) ?? []),
+      item,
+    ]);
   }
 
   return Array.from(evidenceByClaim.entries()).map(([claimId, items]) => ({
@@ -1488,8 +1530,10 @@ function agentOpsDraftMemo(
     sections: recordArray(draftMemo.content.sections).map((section, index) => {
       const evidenceIds = stringArray(section.evidenceIds);
       return {
-        id: typeof section.id === "string" ? section.id : `memo-section-${index}`,
-        title: typeof section.title === "string" ? section.title : "Memo Section",
+        id:
+          typeof section.id === "string" ? section.id : `memo-section-${index}`,
+        title:
+          typeof section.title === "string" ? section.title : "Memo Section",
         body: stringArray(section.body).join(" "),
         evidence_reference_ids: evidenceIds,
         unsupported_claim_count: evidenceIds.length === 0 ? 1 : 0,
@@ -1497,7 +1541,9 @@ function agentOpsDraftMemo(
     }),
     citation_coverage_score: 0,
     unsupported_claim_count: 0,
-    review_status: humanApproved ? "approved" : agentOpsReviewStatus(draftMemo.status),
+    review_status: humanApproved
+      ? "approved"
+      : agentOpsReviewStatus(draftMemo.status),
     gate_status: "warning",
   });
 }
@@ -1529,7 +1575,9 @@ function artifactTypeForReview(
   return "draft_memo";
 }
 
-function severityForReview(review: AletheiaReviewRecord): ReviewComment["severity"] {
+function severityForReview(
+  review: AletheiaReviewRecord,
+): ReviewComment["severity"] {
   if (
     [
       "unsupported_claim",
@@ -1557,10 +1605,7 @@ function referencedArtifactsForReview(
       title: `${review.target_type}:${review.target_id}`,
     },
   ];
-  if (
-    review.evidence_item_id &&
-    review.evidence_item_id !== review.target_id
-  ) {
+  if (review.evidence_item_id && review.evidence_item_id !== review.target_id) {
     refs.push({
       id: review.evidence_item_id,
       type: "evidence_item",
@@ -1600,7 +1645,11 @@ export function buildFinalMemoGateInput(args: {
   const issues = agentOpsIssues(args.detail, args.issueMap);
   return {
     matter: agentOpsMatter(args.detail),
-    draftMemo: agentOpsDraftMemo(args.detail, args.draftMemo, args.humanApproved),
+    draftMemo: agentOpsDraftMemo(
+      args.detail,
+      args.draftMemo,
+      args.humanApproved,
+    ),
     evidence: agentOpsEvidence(args.detail),
     issues,
     risks: agentOpsRisks(issues),

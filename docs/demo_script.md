@@ -74,23 +74,21 @@ Current stage: local-first MVP / private pilot candidate.
       fetch the local source-index route and include
       audit_pack.source_index_manifest with document, chunk, and source-link
       counts in the downloaded AgentOps export package."
-    - "This source-index manifest path is local-only today; do not present it
-      as Supabase-backed or production export infrastructure."
+    - "This source-index manifest path is local-only; do not present it as
+      production SaaS export infrastructure."
 
 12. Generate Eval Cases.
     - "The feedback export and V1 local review-resolution path can turn review
       comments and failed gates into local replayable eval material, so future
       changes to retrieval, drafting, review, and gates can be tested."
     - "Keep this claim local-only: review-derived eval export is durable in the
-      local workflow, not Supabase-backed or production SaaS."
+      local workflow, not production SaaS."
 
 ## V1 Private-Pilot Demo Caveats
 
 - This demo is local/private-pilot only; it is not production SaaS.
 - Aletheia supports expert review and auditability, not legal advice generation,
   guaranteed legal correctness, or replacement of professional judgment.
-- Supabase V1 document/chunk/source listing and Supabase V1 runtime persistence
-  are unavailable.
 - The local runtime-result route can record approval retry/resume state, but it
   does not dispatch a real external provider.
 - Approved skill activation is local-only and requires explicit human approval

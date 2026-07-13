@@ -2,28 +2,28 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SOURCE_MARK="${ROOT_DIR}/frontend/public/aletheia-mark.png"
+SOURCE_MARK="${ROOT_DIR}/frontend/public/vera-mark.png"
 DESKTOP_BUILD_DIR="${ROOT_DIR}/desktop/build"
-ICONSET="${DESKTOP_BUILD_DIR}/Aletheia.iconset"
+ICONSET="${DESKTOP_BUILD_DIR}/Vera.iconset"
 APP_ICON="${DESKTOP_BUILD_DIR}/icon.png"
 
 mkdir -p "${DESKTOP_BUILD_DIR}" "${ICONSET}"
 
 magick -size 1024x1024 xc:none \
   \( -size 1024x1024 xc:none \
-    -fill '#fbfcff' \
+    -fill '#000000' \
     -draw 'roundrectangle 48,48 976,976 210,210' \
   \) \
   -compose over -composite \
-  \( "${SOURCE_MARK}" -resize 760x760 \) \
+  \( "${SOURCE_MARK}" -shave 16x16 -resize 820x820 \) \
   -gravity center -compose over -composite \
   "${APP_ICON}"
 
 sips -z 180 180 "${APP_ICON}" --out "${ROOT_DIR}/frontend/src/app/apple-touch-icon.png" >/dev/null
 cp "${APP_ICON}" "${ROOT_DIR}/frontend/src/app/icon.png"
 
-if sips -z 32 32 "${APP_ICON}" --out /tmp/aletheia-favicon.png >/dev/null &&
-  sips -s format ico /tmp/aletheia-favicon.png --out "${ROOT_DIR}/frontend/src/app/favicon.ico" >/dev/null 2>&1; then
+if sips -z 32 32 "${APP_ICON}" --out /tmp/vera-favicon.png >/dev/null &&
+  sips -s format ico /tmp/vera-favicon.png --out "${ROOT_DIR}/frontend/src/app/favicon.ico" >/dev/null 2>&1; then
   true
 else
   echo "warning: favicon.ico generation is unsupported on this host" >&2

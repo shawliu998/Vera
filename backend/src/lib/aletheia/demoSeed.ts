@@ -1,7 +1,8 @@
 import { createAletheiaRepository } from ".";
 import type { AletheiaRepository, AletheiaUserContext } from "./repository";
 
-const DEMO_SEED_ID = "aletheia-local-demo-seed-v1";
+const DEFAULT_DEMO_SEED_ID = "aletheia-local-demo-seed-v1";
+const DEFAULT_DEMO_TITLE = "Private Contract Review Demo";
 
 type SeedDecision = {
   shouldSeed: boolean;
@@ -14,6 +15,20 @@ function envFlag(name: string, fallback: boolean): boolean {
   return ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
 }
 
+function envText(name: string, fallback: string): string {
+  const value = process.env[name]?.trim();
+  return value || fallback;
+}
+
+function demoSeedId(): string {
+  return envText("ALETHEIA_DEMO_SEED_ID", DEFAULT_DEMO_SEED_ID);
+}
+
+function demoMatterTitle(): string {
+  const suffix = process.env.ALETHEIA_DEMO_SEED_TITLE_SUFFIX?.trim();
+  return suffix ? `${DEFAULT_DEMO_TITLE} — ${suffix}` : DEFAULT_DEMO_TITLE;
+}
+
 function localUserContext(): AletheiaUserContext {
   return {
     userId: process.env.ALETHEIA_LOCAL_USER_ID ?? "local-user",
@@ -22,20 +37,16 @@ function localUserContext(): AletheiaUserContext {
   };
 }
 
-function shouldUseLocalStorage(): boolean {
-  const storageDriver =
-    process.env.ALETHEIA_STORAGE_DRIVER ?? process.env.ALET_HEIA_STORAGE_MODE;
-  return storageDriver === "local";
+function hasDemoSeed(matters: unknown[], seedId: string): boolean {
+  return matters.some(
+    (matter: any) => matter?.metadata?.demoSeedId === seedId,
+  );
 }
 
-function hasDemoSeed(matters: unknown[]): boolean {
-  return matters.some((matter: any) => matter?.metadata?.demoSeedId === DEMO_SEED_ID);
-}
-
-function existingDemoMatter(matters: unknown[]) {
+function existingDemoMatter(matters: unknown[], seedId: string) {
   return matters.find(
-    (matter: any) => matter?.metadata?.demoSeedId === DEMO_SEED_ID,
-  ) as { id?: string } | undefined;
+    (matter: any) => matter?.metadata?.demoSeedId === seedId,
+  ) as { id?: string; title?: string } | undefined;
 }
 
 async function seedDecision(
@@ -45,12 +56,8 @@ async function seedDecision(
   if (!envFlag("ALETHEIA_DEMO_SEED_ENABLED", false)) {
     return { shouldSeed: false, reason: "disabled" };
   }
-  if (!shouldUseLocalStorage()) {
-    return { shouldSeed: false, reason: "storage-not-local" };
-  }
-
   const matters = await repo.listMatters(ctx);
-  if (hasDemoSeed(matters)) {
+  if (hasDemoSeed(matters, demoSeedId())) {
     return { shouldSeed: false, reason: "already-seeded" };
   }
 
@@ -72,11 +79,12 @@ async function approve(
   matterId: string,
   action: "audit_pack_export" | "feedback_dataset_export" | "final_memo_export",
   prompt: string,
+  seedId: string,
 ) {
   const checkpoint: any = await repo.requestApproval(ctx, matterId, {
     action,
     prompt,
-    requestedPayload: { demoSeedId: DEMO_SEED_ID },
+    requestedPayload: { demoSeedId: seedId },
   });
   if (!checkpoint?.id) {
     throw new Error(`Demo seed could not request ${action} approval`);
@@ -92,9 +100,11 @@ export async function seedAletheiaDemoMatter(
   repo: AletheiaRepository,
   ctx: AletheiaUserContext,
 ) {
+  const seedId = demoSeedId();
+  const title = demoMatterTitle();
   const timestamp = new Date().toISOString();
   const matter: any = await repo.createMatter(ctx, {
-    title: "Private Contract Review Demo",
+    title,
     objective:
       "Show the local V1 professional loop from ingestion and retrieval through evidence, memo, review, gates, audit export, eval export, and approved skill activation.",
     template: "legal_matter_review",
@@ -105,7 +115,7 @@ export async function seedAletheiaDemoMatter(
     sharedWith: [],
     metadata: {
       seededBy: "aletheiaDemoSeed",
-      demoSeedId: DEMO_SEED_ID,
+      demoSeedId: seedId,
       seededAt: timestamp,
       localOnly: true,
     },
@@ -130,7 +140,10 @@ export async function seedAletheiaDemoMatter(
   const searchResults: any[] | null = await repo.searchMatterDocuments(
     ctx,
     matter.id,
-    { query: "termination written notice board approval missing schedule", limit: 5 },
+    {
+      query: "termination written notice board approval missing schedule",
+      limit: 5,
+    },
   );
   if (!searchResults?.length) {
     throw new Error("Demo seed document did not produce searchable chunks");
@@ -145,7 +158,7 @@ export async function seedAletheiaDemoMatter(
       confidence: "high",
       metadata: {
         seededBy: "aletheiaDemoSeed",
-        demoSeedId: DEMO_SEED_ID,
+        demoSeedId: seedId,
         query: "termination written notice board approval missing schedule",
       },
     });
@@ -179,7 +192,7 @@ export async function seedAletheiaDemoMatter(
     title: "Missing schedule blocks final reliance",
     body: "Schedule 4.2 must be obtained or explicitly waived before a final memo can be treated as review-ready.",
     source: "review",
-    metadata: { demoSeedId: DEMO_SEED_ID, reviewId: review?.id ?? null },
+    metadata: { demoSeedId: seedId, reviewId: review?.id ?? null },
   });
 
   const playbook: any = await repo.createPlaybook(ctx, matter.id, {
@@ -210,7 +223,7 @@ export async function seedAletheiaDemoMatter(
     workflow: "legal_matter_review",
     goal: "Seed the local V1 demo workflow",
     status: "queued",
-    metadata: { seededBy: "aletheiaDemoSeed", demoSeedId: DEMO_SEED_ID },
+    metadata: { seededBy: "aletheiaDemoSeed", demoSeedId: seedId },
   });
 
   const auditApproval = await approve(
@@ -219,6 +232,7 @@ export async function seedAletheiaDemoMatter(
     matter.id,
     "audit_pack_export",
     "Approve bundled local demo audit/export package.",
+    seedId,
   );
   const evalApproval = await approve(
     repo,
@@ -226,6 +240,7 @@ export async function seedAletheiaDemoMatter(
     matter.id,
     "feedback_dataset_export",
     "Approve bundled local demo eval export.",
+    seedId,
   );
   const finalMemoApproval = await approve(
     repo,
@@ -233,6 +248,7 @@ export async function seedAletheiaDemoMatter(
     matter.id,
     "final_memo_export",
     "Approve bundled local demo final memo export gate.",
+    seedId,
   );
 
   const auditPack: any = await repo.createWorkProduct(ctx, matter.id, {
@@ -250,7 +266,7 @@ export async function seedAletheiaDemoMatter(
       memoryId: (memory as any)?.id ?? null,
       playbookId: playbook.id,
       runId: run?.id ?? null,
-      demoSeedId: DEMO_SEED_ID,
+      demoSeedId: seedId,
     },
     validationErrors: [],
     generatedBy: "system",
@@ -286,7 +302,9 @@ export async function seedAletheiaDemoMatter(
           gate_type: "citation",
           status: "passed",
           reason: "Demo memo claims are linked to local source evidence.",
-          affected_artifact_ids: [draftMemo?.id, evidenceItems[0]?.id].filter(Boolean),
+          affected_artifact_ids: [draftMemo?.id, evidenceItems[0]?.id].filter(
+            Boolean,
+          ),
         },
         {
           id: "demo-human-approval-gate",
@@ -294,7 +312,9 @@ export async function seedAletheiaDemoMatter(
           gate_type: "human_approval",
           status: "passed",
           reason: "Demo final memo export was approved by the local reviewer.",
-          affected_artifact_ids: [draftMemo?.id, finalMemoApproval.id].filter(Boolean),
+          affected_artifact_ids: [draftMemo?.id, finalMemoApproval.id].filter(
+            Boolean,
+          ),
         },
         {
           id: "demo-export-gate",
@@ -302,7 +322,9 @@ export async function seedAletheiaDemoMatter(
           gate_type: "export",
           status: "passed",
           reason: "Demo final memo export is authorized for local inspection.",
-          affected_artifact_ids: [draftMemo?.id, finalMemoApproval.id].filter(Boolean),
+          affected_artifact_ids: [draftMemo?.id, finalMemoApproval.id].filter(
+            Boolean,
+          ),
         },
       ],
       gateProvenance: [
@@ -338,7 +360,8 @@ export async function seedAletheiaDemoMatter(
           gate_id: "demo-export-gate",
           gate_type: "export",
           status: "passed",
-          displayed_reason: "Final export is authorized by the same checkpoint.",
+          displayed_reason:
+            "Final export is authorized by the same checkpoint.",
           source_record_refs: [
             {
               type: "human_checkpoint",
@@ -349,7 +372,7 @@ export async function seedAletheiaDemoMatter(
           unresolved_source_requirements: [],
         },
       ],
-      demoSeedId: DEMO_SEED_ID,
+      demoSeedId: seedId,
     },
     validationErrors: ["Schedule 4.2 remains a demo blocker."],
     generatedBy: "system",
@@ -359,6 +382,7 @@ export async function seedAletheiaDemoMatter(
 
   return {
     matterId: matter.id,
+    matterTitle: title,
     documentId: document.id,
     evidenceCount: evidenceItems.length,
     issueMapId: issueMap?.id ?? null,
@@ -377,11 +401,12 @@ export async function seedAletheiaDemoIfNeeded() {
   const decision = await seedDecision(repo, ctx);
   if (!decision.shouldSeed) {
     const matters = await repo.listMatters(ctx);
-    const existing = existingDemoMatter(matters);
+    const existing = existingDemoMatter(matters, demoSeedId());
     return {
       seeded: false,
       reason: decision.reason,
       ...(existing?.id ? { matterId: existing.id } : {}),
+      ...(existing?.title ? { matterTitle: existing.title } : {}),
     };
   }
   const result = await seedAletheiaDemoMatter(repo, ctx);

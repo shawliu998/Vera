@@ -9,7 +9,7 @@ This is the simplest way to run Aletheia on a local workstation. It starts:
 - `backend` on `http://localhost:3001`
 - a persistent Docker volume named `aletheia-data`
 
-Supabase is not required for the V1 local-only Aletheia workflow.
+The Aletheia workflow uses local SQLite and filesystem storage only.
 
 ## Requirements
 
@@ -135,6 +135,6 @@ The Docker local install supports the V1 local/private-pilot workflow:
 ingestion -> retrieval -> evidence -> risk/memo -> review -> gates -> audit/export -> eval -> approved skill activation
 ```
 
-Production/SaaS deployment, Supabase-backed multi-user persistence, SSO,
-installer packaging, and real external provider dispatch are not claimed by
-this local Docker package.
+Production SaaS, multi-user persistence, SSO, signed installer distribution,
+and real external provider dispatch are not claimed by this local Docker
+package.

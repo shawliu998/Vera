@@ -247,7 +247,7 @@ export type ExportPackageBuildOptions = TypedHandoffProvenanceOptions & {
 };
 
 const LOCAL_ONLY_SOURCE_INDEX_LIMITATION =
-  "V1 source index is local-only for this private pilot; Supabase V1 document, chunk, and source-link listing remains unavailable.";
+  "The source-index manifest contains local parsed records and links; original document/page preview is not embedded.";
 
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== "object") {

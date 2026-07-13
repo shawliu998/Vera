@@ -88,5 +88,5 @@ Sample eval cases and skills live in `frontend/src/aletheia/agentops/fixtures.ts
 They demonstrate a candidate missing-citation skill and an explicitly approved
 high-risk human approval export gate.
 
-Supabase and production/global skill registry behavior are intentionally outside
-the V1 local-only workflow.
+Production/global skill registry behavior is intentionally outside the V1
+local-only workflow.

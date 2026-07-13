@@ -1,7 +1,9 @@
 import { Router } from "express";
+import { createHash } from "node:crypto";
 import { createAletheiaRepository } from "../lib/aletheia";
+import { redactPublicMatterDocument } from "../lib/aletheia/localRepository";
+import { getAuthoritativeRuntimeSettings } from "../lib/aletheia/localControlRepository";
 import {
-  ACTORS,
   EVIDENCE_RELEVANCE,
   EVIDENCE_SUPPORT_STATUS,
   GENERATED_BY,
@@ -23,15 +25,41 @@ import {
 import {
   ApprovalRequiredError,
   CapabilityNotAvailableError,
+  DocumentParseRetryError,
   LocalAdapterNotReadyError,
+  MatterOriginalDocumentAuditError,
+  MatterOriginalDocumentIntegrityError,
 } from "../lib/aletheia/repository";
 import type { V1RuntimePersistenceInput } from "../lib/aletheia/v1RuntimePersistence";
 import { requireAuth } from "../middleware/auth";
-import { multiFileUpload, singleFileUpload } from "../lib/upload";
+import {
+  cleanupUploadedFiles,
+  materializeUploadedFile,
+  multiFileUpload,
+  singleFileUpload,
+  uploadedDocumentValidationError,
+} from "../lib/upload";
 import {
   ExternalSourceFetchPolicyError,
   fetchAllowlistedExternalSource,
 } from "../lib/aletheia/externalSourceFetch";
+import {
+  externalAuditActionHelp,
+  isAllowedExternalAuditAction,
+} from "../lib/aletheia/auditActionPolicy";
+import {
+  MalwareScanBlockedError,
+  malwareScannerPolicy,
+  scanLocalUpload,
+} from "../lib/aletheia/malwareScanner";
+import { localEncryptionStatus } from "../lib/aletheia/localEnvelopeCrypto";
+import { auditAnchorRuntimeStatus } from "../lib/aletheia/auditAnchorJournal";
+import { GovernancePolicyError } from "../lib/aletheia/localGovernance";
+import {
+  ContentDisarmBlockedError,
+  contentDisarmPolicy,
+  disarmLocalUpload,
+} from "../lib/aletheia/contentDisarm";
 
 export const aletheiaRouter = Router();
 
@@ -71,6 +99,15 @@ function retrievalMode(value: unknown) {
     : undefined;
 }
 
+function configuredEvidenceIndexMode(userId: string) {
+  const configured = getAuthoritativeRuntimeSettings(userId).evidenceIndex;
+  return configured === "Hybrid"
+    ? "hybrid"
+    : configured === "Semantic"
+      ? "semantic"
+      : "keyword";
+}
+
 function positiveNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? value
@@ -93,6 +130,38 @@ function reviewResolutionStatus(value: unknown) {
 
 function optionalBooleanPayload(value: unknown) {
   return typeof value === "boolean" ? value : undefined;
+}
+
+function originalDocumentContentDisposition(filename: string) {
+  const extension = text(filename.split(".").pop(), 12).toLowerCase();
+  const safeExtension = ["pdf", "docx", "xlsx", "txt", "md"].includes(extension)
+    ? `.${extension}`
+    : "";
+  const unicodeBase =
+    filename
+      .normalize("NFC")
+      .replace(/.*[\\/]/, "")
+      .replace(/\.[^.]*$/, "")
+      .replace(/[\u0000-\u001f\u007f<>:"/\\|?*]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 100) || "original-document";
+  const asciiBase =
+    unicodeBase
+      .normalize("NFKD")
+      .replace(/[^\x20-\x7e]/g, "")
+      .replace(/[^A-Za-z0-9._ -]+/g, "-")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^[.-]+|[.-]+$/g, "")
+      .toLowerCase()
+      .slice(0, 100) || "original-document";
+  const unicodeFilename = `${unicodeBase}${safeExtension}`;
+  const encodedFilename = encodeURIComponent(unicodeFilename).replace(
+    /[!'()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${asciiBase}${safeExtension}"; filename*=UTF-8''${encodedFilename}`;
 }
 
 function stringQueryList(value: unknown, maxLength: number) {
@@ -255,6 +324,33 @@ function userContext(res: { locals: Record<string, unknown> }) {
   };
 }
 
+async function auditBlockedContentDisarm(
+  res: { locals: Record<string, unknown> },
+  matterId: string,
+  error: unknown,
+) {
+  if (!(error instanceof ContentDisarmBlockedError)) return;
+  try {
+    await createAletheiaRepository().appendAuditEvent(
+      userContext(res),
+      matterId,
+      {
+        actor: "system",
+        action: "content_disarm_blocked",
+        workflowVersion: "aletheia-local-cdr-v1",
+        model: null,
+        details: {
+          code: error.code,
+          result: error.result.metadata,
+        },
+      },
+    );
+  } catch {
+    // The original fail-closed result remains authoritative if audit cannot be
+    // attached because the matter does not exist or is inaccessible.
+  }
+}
+
 function handleRouteError(
   res: { status: (code: number) => { json: (body: unknown) => void } },
   error: unknown,
@@ -263,6 +359,24 @@ function handleRouteError(
     return void res.status(error.statusCode).json({
       code: "external_source_policy",
       detail: error.message,
+    });
+  }
+  if (error instanceof MalwareScanBlockedError) {
+    return void res
+      .status(error.code === "malware_detected" ? 422 : 503)
+      .json({ code: error.code, detail: error.message });
+  }
+  if (error instanceof ContentDisarmBlockedError) {
+    const status =
+      error.code === "cdr_unsupported"
+        ? 415
+        : error.code === "cdr_unavailable"
+          ? 503
+          : 422;
+    return void res.status(status).json({
+      code: error.code,
+      detail: error.message,
+      cdr: error.result.metadata,
     });
   }
   if (error instanceof LocalAdapterNotReadyError) {
@@ -276,6 +390,35 @@ function handleRouteError(
       code: "approval_required",
       detail: error.message,
     });
+  }
+  if (error instanceof DocumentParseRetryError) {
+    return void res.status(error.status).json({
+      code: error.code,
+      detail: error.message,
+      ...(error.document
+        ? { document: redactPublicMatterDocument(error.document) }
+        : {}),
+    });
+  }
+  if (error instanceof MatterOriginalDocumentIntegrityError) {
+    return void res.status(error.status).json({
+      code: error.code,
+      detail: error.message,
+    });
+  }
+  if (error instanceof MatterOriginalDocumentAuditError) {
+    return void res.status(error.status).json({
+      code: error.code,
+      detail: error.message,
+    });
+  }
+  if (error instanceof GovernancePolicyError) {
+    return void res
+      .status(error.code === "EVIDENCE_LOCKED" ? 403 : error.status)
+      .json({
+        code: error.code,
+        detail: error.message,
+      });
   }
   if (error instanceof CapabilityNotAvailableError) {
     return void res.status(501).json({
@@ -320,6 +463,47 @@ function toolAdapterManifest() {
     })),
   };
 }
+
+function enforcedSecurityPolicy() {
+  const applicationEncryption = localEncryptionStatus();
+  return {
+    schemaVersion: "aletheia-security-policy-v3",
+    authority: "backend",
+    localOnly: true,
+    storageDriver: "local",
+    externalModelsEnabled: false,
+    finalExportPolicy: "fail_closed",
+    approvalRequiredFor: [
+      "audit_pack_export",
+      "feedback_dataset_export",
+      "final_memo_export",
+      "litigation_artifact_export",
+      "litigation_matter_audit_export",
+      "litigation_template_publish",
+      "litigation_template_retire",
+      "external_source_use",
+      "matter_purge",
+    ],
+    auditIntegrity: "per_matter_hmac_hash_chain",
+    auditAnchor: auditAnchorRuntimeStatus(),
+    filesystemPermissions: "owner_only",
+    encryptionAtRest: {
+      application: applicationEncryption,
+      volume:
+        process.env.ALETHEIA_ENCRYPTED_VOLUME_ATTESTED === "true"
+          ? "operator_attested_encrypted_volume"
+          : "not_attested",
+    },
+    retentionDays:
+      positiveNumber(Number(process.env.ALETHEIA_RETENTION_DAYS)) ?? null,
+    malwareScanning: malwareScannerPolicy(),
+    contentDisarm: contentDisarmPolicy(),
+  };
+}
+
+aletheiaRouter.get("/security-policy", requireAuth, (_req, res) => {
+  res.json(enforcedSecurityPolicy());
+});
 
 // GET /aletheia/tool-adapter/tools
 aletheiaRouter.get("/tool-adapter/tools", requireAuth, (_req, res) => {
@@ -373,7 +557,9 @@ aletheiaRouter.post(
         const result = await repo.searchMatterDocuments(ctx, matterId, {
           query,
           limit: Number.isFinite(rawLimit) ? rawLimit : undefined,
-          mode: retrievalMode(args.mode),
+          mode:
+            retrievalMode(args.mode) ??
+            configuredEvidenceIndexMode(String(res.locals.userId)),
         });
         if (!result) {
           return void res.status(404).json({ detail: "Matter not found" });
@@ -474,17 +660,18 @@ aletheiaRouter.post(
       }
 
       if (toolName === "append_audit_event") {
-        const actor = text(args.actor, 40) || "agent";
         const action = text(args.action, 120);
 
-        if (!ACTORS.has(actor)) {
-          return void res.status(400).json({ detail: "actor is invalid" });
-        }
         if (!action) {
           return void res.status(400).json({ detail: "action is required" });
         }
+        if (!isAllowedExternalAuditAction("agent", action)) {
+          return void res.status(403).json({
+            detail: externalAuditActionHelp("agent"),
+          });
+        }
         const result = await repo.appendAuditEvent(ctx, matterId, {
-          actor: actor as "system" | "agent" | "human",
+          actor: "agent",
           action,
           workflowVersion: nullableText(args.workflowVersion, 120),
           model: nullableText(args.model, 120),
@@ -531,6 +718,41 @@ aletheiaRouter.post(
 aletheiaRouter.get("/matters", requireAuth, async (_req, res) => {
   try {
     const data = await createAletheiaRepository().listMatters(userContext(res));
+    res.json(data);
+  } catch (error) {
+    handleRouteError(res, error);
+  }
+});
+
+// GET /aletheia/search?q=...&limit=...
+aletheiaRouter.get("/search", requireAuth, async (req, res) => {
+  const query = text(req.query.q, 400);
+  if (query.length < 2) {
+    return void res
+      .status(400)
+      .json({ detail: "q must contain at least 2 characters" });
+  }
+
+  let limit = 20;
+  if (req.query.limit !== undefined) {
+    if (typeof req.query.limit !== "string" || !/^\d+$/.test(req.query.limit)) {
+      return void res
+        .status(400)
+        .json({ detail: "limit must be an integer from 1 to 50" });
+    }
+    limit = Number(req.query.limit);
+    if (limit < 1 || limit > 50) {
+      return void res
+        .status(400)
+        .json({ detail: "limit must be an integer from 1 to 50" });
+    }
+  }
+
+  try {
+    const data = await createAletheiaRepository().searchGlobal(
+      userContext(res),
+      { query, limit },
+    );
     res.json(data);
   } catch (error) {
     handleRouteError(res, error);
@@ -592,6 +814,76 @@ aletheiaRouter.get("/matters/:matterId", requireAuth, async (req, res) => {
   }
 });
 
+aletheiaRouter.post(
+  "/matters/:matterId/archive",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const data = await createAletheiaRepository().archiveMatter(
+        userContext(res),
+        req.params.matterId,
+      );
+      if (!data)
+        return void res.status(404).json({ detail: "Matter not found" });
+      res.json(data);
+    } catch (error) {
+      handleRouteError(res, error);
+    }
+  },
+);
+
+aletheiaRouter.post(
+  "/matters/:matterId/purge",
+  requireAuth,
+  async (req, res) => {
+    if (text(req.body?.confirmMatterId, 120) !== req.params.matterId) {
+      return void res.status(400).json({
+        detail: "confirmMatterId must exactly match the matter being purged",
+      });
+    }
+    const approvalCheckpointId = text(req.body?.approvalCheckpointId, 120);
+    if (!approvalCheckpointId) {
+      return void res.status(409).json({
+        code: "approval_required",
+        detail: "An approved matter_purge checkpoint is required.",
+      });
+    }
+    try {
+      const data = await createAletheiaRepository().purgeMatter(
+        userContext(res),
+        req.params.matterId,
+        approvalCheckpointId,
+      );
+      if (!data)
+        return void res.status(404).json({ detail: "Matter not found" });
+      res.json(data);
+    } catch (error) {
+      handleRouteError(res, error);
+    }
+  },
+);
+
+aletheiaRouter.post(
+  "/deletion-tombstones/:tombstoneId/retry-cleanup",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const data = await createAletheiaRepository().retryPurgeCleanup(
+        userContext(res),
+        req.params.tombstoneId,
+      );
+      if (!data) {
+        return void res
+          .status(404)
+          .json({ detail: "Deletion tombstone not found" });
+      }
+      res.json(data);
+    } catch (error) {
+      handleRouteError(res, error);
+    }
+  },
+);
+
 // POST /aletheia/matters/:matterId/external-source/fetch
 // Retrieval is separate from work-product persistence: callers must still
 // create a reviewable workpaper and audit chain from the returned capture.
@@ -600,20 +892,68 @@ aletheiaRouter.post(
   requireAuth,
   async (req, res) => {
     const sourceUrl = text(req.body?.url, 4000);
-    if (!sourceUrl) return void res.status(400).json({ detail: "url is required" });
+    if (!sourceUrl)
+      return void res.status(400).json({ detail: "url is required" });
     if (req.body?.externalAccessOptIn !== true) {
       return void res.status(403).json({
         code: "external_source_policy",
-        detail: "Explicit per-matter external-source authorization is required.",
+        detail:
+          "Explicit per-matter external-source authorization is required.",
+      });
+    }
+    const approvalCheckpointId = text(req.body?.approvalCheckpointId, 120);
+    if (!approvalCheckpointId) {
+      return void res.status(409).json({
+        code: "approval_required",
+        detail: "An approved external_source_use checkpoint is required.",
       });
     }
     try {
       const repo = createAletheiaRepository();
-      const matter = await repo.getMatterDetail(userContext(res), req.params.matterId);
-      if (!matter) return void res.status(404).json({ detail: "Matter not found" });
+      const ctx = userContext(res);
+      const matter = await repo.getMatterDetail(ctx, req.params.matterId);
+      if (!matter)
+        return void res.status(404).json({ detail: "Matter not found" });
+      const approved = await repo.hasApprovedCheckpoint(
+        ctx,
+        req.params.matterId,
+        approvalCheckpointId,
+        "external_source_use",
+        {
+          sourceUrlHash: `sha256:${createHash("sha256")
+            .update(sourceUrl)
+            .digest("hex")}`,
+        },
+      );
+      if (!approved) {
+        return void res.status(409).json({
+          code: "approval_required",
+          detail: "The external-source approval is missing or invalid.",
+        });
+      }
+      await repo.appendAuditEvent(ctx, req.params.matterId, {
+        actor: "system",
+        action: "external_source_fetch_authorized",
+        workflowVersion: "hermes-external-source-capture-v1",
+        model: null,
+        details: { approvalCheckpointId },
+      });
       const capture = await fetchAllowlistedExternalSource({
         url: sourceUrl,
         externalAccessOptIn: true,
+      });
+      await repo.appendAuditEvent(ctx, req.params.matterId, {
+        actor: "system",
+        action: "external_source_fetch_completed",
+        workflowVersion: "hermes-external-source-capture-v1",
+        model: null,
+        details: {
+          approvalCheckpointId,
+          host: capture.host,
+          urlHash: capture.urlHash,
+          snapshotHash: capture.snapshotHash,
+          responseBytes: capture.responseBytes,
+        },
       });
       res.json({
         schemaVersion: "hermes-external-source-capture-v1",
@@ -635,6 +975,7 @@ aletheiaRouter.post(
     const title = text(req.body?.title, 240);
     const status = text(req.body?.status, 40) || "generated";
     const generatedBy = text(req.body?.generatedBy, 40) || "human";
+    const schemaVersion = text(req.body?.schemaVersion, 120) || "aletheia-v0";
 
     if (!WORK_PRODUCT_KINDS.has(kind)) {
       return void res.status(400).json({ detail: "kind is invalid" });
@@ -647,6 +988,13 @@ aletheiaRouter.post(
     }
     if (!GENERATED_BY.has(generatedBy)) {
       return void res.status(400).json({ detail: "generatedBy is invalid" });
+    }
+    if (schemaVersion.startsWith("vera-legal-research-")) {
+      return void res.status(403).json({
+        code: "research_broker_required",
+        detail:
+          "Vera legal-research records must be created through the controlled Research Broker workflow.",
+      });
     }
     if (
       !req.body?.content ||
@@ -664,13 +1012,17 @@ aletheiaRouter.post(
           kind,
           title,
           status,
-          schemaVersion: text(req.body?.schemaVersion, 120) || "aletheia-v0",
+          schemaVersion,
           content: objectPayload(req.body.content),
           validationErrors: arrayPayload(req.body?.validationErrors),
           generatedBy: generatedBy as "system" | "agent" | "human",
           model: nullableText(req.body?.model, 120),
           approvalCheckpointId: nullableText(
             req.body?.approvalCheckpointId,
+            120,
+          ),
+          governanceApprovalRequestId: nullableText(
+            req.body?.governanceApprovalRequestId,
             120,
           ),
         },
@@ -805,13 +1157,16 @@ aletheiaRouter.post(
   requireAuth,
   async (req, res) => {
     try {
-      const data = await createAletheiaRepository().approveShareholderPenetrationGraph(
-        userContext(res),
-        req.params.matterId,
-        req.params.graphId,
-      );
+      const data =
+        await createAletheiaRepository().approveShareholderPenetrationGraph(
+          userContext(res),
+          req.params.matterId,
+          req.params.graphId,
+        );
       if (!data) {
-        return void res.status(404).json({ detail: "Matter or shareholder graph not found" });
+        return void res
+          .status(404)
+          .json({ detail: "Matter or shareholder graph not found" });
       }
       res.json(data);
     } catch (error) {
@@ -831,7 +1186,10 @@ aletheiaRouter.post(
         req.params.matterId,
         req.params.answerId,
       );
-      if (!data) return void res.status(404).json({ detail: "Matter or Legal Q&A answer not found" });
+      if (!data)
+        return void res
+          .status(404)
+          .json({ detail: "Matter or Legal Q&A answer not found" });
       res.json(data);
     } catch (error) {
       handleRouteError(res, error);
@@ -845,10 +1203,19 @@ aletheiaRouter.post(
   requireAuth,
   async (req, res) => {
     try {
-      const data = await createAletheiaRepository().approveWordAddinHandoff(userContext(res), req.params.matterId, req.params.handoffId);
-      if (!data) return void res.status(404).json({ detail: "Matter or Word Add-in handoff not found" });
+      const data = await createAletheiaRepository().approveWordAddinHandoff(
+        userContext(res),
+        req.params.matterId,
+        req.params.handoffId,
+      );
+      if (!data)
+        return void res
+          .status(404)
+          .json({ detail: "Matter or Word Add-in handoff not found" });
       res.json(data);
-    } catch (error) { handleRouteError(res, error); }
+    } catch (error) {
+      handleRouteError(res, error);
+    }
   },
 );
 
@@ -858,12 +1225,16 @@ aletheiaRouter.post(
   requireAuth,
   async (req, res) => {
     try {
-      const data = await createAletheiaRepository().approvePreferenceLearningCandidate(
-        userContext(res),
-        req.params.matterId,
-        req.params.memoryItemId,
-      );
-      if (!data) return void res.status(404).json({ detail: "Matter or preference candidate not found" });
+      const data =
+        await createAletheiaRepository().approvePreferenceLearningCandidate(
+          userContext(res),
+          req.params.matterId,
+          req.params.memoryItemId,
+        );
+      if (!data)
+        return void res
+          .status(404)
+          .json({ detail: "Matter or preference candidate not found" });
       res.json(data);
     } catch (error) {
       handleRouteError(res, error);
@@ -900,14 +1271,15 @@ aletheiaRouter.post(
   "/matters/:matterId/audit-events",
   requireAuth,
   async (req, res) => {
-    const actor = text(req.body?.actor, 40) || "human";
     const action = text(req.body?.action, 120);
 
-    if (!ACTORS.has(actor)) {
-      return void res.status(400).json({ detail: "actor is invalid" });
-    }
     if (!action) {
       return void res.status(400).json({ detail: "action is required" });
+    }
+    if (!isAllowedExternalAuditAction("human", action)) {
+      return void res.status(403).json({
+        detail: externalAuditActionHelp("human"),
+      });
     }
 
     try {
@@ -915,7 +1287,7 @@ aletheiaRouter.post(
         userContext(res),
         req.params.matterId,
         {
-          actor: actor as "system" | "agent" | "human",
+          actor: "human",
           action,
           workflowVersion: nullableText(req.body?.workflowVersion, 120),
           model: nullableText(req.body?.model, 120),
@@ -942,6 +1314,12 @@ aletheiaRouter.post(
         "audit_pack_export",
         "feedback_dataset_export",
         "final_memo_export",
+        "litigation_artifact_export",
+        "litigation_matter_audit_export",
+        "litigation_template_publish",
+        "litigation_template_retire",
+        "external_source_use",
+        "matter_purge",
       ].includes(action)
     ) {
       return void res.status(400).json({ detail: "action is invalid" });
@@ -955,7 +1333,13 @@ aletheiaRouter.post(
           action: action as
             | "audit_pack_export"
             | "feedback_dataset_export"
-            | "final_memo_export",
+            | "final_memo_export"
+            | "litigation_artifact_export"
+            | "litigation_matter_audit_export"
+            | "litigation_template_publish"
+            | "litigation_template_retire"
+            | "external_source_use"
+            | "matter_purge",
           prompt: nullableText(req.body?.prompt, 1000),
           requestedPayload: objectPayload(req.body?.requestedPayload),
         },
@@ -1433,6 +1817,10 @@ aletheiaRouter.post(
             req.body?.approvalCheckpointId,
             120,
           ),
+          governanceApprovalRequestId: nullableText(
+            req.body?.governanceApprovalRequestId,
+            120,
+          ),
           includeChunks: optionalBooleanPayload(req.body?.includeChunks),
           chunkLimit: positiveNumber(req.body?.chunkLimit),
         },
@@ -1461,6 +1849,10 @@ aletheiaRouter.post(
             req.body?.approvalCheckpointId,
             120,
           ),
+          governanceApprovalRequestId: nullableText(
+            req.body?.governanceApprovalRequestId,
+            120,
+          ),
           includeClosed: optionalBooleanPayload(req.body?.includeClosed),
         },
       );
@@ -1480,25 +1872,104 @@ aletheiaRouter.post(
   requireAuth,
   singleFileUpload("file"),
   async (req, res) => {
-    const file = req.file;
-    if (!file) {
+    const upload = req.file;
+    if (!upload) {
       return void res.status(400).json({ detail: "file is required" });
     }
 
     try {
-      const data = await createAletheiaRepository().uploadMatterDocument(
-        userContext(res),
-        req.params.matterId,
-        {
-          filename: file.originalname,
-          mimeType: file.mimetype,
-          sizeBytes: file.size,
-          buffer: file.buffer,
-        },
+      const repo = createAletheiaRepository();
+      const ctx = userContext(res);
+      if (
+        !(await repo.preflightMatterDocumentWrite(ctx, req.params.matterId))
+      ) {
+        return void res.status(404).json({ detail: "Matter not found" });
+      }
+      if (!upload.path) throw new Error("Temporary upload path is missing");
+      const malwareScan = await scanLocalUpload(upload.path);
+      const file = await materializeUploadedFile(upload);
+      const validationError = await uploadedDocumentValidationError(file);
+      if (validationError) {
+        return void res.status(415).json({ detail: validationError });
+      }
+      const contentDisarm = await disarmLocalUpload(
+        upload.path,
+        file.originalname,
       );
+      const data = await repo.uploadMatterDocument(ctx, req.params.matterId, {
+        filename: file.originalname,
+        mimeType: file.mimetype,
+        sizeBytes: file.size,
+        buffer: file.buffer,
+        malwareScan,
+        contentDisarm,
+      });
       if (!data)
         return void res.status(404).json({ detail: "Matter not found" });
-      res.status(201).json(data);
+      res.status(201).json(redactPublicMatterDocument(data));
+    } catch (error) {
+      await auditBlockedContentDisarm(res, req.params.matterId, error);
+      handleRouteError(res, error);
+    } finally {
+      await cleanupUploadedFiles([upload]);
+    }
+  },
+);
+
+// POST /aletheia/matters/:matterId/documents/:documentId/retry-parse
+aletheiaRouter.post(
+  "/matters/:matterId/documents/:documentId/retry-parse",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const data = await createAletheiaRepository().retryMatterDocumentParse(
+        userContext(res),
+        req.params.matterId,
+        req.params.documentId,
+      );
+      if (!data) {
+        return void res.status(404).json({ detail: "Document not found" });
+      }
+      res.json(redactPublicMatterDocument(data));
+    } catch (error) {
+      handleRouteError(res, error);
+    }
+  },
+);
+
+// GET /aletheia/matters/:matterId/documents/:documentId/original
+aletheiaRouter.get(
+  "/matters/:matterId/documents/:documentId/original",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const data =
+        await createAletheiaRepository().downloadMatterOriginalDocument(
+          userContext(res),
+          req.params.matterId,
+          req.params.documentId,
+        );
+      if (!data) {
+        return void res.status(404).json({ detail: "Document not found" });
+      }
+      res.status(200);
+      res.setHeader("Content-Type", data.mimeType);
+      res.setHeader(
+        "Content-Disposition",
+        originalDocumentContentDisposition(data.filename),
+      );
+      res.setHeader("Content-Length", String(data.bytes.length));
+      res.setHeader("X-Aletheia-Content-SHA256", data.sha256);
+      res.setHeader(
+        "Access-Control-Expose-Headers",
+        "Content-Disposition, Content-Length, X-Aletheia-Content-SHA256",
+      );
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Content-Security-Policy", "sandbox");
+      res.setHeader("Accept-Ranges", "none");
+      res.send(data.bytes);
     } catch (error) {
       handleRouteError(res, error);
     }
@@ -1514,45 +1985,73 @@ aletheiaRouter.post(
     const files = Array.isArray(req.files)
       ? (req.files as Express.Multer.File[])
       : [];
-    if (files.length === 0) {
-      return void res.status(400).json({ detail: "files are required" });
-    }
-
-    const repo = createAletheiaRepository();
-    const ctx = userContext(res);
-    const documents: unknown[] = [];
-    const errors: Array<{ filename: string; detail: string }> = [];
-
-    for (const file of files) {
-      try {
-        const data = await repo.uploadMatterDocument(ctx, req.params.matterId, {
-          filename: file.originalname,
-          mimeType: file.mimetype,
-          sizeBytes: file.size,
-          buffer: file.buffer,
-        });
-        if (!data) {
-          return void res.status(404).json({ detail: "Matter not found" });
-        }
-        documents.push(data);
-      } catch (error) {
-        errors.push({
-          filename: file.originalname,
-          detail:
-            error instanceof Error ? error.message : "Document upload failed",
-        });
+    try {
+      const repo = createAletheiaRepository();
+      const ctx = userContext(res);
+      if (
+        !(await repo.preflightMatterDocumentWrite(ctx, req.params.matterId))
+      ) {
+        return void res.status(404).json({ detail: "Matter not found" });
       }
-    }
+      if (files.length === 0) {
+        return void res.status(400).json({ detail: "files are required" });
+      }
+      const documents: unknown[] = [];
+      const errors: Array<{ filename: string; detail: string }> = [];
 
-    res.status(errors.length > 0 ? 207 : 201).json({
-      schema_version: "aletheia-document-import-batch-v0",
-      matter_id: req.params.matterId,
-      total: files.length,
-      imported: documents.length,
-      failed: errors.length,
-      documents,
-      errors,
-    });
+      for (const upload of files) {
+        try {
+          if (!upload.path) throw new Error("Temporary upload path is missing");
+          const malwareScan = await scanLocalUpload(upload.path);
+          const file = await materializeUploadedFile(upload);
+          const validationError = await uploadedDocumentValidationError(file);
+          if (validationError) throw new Error(validationError);
+          const contentDisarm = await disarmLocalUpload(
+            upload.path,
+            file.originalname,
+          );
+          const data = await repo.uploadMatterDocument(
+            ctx,
+            req.params.matterId,
+            {
+              filename: file.originalname,
+              mimeType: file.mimetype,
+              sizeBytes: file.size,
+              buffer: file.buffer,
+              malwareScan,
+              contentDisarm,
+            },
+          );
+          if (!data) {
+            return void res.status(404).json({ detail: "Matter not found" });
+          }
+          documents.push(redactPublicMatterDocument(data));
+        } catch (error) {
+          await auditBlockedContentDisarm(res, req.params.matterId, error);
+          errors.push({
+            filename: upload.originalname,
+            detail:
+              error instanceof Error ? error.message : "Document upload failed",
+          });
+        } finally {
+          await cleanupUploadedFiles([upload]);
+        }
+      }
+
+      res.status(errors.length > 0 ? 207 : 201).json({
+        schema_version: "aletheia-document-import-batch-v0",
+        matter_id: req.params.matterId,
+        total: files.length,
+        imported: documents.length,
+        failed: errors.length,
+        documents,
+        errors,
+      });
+    } catch (error) {
+      handleRouteError(res, error);
+    } finally {
+      await cleanupUploadedFiles(files);
+    }
   },
 );
 
@@ -1564,7 +2063,9 @@ aletheiaRouter.get(
     const query = text(req.query.q, 400);
     const rawLimit =
       typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
-    const mode = retrievalMode(req.query.mode);
+    const mode =
+      retrievalMode(req.query.mode) ??
+      configuredEvidenceIndexMode(String(res.locals.userId));
     if (!query) {
       return void res.status(400).json({ detail: "q is required" });
     }

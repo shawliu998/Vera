@@ -19,10 +19,10 @@ export function SiteLogo({
             ? "/aletheia"
             : "/aletheia";
     const sizeClasses = {
-        sm: "text-xl",
-        md: "text-2xl",
-        lg: "text-4xl",
-        xl: "text-6xl",
+        sm: "text-[18px]",
+        md: "text-[22px]",
+        lg: "text-[34px]",
+        xl: "text-[52px]",
     };
 
     const iconSizes = {
@@ -34,15 +34,12 @@ export function SiteLogo({
 
     const logo = (
         <h1
-            className={`flex items-center gap-2 ${sizeClasses[size]} font-light font-serif ${
+            className={`flex items-center gap-2 ${sizeClasses[size]} font-sans ${
                 animate ? "sidebar-fade-in" : ""
             } ${className}`}
         >
             <AletheiaIcon size={iconSizes[size]} />
-            <span>Aletheia</span>
-            <span className="brand-cjk ml-2 translate-y-[0.02em] text-[0.45em] leading-none text-[#69707d]">
-                明证
-            </span>
+            <span className="font-semibold leading-none">Vera</span>
         </h1>
     );
 

@@ -2,28 +2,48 @@
   "name": "aletheia-desktop",
   "version": "1.0.1",
   "private": true,
-  "description": "Aletheia local desktop app.",
-  "author": "Aletheia contributors",
+  "description": "Vera local desktop app.",
+  "author": "Vera contributors",
   "license": "AGPL-3.0-only",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dist:mac": "electron-builder --mac",
-    "pack:mac": "electron-builder --mac --dir"
+    "test:sqlcipher-runtime": "electron scripts/sqlcipherUtilityAudit.js",
+    "test:legacy-migration": "node scripts/desktopMigrationAudit.js",
+    "test:packaged-app": "node scripts/packagedAppSmoke.js",
+    "test:packaged-backup": "node scripts/packagedBackupBridgeAudit.js",
+    "test:packaged-restore-fail-closed": "node scripts/packagedRestoreFailClosedAudit.js",
+    "test:native-ocr": "node scripts/nativeOcrAudit.js",
+    "test:packaged-native-ocr": "node scripts/packagedNativeOcrAudit.js",
+    "test:packaged-ocr": "node scripts/packagedNativeOcrAudit.js",
+    "test:packaged-notifications": "node scripts/packagedNotificationAudit.js",
+    "test:product-rename": "node scripts/productRenameAudit.js",
+    "test:audit-anchor-config": "node scripts/auditAnchorConfigAudit.js",
+    "test:original-document-save": "node scripts/originalDocumentSaveAudit.js",
+    "signing:preflight": "node scripts/releaseSigningPreflight.js",
+    "signing:verify": "node scripts/verifyMacRelease.js",
+    "test:signing-pipeline": "node scripts/releaseSigningAudit.js",
+    "prepare:frontend-runtime": "node scripts/prepareFrontendRuntime.js && node scripts/buildNativeOcr.js",
+    "check:package-hygiene": "node scripts/desktopPackageHygieneAudit.js --runtime .runtime/frontend",
+    "dist:mac": "npm run signing:preflight && electron-builder --mac",
+    "pack:mac": "npm run signing:preflight && electron-builder --mac --dir"
   },
   "devDependencies": {
+    "@electron/notarize": "2.5.0",
     "electron": "^39.2.7",
     "electron-builder": "^26.0.12"
   },
   "build": {
     "appId": "ai.aletheia.local",
-    "productName": "Aletheia",
+    "productName": "Vera",
     "asar": true,
-    "afterPack": "scripts/afterPack.js",
+    "afterSign": "scripts/afterSign.js",
     "files": [
       "main.js",
+      "preload.js",
+      "auditAnchorConfig.js",
+      "originalDocumentSave.js",
       "package.json",
-      "scripts/afterPack.js",
       "build/icon.icns",
       "build/icon.png"
     ],
@@ -41,32 +61,23 @@
         "to": "aletheia/backend/package.json"
       },
       {
-        "from": "../backend/schema.sql",
-        "to": "aletheia/backend/schema.sql"
+        "from": "../backend/voice_sidecar",
+        "to": "aletheia/backend/voice_sidecar"
       },
       {
-        "from": "../backend/migrations",
-        "to": "aletheia/backend/migrations"
+        "from": ".runtime/frontend",
+        "to": "aletheia/frontend",
+        "filter": [
+          "**/*"
+        ]
       },
       {
-        "from": "../frontend/.next",
-        "to": "aletheia/frontend/.next"
+        "from": ".runtime/frontend-node-modules.tgz",
+        "to": "aletheia/frontend-node-modules.tgz"
       },
       {
-        "from": "../frontend/node_modules",
-        "to": "aletheia/frontend/node_modules"
-      },
-      {
-        "from": "../frontend/package.json",
-        "to": "aletheia/frontend/package.json"
-      },
-      {
-        "from": "../frontend/public",
-        "to": "aletheia/frontend/public"
-      },
-      {
-        "from": "../frontend/next.config.ts",
-        "to": "aletheia/frontend/next.config.ts"
+        "from": ".runtime/native/aletheia-ocr",
+        "to": "aletheia/native/aletheia-ocr"
       }
     ],
     "mac": {
@@ -76,13 +87,12 @@
         "dmg",
         "zip"
       ],
-      "hardenedRuntime": false,
+      "hardenedRuntime": true,
       "gatekeeperAssess": false,
-      "identity": null,
-      "artifactName": "Aletheia-${version}-${arch}.${ext}"
+      "artifactName": "Vera-${version}-${arch}.${ext}"
     },
     "dmg": {
-      "artifactName": "Aletheia-${version}-${arch}.${ext}"
+      "artifactName": "Vera-${version}-${arch}.${ext}"
     }
   }
 }

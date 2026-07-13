@@ -49,6 +49,9 @@ not a release process yet; it defines what must be true before packaging.
   links for high-risk exports. Its output includes byte counts and sha256 hashes
   for local export files.
 - `npm run test:aletheia:local` passes.
+- `npm run test:aletheia:litigation-tasks` verifies that only confirmed or
+  completed deadlines enter the persistent work queue, including idempotency,
+  user isolation, completion/reopen, audit events, and SQLite constraints.
 - `npm run test:aletheia:restore-drill` proves backup, restore, and audit
   integrity against a real generated local matter, not just an empty data
   directory.
@@ -157,6 +160,15 @@ npm run test:aletheia:package
 ```bash
 cd frontend
 npm run build
+
+cd ../desktop
+npm run test:sqlcipher-runtime
+npm run test:legacy-migration
+npm run prepare:frontend-runtime
+npm run check:package-hygiene
+npm run test:signing-pipeline
+npm run pack:mac
+npm run test:packaged-app
 ```
 
 Manual browser check:
@@ -170,10 +182,46 @@ Manual browser check:
 ## Known Packaging Risks
 
 - Node 22 currently prints an ExperimentalWarning for `node:sqlite`.
-- The broader inherited app still has Supabase-dependent routes.
 - Local vector retrieval is not packaged yet; SQLite FTS5 is the current
   supported local retrieval layer.
-- If using production `next start`, `NEXT_PUBLIC_API_BASE_URL` must be set at
-  build time.
+- Browser-only production builds still need `NEXT_PUBLIC_API_BASE_URL` at build
+  time. The Electron package instead resolves its backend URL through the
+  trusted runtime bridge.
 - Generated shell launchers are a packaging prototype. A signed desktop app or
   installer still needs operator-specific hardening.
+
+The packaged runtime must contain only the compiled local backend. Verify that
+desktop resources do not include legacy SQL schemas/migrations and that child
+processes use the reviewed local environment allowlist. The default macOS build
+has no application signature and is local-only until an Apple Developer ID is
+available; a linker-generated ad-hoc Mach-O marker is not a release signature.
+
+## macOS Distribution Gate
+
+The default `./scripts/package-desktop-mac.sh` build is local-only and must
+report `signed=false notarized=false`. It clears signing and notarization
+environment variables for the Electron Builder invocation and never submits an
+artifact to Apple.
+
+Developer ID signing and notarization are blocked until real Apple credentials
+are provided outside this repository. There is no claim that Vera is notarized
+today. A distributable build must use `VERA_RELEASE_SIGNING=true` and pass
+`npm run signing:preflight` before any application build begins. It requires a
+non-ad-hoc `CSC_NAME="Developer ID Application: ... (TEAMID)"` plus exactly one
+complete, team-matched method:
+
+- `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID`; or
+- `APPLE_API_KEY` (readable `.p8` file), `APPLE_API_KEY_ID`,
+  `APPLE_API_ISSUER`, and `APPLE_TEAM_ID`.
+
+When `CSC_LINK` is not used, the release CLI preflight also runs
+`security find-identity -v -p codesigning` and requires an exact match for
+`CSC_NAME` in the macOS keychain. Preflight reports requirements only; actual
+`signed=true notarized=true` is emitted solely after release verification.
+
+Release packaging notarizes in `afterSign`, validates the stapled ticket, then
+requires `codesign --verify --deep --strict`, Developer ID authority/team
+inspection, `spctl --assess`, `xcrun stapler validate`, and SHA-256 manifest
+verification. Run `npm run test:signing-pipeline` to audit credential
+classification and static linkage offline; it uses fixtures only and performs
+no network call.

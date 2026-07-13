@@ -73,6 +73,12 @@ function assertWorkflowGraph(run: any, options: { resumed?: boolean } = {}) {
     graph.controls?.defaultToolPolicy === "allowlist_per_step",
     "Workflow graph should expose allowlist tool policy",
   );
+  assert(
+    graph.controls?.humanApprovalRequiredFor?.includes(
+      "litigation_artifact_export",
+    ),
+    "Workflow graph should require approval for litigation artifact export",
+  );
   if (options.resumed) {
     assert(
       graph.nodes.some((node: any) =>
@@ -167,7 +173,6 @@ async function runMcpSmoke(dataDir: string, expectedMatterTitle: string) {
     cwd: process.cwd(),
     env: {
       ...process.env,
-      ALETHEIA_STORAGE_DRIVER: "local",
       ALETHEIA_AUTH_MODE: "single_user",
       ALETHEIA_DATA_DIR: dataDir,
       ALETHEIA_LOCAL_USER_ID: "local-user",
@@ -216,7 +221,8 @@ async function runPrivateTokenAuthSmoke() {
   const previousUserId = process.env.ALETHEIA_LOCAL_USER_ID;
   const previousUserEmail = process.env.ALETHEIA_LOCAL_USER_EMAIL;
   process.env.ALETHEIA_AUTH_MODE = "private_token";
-  process.env.ALETHEIA_PRIVATE_AUTH_TOKEN = "regression-private-token";
+  const privateToken = "regression-private-token-at-least-32-characters";
+  process.env.ALETHEIA_PRIVATE_AUTH_TOKEN = privateToken;
   process.env.ALETHEIA_LOCAL_USER_ID = "private-token-user";
   process.env.ALETHEIA_LOCAL_USER_EMAIL = "private-token@aletheia.internal";
 
@@ -260,10 +266,7 @@ async function runPrivateTokenAuthSmoke() {
       !wrong.nextCalled && wrong.response.statusCode === 401,
       "Aletheia private token auth should reject invalid bearer tokens",
     );
-    const allowed = await invoke(
-      "/aletheia/matters",
-      "Bearer regression-private-token",
-    );
+    const allowed = await invoke("/aletheia/matters", `Bearer ${privateToken}`);
     assert(
       allowed.nextCalled &&
         allowed.response.locals.userId === "private-token-user" &&
@@ -275,9 +278,14 @@ async function runPrivateTokenAuthSmoke() {
       "Bearer regression-private-token",
     );
     assert(
-      !inheritedRoute.nextCalled &&
-        [401, 500].includes(inheritedRoute.response.statusCode),
-      "Aletheia private token auth must not bypass Supabase auth for inherited routes",
+      !inheritedRoute.nextCalled && inheritedRoute.response.statusCode === 404,
+      "The local-only auth boundary must reject inherited cloud routes",
+    );
+    delete process.env.ALETHEIA_AUTH_MODE;
+    const unconfigured = await invoke("/aletheia/matters");
+    assert(
+      !unconfigured.nextCalled && unconfigured.response.statusCode === 500,
+      "Aletheia auth must fail closed when no local auth mode is configured",
     );
   } finally {
     if (previousAuthMode === undefined) {
@@ -415,7 +423,6 @@ async function main() {
     `aletheia-local-regression-${Date.now()}`,
   );
   rmSync(dataDir, { recursive: true, force: true });
-  process.env.ALETHEIA_STORAGE_DRIVER = "local";
   process.env.ALETHEIA_AUTH_MODE = "single_user";
   process.env.ALETHEIA_DATA_DIR = dataDir;
   process.env.ALETHEIA_LOCAL_USER_ID = "local-user";

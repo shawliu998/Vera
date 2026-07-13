@@ -73,6 +73,7 @@ function main() {
     "backend/src/scripts/aletheiaRestoreDrill.ts",
   );
   const index = readText(root, "backend/src/index.ts");
+  const repositoryFactory = readText(root, "backend/src/lib/aletheia/index.ts");
   const auth = readText(root, "backend/src/middleware/auth.ts");
   const ci = readText(root, ".github/workflows/aletheia-local-ci.yml");
   const docs = [
@@ -93,19 +94,17 @@ function main() {
       hasAll(localDoctor, [
         "nodeMajor >= 22",
         'await import("node:sqlite")',
-        'actualStorageDriver === "local"',
         'actualAuthMode === "single_user" || actualAuthMode === "private_token"',
-        "privateToken.length >= 24",
+        "privateToken.length >= 32",
         "assertWritableDataDirs",
         "semantic-index-boundary",
         "model-provider-keys",
       ]),
-      "Local doctor must verify Node 22, node:sqlite, local storage/auth, private token length, writable data dirs, semantic index boundary, and model-key warnings.",
+      "Local doctor must verify Node 22, node:sqlite, local auth, private token length, writable data dirs, semantic index boundary, and model-key warnings.",
     ),
     check(
       "local-launcher-workstation",
       hasAll(localLauncher, [
-        'ALETHEIA_STORAGE_DRIVER: process.env.ALETHEIA_STORAGE_DRIVER ?? "local"',
         'ALETHEIA_AUTH_MODE: process.env.ALETHEIA_AUTH_MODE ?? "single_user"',
         "NEXT_PUBLIC_API_BASE_URL",
         "portOpen",
@@ -117,16 +116,25 @@ function main() {
       "Local launcher must default to local/single-user mode, respect existing dev servers, print frontend/backend health URLs, and show the MCP command.",
     ),
     check(
+      "local-only-product-boundary",
+      hasAll(index, ['app.use("/aletheia", aletheiaRouter)']) &&
+        !index.includes('app.use("/chat"') &&
+        !index.includes('require("./routes/chat")') &&
+        repositoryFactory.includes("return new LocalAletheiaRepository()"),
+      "Aletheia must default to the product-only router surface and have exactly one local repository implementation.",
+    ),
+    check(
       "http-health-and-private-auth",
       hasAll(index, [
         'app.get("/health"',
         "helmet",
         "rateLimit",
-        "Aletheia backend running on port",
+        "Aletheia backend running at http://",
+        "ALETHEIA_BACKEND_HOST",
       ]) &&
         hasAll(auth, [
-          'localAuthMode === "single_user"',
-          'localAuthMode === "private_token"',
+          'authMode === "single_user"',
+          'authMode === "private_token"',
           "constantTimeTokenEqual",
           "ALETHEIA_PRIVATE_AUTH_TOKEN",
           'req.originalUrl.startsWith("/aletheia")',

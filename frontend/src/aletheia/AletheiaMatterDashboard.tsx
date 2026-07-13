@@ -1,338 +1,386 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-    ArrowRight,
-    CircleAlert,
-    Database,
-    FileCheck2,
-    Scale,
-    ShieldCheck,
+  ArrowRight,
+  CalendarClock,
+  CircleAlert,
+  Database,
+  FileCheck2,
+  RefreshCw,
+  Scale,
+  ShieldCheck,
 } from "lucide-react";
-import { templates } from "./mockData";
-import { getMatterSummaries, getReviewQueue } from "./workflow";
 import { NewMatterButton } from "./NewMatterButton";
 import {
-    listAletheiaMatters,
-    type AletheiaMatterOverview,
+  listAletheiaMatters,
+  listAletheiaTasks,
+  type AletheiaMatterOverview,
+  type AletheiaMatterTaskRecord,
 } from "@/app/lib/aletheiaApi";
 import { cn } from "@/lib/utils";
-import {
-    ALETHEIA_SETTINGS_EVENT,
-    readAletheiaSettings,
-} from "./settingsModel";
+import { formatTaskDueDate, taskDueGroup } from "./AletheiaTaskQueue";
 
-type MatterQueueItem = ReturnType<typeof getMatterSummaries>[number] & {
-    href: string;
-    source: "api" | "demo";
+type MatterQueueItem = {
+  id: string;
+  title: string;
+  template: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  clientOrProject?: string;
+  objective: string;
+  riskLevel?: string;
+  templateName: string;
+  documentCount: number;
+  evidenceCount: number;
+  reviewCount: number;
+  auditEventCount: number;
+  href: string;
 };
 
 function riskClass(risk?: string | null) {
-    if (risk === "high") return "text-red-600";
-    if (risk === "medium") return "text-amber-700";
-    return "text-gray-500";
+  if (risk === "high") return "text-red-600";
+  if (risk === "medium") return "text-amber-700";
+  return "text-gray-500";
 }
 
 function statusClass(status: string) {
-    if (status === "needs_review") return "text-amber-700";
-    if (status === "completed") return "text-gray-500";
-    return "text-gray-600";
+  if (status === "needs_review") return "text-amber-700";
+  if (status === "completed") return "text-gray-500";
+  return "text-gray-600";
 }
 
 function titleize(value: string) {
-    return value.replaceAll("_", " ");
+  return value.replaceAll("_", " ");
 }
 
 function templateName(templateId: string) {
-    return templates.find((template) => template.id === templateId)?.name ?? templateId;
+  if (templateId === "civil_litigation") return "Civil Litigation";
+  return titleize(templateId);
 }
 
 function remoteToQueueItem(matter: AletheiaMatterOverview): MatterQueueItem {
-    return {
-        id: matter.id,
-        title: matter.title,
-        template: matter.template,
-        status: matter.status === "archived" ? "completed" : matter.status,
-        createdAt: matter.created_at,
-        updatedAt: matter.updated_at,
-        clientOrProject: matter.client_or_project ?? undefined,
-        objective: matter.objective,
-        riskLevel: matter.risk_level ?? undefined,
-        templateName: templateName(matter.template),
-        documentCount: matter.document_count,
-        evidenceCount: matter.evidence_count,
-        reviewCount: matter.review_count,
-        auditEventCount: matter.audit_event_count,
-        href: `/aletheia/matters/${matter.id}`,
-        source: "api",
-    };
+  return {
+    id: matter.id,
+    title: matter.title,
+    template: matter.template,
+    status: matter.status === "archived" ? "completed" : matter.status,
+    createdAt: matter.created_at,
+    updatedAt: matter.updated_at,
+    clientOrProject: matter.client_or_project ?? undefined,
+    objective: matter.objective,
+    riskLevel: matter.risk_level ?? undefined,
+    templateName: templateName(matter.template),
+    documentCount: matter.document_count,
+    evidenceCount: matter.evidence_count,
+    reviewCount: matter.review_count,
+    auditEventCount: matter.audit_event_count,
+    href: `/aletheia/matters/${matter.id}/litigation?view=overview`,
+  };
 }
 
 export function AletheiaMatterDashboard({
-    initialNewMatterOpen,
+  initialNewMatterOpen,
 }: {
-    initialNewMatterOpen: boolean;
+  initialNewMatterOpen: boolean;
 }) {
-    const demoMatters = useMemo<MatterQueueItem[]>(
-        () =>
-            getMatterSummaries().map((matter) => ({
-                ...matter,
-                href:
-                    matter.template === "legal_matter_review"
-                        ? "/aletheia/matters/matter-demo-legal-001"
-                        : `/aletheia/templates/${matter.template}`,
-                source: "demo" as const,
-            })),
-        [],
-    );
-    const reviewQueue = useMemo(() => getReviewQueue(), []);
-    const [apiMatters, setApiMatters] = useState<MatterQueueItem[]>([]);
-    const [apiState, setApiState] = useState<"checking" | "connected" | "fallback">(
-        "checking",
-    );
-    const [demoDataEnabled, setDemoDataEnabled] = useState(true);
+  const [apiMatters, setApiMatters] = useState<MatterQueueItem[]>([]);
+  const [openTasks, setOpenTasks] = useState<AletheiaMatterTaskRecord[]>([]);
+  const [apiState, setApiState] = useState<
+    "checking" | "connected" | "unavailable"
+  >("checking");
+  const [retryKey, setRetryKey] = useState(0);
 
-    useEffect(() => {
-        let cancelled = false;
-        async function loadMatters() {
-            try {
-                const records = await listAletheiaMatters();
-                if (cancelled) return;
-                setApiMatters(records.map(remoteToQueueItem));
-                setApiState("connected");
-            } catch {
-                if (!cancelled) setApiState("fallback");
-            }
-        }
-        void loadMatters();
-        return () => {
-            cancelled = true;
-        };
-    }, []);
+  useEffect(() => {
+    let cancelled = false;
+    async function loadMatters() {
+      setApiState("checking");
+      setApiMatters([]);
+      setOpenTasks([]);
+      try {
+        const [records, tasks] = await Promise.all([
+          listAletheiaMatters(),
+          listAletheiaTasks("open"),
+        ]);
+        if (cancelled) return;
+        setApiMatters(records.map(remoteToQueueItem));
+        setOpenTasks(tasks);
+        setApiState("connected");
+      } catch {
+        if (!cancelled) setApiState("unavailable");
+      }
+    }
+    void loadMatters();
+    return () => {
+      cancelled = true;
+    };
+  }, [retryKey]);
 
-    useEffect(() => {
-        function syncSettings() {
-            setDemoDataEnabled(readAletheiaSettings().demoDataEnabled);
-        }
-        syncSettings();
-        window.addEventListener(ALETHEIA_SETTINGS_EVENT, syncSettings);
-        return () => {
-            window.removeEventListener(ALETHEIA_SETTINGS_EVENT, syncSettings);
-        };
-    }, []);
+  const matters = apiMatters;
 
-    const matters = useMemo(() => {
-        const remoteIds = new Set(apiMatters.map((matter) => matter.id));
-        return [
-            ...apiMatters,
-            ...(demoDataEnabled
-                ? demoMatters.filter((matter) => !remoteIds.has(matter.id))
-                : []),
-        ];
-    }, [apiMatters, demoDataEnabled, demoMatters]);
+  const totalEvidence = matters.reduce(
+    (sum, matter) => sum + matter.evidenceCount,
+    0,
+  );
+  const totalReviews = matters.reduce(
+    (sum, matter) => sum + matter.reviewCount,
+    0,
+  );
+  const connected = apiState === "connected";
+  const matterById = new Map(matters.map((matter) => [matter.id, matter]));
 
-    const totalEvidence = matters.reduce((sum, matter) => sum + matter.evidenceCount, 0);
-    const totalReviews = matters.reduce((sum, matter) => sum + matter.reviewCount, 0);
-    const highRiskMatters = matters.filter((matter) => matter.riskLevel === "high").length;
-    const connected = apiState === "connected";
+  return (
+    <section className="flex min-h-full flex-col bg-[#fbfbfc]">
+      <div className="border-b border-gray-200 bg-white px-5 py-4 md:px-8">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h1 className="text-[22px] font-semibold leading-7 text-gray-950">
+              Matters
+            </h1>
+            <p className="mt-1 text-xs text-gray-500">
+              {connected
+                ? "Local records connected."
+                : apiState === "checking"
+                  ? "Connecting to the local service..."
+                  : "Local records are unavailable."}
+            </p>
+          </div>
+          <div className="flex w-fit items-center gap-3">
+            {connected && (
+              <div className="hidden h-9 items-center gap-2 text-sm font-medium text-gray-700 md:flex">
+                <Database className="h-3.5 w-3.5 text-emerald-600" />
+                Local store
+              </div>
+            )}
+            {connected && matters.length > 0 && (
+              <NewMatterButton initialOpen={initialNewMatterOpen} />
+            )}
+          </div>
+        </div>
 
-    return (
-        <section className="flex min-h-full flex-col bg-[#fbfbfc]">
-            <div className="border-b border-gray-200 bg-white px-5 py-4 md:px-8">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                    <div>
-                        <div className="flex items-center gap-2">
-                            <h1 className="text-[22px] font-semibold leading-7 text-gray-950">
-                                Matters
-                            </h1>
-                            <span className="text-[11px] font-medium text-gray-500">
-                                V1 local
-                            </span>
-                        </div>
-                        <p className="mt-1 text-xs text-gray-500">
-                            {connected
-                                ? "Local records connected."
-                                : apiState === "checking"
-                                  ? "Checking local workspace..."
-                                  : "Demo data"}
-                        </p>
-                    </div>
-                    <div className="flex w-fit items-center gap-3">
-                        <div className="hidden h-9 items-center gap-2 text-sm font-medium text-gray-700 md:flex">
-                            {connected ? (
-                                <Database className="h-3.5 w-3.5 text-emerald-600" />
-                            ) : (
-                                <CircleAlert className="h-3.5 w-3.5 text-amber-600" />
-                            )}
-                            {connected ? "Local store" : "Fallback mode"}
-                        </div>
-                        <NewMatterButton initialOpen={initialNewMatterOpen} />
-                    </div>
-                </div>
-
-                <div className="mt-4 grid overflow-hidden rounded-lg border border-gray-200 bg-white md:grid-cols-4">
-                    {[
-                        {
-                            label: "Matters",
-                            value: matters.length,
-                            icon: Scale,
-                        },
-                        {
-                            label: "Evidence",
-                            value: totalEvidence,
-                            icon: FileCheck2,
-                        },
-                        {
-                            label: "Reviews",
-                            value: totalReviews,
-                            icon: ShieldCheck,
-                        },
-                        {
-                            label: "High risk",
-                            value: highRiskMatters,
-                            icon: CircleAlert,
-                        },
-                    ].map((item) => (
-                        <div
-                            key={item.label}
-                            className="flex items-center justify-between border-b border-gray-200/60 px-3.5 py-2.5 last:border-b-0 md:border-b-0 md:border-r md:last:border-r-0"
-                        >
-                            <div>
-                                <p className="text-[11px] font-medium text-gray-500">
-                                    {item.label}
-                                </p>
-                                <p className="mt-0.5 text-lg font-semibold text-gray-950">
-                                    {item.value}
-                                </p>
-                            </div>
-                            <item.icon className="h-4 w-4 stroke-[1.8] text-gray-500" />
-                        </div>
-                    ))}
-                </div>
+        {connected && (
+          <div className="mt-4 grid overflow-hidden border border-gray-200 bg-white md:grid-cols-4">
+          {[
+            {
+              label: "Matters",
+              value: matters.length,
+              icon: Scale,
+            },
+            {
+              label: "Evidence",
+              value: totalEvidence,
+              icon: FileCheck2,
+            },
+            {
+              label: "Reviews",
+              value: totalReviews,
+              icon: ShieldCheck,
+            },
+            {
+              label: "Open tasks",
+              value: openTasks.length,
+              icon: CalendarClock,
+            },
+          ].map((item) => (
+            <div
+              key={item.label}
+              className="flex items-center justify-between border-b border-gray-200/60 px-3.5 py-2.5 last:border-b-0 md:border-b-0 md:border-r md:last:border-r-0"
+            >
+              <div>
+                <p className="text-[11px] font-medium text-gray-500">
+                  {item.label}
+                </p>
+                <p className="mt-0.5 text-lg font-semibold text-gray-950">
+                  {item.value}
+                </p>
+              </div>
+              <item.icon className="h-4 w-4 stroke-[1.8] text-gray-500" />
             </div>
+          ))}
+          </div>
+        )}
+      </div>
 
-            <div className="flex h-12 items-center gap-4 border-b border-gray-100 bg-white px-5 text-sm md:px-8">
-                <div className="flex items-center gap-4">
-                    <span className="border-b border-gray-950 py-3 text-sm font-medium text-gray-950">
-                        All Matters
+      {connected && (
+        <div className="flex h-12 items-center gap-4 border-b border-gray-100 bg-white px-5 text-sm md:px-8">
+          <div className="flex items-center gap-4">
+          <span className="border-b border-gray-950 py-3 text-sm font-medium text-gray-950">
+            All Matters
+          </span>
+          </div>
+        </div>
+      )}
+
+      {apiState === "checking" && (
+        <div className="px-5 py-8 text-sm text-gray-500 md:px-8">
+          Connecting to the local service...
+        </div>
+      )}
+
+      {apiState === "unavailable" && (
+        <div className="px-5 py-8 md:px-8">
+          <div
+            role="alert"
+            data-testid="matters-service-unavailable"
+            className="max-w-2xl border border-gray-300 bg-white p-5"
+          >
+            <div className="flex items-start gap-3">
+              <CircleAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+              <div>
+                <h2 className="text-sm font-semibold text-gray-950">
+                  Local service unavailable
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-gray-600">
+                  Vera could not load local matters and has not substituted demo
+                  records. Reconnect the local service, then retry.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setRetryKey((value) => value + 1)}
+                  className="mt-4 inline-flex h-9 items-center gap-2 border border-gray-300 bg-white px-3 text-sm font-medium text-gray-800 hover:bg-gray-50"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Retry
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {connected && (
+        <div className="grid min-h-0 flex-1 lg:grid-cols-[1fr_340px]">
+        <section className="min-w-0 overflow-x-auto">
+          <div className="min-w-0 md:min-w-[900px]">
+            <div className="flex h-8 items-center border-b border-gray-200/80 bg-[#f6f7f8] pr-8 text-xs font-semibold text-gray-500">
+              <div className="w-8 shrink-0" />
+              <div className="flex-1 min-w-0 pl-2 pr-4">Name</div>
+              <div className="hidden w-52 shrink-0 md:block">Template</div>
+              <div className="hidden w-24 shrink-0 md:block">Docs</div>
+              <div className="hidden w-24 shrink-0 md:block">Evidence</div>
+              <div className="hidden w-28 shrink-0 md:block">Status</div>
+              <div className="w-8 shrink-0" />
+            </div>
+            <div>
+              {matters.length === 0 && (
+                <div className="px-10 py-16 text-center">
+                  <h2 className="text-base font-semibold text-gray-900">
+                    No matters yet
+                  </h2>
+                  <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-gray-500">
+                    Create a local matter to import documents, confirm facts,
+                    track deadlines, and prepare reviewable work products.
+                  </p>
+                  <div className="mt-5 flex justify-center">
+                    <NewMatterButton />
+                  </div>
+                </div>
+              )}
+              {matters.map((matter) => (
+                <Link
+                  key={matter.id}
+                  href={matter.href}
+                  className="aletheia-matter-row group flex h-16 items-center border-b border-gray-100 pr-8 transition-colors hover:bg-white"
+                >
+                  <div className="flex w-8 shrink-0 justify-center">
+                    <Scale className="h-3.5 w-3.5 text-gray-300 group-hover:text-gray-500" />
+                  </div>
+                  <div className="min-w-0 flex-1 pl-2 pr-4">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="truncate text-sm text-gray-800">
+                        {matter.title}
+                      </span>
+                      <span
+                        className={cn(
+                          "text-[11px] font-medium",
+                          riskClass(matter.riskLevel),
+                        )}
+                      >
+                        {matter.riskLevel ?? "low"}
+                      </span>
+                      <span className="text-[11px] text-gray-400">local</span>
+                    </div>
+                    <p className="mt-0.5 truncate text-xs text-gray-400">
+                      {matter.objective}
+                    </p>
+                  </div>
+                  <div className="hidden w-52 shrink-0 truncate text-sm text-gray-500 md:block">
+                    {matter.templateName}
+                  </div>
+                  <div className="hidden w-24 shrink-0 text-sm text-gray-500 md:block">
+                    {matter.documentCount}
+                  </div>
+                  <div className="hidden w-24 shrink-0 text-sm text-gray-500 md:block">
+                    {matter.evidenceCount}
+                  </div>
+                  <div className="hidden w-28 shrink-0 md:block">
+                    <span
+                      className={cn(
+                        "text-xs font-medium",
+                        statusClass(matter.status),
+                      )}
+                    >
+                      {titleize(matter.status)}
                     </span>
-                    <Link
-                        href="/aletheia/reviews"
-                        className="py-3 font-medium text-gray-500 transition-colors hover:text-gray-900"
-                    >
-                        Review Queue
-                    </Link>
-                    <Link
-                        href="/aletheia/evidence"
-                        className="py-3 font-medium text-gray-500 transition-colors hover:text-gray-900"
-                    >
-                        Evidence
-                    </Link>
-                </div>
-                <div className="ml-auto hidden items-center gap-2 text-xs text-gray-500 md:flex">
-                    <span>Evidence-bound</span>
-                    <span className="text-gray-300">/</span>
-                    <span>Gate-controlled</span>
-                </div>
+                  </div>
+                  <ArrowRight className="h-4 w-8 shrink-0 text-gray-300 transition-colors group-hover:text-gray-600" />
+                </Link>
+              ))}
             </div>
-
-            <div className="grid min-h-0 flex-1 lg:grid-cols-[1fr_340px]">
-                <section className="min-w-0 overflow-x-auto">
-                    <div className="min-w-0 md:min-w-[900px]">
-                        <div className="flex h-8 items-center border-b border-gray-200/80 bg-[#f6f7f8] pr-8 text-xs font-semibold text-gray-500">
-                            <div className="w-8 shrink-0" />
-                            <div className="flex-1 min-w-0 pl-2 pr-4">Name</div>
-                            <div className="hidden w-52 shrink-0 md:block">Template</div>
-                            <div className="hidden w-24 shrink-0 md:block">Docs</div>
-                            <div className="hidden w-24 shrink-0 md:block">Evidence</div>
-                            <div className="hidden w-28 shrink-0 md:block">Status</div>
-                            <div className="w-8 shrink-0" />
-                        </div>
-                        <div>
-                            {matters.map((matter) => (
-                                <Link
-                                    key={`${matter.source}-${matter.id}`}
-                                    href={matter.href}
-                                    className="group flex h-16 items-center border-b border-gray-100 pr-8 transition-colors hover:bg-white"
-                                >
-                                    <div className="flex w-8 shrink-0 justify-center">
-                                        <Scale className="h-3.5 w-3.5 text-gray-300 group-hover:text-gray-500" />
-                                    </div>
-                                    <div className="min-w-0 flex-1 pl-2 pr-4">
-                                        <div className="flex min-w-0 items-center gap-2">
-                                            <span className="truncate text-sm text-gray-800">
-                                                {matter.title}
-                                            </span>
-                                            <span
-                                                className={cn("text-[11px] font-medium", riskClass(matter.riskLevel))}
-                                            >
-                                                {matter.riskLevel ?? "low"}
-                                            </span>
-                                            {matter.source === "api" && (
-                                                <span className="text-[11px] text-gray-400">
-                                                    local
-                                                </span>
-                                            )}
-                                        </div>
-                                        <p className="mt-0.5 truncate text-xs text-gray-400">
-                                            {matter.objective}
-                                        </p>
-                                    </div>
-                                    <div className="hidden w-52 shrink-0 truncate text-sm text-gray-500 md:block">
-                                        {matter.templateName}
-                                    </div>
-                                    <div className="hidden w-24 shrink-0 text-sm text-gray-500 md:block">
-                                        {matter.documentCount}
-                                    </div>
-                                    <div className="hidden w-24 shrink-0 text-sm text-gray-500 md:block">
-                                        {matter.evidenceCount}
-                                    </div>
-                                    <div className="hidden w-28 shrink-0 md:block">
-                                        <span className={cn("text-xs font-medium", statusClass(matter.status))}>
-                                            {titleize(matter.status)}
-                                        </span>
-                                    </div>
-                                    <ArrowRight className="h-4 w-8 shrink-0 text-gray-300 transition-colors group-hover:text-gray-600" />
-                                </Link>
-                            ))}
-                        </div>
-                    </div>
-                </section>
-
-                <aside className="border-l border-gray-100 bg-white px-5 py-5">
-                    <div className="flex items-center justify-between">
-                        <h2 className="text-sm font-medium text-gray-900">Review Queue</h2>
-                        <Link href="/aletheia/reviews" className="text-xs text-gray-400 hover:text-gray-900">
-                            View all
-                        </Link>
-                    </div>
-                    <div className="mt-4 space-y-4">
-                        {reviewQueue.slice(0, 5).map((item) => (
-                            <Link
-                                key={item.id}
-                                href="/aletheia/matters/matter-demo-legal-001"
-                                className="block border-b border-gray-100 pb-4 last:border-b-0"
-                            >
-                                <div className="flex items-center justify-between gap-2">
-                                    <span className="text-xs text-gray-400">
-                                        {item.matterTitle}
-                                    </span>
-                                    <span className={cn("text-[11px] font-medium", riskClass(item.riskLevel))}>
-                                        {item.riskLevel}
-                                    </span>
-                                </div>
-                                <p className="mt-2 text-sm font-medium leading-5 text-gray-800">
-                                    {item.title}
-                                </p>
-                                <p className="mt-1 line-clamp-2 text-xs leading-5 text-gray-500">
-                                    {item.comment}
-                                </p>
-                            </Link>
-                        ))}
-                    </div>
-                </aside>
-            </div>
+          </div>
         </section>
-    );
+
+        <aside className="border-l border-gray-100 bg-white px-5 py-5">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium text-gray-900">Work Queue</h2>
+            <Link
+              href="/aletheia/tasks"
+              className="text-xs text-gray-400 hover:text-gray-900"
+            >
+              View all
+            </Link>
+          </div>
+          <div className="mt-4">
+            {openTasks.length === 0 && (
+              <p className="border-y border-gray-100 py-6 text-sm text-gray-400">
+                No open tasks.
+              </p>
+            )}
+            {openTasks.slice(0, 6).map((task) => {
+              const matter = matterById.get(task.matter_id);
+              const dueGroup = taskDueGroup(task);
+              return (
+                <Link
+                  key={task.id}
+                  href={`/aletheia/matters/${task.matter_id}/litigation?view=procedure&focus=${encodeURIComponent(`task:${task.id}`)}`}
+                  className="block border-b border-gray-100 py-4 first:pt-0 last:border-b-0"
+                >
+                  <p className="mt-2 text-sm font-medium leading-5 text-gray-800">
+                    {task.title}
+                  </p>
+                  <div className="mt-1 flex items-center justify-between gap-3 text-xs">
+                    <span className="truncate text-gray-400">
+                      {matter?.title ?? "Matter"}
+                    </span>
+                    <time
+                      className={cn(
+                        "shrink-0 text-gray-500",
+                        dueGroup === "overdue" && "text-red-700",
+                        dueGroup === "today" && "text-amber-700",
+                      )}
+                    >
+                      {formatTaskDueDate(task.due_at)}
+                    </time>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </aside>
+        </div>
+      )}
+    </section>
+  );
 }

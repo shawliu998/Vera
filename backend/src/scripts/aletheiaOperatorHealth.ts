@@ -77,7 +77,6 @@ function main() {
     check(
       "local-privacy-mode",
       contains(root, "docs/local_deployment.md", [
-        "ALETHEIA_STORAGE_DRIVER=local",
         "ALETHEIA_AUTH_MODE=single_user",
         "ALETHEIA_DATA_DIR=.data/aletheia",
       ]) &&

@@ -34,7 +34,7 @@ export function TemplatePreviewPage({
           className="inline-flex items-center gap-2 text-sm text-[#6b7280] hover:text-[#111827]"
         >
           <ArrowLeft className="h-4 w-4" />
-          Back to Aletheia
+          Back to Vera
         </Link>
 
         <section className="mt-5 rounded-lg border border-[#e5e7eb] bg-white p-6">
@@ -45,7 +45,7 @@ export function TemplatePreviewPage({
                   <Layers3 className="h-4 w-4" />
                 </div>
                 <span className="text-sm font-semibold text-[#6b7280]">
-                  Aletheia 明证 Template
+                  Vera Template
                 </span>
               </div>
               <h1 className="mt-4 text-3xl font-semibold tracking-tight">

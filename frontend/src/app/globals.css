@@ -50,7 +50,7 @@
 }
 
 :root {
-    --radius: 0.625rem;
+    --radius: 0.375rem;
     --font-inter: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text",
         "Segoe UI", "Helvetica Neue", Arial, sans-serif;
     --font-cjk: "PingFang SC", "Hiragino Sans GB", "Heiti SC",
@@ -137,6 +137,161 @@
     button {
         cursor: pointer;
     }
+}
+
+/* Aletheia local-client appearance preferences. */
+.aletheia-shell {
+    --aletheia-document-scale: 1;
+    --aletheia-canvas: #f8f8f9;
+    --aletheia-sidebar: #f3f3f5;
+    --aletheia-rule: #dedfe3;
+    --aletheia-focus: #2563eb;
+    font-family: var(--font-inter), var(--font-cjk);
+    letter-spacing: 0;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+
+.aletheia-titlebar-drag {
+    -webkit-app-region: drag;
+    user-select: none;
+}
+
+.aletheia-titlebar-control,
+.aletheia-titlebar-drag a,
+.aletheia-titlebar-drag button {
+    -webkit-app-region: no-drag;
+}
+
+.aletheia-mobile-header {
+    border-color: #dedfe3;
+    background-color: #fafafa;
+    color: #111827;
+}
+
+.aletheia-mobile-brand {
+    color: #111827;
+}
+
+.aletheia-mobile-search {
+    color: #6b7280;
+}
+
+.aletheia-mobile-search:hover {
+    background-color: #f3f4f6;
+    color: #111827;
+}
+
+.aletheia-mobile-nav {
+    border-color: #dedfe3;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+}
+
+.aletheia-mobile-nav::-webkit-scrollbar {
+    display: none;
+}
+
+.aletheia-mobile-nav-active {
+    background-color: #111827;
+    color: #ffffff;
+}
+
+.aletheia-mobile-nav-idle {
+    color: #5f6673;
+}
+
+.aletheia-mobile-nav-idle:hover {
+    background-color: #f3f4f6;
+    color: #111827;
+}
+
+.aletheia-shell :is(button, a, input, select, textarea):focus-visible {
+    outline: 2px solid var(--aletheia-focus);
+    outline-offset: 2px;
+}
+
+.aletheia-shell :is(input, select, textarea):disabled {
+    color: #8b8d92;
+    background-color: #f3f3f4;
+    cursor: not-allowed;
+}
+
+.aletheia-shell ::selection {
+    background: #dbeafe;
+    color: #111827;
+}
+
+[data-aletheia-document-font-size="small"] .aletheia-shell {
+    --aletheia-document-scale: 0.9;
+}
+
+[data-aletheia-document-font-size="large"] .aletheia-shell {
+    --aletheia-document-scale: 1.12;
+}
+
+.aletheia-density-compact .aletheia-setting-row {
+    padding-block: 0.65rem;
+}
+
+.aletheia-density-compact .aletheia-sidebar nav a {
+    font-size: 0.75rem;
+}
+
+.aletheia-density-compact .aletheia-matter-row {
+    height: 3.25rem;
+}
+
+.aletheia-settings {
+    --aletheia-settings-canvas: #f8f8f9;
+    --aletheia-settings-header: #ffffff;
+    --aletheia-settings-sidebar: #f1f1f3;
+    background-color: var(--aletheia-settings-canvas);
+}
+
+.aletheia-settings-header {
+    background-color: var(--aletheia-settings-header);
+}
+
+.aletheia-settings-sidebar {
+    background-color: var(--aletheia-settings-sidebar);
+}
+
+.aletheia-settings-content {
+    background-color: var(--aletheia-settings-canvas);
+}
+
+.dark .aletheia-shell {
+    background: #111315 !important;
+    color: #f4f4f5 !important;
+}
+
+.dark .aletheia-settings {
+    --aletheia-settings-canvas: #151719;
+    --aletheia-settings-header: #111315;
+    --aletheia-settings-sidebar: #191b1e;
+}
+
+.dark .aletheia-shell :is(.bg-white, .bg-\[\#fbfbfc\], .bg-\[\#f7f7f8\], .bg-\[\#f4f5f6\], .bg-\[\#f6f7f8\]) {
+    background-color: #17191c !important;
+}
+
+.dark .aletheia-shell :is(.text-gray-950, .text-gray-900, .text-gray-800, .text-\[\#111827\], .text-\[\#374151\]) {
+    color: #f4f4f5 !important;
+}
+
+.dark .aletheia-shell :is(.text-gray-700, .text-gray-600, .text-gray-500, .text-\[\#6b7280\]) {
+    color: #a1a1aa !important;
+}
+
+.dark .aletheia-shell :is(.border-gray-100, .border-gray-200, .border-\[\#e5e7eb\]) {
+    border-color: #303338 !important;
+}
+
+.dark .aletheia-shell :is(input, textarea, select, code) {
+    border-color: #3f3f46 !important;
+    background-color: #202226 !important;
+    color: #f4f4f5 !important;
 }
 
 .brand-cjk {

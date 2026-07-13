@@ -59,7 +59,7 @@ const exportCapablePolicy: KernelToolPolicy = {
 test("kernel profile exposes reusable modules with contract review as a domain pack", () => {
   const profile = createKernelProfile();
 
-  assert.equal(profile.positioning, "Aletheia is a local-first agent harness for sensitive professional work.");
+  assert.equal(profile.positioning, "Vera is a local-first agent harness for sensitive professional work.");
   assert.deepEqual(profile.modules, [...KERNEL_MODULES]);
   assert.equal(profile.domain_pack.id, "private_contract_due_diligence_review");
   assert.equal(profile.domain_pack.name, "Private Contract / Due Diligence Review");

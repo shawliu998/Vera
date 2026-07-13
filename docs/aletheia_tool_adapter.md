@@ -74,7 +74,6 @@ The adapter is designed for least privilege:
 Run the local MCP wrapper from the backend directory:
 
 ```bash
-ALETHEIA_STORAGE_DRIVER=local \
 ALETHEIA_AUTH_MODE=single_user \
 ALETHEIA_DATA_DIR=.data/aletheia \
 npm run mcp:aletheia
@@ -90,7 +89,6 @@ Example MCP client config:
       "args": ["run", "mcp:aletheia"],
       "cwd": "/absolute/path/to/backend",
       "env": {
-        "ALETHEIA_STORAGE_DRIVER": "local",
         "ALETHEIA_AUTH_MODE": "single_user",
         "ALETHEIA_DATA_DIR": ".data/aletheia",
         "ALETHEIA_LOCAL_USER_ID": "local-user",

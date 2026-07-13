@@ -47,18 +47,6 @@ function main() {
     root,
     "backend/src/lib/aletheia/localRepository.ts",
   );
-  const supabaseRepository = readText(
-    root,
-    "backend/src/lib/aletheia/supabaseRepository.ts",
-  );
-  const runtimeMigration = readText(
-    root,
-    "backend/migrations/20260708_02_aletheia_agent_runtime.sql",
-  );
-  const budgetPolicyMigration = readText(
-    root,
-    "backend/migrations/20260709_01_aletheia_agent_budget_policy.sql",
-  );
   const localRegression = readText(
     root,
     "backend/src/scripts/aletheiaLocalRegression.ts",
@@ -114,6 +102,7 @@ function main() {
         "final_memo_export",
         "audit_pack_export",
         "feedback_dataset_export",
+        "litigation_artifact_export",
         "playbook_update",
         "external_source_use",
       ]),
@@ -133,42 +122,6 @@ function main() {
           "createAgentRunTraceScaffold",
         ]),
       "Local SQLite repository must persist runs, steps, tool calls, checkpoints, budgets, metrics, approvals, and resume nodes.",
-    ),
-    check(
-      "supabase-runtime-boundary",
-      hasAll(supabaseRepository, RUNTIME_TABLES) &&
-        hasAll(supabaseRepository, [
-          "buildAgentRunTraceScaffold",
-          "buildAgentWorkflowGraph",
-          "createAgentRun(",
-          "resumeAgentRun(",
-          "requestApproval(",
-          "decideApproval(",
-          "createAgentRunTraceScaffold",
-          "budget: defaultRunBudget(input.budget)",
-          "metrics:",
-        ]),
-      "Supabase compatibility adapter must expose the same AgentRun, approval, budget, and metrics contract.",
-    ),
-    check(
-      "runtime-migrations",
-      hasAll(runtimeMigration, RUNTIME_TABLES) &&
-        hasAll(runtimeMigration, [
-          "enable row level security",
-          "owner_write",
-          "visible",
-          "metadata jsonb",
-          "input jsonb",
-          "output jsonb",
-        ]) &&
-        hasAll(budgetPolicyMigration, [
-          "budget",
-          "metrics",
-          "approved",
-          "edited",
-          "responded",
-        ]),
-      "Postgres migrations must create runtime tables with RLS plus budget, metrics, and expanded checkpoint decisions.",
     ),
     check(
       "local-regression-run-trace",

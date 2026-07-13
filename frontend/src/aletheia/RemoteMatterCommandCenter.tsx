@@ -102,14 +102,14 @@ export function RemoteMatterCommandCenter({ matterId }: { matterId: string }) {
         const nextSourceIndex = sourceIndexResult.value;
         setSourceIndex(nextSourceIndex);
         setSourceIndexStatus(
-          `Local-only V1 source index included (${nextSourceIndex.documents.length} documents, ${nextSourceIndex.chunks.length} chunks, ${nextSourceIndex.source_links.length} source links). Supabase V1 source listing remains unavailable.`,
+          `Local-only V1 source index included (${nextSourceIndex.documents.length} documents, ${nextSourceIndex.chunks.length} chunks, ${nextSourceIndex.source_links.length} source links).`,
         );
       } else {
         setSourceIndex(null);
         setSourceIndexStatus(
           sourceIndexResult.reason instanceof Error
-            ? `V1 source index unavailable: ${sourceIndexResult.reason.message}. Export package omits the source-index manifest; Supabase V1 source listing remains unavailable.`
-            : "V1 source index unavailable. Export package omits the source-index manifest; Supabase V1 source listing remains unavailable.",
+            ? `V1 source index unavailable: ${sourceIndexResult.reason.message}. Export package omits the source-index manifest.`
+            : "V1 source index unavailable. Export package omits the source-index manifest.",
         );
       }
 
@@ -128,7 +128,8 @@ export function RemoteMatterCommandCenter({ matterId }: { matterId: string }) {
   }, [loadRemoteMatter]);
 
   const workspace = useMemo(
-    () => (detail ? adaptAletheiaMatterDetailToAgentOpsWorkspace(detail) : null),
+    () =>
+      detail ? adaptAletheiaMatterDetailToAgentOpsWorkspace(detail) : null,
     [detail],
   );
   const provenance = useMemo(
@@ -166,7 +167,11 @@ export function RemoteMatterCommandCenter({ matterId }: { matterId: string }) {
     >();
 
     for (const query of suggestedQueries) {
-      for (const candidate of createBigAtAutocompleteCandidates(query, workspace, 2)) {
+      for (const candidate of createBigAtAutocompleteCandidates(
+        query,
+        workspace,
+        2,
+      )) {
         byInsertionText.set(candidate.insertion_text, candidate);
       }
     }
@@ -178,7 +183,8 @@ export function RemoteMatterCommandCenter({ matterId }: { matterId: string }) {
     [workspace],
   );
   const gateProvenance = useMemo(
-    () => (detail && workspace ? buildGateProvenance({ detail, workspace }) : []),
+    () =>
+      detail && workspace ? buildGateProvenance({ detail, workspace }) : [],
     [detail, workspace],
   );
   const exportPackage = useMemo(
@@ -237,7 +243,7 @@ export function RemoteMatterCommandCenter({ matterId }: { matterId: string }) {
     try {
       const event = await appendAletheiaAuditEvent(matterId, {
         actor: "human",
-        action: "agentops_snapshot_recorded",
+        action: "human_note.agentops_snapshot_recorded",
         workflowVersion: "agentops-adapter-view-v0",
         details: buildAgentOpsSnapshotDetails({
           workspace,
@@ -252,7 +258,9 @@ export function RemoteMatterCommandCenter({ matterId }: { matterId: string }) {
       setSnapshotStatus(`AgentOps snapshot recorded (${event.id}).`);
     } catch (err) {
       setSnapshotStatus(
-        err instanceof Error ? err.message : "AgentOps snapshot could not be recorded.",
+        err instanceof Error
+          ? err.message
+          : "AgentOps snapshot could not be recorded.",
       );
     } finally {
       setSnapshotSaving(false);
@@ -399,7 +407,7 @@ export function RemoteMatterCommandCenter({ matterId }: { matterId: string }) {
                       Gate Provenance
                     </h2>
                     <p className="mt-1 text-sm text-gray-600">
-                      Displayed gates mapped back to persisted Aletheia records.
+                      Displayed gates mapped back to persisted Vera records.
                     </p>
                   </div>
                   <Badge
@@ -653,7 +661,12 @@ export function RemoteMatterCommandCenter({ matterId }: { matterId: string }) {
                 variant="outline"
                 className="rounded-md border-gray-200 bg-gray-50 px-2 py-1 text-xs text-gray-600"
               >
-                {referenceResolutions.filter((item) => item.status === "resolved").length} resolved
+                {
+                  referenceResolutions.filter(
+                    (item) => item.status === "resolved",
+                  ).length
+                }{" "}
+                resolved
               </Badge>
             </div>
             <div className="mt-4 grid gap-2 sm:grid-cols-3">

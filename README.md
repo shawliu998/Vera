@@ -1,10 +1,10 @@
-# Aletheia 明证
+# Vera
 
-**Aletheia 明证 is not a legal chatbot.** It is a local-first MVP and private
+**Vera is not a legal chatbot.** It is a local-first MVP and private
 pilot candidate for a sensitive-work agent harness: a local vault plus bounded
 agent loops for expert-led professional document work.
 
-Aletheia turns confidential source documents and bounded agent runs into typed,
+Vera turns confidential source documents and bounded agent runs into typed,
 evidence-linked, reviewed, gated, audited, and eval-ready deliverables. The
 first public/private-pilot domain pack is **Private Contract / Due Diligence
 Review**. Compliance, audit, regulatory response, and litigation chronology are
@@ -18,7 +18,7 @@ Core analogy:
 
 ```text
 Codex: repo -> agent edits code -> tests run -> diff opens -> human reviews -> merge
-Aletheia: local matter vault -> agent creates professional artifacts -> gates run -> diff/review packet opens -> expert reviews -> final export
+Vera: local matter vault -> agent creates professional artifacts -> gates run -> diff/review packet opens -> expert reviews -> final export
 ```
 
 The core product loop is:
@@ -33,7 +33,7 @@ and Hermes-style skills/memory loops, rebuilt around local-first operation,
 evidence binding, expert control, audit readiness, and eval-driven improvement.
 
 Current stage: **V1 local/private-pilot candidate completed; production/SaaS
-not claimed.** Aletheia is not positioned as production SaaS, legal advice
+not claimed.** Vera is not positioned as production SaaS, legal advice
 software, or a replacement for qualified professionals.
 
 ## Docker Quick Start
@@ -64,9 +64,8 @@ mode, and validation details.
 
 ## Desktop App
 
-Aletheia also ships as an unsigned macOS local desktop app. It bundles the
-local backend and frontend, stores data on the local machine, and does not
-require Docker or Supabase.
+Vera also ships as an unsigned macOS local desktop app. It bundles the
+local backend and frontend and stores data on the local machine.
 
 Download the latest desktop release asset from GitHub, then verify the
 published SHA256 checksum before opening it. Because the project does not yet
@@ -106,13 +105,11 @@ Working local/private-pilot scope:
 
 Unavailable or partial V1 scope:
 
-- Supabase V1 document/chunk/source listing is unavailable.
-- Supabase V1 runtime persistence is unavailable.
 - Local runtime approval retry records authorization and trace state only; it
   does not dispatch a real external provider.
 - Review-derived eval, export persistence, and approved skill activation are
-  local-only; do not describe them as Supabase-backed, production SaaS, or
-  automatic production learning.
+  local-only; do not describe them as production SaaS or automatic production
+  learning.
 - External model calls remain off by default for sensitive/private data and
   must be explicitly configured, logged, and auditable if enabled later.
 - Full Playwright UI smoke passed 6/6 on explicit local backend/frontend ports
@@ -216,12 +213,6 @@ local JSON artifacts:
 - Audit Pack: matter profile, document registry, workflow artifacts, review log, audit log, and validation status.
 - Feedback Eval Dataset: expert review tags mapped back to their target claim, evidence, memo section, and supporting citations.
 
-The first database migration for the workspace domain is
-`backend/migrations/20260708_01_aletheia_workspace.sql`. It adds matters,
-matter documents, work products, evidence items, review items, and audit events.
-`backend/migrations/20260708_02_aletheia_agent_runtime.sql` adds the agent
-runtime skeleton: runs, steps, tool calls, and human checkpoints.
-
 The first API surface is mounted at `/aletheia` on the backend and currently
 supports listing matters, creating a matter, loading a matter, adding review
 items, saving structured work products, appending audit events, uploading and
@@ -232,10 +223,9 @@ Aletheia Tool Adapter.
 Newly created matters receive a deterministic initial Agent Plan work product so
 the workflow starts from a reviewable scaffold even before model integration.
 
-Backend persistence now goes through an Aletheia repository boundary. The
-default adapter remains Supabase/Postgres for compatibility with the base
-application. The local adapter now supports SQLite persistence for Aletheia
-matters, work products, reviews, audit events, and agent runs. Local mode also
+Backend persistence goes through the local Aletheia repository boundary. It
+uses SQLite persistence for Aletheia matters, work products, reviews, audit
+events, and agent runs. Local mode also
 stores uploaded documents on disk, extracts text, chunks documents, and indexes
 chunks with SQLite FTS5 keyword search.
 
@@ -262,9 +252,8 @@ http://localhost:3000/aletheia
 ```
 
 This starts the frontend, backend, and a persistent local Docker volume for
-Aletheia data. Supabase is not required for the V1 local-only workflow. See
-`docs/install_local.md` for details, private-token mode, health checks, and
-data reset commands.
+Aletheia data. See `docs/install_local.md` for details, private-token mode,
+health checks, and data reset commands.
 
 ### Manual development
 

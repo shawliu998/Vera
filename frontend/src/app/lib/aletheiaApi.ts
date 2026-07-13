@@ -1,9 +1,9 @@
 /**
  * Aletheia API client — all requests to the Node.js backend.
- * Attaches the Supabase auth token for user authentication.
+ * Desktop builds use a per-launch local bearer token; browser-only local mode
+ * may use an explicitly configured private token.
  */
 
-import { supabase } from "@/lib/supabase";
 import type {
   AssistantEvent,
   Chat,
@@ -18,6 +18,7 @@ import type {
   TabularReviewDetailOut,
 } from "@/app/components/shared/types";
 import type { V1SourceIndexSnapshot } from "@/aletheia/agentops/exportPackage";
+import { getAletheiaApiBase } from "@/app/lib/aletheiaRuntime";
 
 // Server-side shape before mapping
 interface ServerMessage {
@@ -35,8 +36,6 @@ interface ServerChatDetailOut {
   messages: ServerMessage[];
 }
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
 const PRIVATE_AUTH_TOKEN =
   process.env.NEXT_PUBLIC_ALETHEIA_PRIVATE_AUTH_TOKEN?.trim() ?? "";
 const isDev = process.env.NODE_ENV !== "production";
@@ -56,30 +55,256 @@ export class AletheiaApiError extends Error {
   }
 }
 
-export function isMfaRequiredError(error: unknown) {
-  return (
-    error instanceof AletheiaApiError &&
-    error.status === 403 &&
-    error.code === "mfa_verification_required"
+export type AletheiaApprovalAction =
+  | "audit_pack_export"
+  | "feedback_dataset_export"
+  | "final_memo_export"
+  | "litigation_artifact_export"
+  | "litigation_matter_audit_export"
+  | "litigation_template_publish"
+  | "litigation_template_retire"
+  | "external_source_use"
+  | "matter_purge";
+
+export type AletheiaSecurityPolicy = {
+  schemaVersion: string;
+  authority: "backend";
+  localOnly: true;
+  storageDriver: "local";
+  auditIntegrity: "per_matter_hmac_hash_chain";
+  finalExportPolicy: "fail_closed";
+  approvalRequiredFor: AletheiaApprovalAction[];
+};
+
+export function getAletheiaSecurityPolicy() {
+  return apiRequest<AletheiaSecurityPolicy>("/aletheia/security-policy");
+}
+
+export type AletheiaLegalSourceProviderId = "pkulaw" | "wolters";
+
+export type AletheiaLegalSourceProvider = {
+  provider: AletheiaLegalSourceProviderId;
+  hasSecret: boolean;
+  encryptionEnabled: boolean;
+  endpointConfigured: boolean;
+  allowlisted: boolean;
+  credentialReferenceConfigured: boolean;
+};
+
+type AletheiaLegalSourceProviderWire = Partial<
+  AletheiaLegalSourceProvider & {
+    configured: boolean;
+    credentialReference: string | null;
+  }
+> & { provider?: unknown };
+
+export type AletheiaLegalSourceProvidersResponse = {
+  providers: AletheiaLegalSourceProvider[];
+};
+
+function normalizeLegalSourceProvider(
+  value: AletheiaLegalSourceProviderWire,
+): AletheiaLegalSourceProvider | null {
+  if (value.provider !== "pkulaw" && value.provider !== "wolters") return null;
+  return {
+    provider: value.provider,
+    hasSecret: value.hasSecret === true || value.configured === true,
+    encryptionEnabled: value.encryptionEnabled === true,
+    endpointConfigured: value.endpointConfigured === true,
+    allowlisted: value.allowlisted === true,
+    credentialReferenceConfigured:
+      value.credentialReferenceConfigured === true ||
+      (typeof value.credentialReference === "string" &&
+        value.credentialReference.length > 0),
+  };
+}
+
+export async function listAletheiaLegalSourceProviders(): Promise<AletheiaLegalSourceProvidersResponse> {
+  const response = await apiRequest<{ providers?: AletheiaLegalSourceProviderWire[] }>(
+    "/aletheia/providers",
   );
+  return {
+    providers: Array.isArray(response.providers)
+      ? response.providers
+          .map(normalizeLegalSourceProvider)
+          .filter((provider): provider is AletheiaLegalSourceProvider => Boolean(provider))
+      : [],
+  };
+}
+
+export function saveAletheiaLegalSourceSecret(
+  provider: AletheiaLegalSourceProviderId,
+  secret: string,
+): Promise<AletheiaLegalSourceProviderWire> {
+  return apiRequest(`/aletheia/providers/${provider}/secret`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ secret }),
+  });
+}
+
+export function removeAletheiaLegalSourceSecret(
+  provider: AletheiaLegalSourceProviderId,
+): Promise<void> {
+  return apiRequest(`/aletheia/providers/${provider}/secret`, {
+    method: "DELETE",
+  });
+}
+
+export type LocalModelCalibrationAcceptanceCode =
+  | "calibrated"
+  | "calibration_required"
+  | "calibration_failed"
+  | "calibration_stale"
+  | "calibration_expired"
+  | "model_revision_unavailable";
+
+export type LocalModelBenchmarkAcceptanceCode =
+  | "benchmarked_diagnostic"
+  | "benchmark_required"
+  | "benchmark_failed"
+  | "benchmark_stale"
+  | "benchmark_expired"
+  | "benchmark_integrity_failed"
+  | "model_revision_unavailable";
+
+export type LocalModelBenchmarkCaseResult = {
+  caseId: string;
+  status: "passed" | "failed";
+  score: number;
+  durationMs: number;
+  responseSha256: string | null;
+  responseText: string | null;
+  failureCode: string | null;
+  failureDetail: string | null;
+  resultHash: string;
+};
+
+export type LocalModelBenchmarkAttempt = {
+  id: string;
+  userId: string;
+  modelId: string;
+  modelFingerprint: string;
+  modelRevision: string;
+  adapter: string;
+  providerModel: string;
+  reasoning: "Off" | "Low" | "Medium" | "High";
+  fastMode: boolean;
+  protocolVersion: string;
+  caseSetHash: string;
+  graderVersion: string;
+  status: "passed" | "failed";
+  score: number;
+  testedAt: string;
+  expiresAt: string;
+  durationMs: number;
+  responseHashesSha256: string;
+  failureCode: string | null;
+  failureDetail: string | null;
+  resultHash: string;
+  cases: LocalModelBenchmarkCaseResult[];
+};
+
+export type LocalModelSnapshot = {
+  id: string;
+  adapter: "ollama" | "openai-compatible";
+  model: string;
+  modelRevision?: string;
+  state:
+    "stopped" | "starting" | "ready" | "unhealthy" | "stopping" | "crashed";
+  managed: boolean;
+  contextWindowTokens: number;
+  maxOutputTokens: number;
+  lastError?: string;
+  calibration?: {
+    id: string;
+    modelFingerprint: string;
+    status: "passed" | "failed";
+    protocolVersion: string;
+    testedAt: string;
+    expiresAt: string;
+    durationMs: number;
+    failureCode: string | null;
+    failureDetail: string | null;
+  } | null;
+  calibrationAcceptance?: {
+    accepted: boolean;
+    code: LocalModelCalibrationAcceptanceCode;
+  };
+  benchmark?: LocalModelBenchmarkAttempt | null;
+  benchmarkAcceptance?: {
+    accepted: boolean;
+    code: LocalModelBenchmarkAcceptanceCode;
+  };
+};
+
+export type LocalModelsResponse = {
+  schemaVersion: "aletheia-local-model-runtime-v1";
+  localOnly: true;
+  benchmark: {
+    diagnostic: true;
+    productionExecutionGate: false;
+  };
+  models: LocalModelSnapshot[];
+};
+
+export async function listLocalModels(): Promise<LocalModelsResponse> {
+  return apiRequest<LocalModelsResponse>("/aletheia/local-models");
+}
+
+export async function calibrateLocalModel(modelId: string): Promise<void> {
+  try {
+    await apiRequest(
+      `/aletheia/local-models/${encodeURIComponent(modelId)}/calibrate`,
+      { method: "POST" },
+    );
+  } catch (error) {
+    // A failed calibration is still a valid persisted result that the list
+    // projection exposes after refresh.
+    if (!(error instanceof AletheiaApiError) || error.status !== 422)
+      throw error;
+  }
+}
+
+export async function benchmarkLocalModel(
+  modelId: string,
+): Promise<LocalModelBenchmarkAttempt> {
+  const authHeaders = await getAuthHeader();
+  const apiBase = await getAletheiaApiBase();
+  const path = `/aletheia/local-models/${encodeURIComponent(modelId)}/benchmark`;
+  const response = await fetch(`${apiBase}${path}`, {
+    method: "POST",
+    cache: "no-store",
+    headers: { Accept: "application/json", ...authHeaders },
+  });
+  if (!response.ok && response.status !== 422) {
+    throw await toApiError(response, path);
+  }
+  return (await response.json()) as LocalModelBenchmarkAttempt;
 }
 
 async function getAuthHeader(): Promise<Record<string, string>> {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session?.access_token) {
-    return PRIVATE_AUTH_TOKEN
-      ? { Authorization: `Bearer ${PRIVATE_AUTH_TOKEN}` }
-      : {};
+  if (typeof window !== "undefined" && window.aletheiaDesktop?.getAuthToken) {
+    const desktopToken = await window.aletheiaDesktop.getAuthToken();
+    if (desktopToken) return { Authorization: `Bearer ${desktopToken}` };
   }
-  return { Authorization: `Bearer ${session.access_token}` };
+  return PRIVATE_AUTH_TOKEN
+    ? { Authorization: `Bearer ${PRIVATE_AUTH_TOKEN}` }
+    : {};
+}
+
+/** Shared local-only auth for document endpoints outside apiRequest. */
+export async function getAletheiaAuthHeaders(): Promise<
+  Record<string, string>
+> {
+  return getAuthHeader();
 }
 
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const authHeaders = await getAuthHeader();
+  const apiBase = await getAletheiaApiBase();
   const { headers: initHeaders, ...restInit } = init ?? {};
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(`${apiBase}${path}`, {
     cache: "no-store",
     ...restInit,
     headers: {
@@ -101,31 +326,6 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return (await response.json()) as T;
-}
-
-async function apiBlobRequest(path: string): Promise<{
-  blob: Blob;
-  filename: string | null;
-}> {
-  const authHeaders = await getAuthHeader();
-  const response = await fetch(`${API_BASE}${path}`, {
-    cache: "no-store",
-    headers: {
-      Accept: "application/json",
-      ...authHeaders,
-    },
-  });
-
-  if (!response.ok) {
-    throw await toApiError(response, path);
-  }
-
-  const disposition = response.headers.get("content-disposition") ?? "";
-  const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
-  return {
-    blob: await response.blob(),
-    filename: filenameMatch?.[1] ?? null,
-  };
 }
 
 async function toApiError(response: Response, path: string) {
@@ -167,7 +367,10 @@ async function toApiError(response: Response, path: string) {
 // ---------------------------------------------------------------------------
 
 export type AletheiaMatterTemplate =
-  "legal_matter_review" | "compliance_impact_review" | "deal_due_diligence";
+  | "legal_matter_review"
+  | "compliance_impact_review"
+  | "deal_due_diligence"
+  | "civil_litigation";
 
 export type AletheiaMatterStatus =
   "draft" | "in_progress" | "needs_review" | "completed" | "archived";
@@ -187,9 +390,24 @@ export type AletheiaWorkProductKind =
   | "feedback_export"
   | "registry_snapshot"
   | "external_source_workpaper"
+  | "legal_research_case_context"
   | "shareholder_penetration_graph"
   | "legal_qa_answer"
-  | "word_addin_handoff";
+  | "word_addin_handoff"
+  | "claim_defense_matrix"
+  | "procedural_clock"
+  | "litigation_brief"
+  | "hearing_plan"
+  | "hearing_bundle_index"
+  | "evidence_catalog"
+  | "legal_research_request"
+  | "legal_research_issue_tree"
+  | "legal_research_query_plan"
+  | "legal_research_search_result"
+  | "legal_research_excerpt"
+  | "legal_research_input_manifest"
+  | "legal_research_memo"
+  | "legal_opinion";
 
 export type AletheiaWorkProductStatus =
   "draft" | "generated" | "needs_review" | "accepted" | "superseded";
@@ -254,6 +472,11 @@ export interface AletheiaDocumentSearchResult {
   section: string | null;
   quote_start: number;
   quote_end: number;
+  ocr_provenance?: {
+    engine?: string;
+    page?: number;
+    confidence?: number;
+  } | null;
   score: number;
   quote_preview?: string;
   method?: "keyword" | "hybrid" | "semantic";
@@ -280,6 +503,33 @@ export interface AletheiaDocumentSearchResult {
   } | null;
 }
 
+export type AletheiaSearchResultKind =
+  | "matter"
+  | "document"
+  | "fact"
+  | "position"
+  | "deadline"
+  | "task"
+  | "work_product";
+
+export interface AletheiaSearchResult {
+  kind: AletheiaSearchResultKind;
+  id: string;
+  matterId: string;
+  matterTitle: string;
+  title: string;
+  snippet: string;
+  status: string;
+  updatedAt: string;
+  href: string;
+}
+
+export interface AletheiaSearchResponse {
+  query: string;
+  results: AletheiaSearchResult[];
+  total: number;
+}
+
 export type AletheiaV1SourceIndex = V1SourceIndexSnapshot;
 
 export interface AletheiaDocumentBatchUploadResult {
@@ -304,6 +554,12 @@ export interface AletheiaWorkProductRecord {
   validation_errors: unknown[];
   generated_by: "system" | "agent" | "human";
   model: string | null;
+  version: number;
+  parent_work_product_id: string | null;
+  content_hash: string;
+  dependency_hash: string | null;
+  stale_at: string | null;
+  stale_reason: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -329,11 +585,7 @@ export interface AletheiaEvidenceRecord {
 }
 
 export type AletheiaReviewResolutionStatus =
-  | "open"
-  | "accepted"
-  | "rejected"
-  | "needs_material"
-  | "resolved";
+  "open" | "accepted" | "rejected" | "needs_material" | "resolved";
 
 export interface AletheiaReviewRecord {
   id: string;
@@ -525,7 +777,7 @@ export interface AletheiaAgentRunRecord {
     | "cancelled";
   current_step_key: string | null;
   model_profile: string | null;
-  storage_driver: "local" | "postgres" | "supabase";
+  storage_driver: "local";
   budget?: AletheiaAgentRunBudget;
   metadata: Record<string, unknown> & {
     workflowGraph?: AletheiaWorkflowGraph;
@@ -550,6 +802,823 @@ export interface AletheiaMatterDetail {
   agentRuns?: AletheiaAgentRunRecord[];
   matterMemory?: AletheiaMatterMemoryRecord[];
   playbooks?: AletheiaPlaybookRecord[];
+}
+
+export interface AletheiaLegalOpinionExport {
+  exportId: string;
+  opinionId: string;
+  version: number;
+  contentHash: string;
+}
+
+export type AletheiaLegalOpinionCover = {
+  title?: string;
+  addressee?: string;
+  limitation?: string;
+  lawyerReference?: string;
+};
+
+export async function createAletheiaLegalOpinion(
+  matterId: string,
+  payload: { answerId: string; cover?: AletheiaLegalOpinionCover },
+): Promise<AletheiaWorkProductRecord> {
+  return apiRequest<AletheiaWorkProductRecord>(
+    `/aletheia/matters/${matterId}/legal-opinions`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function approveAletheiaLegalOpinion(
+  matterId: string,
+  opinionId: string,
+): Promise<AletheiaWorkProductRecord> {
+  return apiRequest<AletheiaWorkProductRecord>(
+    `/aletheia/matters/${matterId}/legal-opinions/${opinionId}/approve`,
+    { method: "POST", headers: { "Content-Type": "application/json" } },
+  );
+}
+
+export async function exportAletheiaLegalOpinionDocx(
+  matterId: string,
+  opinionId: string,
+): Promise<AletheiaLegalOpinionExport> {
+  return apiRequest<AletheiaLegalOpinionExport>(
+    `/aletheia/matters/${matterId}/legal-opinions/${opinionId}/docx`,
+    { method: "POST", headers: { "Content-Type": "application/json" } },
+  );
+}
+
+export async function downloadAletheiaLegalOpinionDocx(
+  matterId: string,
+  exportId: string,
+): Promise<Blob> {
+  const authHeaders = await getAuthHeader();
+  const apiBase = await getAletheiaApiBase();
+  const response = await fetch(
+    `${apiBase}/aletheia/matters/${matterId}/legal-opinion-exports/${exportId}/download`,
+    { headers: { ...authHeaders } },
+  );
+  if (!response.ok) {
+    throw await toApiError(response, "legal opinion DOCX download");
+  }
+  return response.blob();
+}
+
+export type LegalResearchProvider = "pkulaw" | "wolters" | "official";
+
+export interface LegalResearchRequestInput {
+  title: string;
+  jurisdiction: string;
+  asOfDate: string;
+  question: string;
+  factIds: string[];
+  proceduralEventIds: string[];
+}
+
+export type LegalResearchManualSourceDocumentKind =
+  | "statute"
+  | "judicial_interpretation"
+  | "other";
+
+export interface LegalResearchManualSourceInput {
+  documentId: string;
+  title: string;
+  content: string;
+  documentKind: LegalResearchManualSourceDocumentKind;
+  version?: string;
+  effectiveDate?: string;
+  effectiveTo?: string;
+  publicationDate?: string;
+}
+
+export interface LegalResearchFindingInput {
+  conclusion: string;
+  citations: Array<{
+    snapshotId: string;
+    quote: string;
+    sourceType: "statute" | "judicial_interpretation" | "case" | "manual";
+    effectiveFrom: string | null;
+    effectiveTo: string | null;
+    caseVerificationStatus?: "verified" | "unverified" | null;
+  }>;
+  confidence: "high" | "medium" | "low";
+  uncertainty: string | null;
+  position: "supporting" | "adverse" | "neutral";
+}
+
+export type LegalResearchIssueStatus = "open" | "resolved" | "needs_material";
+
+export interface LegalResearchIssueNode {
+  id: string;
+  parentId: string | null;
+  title: string;
+  description?: string | null;
+  status: LegalResearchIssueStatus;
+  order: number;
+}
+
+export interface LegalResearchMemoBlockedResponse {
+  code: "insufficient_basis";
+  detail: string;
+  gate: { status: "insufficient_basis"; reasons: string[] };
+  workProduct: AletheiaWorkProductRecord;
+}
+
+export type LitigationProposalStatus =
+  "proposed" | "confirmed" | "rejected" | "disputed";
+
+export interface LitigationFactRecord {
+  id: string;
+  matter_id: string;
+  statement: string;
+  occurred_at: string | null;
+  date_precision: string;
+  helpfulness: "helpful" | "harmful" | "neutral" | "unknown";
+  confidence: "low" | "medium" | "high" | null;
+  status: LitigationProposalStatus;
+  created_by: "agent" | "human";
+  decision_comment: string | null;
+  current_assessment_id: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LitigationFactSourceRecord {
+  id: string;
+  fact_id: string;
+  source_span_id: string;
+  relation: string;
+  document_id: string;
+  document_name: string;
+  page: number | null;
+  section: string | null;
+  quote: string;
+  document_quote_start: number;
+  document_quote_end: number;
+  source_chunk_sha256: string;
+  quote_sha256: string;
+  metadata: {
+    ocrProvenance?: { engine?: string; page?: number; confidence?: number };
+  };
+  current_verification_id: string | null;
+  verification_reason: string | null;
+  verified_at: string | null;
+}
+
+export interface LitigationClaimRecord {
+  id: string;
+  matter_id: string;
+  kind: "claim" | "defense" | "rebuttal";
+  parent_claim_id: string | null;
+  title: string;
+  legal_basis: string | null;
+  burden_party_id: string | null;
+  confidence: "low" | "medium" | "high" | null;
+  uncertainty: string | null;
+  status: "proposed" | "confirmed" | "rejected" | "withdrawn";
+  created_by: "agent" | "human";
+  decision_comment: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LitigationClaimSourceRecord {
+  id: string;
+  claim_id: string;
+  source_span_id: string;
+  relation: "authority" | "supports" | "contradicts";
+  document_id: string;
+  document_name: string;
+  page: number | null;
+  section: string | null;
+  quote: string;
+  document_quote_start: number;
+  document_quote_end: number;
+  source_chunk_sha256: string;
+  quote_sha256: string;
+  metadata: {
+    ocrProvenance?: { engine?: string; page?: number; confidence?: number };
+  };
+  current_verification_id: string | null;
+  verification_reason: string | null;
+  verified_at: string | null;
+}
+
+export interface LitigationPositionReviewRecord {
+  id: string;
+  matter_id: string;
+  claim_id: string;
+  assessment_id: string;
+  result_assessment_id: string | null;
+  parent_review_id: string | null;
+  review_level: 1 | 2;
+  independent_review: 0 | 1;
+  kind: "objection" | "reconsideration" | "withdrawal";
+  reason: string;
+  requested_outcome: "confirmed" | "rejected" | "withdrawn";
+  status: "open" | "resolved" | "withdrawn";
+  resolution: "upheld" | "granted" | "dismissed" | null;
+  resolution_comment: string | null;
+  resolved_by: string | null;
+  resolved_at: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LitigationLegalAssessmentEvidenceSourceSnapshot {
+  id?: string;
+  relation?: "authority" | "supports" | "contradicts";
+  source_span_id: string;
+  document_id?: string;
+  document_name: string;
+  page: number | null;
+  section: string | null;
+  quote: string;
+  source_chunk_sha256: string;
+  quote_sha256: string;
+}
+
+export interface LitigationLegalAssessmentAuthoritySnapshot {
+  id: string;
+  authority_version_id: string;
+  applicability_date: string;
+  provision_reference: string;
+  exact_quote: string;
+  quote_sha256: string;
+  rationale: string;
+  status: "active" | "withdrawn";
+  official_identifier: string;
+  version_label: string;
+  content_sha256: string;
+  effective_from: string;
+  effective_to: string | null;
+  authority_status: "draft" | "verified" | "retired";
+}
+
+export type LitigationLegalAssessmentSourceSnapshot =
+  | LitigationLegalAssessmentEvidenceSourceSnapshot[]
+  | {
+      evidenceSources: LitigationLegalAssessmentEvidenceSourceSnapshot[];
+      legalAuthorities: LitigationLegalAssessmentAuthoritySnapshot[];
+    };
+
+export interface LitigationLegalAssessmentRecord {
+  id: string;
+  matter_id: string;
+  claim_id: string;
+  version: number;
+  status: "confirmed" | "rejected" | "withdrawn";
+  legal_basis: string | null;
+  confidence: "low" | "medium" | "high" | null;
+  uncertainty: string | null;
+  decision_comment: string | null;
+  source_snapshot: LitigationLegalAssessmentSourceSnapshot;
+  payload_sha256: string;
+  source_review_id: string | null;
+  supersedes_id: string | null;
+  created_by: string;
+  created_at: string;
+}
+
+export type LitigationLegalAuthorityType =
+  | "statute"
+  | "regulation"
+  | "judicial_interpretation"
+  | "guiding_case"
+  | "other";
+
+export interface LitigationLegalAuthorityVersionRecord {
+  id: string;
+  matter_id: string;
+  jurisdiction: string;
+  authority_type: LitigationLegalAuthorityType;
+  title: string;
+  issuer: string;
+  official_identifier: string;
+  version_label: string;
+  source_reference: string;
+  content_sha256: string;
+  effective_from: string;
+  effective_to: string | null;
+  status: "draft" | "verified" | "retired";
+  verification_comment: string | null;
+  verified_by: string | null;
+  verified_at: string | null;
+  retired_by: string | null;
+  retired_at: string | null;
+  retirement_comment: string | null;
+  created_by: string;
+  created_at: string;
+}
+
+export interface LitigationLegalAuthorityVersionDetail extends LitigationLegalAuthorityVersionRecord {
+  user_id: string;
+  content: string;
+}
+
+export interface LitigationPositionAuthorityRecord {
+  id: string;
+  matter_id: string;
+  user_id: string;
+  claim_id: string;
+  authority_version_id: string;
+  applicability_date: string;
+  provision_reference: string;
+  exact_quote: string;
+  quote_sha256: string;
+  rationale: string;
+  status: "active" | "withdrawn";
+  created_by: string;
+  created_at: string;
+  withdrawn_by: string | null;
+  withdrawn_at: string | null;
+  withdrawal_comment: string | null;
+}
+
+export interface LitigationPositionAuthorityStatusRecord {
+  claim_id: string;
+  status: "satisfied" | "missing" | "invalid";
+  valid_link_ids: string[];
+  invalid_link_ids: string[];
+}
+
+export interface LitigationLegalAuthorityRegistry {
+  versions: LitigationLegalAuthorityVersionRecord[];
+  links: LitigationPositionAuthorityRecord[];
+}
+
+export interface LitigationClaimElementRecord {
+  id: string;
+  claim_id: string;
+  title: string;
+  description: string | null;
+  sequence: number;
+  status: "proposed" | "confirmed" | "rejected";
+  created_by: "agent" | "human";
+  decision_comment: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface LitigationElementFactRecord {
+  id: string;
+  element_id: string;
+  fact_id: string;
+  relation: "supports" | "contradicts" | "gap";
+  note: string | null;
+}
+
+export interface LitigationElementEvidenceStatusRecord {
+  element_id: string;
+  status:
+    | "gap"
+    | "pending_review"
+    | "needs_source"
+    | "supported"
+    | "contradicted"
+    | "contested";
+  total_links: number;
+  confirmed_supports: number;
+  confirmed_contradictions: number;
+  pending_links: number;
+  rejected_links: number;
+  uncited_confirmed_links: number;
+}
+
+export interface LitigationProceduralEventRecord {
+  id: string;
+  event_type: string;
+  title: string;
+  occurred_at: string | null;
+  primary_source_span_id: string | null;
+  status: "proposed" | "confirmed" | "rejected";
+  created_by: "agent" | "human";
+  decision_comment: string | null;
+  document_name?: string | null;
+  page?: number | null;
+  quote?: string | null;
+  event_version: number;
+  supersedes_event_id: string | null;
+  superseded_by_event_id: string | null;
+  superseded_at: string | null;
+  correction_reason: string | null;
+  event_lineage_hash: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface LitigationProceduralEventCorrectionRecord {
+  id: string;
+  matter_id: string;
+  user_id: string;
+  original_event_id: string;
+  replacement_event_id: string;
+  from_occurred_at: string;
+  to_occurred_at: string;
+  reason: string;
+  correction_hash: string;
+  corrected_by: string;
+  corrected_at: string;
+}
+
+export interface LitigationProceduralEventCorrectionResult {
+  correctionId: string;
+  correctionHash: string;
+  originalEventId: string;
+  fromOccurredAt: string;
+  toOccurredAt: string;
+  replacement: LitigationProceduralEventRecord;
+  invalidatedDeadlines: number;
+  invalidatedTasks: number;
+}
+
+export interface LitigationDeadlineRecord {
+  id: string;
+  matter_id: string;
+  triggering_event_id: string | null;
+  title: string;
+  due_at: string;
+  rule_label: string;
+  rule_version: string;
+  calculation: string;
+  status: "proposed" | "confirmed" | "rejected" | "completed";
+  created_by: "agent" | "human";
+  decision_comment: string | null;
+  document_name?: string | null;
+  page?: number | null;
+  quote?: string | null;
+  calculation_hash: string;
+  court_calendar_version_id: string | null;
+  court_calendar_hash: string | null;
+  stale_at: string | null;
+  stale_reason: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export type LitigationCourtCalendarDisposition = "open" | "closed";
+
+export interface LitigationCourtCalendarOverrideRecord {
+  id: string;
+  calendar_version_id: string;
+  matter_id: string;
+  user_id: string;
+  local_date: string;
+  disposition: LitigationCourtCalendarDisposition;
+  source_reference: string;
+  created_at: string;
+}
+
+export interface LitigationCourtCalendarVersionRecord {
+  id: string;
+  calendar_id: string;
+  matter_id: string;
+  user_id: string;
+  name: string;
+  jurisdiction: "CN";
+  court_identifier: string;
+  timezone: "Asia/Shanghai";
+  version: number;
+  version_label: string;
+  supersedes_version_id: string | null;
+  effective_from: string;
+  effective_to: string;
+  weekly_non_working_days: number[];
+  source_authority_version_id: string;
+  source_content_sha256: string;
+  source_authority_title: string;
+  source_authority_official_identifier: string;
+  source_authority_version_label: string;
+  source_authority_status: "draft" | "verified" | "retired";
+  calendar_hash: string;
+  status: "draft" | "verified" | "retired";
+  verification_comment: string | null;
+  verified_by: string | null;
+  verified_at: string | null;
+  retirement_comment: string | null;
+  retired_by: string | null;
+  retired_at: string | null;
+  created_by: string;
+  created_at: string;
+  overrides: LitigationCourtCalendarOverrideRecord[];
+}
+
+export interface LitigationCourtCalendarRetirementResult {
+  calendarVersionId: string;
+  status: "retired";
+  retiredRules: number;
+  invalidatedDeadlines: number;
+  invalidatedTasks: number;
+}
+
+export interface LitigationDeadlineRuleRecord {
+  id: string;
+  matter_id: string;
+  user_id: string;
+  name: string;
+  jurisdiction: string;
+  trigger_event_type: string;
+  authority_version_id: string;
+  provision_reference: string;
+  exact_quote: string;
+  quote_sha256: string;
+  offset_days: number;
+  counting_basis: "calendar_days" | "business_days";
+  court_calendar_version_id: string | null;
+  court_calendar_hash: string | null;
+  start_policy: "same_day" | "next_day";
+  timezone: "Asia/Shanghai";
+  rule_hash: string;
+  status: "draft" | "verified" | "retired";
+  verification_comment: string | null;
+  verified_by: string | null;
+  verified_at: string | null;
+  retired_by: string | null;
+  retired_at: string | null;
+  retirement_comment: string | null;
+  created_by: string;
+  created_at: string;
+  authority_title: string;
+  authority_official_identifier: string;
+  authority_version_label: string;
+  authority_content_sha256: string;
+  authority_effective_from: string;
+  authority_effective_to: string | null;
+  authority_status: "draft" | "verified" | "retired";
+}
+
+export type AletheiaMatterTaskStatus = "open" | "completed";
+export type AletheiaMatterTaskPriority = "high" | "normal" | "low";
+
+export interface AletheiaMatterTaskRecord {
+  id: string;
+  matter_id: string;
+  user_id: string;
+  source_deadline_id: string;
+  title: string;
+  due_at: string;
+  status: AletheiaMatterTaskStatus;
+  priority: AletheiaMatterTaskPriority;
+  note: string | null;
+  completed_at: string | null;
+  invalidated_at?: string | null;
+  invalidated_reason?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LitigationWorkspaceRecord {
+  profile: Record<string, unknown> | null;
+  facts: LitigationFactRecord[];
+  fact_sources: LitigationFactSourceRecord[];
+  claims: LitigationClaimRecord[];
+  claim_sources: LitigationClaimSourceRecord[];
+  position_authority_statuses: LitigationPositionAuthorityStatusRecord[];
+  position_reviews: LitigationPositionReviewRecord[];
+  legal_assessments: LitigationLegalAssessmentRecord[];
+  agent_output_reviews: LitigationAgentOutputReviewRecord[];
+  agent_finding_reviews: LitigationAgentFindingReviewRecord[];
+  agent_finding_semantic_checks: LitigationAgentFindingSemanticCheckRecord[];
+  elements: LitigationClaimElementRecord[];
+  element_facts: LitigationElementFactRecord[];
+  element_evidence_statuses: LitigationElementEvidenceStatusRecord[];
+  procedural_events: LitigationProceduralEventRecord[];
+  procedural_event_corrections: LitigationProceduralEventCorrectionRecord[];
+  deadlines: LitigationDeadlineRecord[];
+}
+
+export interface LitigationRetrievalCandidate {
+  rank: number;
+  chunkId: string;
+  documentId: string;
+  documentName: string;
+  chunkIndex: number;
+  page: number | null;
+  section: string | null;
+  quoteStart: number;
+  quoteEnd: number;
+  score: number;
+  scoreDirection: "lower_is_better";
+  retrievalLayers: string[];
+  textSha256: string;
+}
+
+export interface LitigationRetrievalExcerpt {
+  id: string;
+  manifest_id: string;
+  matter_id: string;
+  user_id: string;
+  chunk_id: string;
+  document_id: string;
+  document_name: string;
+  rank: number;
+  quote_start: number;
+  quote_end: number;
+  quote: string;
+  quote_sha256: string;
+  chunk_text_sha256: string;
+  status: "confirmed" | "withdrawn";
+  decision_comment: string;
+  confirmed_by: string;
+  confirmed_at: string;
+  withdrawn_by: string | null;
+  withdrawn_at: string | null;
+  withdrawal_comment: string | null;
+}
+
+export interface LitigationRetrievalManifest {
+  id: string;
+  status: "open";
+  schemaVersion: "aletheia-litigation-retrieval-manifest-v1";
+  matterId: string;
+  focus: string;
+  mode: "keyword";
+  rankingBasis: string;
+  indexFingerprint: string;
+  candidateLimit: number;
+  candidateCount: number;
+  candidateSetComplete: true;
+  candidates: LitigationRetrievalCandidate[];
+  purpose: "partition_ordering_diagnostics";
+  inputBinding: false;
+  selectedChunkIds: string[];
+  omissionPolicy: "none";
+  createdAt: string;
+  manifestHash: string;
+  excerpts?: LitigationRetrievalExcerpt[];
+  bindingEligibility?:
+    | { eligible: true; bindingHash: string }
+    | { eligible: false; reason: string };
+}
+
+export interface LitigationAgentFindingReviewRecord {
+  id: string;
+  run_id: string;
+  step_id: string;
+  finding_index: number;
+  finding_hash: string;
+  assessment: "supported" | "partial" | "unsupported";
+  reason: string;
+  version: number;
+  supersedes_id: string | null;
+  reviewed_by: string;
+  created_at: string;
+}
+
+export interface LitigationAgentFindingCitationAssessment {
+  sourceId: string;
+  assessment: "supported" | "partial" | "unsupported";
+  rationale: string;
+}
+
+export interface LitigationAgentFindingSemanticCheckRecord {
+  id: string;
+  run_id: string;
+  step_id: string;
+  matter_id: string;
+  user_id: string;
+  finding_index: number;
+  version: number;
+  finding_hash: string;
+  citation_set_hash: string;
+  snapshot_hash: string;
+  output_review_hash: string;
+  model_id: string;
+  model_revision: string;
+  model_fingerprint: string;
+  calibration_fingerprint: string;
+  benchmark_fingerprint: string;
+  calibration_id: string;
+  benchmark_id: string;
+  protocol_version: string;
+  prompt_sha256: string;
+  output_sha256: string | null;
+  citation_assessments:
+    LitigationAgentFindingCitationAssessment[] | string | null;
+  derived_verdict: "supported" | "partial" | "unsupported" | null;
+  overall_rationale: string | null;
+  uncertainty: string | null;
+  status: "succeeded" | "failed";
+  failure_code: string | null;
+  failure_detail: string | null;
+  duration_ms: number;
+  supersedes_id: string | null;
+  actor_id: string;
+  created_at: string;
+  stale: boolean;
+  stale_reasons: string[];
+}
+
+export interface LitigationAgentOutputReviewRecord {
+  id: string;
+  run_id: string;
+  matter_id: string;
+  user_id: string;
+  output_hash: string;
+  snapshot_hash: string;
+  status: "open" | "approved" | "rejected";
+  requested_by: string;
+  decision_comment: string | null;
+  decided_by: string | null;
+  independent_review: number;
+  decided_at: string | null;
+  created_at: string;
+}
+
+export async function updateLitigationProfile(
+  matterId: string,
+  payload: {
+    organizationName?: string | null;
+    court?: string | null;
+    caseNumber?: string | null;
+    exhibitPrefix: string;
+    exhibitStart: number;
+    paginationPolicy: "auto" | "source_native";
+    documentTemplateId: string;
+    documentTemplateVersion: number;
+  },
+) {
+  return apiRequest<Record<string, unknown>>(
+    `/aletheia/matters/${matterId}/litigation/profile`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export type LitigationDocumentTemplateRecord = {
+  id: string;
+  version: number;
+  name: string;
+  locale: string;
+  status: "draft" | "approved" | "retired";
+  templateHash: string;
+  source?: "built_in" | "custom";
+  file_sha256?: string;
+  file_bytes?: number;
+  placeholders?: string[];
+  approval_checkpoint_id?: string | null;
+  independent_approval?: 0 | 1;
+  retirement_checkpoint_id?: string | null;
+  retired_by?: string | null;
+  retired_at?: string | null;
+};
+
+export async function listLitigationDocumentTemplates(matterId: string) {
+  const result = await apiRequest<{
+    templates: LitigationDocumentTemplateRecord[];
+  }>(`/aletheia/matters/${matterId}/litigation/document-templates`);
+  return result.templates;
+}
+
+export async function importLitigationDocumentTemplate(
+  matterId: string,
+  name: string,
+  file: File,
+) {
+  const body = new FormData();
+  body.set("name", name);
+  body.set("template", file);
+  return apiRequest<LitigationDocumentTemplateRecord>(
+    `/aletheia/matters/${matterId}/litigation/document-templates/import`,
+    { method: "POST", body },
+  );
+}
+
+export async function publishLitigationDocumentTemplate(
+  matterId: string,
+  templateId: string,
+  checkpointId: string,
+) {
+  return apiRequest<LitigationDocumentTemplateRecord>(
+    `/aletheia/matters/${matterId}/litigation/document-templates/${templateId}/publish`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ checkpointId }),
+    },
+  );
+}
+
+export async function retireLitigationDocumentTemplate(
+  matterId: string,
+  templateId: string,
+  checkpointId: string,
+) {
+  return apiRequest<LitigationDocumentTemplateRecord>(
+    `/aletheia/matters/${matterId}/litigation/document-templates/${templateId}/retire`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ checkpointId }),
+    },
+  );
 }
 
 export async function listAletheiaMatters(): Promise<AletheiaMatterOverview[]> {
@@ -578,6 +1647,1746 @@ export async function getAletheiaMatter(
   matterId: string,
 ): Promise<AletheiaMatterDetail> {
   return apiRequest<AletheiaMatterDetail>(`/aletheia/matters/${matterId}`);
+}
+
+export async function createLegalResearchRequest(
+  matterId: string,
+  payload: LegalResearchRequestInput,
+): Promise<AletheiaWorkProductRecord> {
+  const wirePayload = {
+    ...payload,
+    factIds: payload.factIds.length > 0 ? payload.factIds : undefined,
+    proceduralEventIds:
+      payload.proceduralEventIds.length > 0
+        ? payload.proceduralEventIds
+        : undefined,
+  };
+  return apiRequest(`/aletheia/matters/${matterId}/research/requests`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(wirePayload),
+  });
+}
+
+export async function getLegalResearchIssueTree(
+  matterId: string,
+  requestId: string,
+): Promise<AletheiaWorkProductRecord> {
+  return apiRequest(
+    `/aletheia/matters/${matterId}/research/requests/${requestId}/issues`,
+  );
+}
+
+export async function saveLegalResearchIssueTree(
+  matterId: string,
+  requestId: string,
+  nodes: LegalResearchIssueNode[],
+): Promise<AletheiaWorkProductRecord> {
+  return apiRequest(
+    `/aletheia/matters/${matterId}/research/requests/${requestId}/issues`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nodes }),
+    },
+  );
+}
+
+export async function importLegalResearchManualSource(
+  matterId: string,
+  requestId: string,
+  payload: LegalResearchManualSourceInput,
+): Promise<AletheiaWorkProductRecord> {
+  return apiRequest(
+    `/aletheia/matters/${matterId}/research/requests/${requestId}/manual-sources`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function createLegalResearchQueryPreview(
+  matterId: string,
+  requestId: string,
+  payload: {
+    issueTreeId: string;
+    provider: LegalResearchProvider;
+    query: string;
+    protectedTerms?: string[];
+  },
+): Promise<AletheiaWorkProductRecord> {
+  return apiRequest(
+    `/aletheia/matters/${matterId}/research/requests/${requestId}/query-preview`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        issueTreeId: payload.issueTreeId,
+        provider: payload.provider,
+        query: payload.query,
+        ...(payload.protectedTerms?.length
+          ? { protectedTerms: payload.protectedTerms }
+          : {}),
+      }),
+    },
+  );
+}
+
+export async function requestLegalResearchQueryApproval(
+  matterId: string,
+  queryPlanId: string,
+): Promise<AletheiaHumanCheckpointRecord> {
+  return apiRequest(
+    `/aletheia/matters/${matterId}/research/query-plans/${queryPlanId}/approval`,
+    { method: "POST", headers: { "Content-Type": "application/json" } },
+  );
+}
+
+export async function executeLegalResearchSearch(
+  matterId: string,
+  queryPlanId: string,
+  approvalCheckpointId: string,
+): Promise<AletheiaWorkProductRecord> {
+  return apiRequest(
+    `/aletheia/matters/${matterId}/research/query-plans/${queryPlanId}/search`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approvalCheckpointId }),
+    },
+  );
+}
+
+export async function requestLegalResearchSourceApproval(
+  matterId: string,
+  queryPlanId: string,
+  searchResultId: string,
+  documentId: string,
+): Promise<AletheiaHumanCheckpointRecord> {
+  return apiRequest(
+    `/aletheia/matters/${matterId}/research/query-plans/${queryPlanId}/search-results/${searchResultId}/sources/${encodeURIComponent(documentId)}/approval`,
+    { method: "POST", headers: { "Content-Type": "application/json" } },
+  );
+}
+
+export async function fetchLegalResearchSource(
+  matterId: string,
+  queryPlanId: string,
+  searchResultId: string,
+  documentId: string,
+  approvalCheckpointId: string,
+): Promise<AletheiaWorkProductRecord> {
+  return apiRequest(
+    `/aletheia/matters/${matterId}/research/query-plans/${queryPlanId}/search-results/${searchResultId}/sources/${encodeURIComponent(documentId)}/fetch`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approvalCheckpointId }),
+    },
+  );
+}
+
+export async function confirmLegalResearchExcerpt(
+  matterId: string,
+  snapshotId: string,
+  payload: { quote: string; comment: string },
+): Promise<AletheiaWorkProductRecord> {
+  return apiRequest(
+    `/aletheia/matters/${matterId}/research/snapshots/${snapshotId}/excerpts`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function createLegalResearchInputManifest(
+  matterId: string,
+  requestId: string,
+  excerptIds: string[],
+): Promise<AletheiaWorkProductRecord> {
+  return apiRequest(
+    `/aletheia/matters/${matterId}/research/requests/${requestId}/input-manifests`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ excerptIds }),
+    },
+  );
+}
+
+export async function createLegalResearchMemo(
+  matterId: string,
+  inputManifestId: string,
+  findings: LegalResearchFindingInput[],
+): Promise<AletheiaWorkProductRecord | LegalResearchMemoBlockedResponse> {
+  const authHeaders = await getAuthHeader();
+  const apiBase = await getAletheiaApiBase();
+  const path = `/aletheia/matters/${matterId}/research/input-manifests/${inputManifestId}/memos`;
+  const response = await fetch(`${apiBase}${path}`, {
+    method: "POST",
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...authHeaders,
+    },
+    body: JSON.stringify({ findings }),
+  });
+  if (!response.ok && response.status !== 422) throw await toApiError(response, path);
+  return (await response.json()) as
+    | AletheiaWorkProductRecord
+    | LegalResearchMemoBlockedResponse;
+}
+
+export async function getLitigationWorkspace(
+  matterId: string,
+): Promise<LitigationWorkspaceRecord> {
+  return apiRequest<LitigationWorkspaceRecord>(
+    `/aletheia/matters/${matterId}/litigation`,
+  );
+}
+
+export async function listLitigationLegalAuthorities(matterId: string) {
+  return apiRequest<LitigationLegalAuthorityRegistry>(
+    `/aletheia/matters/${matterId}/litigation/legal-authorities`,
+  );
+}
+
+export async function createLitigationLegalAuthorityVersion(
+  matterId: string,
+  payload: {
+    authorityType: LitigationLegalAuthorityType;
+    title: string;
+    issuer: string;
+    officialIdentifier: string;
+    versionLabel: string;
+    sourceReference: string;
+    content: string;
+    effectiveFrom: string;
+    effectiveTo?: string | null;
+  },
+) {
+  return apiRequest<LitigationLegalAuthorityVersionDetail>(
+    `/aletheia/matters/${matterId}/litigation/legal-authorities`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function getLitigationLegalAuthorityVersion(
+  matterId: string,
+  authorityVersionId: string,
+) {
+  return apiRequest<LitigationLegalAuthorityVersionDetail>(
+    `/aletheia/matters/${matterId}/litigation/legal-authorities/${authorityVersionId}`,
+  );
+}
+
+export async function verifyLitigationLegalAuthorityVersion(
+  matterId: string,
+  authorityVersionId: string,
+  comment: string,
+) {
+  return apiRequest<LitigationLegalAuthorityVersionDetail>(
+    `/aletheia/matters/${matterId}/litigation/legal-authorities/${authorityVersionId}/verify`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comment }),
+    },
+  );
+}
+
+export async function retireLitigationLegalAuthorityVersion(
+  matterId: string,
+  authorityVersionId: string,
+  comment: string,
+) {
+  return apiRequest<LitigationLegalAuthorityVersionDetail>(
+    `/aletheia/matters/${matterId}/litigation/legal-authorities/${authorityVersionId}/retire`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comment }),
+    },
+  );
+}
+
+export async function linkLitigationPositionAuthority(
+  matterId: string,
+  payload: {
+    claimId: string;
+    authorityVersionId: string;
+    applicabilityDate: string;
+    provisionReference: string;
+    exactQuote: string;
+    rationale: string;
+  },
+) {
+  return apiRequest<LitigationPositionAuthorityRecord>(
+    `/aletheia/matters/${matterId}/litigation/position-authorities`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function withdrawLitigationPositionAuthority(
+  matterId: string,
+  positionAuthorityId: string,
+  comment: string,
+) {
+  return apiRequest<LitigationPositionAuthorityRecord>(
+    `/aletheia/matters/${matterId}/litigation/position-authorities/${positionAuthorityId}/withdraw`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comment }),
+    },
+  );
+}
+
+export async function createLitigationRetrievalManifest(
+  matterId: string,
+  focus: string,
+) {
+  return apiRequest<LitigationRetrievalManifest>(
+    `/aletheia/matters/${matterId}/litigation/retrieval-manifests`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ focus }),
+    },
+  );
+}
+
+export async function getLitigationRetrievalManifest(
+  matterId: string,
+  manifestId: string,
+) {
+  return apiRequest<LitigationRetrievalManifest>(
+    `/aletheia/matters/${matterId}/litigation/retrieval-manifests/${manifestId}`,
+  );
+}
+
+export async function confirmLitigationRetrievalExcerpt(
+  matterId: string,
+  manifestId: string,
+  payload: { chunkId: string; comment: string },
+) {
+  return apiRequest<LitigationRetrievalExcerpt>(
+    `/aletheia/matters/${matterId}/litigation/retrieval-manifests/${manifestId}/excerpts`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function withdrawLitigationRetrievalExcerpt(
+  matterId: string,
+  excerptId: string,
+  comment: string,
+) {
+  return apiRequest<LitigationRetrievalExcerpt>(
+    `/aletheia/matters/${matterId}/litigation/retrieval-excerpts/${excerptId}/withdraw`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comment }),
+    },
+  );
+}
+
+export async function createLitigationFact(
+  matterId: string,
+  payload: {
+    statement: string;
+    occurredAt?: string | null;
+    datePrecision?: string;
+    sourceRelation?: string;
+    helpfulness?: string;
+    confidence?: "low" | "medium" | "high" | null;
+    source?: {
+      sourceChunkId: string;
+      quoteStart: number;
+      quoteEnd: number;
+    } | null;
+    createdBy?: "agent" | "human";
+  },
+) {
+  return apiRequest<LitigationFactRecord>(
+    `/aletheia/matters/${matterId}/litigation/facts`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function decideLitigationFact(
+  matterId: string,
+  factId: string,
+  next: "confirmed" | "rejected",
+  comment?: string,
+) {
+  return apiRequest<LitigationFactRecord>(
+    `/aletheia/matters/${matterId}/litigation/facts/${factId}/decision`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision: next, comment }),
+    },
+  );
+}
+
+export async function verifyLitigationSourceSpanOriginal(
+  matterId: string,
+  sourceSpanId: string,
+  reason: string,
+) {
+  return apiRequest<{
+    id: string;
+    source_span_id: string;
+    reason: string;
+    verified_by: string;
+    verified_at: string;
+  }>(
+    `/aletheia/matters/${matterId}/litigation/source-spans/${sourceSpanId}/verify-original`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    },
+  );
+}
+
+export interface LitigationSourceOriginalVerificationHistoryItem {
+  id: string;
+  sourceChunkSha256: string;
+  quoteSha256: string;
+  reason: string;
+  verifiedBy: string;
+  verifiedAt: string;
+  current: boolean;
+  withdrawal: {
+    id: string;
+    reason: string;
+    withdrawnBy: string;
+    withdrawnAt: string;
+  } | null;
+}
+
+export interface LitigationSourceOriginalVerificationHistory {
+  sourceSpanId: string;
+  items: LitigationSourceOriginalVerificationHistoryItem[];
+}
+
+function historyString(
+  value: Record<string, unknown>,
+  snakeKey: string,
+  camelKey: string,
+) {
+  const candidate = value[snakeKey] ?? value[camelKey];
+  return typeof candidate === "string" ? candidate : "";
+}
+
+export async function getLitigationSourceSpanOriginalVerificationHistory(
+  matterId: string,
+  sourceSpanId: string,
+): Promise<LitigationSourceOriginalVerificationHistory> {
+  const response = await apiRequest<unknown>(
+    `/aletheia/matters/${encodeURIComponent(matterId)}/litigation/source-spans/${encodeURIComponent(sourceSpanId)}/original-verification-history`,
+  );
+  if (!response || typeof response !== "object") {
+    throw new Error("invalid_original_verification_history");
+  }
+  const payload = response as Record<string, unknown>;
+  const rawItems = Array.isArray(payload.items)
+    ? payload.items
+    : Array.isArray(payload.verifications)
+      ? payload.verifications
+      : null;
+  if (!rawItems) throw new Error("invalid_original_verification_history");
+
+  const items = rawItems.map((rawItem) => {
+    if (!rawItem || typeof rawItem !== "object") {
+      throw new Error("invalid_original_verification_history");
+    }
+    const item = rawItem as Record<string, unknown>;
+    const nestedWithdrawal =
+      item.withdrawal && typeof item.withdrawal === "object"
+        ? (item.withdrawal as Record<string, unknown>)
+        : null;
+    const withdrawnAt = nestedWithdrawal
+      ? historyString(nestedWithdrawal, "withdrawn_at", "withdrawnAt")
+      : historyString(item, "withdrawn_at", "withdrawnAt");
+    const withdrawal = withdrawnAt
+      ? {
+          id: nestedWithdrawal
+            ? historyString(nestedWithdrawal, "id", "id")
+            : historyString(item, "withdrawal_id", "withdrawalId"),
+          reason: nestedWithdrawal
+            ? historyString(nestedWithdrawal, "reason", "reason")
+            : historyString(item, "withdrawal_reason", "withdrawalReason"),
+          withdrawnBy: nestedWithdrawal
+            ? historyString(nestedWithdrawal, "withdrawn_by", "withdrawnBy")
+            : historyString(item, "withdrawn_by", "withdrawnBy"),
+          withdrawnAt,
+        }
+      : null;
+    const id = historyString(item, "verification_id", "verificationId") ||
+      historyString(item, "id", "id");
+    const sourceChunkSha256 = historyString(
+      item,
+      "source_chunk_sha256",
+      "sourceChunkSha256",
+    );
+    const quoteSha256 = historyString(item, "quote_sha256", "quoteSha256");
+    const reason = historyString(item, "reason", "reason");
+    const verifiedBy = historyString(item, "verified_by", "verifiedBy");
+    const verifiedAt = historyString(item, "verified_at", "verifiedAt");
+    if (!id || !sourceChunkSha256 || !quoteSha256 || !verifiedAt) {
+      throw new Error("invalid_original_verification_history");
+    }
+    return {
+      id,
+      sourceChunkSha256,
+      quoteSha256,
+      reason,
+      verifiedBy,
+      verifiedAt,
+      current:
+        typeof item.current === "boolean"
+          ? item.current
+          : item.is_current === true || item.isCurrent === true,
+      withdrawal,
+    } satisfies LitigationSourceOriginalVerificationHistoryItem;
+  });
+
+  return {
+    sourceSpanId:
+      historyString(payload, "source_span_id", "sourceSpanId") || sourceSpanId,
+    items,
+  };
+}
+
+export interface LitigationSourceOriginalVerificationWithdrawalRecord {
+  id: string;
+  source_span_id: string;
+  verification_id: string;
+  reason: string;
+  withdrawn_by: string;
+  withdrawn_at: string;
+}
+
+export async function withdrawLitigationSourceSpanOriginalVerification(
+  matterId: string,
+  sourceSpanId: string,
+  verificationId: string,
+  reason: string,
+) {
+  return apiRequest<LitigationSourceOriginalVerificationWithdrawalRecord>(
+    `/aletheia/matters/${matterId}/litigation/source-spans/${sourceSpanId}/verifications/${verificationId}/withdraw`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    },
+  );
+}
+
+export async function createLitigationClaim(
+  matterId: string,
+  payload: {
+    kind: "claim" | "defense" | "rebuttal";
+    title: string;
+    legalBasis?: string | null;
+    confidence?: "low" | "medium" | "high" | null;
+    uncertainty?: string | null;
+    sourceRelation?: "authority" | "supports" | "contradicts";
+    source?: {
+      sourceChunkId: string;
+      quoteStart: number;
+      quoteEnd: number;
+    } | null;
+    parentClaimId?: string | null;
+    createdBy?: "agent" | "human";
+  },
+) {
+  return apiRequest<LitigationClaimRecord>(
+    `/aletheia/matters/${matterId}/litigation/claims`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function createLitigationPositionReview(
+  matterId: string,
+  claimId: string,
+  payload: {
+    kind: LitigationPositionReviewRecord["kind"];
+    reason: string;
+    requestedOutcome: LitigationPositionReviewRecord["requested_outcome"];
+    parentReviewId?: string | null;
+    createdBy?: "human" | "agent";
+  },
+) {
+  return apiRequest<LitigationPositionReviewRecord>(
+    `/aletheia/matters/${matterId}/litigation/claims/${claimId}/reviews`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function resolveLitigationPositionReview(
+  matterId: string,
+  reviewId: string,
+  payload: {
+    resolution: "upheld" | "granted" | "dismissed";
+    comment: string;
+  },
+) {
+  return apiRequest<LitigationPositionReviewRecord>(
+    `/aletheia/matters/${matterId}/litigation/position-reviews/${reviewId}/resolve`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function withdrawLitigationPositionReview(
+  matterId: string,
+  reviewId: string,
+) {
+  return apiRequest<LitigationPositionReviewRecord>(
+    `/aletheia/matters/${matterId}/litigation/position-reviews/${reviewId}/withdraw`,
+    { method: "POST", headers: { "Content-Type": "application/json" } },
+  );
+}
+
+export async function decideLitigationClaim(
+  matterId: string,
+  claimId: string,
+  next: "confirmed" | "rejected",
+  comment?: string,
+) {
+  return apiRequest<LitigationClaimRecord>(
+    `/aletheia/matters/${matterId}/litigation/claims/${claimId}/decision`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision: next, comment }),
+    },
+  );
+}
+
+export async function createLitigationClaimElement(
+  matterId: string,
+  claimId: string,
+  payload: {
+    title: string;
+    description?: string | null;
+    sequence?: number;
+    createdBy?: "agent" | "human";
+  },
+) {
+  return apiRequest<LitigationClaimElementRecord>(
+    `/aletheia/matters/${matterId}/litigation/claims/${claimId}/elements`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function decideLitigationClaimElement(
+  matterId: string,
+  elementId: string,
+  next: "confirmed" | "rejected",
+  comment?: string,
+) {
+  return apiRequest<LitigationClaimElementRecord>(
+    `/aletheia/matters/${matterId}/litigation/elements/${elementId}/decision`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision: next, comment }),
+    },
+  );
+}
+
+export async function linkLitigationElementFact(
+  matterId: string,
+  elementId: string,
+  payload: {
+    factId: string;
+    relation: "supports" | "contradicts" | "gap";
+    note?: string | null;
+  },
+) {
+  return apiRequest<LitigationElementFactRecord>(
+    `/aletheia/matters/${matterId}/litigation/elements/${elementId}/facts`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function createLitigationProceduralEvent(
+  matterId: string,
+  payload: {
+    eventType: string;
+    title: string;
+    occurredAt?: string | null;
+    source?: {
+      sourceChunkId: string;
+      quoteStart: number;
+      quoteEnd: number;
+    } | null;
+    createdBy?: "agent" | "human";
+  },
+) {
+  return apiRequest<LitigationProceduralEventRecord>(
+    `/aletheia/matters/${matterId}/litigation/procedural-events`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function decideLitigationProceduralEvent(
+  matterId: string,
+  eventId: string,
+  next: "confirmed" | "rejected",
+  comment?: string,
+) {
+  return apiRequest<LitigationProceduralEventRecord>(
+    `/aletheia/matters/${matterId}/litigation/procedural-events/${eventId}/decision`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision: next, comment }),
+    },
+  );
+}
+
+export async function correctLitigationProceduralEvent(
+  matterId: string,
+  eventId: string,
+  payload: {
+    title: string;
+    occurredAt: string;
+    reason: string;
+    source?: {
+      sourceChunkId: string;
+      quoteStart: number;
+      quoteEnd: number;
+    };
+  },
+) {
+  return apiRequest<LitigationProceduralEventCorrectionResult>(
+    `/aletheia/matters/${matterId}/litigation/procedural-events/${eventId}/corrections`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function listLitigationDeadlineRules(matterId: string) {
+  return apiRequest<LitigationDeadlineRuleRecord[]>(
+    `/aletheia/matters/${matterId}/litigation/deadline-rules`,
+  );
+}
+
+export async function listLitigationCourtCalendars(matterId: string) {
+  return apiRequest<LitigationCourtCalendarVersionRecord[]>(
+    `/aletheia/matters/${matterId}/litigation/court-calendars`,
+  );
+}
+
+export async function createLitigationCourtCalendar(
+  matterId: string,
+  payload: {
+    courtIdentifier: string;
+    name: string;
+    versionLabel: string;
+    sourceAuthorityVersionId: string;
+    effectiveFrom: string;
+    effectiveTo: string;
+    weeklyNonWorkingDays: number[];
+    overrides: Array<{
+      localDate: string;
+      disposition: LitigationCourtCalendarDisposition;
+      sourceReference: string;
+    }>;
+  },
+) {
+  return apiRequest<LitigationCourtCalendarVersionRecord>(
+    `/aletheia/matters/${matterId}/litigation/court-calendars`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function verifyLitigationCourtCalendar(
+  matterId: string,
+  versionId: string,
+  comment: string,
+) {
+  return apiRequest<LitigationCourtCalendarVersionRecord>(
+    `/aletheia/matters/${matterId}/litigation/court-calendars/${versionId}/verify`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comment }),
+    },
+  );
+}
+
+export async function retireLitigationCourtCalendar(
+  matterId: string,
+  versionId: string,
+  comment: string,
+) {
+  return apiRequest<LitigationCourtCalendarRetirementResult>(
+    `/aletheia/matters/${matterId}/litigation/court-calendars/${versionId}/retire`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comment }),
+    },
+  );
+}
+
+export async function createLitigationDeadlineRule(
+  matterId: string,
+  payload: {
+    name: string;
+    triggerEventType: string;
+    authorityVersionId: string;
+    provisionReference: string;
+    exactQuote: string;
+    offsetDays: number;
+    countingBasis: "calendar_days" | "business_days";
+    courtCalendarVersionId?: string;
+    startPolicy: "same_day" | "next_day";
+  },
+) {
+  return apiRequest<LitigationDeadlineRuleRecord>(
+    `/aletheia/matters/${matterId}/litigation/deadline-rules`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function verifyLitigationDeadlineRule(
+  matterId: string,
+  ruleId: string,
+  comment: string,
+) {
+  return apiRequest<LitigationDeadlineRuleRecord>(
+    `/aletheia/matters/${matterId}/litigation/deadline-rules/${ruleId}/verify`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comment }),
+    },
+  );
+}
+
+export async function calculateLitigationDeadlineRule(
+  matterId: string,
+  ruleId: string,
+  payload: { eventId: string; title: string },
+) {
+  return apiRequest<LitigationDeadlineRecord>(
+    `/aletheia/matters/${matterId}/litigation/deadline-rules/${ruleId}/calculate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function retireLitigationDeadlineRule(
+  matterId: string,
+  ruleId: string,
+  comment: string,
+) {
+  return apiRequest<LitigationDeadlineRuleRecord>(
+    `/aletheia/matters/${matterId}/litigation/deadline-rules/${ruleId}/retire`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comment }),
+    },
+  );
+}
+
+export async function createLitigationDeadline(
+  matterId: string,
+  payload: {
+    title: string;
+    dueAt: string;
+    triggeringEventId?: string | null;
+    ruleLabel: string;
+    ruleVersion: string;
+    calculation: string;
+    source?: {
+      sourceChunkId: string;
+      quoteStart: number;
+      quoteEnd: number;
+    } | null;
+    createdBy?: "agent" | "human";
+  },
+) {
+  return apiRequest<LitigationDeadlineRecord>(
+    `/aletheia/matters/${matterId}/litigation/deadlines`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function decideLitigationDeadline(
+  matterId: string,
+  deadlineId: string,
+  next: "confirmed" | "rejected",
+  comment?: string,
+) {
+  return apiRequest<LitigationDeadlineRecord>(
+    `/aletheia/matters/${matterId}/litigation/deadlines/${deadlineId}/decision`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision: next, comment }),
+    },
+  );
+}
+
+export async function createMatterTaskFromDeadline(
+  matterId: string,
+  deadlineId: string,
+  payload?: {
+    title?: string;
+    priority?: AletheiaMatterTaskPriority;
+    note?: string | null;
+  },
+) {
+  return apiRequest<AletheiaMatterTaskRecord>(
+    `/aletheia/matters/${matterId}/litigation/deadlines/${deadlineId}/task`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload ?? {}),
+    },
+  );
+}
+
+export async function listAletheiaTasks(
+  status: AletheiaMatterTaskStatus | "all" = "open",
+) {
+  return apiRequest<AletheiaMatterTaskRecord[]>(
+    `/aletheia/tasks?status=${encodeURIComponent(status)}`,
+  );
+}
+
+export type AletheiaTaskNotificationClaim = {
+  deliveryId: string;
+  leaseToken: string;
+  tag: string;
+  category: "due_soon" | "overdue";
+  taskId: string;
+  matterId: string;
+  matterTitle: string;
+  title: string;
+  dueAt: string;
+  attemptCount: number;
+};
+
+export async function claimAletheiaTaskNotifications() {
+  return apiRequest<{
+    claimedAt: string;
+    claims: AletheiaTaskNotificationClaim[];
+    withdrawals: Array<{ deliveryId: string; taskId: string; tag: string }>;
+  }>("/aletheia/task-notifications/claim", { method: "POST" });
+}
+
+export async function acknowledgeAletheiaTaskNotification(
+  deliveryId: string,
+  payload: {
+    leaseToken: string;
+    outcome: "delivered" | "failed";
+    failureCode?: string | null;
+  },
+) {
+  return apiRequest<Record<string, unknown>>(
+    `/aletheia/task-notifications/${deliveryId}/ack`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function fetchAletheiaTaskCalendar(
+  status: AletheiaMatterTaskStatus | "all" = "open",
+): Promise<Blob> {
+  const authHeaders = await getAuthHeader();
+  const apiBase = await getAletheiaApiBase();
+  const path = `/aletheia/tasks/calendar.ics?status=${encodeURIComponent(status)}`;
+  const response = await fetch(`${apiBase}${path}`, {
+    cache: "no-store",
+    headers: {
+      Accept: "text/calendar",
+      ...authHeaders,
+    },
+  });
+  if (!response.ok) throw await toApiError(response, path);
+  return response.blob();
+}
+
+export async function completeAletheiaTask(taskId: string) {
+  return apiRequest<AletheiaMatterTaskRecord>(
+    `/aletheia/tasks/${taskId}/complete`,
+    { method: "POST" },
+  );
+}
+
+export async function reopenAletheiaTask(taskId: string) {
+  return apiRequest<AletheiaMatterTaskRecord>(
+    `/aletheia/tasks/${taskId}/reopen`,
+    { method: "POST" },
+  );
+}
+
+export type LitigationArtifactKind =
+  | "evidence_catalog"
+  | "claim_defense_matrix"
+  | "procedural_clock"
+  | "litigation_brief"
+  | "hearing_plan"
+  | "hearing_bundle_index";
+
+export type LitigationAuditChecklistStatus =
+  "satisfied" | "action_required" | "not_applicable";
+
+export interface LitigationAuditChecklistItem {
+  id: string;
+  status: LitigationAuditChecklistStatus;
+  summary: string;
+}
+
+export interface LitigationAuditChecklist {
+  schema_version: "vera-litigation-counsel-signoff-checklist-v1";
+  overall_status: "ready" | "action_required";
+  items: LitigationAuditChecklistItem[];
+  assurance_limit: string;
+}
+
+export interface LitigationMatterAuditExportPreview {
+  schema_version: "vera-litigation-matter-audit-package-v1";
+  matter_id: string;
+  matter_state_hash: string;
+  checklist: LitigationAuditChecklist;
+  checklist_hash: string;
+  attestation_version: "vera-counsel-audit-attestation-v1";
+  attestation: string;
+}
+
+export interface LitigationMatterAuditExportSummary {
+  export_id: string;
+  export_hash: string;
+  matter_state_hash: string;
+  checklist_hash: string;
+  checklist: LitigationAuditChecklist;
+  exported_at: string;
+  exported_by: string;
+  approval_checkpoint_id: string | null;
+  stale: boolean;
+  signoff_count: number;
+}
+
+export interface LitigationMatterAuditExportPackage {
+  schema_version: "vera-litigation-matter-audit-package-v1";
+  local_only: true;
+  matter_id: string;
+  exported_at: string;
+  exported_by: string;
+  export_id: string;
+  export_hash: string;
+  matter_state_hash: string;
+  checklist: LitigationAuditChecklist;
+  checklist_hash: string;
+  section_hashes: Record<string, string>;
+  snapshot: Record<string, unknown>;
+  assurance_limit: string;
+}
+
+export interface LitigationMatterAuditExportSignoff {
+  id: string;
+  matterId: string;
+  ownerId: string;
+  exportId: string;
+  exportHash: string;
+  checklistSchemaVersion: string;
+  checklistHash: string;
+  matterStateHash: string;
+  actorId: string;
+  signerName: string;
+  professionalIdentifier: string | null;
+  attestationVersion: string;
+  attestation: string;
+  comment: string;
+  independentReview: boolean;
+  signedAt: string;
+  signoffHash: string;
+  auditEventId: string | null;
+  auditEventSequence: number | null;
+  auditEventHash: string | null;
+  audit_binding_valid: boolean;
+  integrity_valid: boolean;
+  stale: boolean;
+}
+
+export interface LitigationSignoffAnchorProof {
+  schema_version: "aletheia-litigation-signoff-anchor-proof-v1";
+  configured: boolean;
+  anchored: boolean;
+  can_anchor: boolean;
+  exact_current_matter_head: boolean;
+  target?: {
+    signoff_id: string;
+    signoff_hash: string;
+    audit_event_id: string;
+    audit_event_sequence: number;
+    audit_event_hash: string;
+  };
+  coverage?: null | {
+    schema_version: "aletheia-litigation-signoff-anchor-coverage-v1";
+    coverage: "exact_matter_audit_head";
+    anchor_id: string;
+    anchor_index: number;
+    anchor_hash: string;
+    anchored_at: string;
+    reason: string;
+    key_id: string;
+    signature_algorithm: "ed25519";
+    signature: string;
+    journal_head: string;
+    journal_entries: number;
+    matter_head: {
+      matter_id: string;
+      event_count: number;
+      chained_event_count: number;
+      invalid_event_count: number;
+      sequence_anomaly_count: number;
+      last_sequence: number;
+      last_event_hash: string;
+    };
+  };
+  runtime: {
+    enabled: boolean;
+    healthy: boolean;
+    protection_active: boolean;
+    key_id: string | null;
+    journal_entries: number;
+    journal_head: string | null;
+    last_success_at: string | null;
+    last_error: string | null;
+  };
+  assurance: string;
+}
+
+export function getLitigationMatterAuditExportPreview(matterId: string) {
+  return apiRequest<LitigationMatterAuditExportPreview>(
+    `/aletheia/matters/${matterId}/litigation/audit-exports/preview`,
+  );
+}
+
+export function listLitigationMatterAuditExports(matterId: string) {
+  return apiRequest<LitigationMatterAuditExportSummary[]>(
+    `/aletheia/matters/${matterId}/litigation/audit-exports`,
+  );
+}
+
+export function createLitigationMatterAuditExport(
+  matterId: string,
+  payload: {
+    approvalCheckpointId: string;
+    governanceApprovalRequestId?: string | null;
+  },
+) {
+  return apiRequest<LitigationMatterAuditExportPackage>(
+    `/aletheia/matters/${matterId}/litigation/audit-exports`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function getLitigationMatterAuditExport(
+  matterId: string,
+  exportId: string,
+) {
+  return apiRequest<LitigationMatterAuditExportPackage>(
+    `/aletheia/matters/${matterId}/litigation/audit-exports/${exportId}`,
+  );
+}
+
+export function listLitigationMatterAuditExportSignoffs(
+  matterId: string,
+  exportId: string,
+) {
+  return apiRequest<LitigationMatterAuditExportSignoff[]>(
+    `/aletheia/matters/${matterId}/litigation/audit-exports/${exportId}/signoffs`,
+  );
+}
+
+export function signLitigationMatterAuditExport(
+  matterId: string,
+  exportId: string,
+  payload: {
+    exportHash: string;
+    checklistHash: string;
+    matterStateHash: string;
+    signerName: string;
+    professionalIdentifier?: string | null;
+    attestation: string;
+    comment: string;
+  },
+) {
+  return apiRequest<LitigationMatterAuditExportSignoff>(
+    `/aletheia/matters/${matterId}/litigation/audit-exports/${exportId}/signoffs`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function getLitigationMatterAuditSignoffAnchorProof(
+  matterId: string,
+  exportId: string,
+  signoffId: string,
+) {
+  return apiRequest<LitigationSignoffAnchorProof>(
+    `/aletheia/matters/${matterId}/litigation/audit-exports/${exportId}/signoffs/${signoffId}/anchor-proof`,
+  );
+}
+
+export function anchorLitigationMatterAuditSignoff(
+  matterId: string,
+  exportId: string,
+  signoffId: string,
+) {
+  return apiRequest<LitigationSignoffAnchorProof>(
+    `/aletheia/matters/${matterId}/litigation/audit-exports/${exportId}/signoffs/${signoffId}/anchor`,
+    { method: "POST" },
+  );
+}
+
+export async function generateLitigationArtifact(
+  matterId: string,
+  kind: LitigationArtifactKind,
+) {
+  return apiRequest<AletheiaWorkProductRecord>(
+    `/aletheia/matters/${matterId}/litigation/artifacts/${kind}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    },
+  );
+}
+
+export type LitigationDocumentDraftArtifactKind =
+  "litigation_brief" | "hearing_plan";
+
+export interface LitigationDocumentDraftSection {
+  id: string;
+  heading: string;
+  body: string;
+}
+
+export interface LitigationDocumentDraftVersionRecord {
+  id: string;
+  document_id: string;
+  matter_id: string;
+  user_id: string;
+  version: number;
+  parent_version_id: string | null;
+  parent_content_hash: string | null;
+  content_hash: string;
+  sections: LitigationDocumentDraftSection[];
+  change_summary: string;
+  provenance: {
+    schemaVersion: string;
+    actor: "human";
+    actorId: string;
+    source:
+      | "server_artifact_projection"
+      | "server_authenticated_edit"
+      | "external_docx_import";
+    artifactId?: string;
+    artifactKind?: LitigationDocumentDraftArtifactKind;
+    sourceContentHash?: string;
+    sourceDependencyHash?: string;
+    baseVersion?: number;
+    baseVersionId?: string;
+    originalFilename?: string;
+    fileSha256?: string;
+    parserProtocol?: string;
+    bindingHash?: string;
+  };
+  created_by: string;
+  created_at: string;
+  review_status: "unreviewed" | "approved" | "rejected";
+  review_reason: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+}
+
+export interface LitigationDocumentDraftRecord {
+  id: string;
+  matter_id: string;
+  user_id: string;
+  artifact_id: string;
+  artifact_kind: LitigationDocumentDraftArtifactKind;
+  source_content_hash: string;
+  source_dependency_hash: string;
+  current_version_id: string;
+  status: "active" | "withdrawn";
+  withdrawn_by: string | null;
+  withdrawn_at: string | null;
+  withdrawal_reason: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  stale: boolean;
+  stale_reasons: string[];
+}
+
+export interface LitigationDocumentDraftImportAttempt {
+  id: string;
+  document_id: string;
+  matter_id: string;
+  user_id: string;
+  base_version_id: string | null;
+  base_version: number | null;
+  base_content_hash: string | null;
+  original_filename: string;
+  file_sha256: string;
+  file_bytes: number;
+  parser_protocol: string;
+  binding_hash: string | null;
+  status: "accepted" | "rejected";
+  failure_code: string | null;
+  failure_detail: string | null;
+  accepted_version_id: string | null;
+  actor_id: string;
+  created_at: string;
+}
+
+export interface LitigationDocumentDraftDetail extends LitigationDocumentDraftRecord {
+  versions: LitigationDocumentDraftVersionRecord[];
+  import_attempts: LitigationDocumentDraftImportAttempt[];
+}
+
+export interface LitigationDocumentDraftDiffChange {
+  id: string;
+  status: "added" | "removed" | "unchanged" | "modified";
+  old_hash: string | null;
+  new_hash: string | null;
+  old_section: LitigationDocumentDraftSection | null;
+  new_section: LitigationDocumentDraftSection | null;
+}
+
+export interface LitigationDocumentDraftDiff {
+  document: LitigationDocumentDraftRecord;
+  from_version?: number;
+  to_version?: number;
+  changes: LitigationDocumentDraftDiffChange[];
+}
+
+export function createLitigationDocumentDraft(
+  matterId: string,
+  artifactId: string,
+) {
+  return apiRequest<LitigationDocumentDraftDetail>(
+    `/aletheia/matters/${matterId}/litigation/artifacts/${artifactId}/document-draft`,
+    { method: "POST" },
+  );
+}
+
+export async function listLitigationDocumentDrafts(matterId: string) {
+  const response = await apiRequest<{
+    document_drafts: LitigationDocumentDraftRecord[];
+  }>(`/aletheia/matters/${matterId}/litigation/document-drafts`);
+  return response.document_drafts;
+}
+
+export function getLitigationDocumentDraft(
+  matterId: string,
+  documentId: string,
+) {
+  return apiRequest<LitigationDocumentDraftDetail>(
+    `/aletheia/matters/${matterId}/litigation/document-drafts/${documentId}`,
+  );
+}
+
+export function appendLitigationDocumentDraftVersion(
+  matterId: string,
+  documentId: string,
+  payload: {
+    baseVersion: number;
+    changeSummary: string;
+    sections: LitigationDocumentDraftSection[];
+  },
+) {
+  return apiRequest<LitigationDocumentDraftDetail>(
+    `/aletheia/matters/${matterId}/litigation/document-drafts/${documentId}/versions`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+function filenameFromDisposition(value: string | null) {
+  if (!value) return null;
+  const encoded = value.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      return encoded;
+    }
+  }
+  return value.match(/filename="?([^";]+)"?/i)?.[1] ?? null;
+}
+
+export async function exportLitigationDocumentDraftDocx(
+  matterId: string,
+  documentId: string,
+  versionId: string,
+) {
+  const authHeaders = await getAuthHeader();
+  const apiBase = await getAletheiaApiBase();
+  const path = `/aletheia/matters/${matterId}/litigation/document-drafts/${documentId}/versions/${versionId}/docx-export`;
+  const response = await fetch(`${apiBase}${path}`, {
+    method: "POST",
+    cache: "no-store",
+    headers: {
+      Accept:
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      ...authHeaders,
+    },
+  });
+  if (!response.ok) throw await toApiError(response, path);
+  return {
+    blob: await response.blob(),
+    filename: filenameFromDisposition(
+      response.headers.get("content-disposition"),
+    ),
+    fileSha256: response.headers.get("x-vera-file-sha256"),
+    bindingHash: response.headers.get("x-vera-binding-sha256"),
+  };
+}
+
+export async function importLitigationDocumentDraftDocx(
+  matterId: string,
+  documentId: string,
+  document: File,
+  changeSummary: string,
+) {
+  const authHeaders = await getAuthHeader();
+  const apiBase = await getAletheiaApiBase();
+  const path = `/aletheia/matters/${matterId}/litigation/document-drafts/${documentId}/docx-import`;
+  const form = new FormData();
+  form.append("document", document);
+  form.append("changeSummary", changeSummary);
+  const response = await fetch(`${apiBase}${path}`, {
+    method: "POST",
+    cache: "no-store",
+    headers: { Accept: "application/json", ...authHeaders },
+    body: form,
+  });
+  if (!response.ok) throw await toApiError(response, path);
+  return (await response.json()) as LitigationDocumentDraftDetail;
+}
+
+export function diffLitigationDocumentDraftVersions(
+  matterId: string,
+  documentId: string,
+  fromVersion: number,
+  toVersion: number,
+) {
+  const query = new URLSearchParams({
+    fromVersion: String(fromVersion),
+    toVersion: String(toVersion),
+  });
+  return apiRequest<LitigationDocumentDraftDiff>(
+    `/aletheia/matters/${matterId}/litigation/document-drafts/${documentId}/diff?${query}`,
+  );
+}
+
+export function reviewLitigationDocumentDraftVersion(
+  matterId: string,
+  documentId: string,
+  versionId: string,
+  payload: { decision: "approved" | "rejected"; reason: string },
+) {
+  return apiRequest<LitigationDocumentDraftDetail>(
+    `/aletheia/matters/${matterId}/litigation/document-drafts/${documentId}/versions/${versionId}/review`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function withdrawLitigationDocumentDraft(
+  matterId: string,
+  documentId: string,
+  reason: string,
+) {
+  return apiRequest<LitigationDocumentDraftDetail>(
+    `/aletheia/matters/${matterId}/litigation/document-drafts/${documentId}/withdraw`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    },
+  );
+}
+
+export interface LitigationArtifactExportResult {
+  schemaVersion: "aletheia-litigation-artifact-export-v2";
+  exportId: string;
+  matterId: string;
+  workProductId: string;
+  kind: LitigationArtifactKind;
+  version: number;
+  contentHash: string;
+  format: "docx" | "json" | "zip";
+  mimeType: string;
+  exportHash: string;
+}
+
+export type LitigationApprovalVoteBlockReason =
+  | "independent_approval_not_required"
+  | "approval_not_requested"
+  | "artifact_binding_stale"
+  | "artifact_ineligible"
+  | "governance_request_ineligible"
+  | "policy_missing_or_disabled"
+  | "requester_cannot_vote"
+  | "missing_approval_vote_permission"
+  | "role_not_eligible"
+  | "actor_already_voted"
+  | "distinct_role_already_approved"
+  | "governance_request_approved"
+  | "governance_request_rejected";
+
+export interface LitigationArtifactExportApprovalProjection {
+  approvalCheckpointId: string | null;
+  workProductId: string;
+  version: number;
+  contentHash: string;
+  checkpointStatus:
+    | "not_requested"
+    | "open"
+    | "approved"
+    | "rejected"
+    | "resolved"
+    | "consumed"
+    | "stale"
+    | "ineligible";
+  governanceRequest: {
+    id: string;
+    requesterId: string;
+    status: string;
+    approvedVotes: number;
+    rejectedVotes: number;
+    requiredApprovals: number;
+    requireDistinctRoles: boolean;
+    votes: Array<{
+      principalId: string;
+      role: string;
+      decision: string;
+      comment: string | null;
+      createdAt: string;
+    }>;
+  } | null;
+  actor: {
+    id: string;
+    canVote: boolean;
+    canExport: boolean;
+    voteBlockReason: LitigationApprovalVoteBlockReason | null;
+  };
+  independentApproval: {
+    required: boolean;
+    status:
+      | "not_requested"
+      | "pending"
+      | "approved"
+      | "rejected"
+      | "stale"
+      | "ineligible";
+    approvedBy: string[];
+  };
+  export: {
+    status: "exported";
+    exportId: string;
+    exportedBy: string;
+    exportedAt: string;
+  } | null;
+}
+
+export function getLitigationArtifactExportApproval(
+  matterId: string,
+  workProductId: string,
+) {
+  return apiRequest<LitigationArtifactExportApprovalProjection>(
+    `/aletheia/matters/${matterId}/litigation/artifacts/${workProductId}/export-approval`,
+  );
+}
+
+export function voteLitigationArtifactExportApproval(
+  matterId: string,
+  workProductId: string,
+  payload: {
+    approvalCheckpointId: string;
+    decision: "approved" | "rejected";
+    comment?: string | null;
+  },
+) {
+  return apiRequest<LitigationArtifactExportApprovalProjection>(
+    `/aletheia/matters/${matterId}/litigation/artifacts/${workProductId}/export-approval/votes`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function exportLitigationArtifact(
+  matterId: string,
+  workProductId: string,
+  approvalCheckpointId: string,
+  kind: LitigationArtifactKind,
+) {
+  return apiRequest<LitigationArtifactExportResult>(
+    `/aletheia/matters/${matterId}/litigation/artifacts/${workProductId}/export`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        approvalCheckpointId,
+        format: kind === "hearing_bundle_index" ? "zip" : "docx",
+      }),
+    },
+  );
+}
+
+export async function fetchLitigationArtifactDownload(
+  matterId: string,
+  exportId: string,
+) {
+  const authHeaders = await getAuthHeader();
+  const apiBase = await getAletheiaApiBase();
+  const response = await fetch(
+    `${apiBase}/aletheia/matters/${matterId}/litigation/exports/${exportId}/download`,
+    {
+      cache: "no-store",
+      headers: {
+        Accept:
+          "application/zip, application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ...authHeaders,
+      },
+    },
+  );
+  if (!response.ok) {
+    throw await toApiError(response, "litigation artifact download");
+  }
+  return response.blob();
+}
+
+export type LitigationEvalRun = {
+  id: string;
+  suite_version: string;
+  status: "completed";
+  passed: number;
+  total: number;
+  result_hash: string;
+  created_at: string;
+  results: Array<{
+    id: string;
+    case_id: string;
+    case_type: "golden" | "bad_case";
+    expected: boolean;
+    actual: boolean;
+    passed: boolean;
+    grader_id: string;
+    grader_version: string;
+    evidence_refs: string[];
+  }>;
+};
+
+export async function listLitigationEvalRuns(matterId: string) {
+  return apiRequest<LitigationEvalRun[]>(
+    `/aletheia/matters/${matterId}/litigation/eval-runs`,
+  );
+}
+
+export async function runLitigationEvalSuite(matterId: string) {
+  return apiRequest<LitigationEvalRun>(
+    `/aletheia/matters/${matterId}/litigation/eval-runs`,
+    { method: "POST", headers: { "Content-Type": "application/json" } },
+  );
 }
 
 export async function uploadAletheiaMatterDocument(
@@ -612,12 +3421,88 @@ export async function uploadAletheiaMatterDocuments(
   );
 }
 
+export async function retryAletheiaMatterDocumentParse(
+  matterId: string,
+  documentId: string,
+): Promise<AletheiaMatterDocumentRecord> {
+  return apiRequest<AletheiaMatterDocumentRecord>(
+    `/aletheia/matters/${matterId}/documents/${documentId}/retry-parse`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    },
+  );
+}
+
+export type AletheiaOriginalDocumentDownload = {
+  blob: Blob;
+  mimeType: string;
+  sha256: string;
+  size: number;
+};
+
+export async function fetchAletheiaMatterDocumentOriginal(
+  matterId: string,
+  documentId: string,
+): Promise<AletheiaOriginalDocumentDownload> {
+  const authHeaders = await getAuthHeader();
+  const apiBase = await getAletheiaApiBase();
+  const path = `/aletheia/matters/${encodeURIComponent(matterId)}/documents/${encodeURIComponent(documentId)}/original`;
+  const response = await fetch(`${apiBase}${path}`, {
+    cache: "no-store",
+    headers: { Accept: "*/*", ...authHeaders },
+  });
+  if (!response.ok) throw await toApiError(response, path);
+
+  const sha256Header = response.headers.get("x-aletheia-content-sha256");
+  const sha256 = sha256Header?.trim().toLowerCase() ?? "";
+  const sizeHeader = response.headers.get("content-length");
+  const declaredSize = sizeHeader === null ? Number.NaN : Number(sizeHeader);
+  if (!/^[a-f0-9]{64}$/.test(sha256)) {
+    throw new AletheiaApiError({
+      status: 502,
+      code: "original_integrity_metadata_missing",
+      message: "Original integrity metadata is unavailable",
+    });
+  }
+  if (!Number.isSafeInteger(declaredSize) || declaredSize < 0) {
+    throw new AletheiaApiError({
+      status: 502,
+      code: "original_size_metadata_invalid",
+      message: "Original size metadata is invalid",
+    });
+  }
+
+  const blob = await response.blob();
+  return {
+    blob,
+    mimeType: response.headers.get("content-type")?.split(";", 1)[0] ?? "",
+    sha256,
+    size: declaredSize,
+  };
+}
+
 export async function searchAletheiaMatterDocuments(
   matterId: string,
   query: string,
 ): Promise<AletheiaDocumentSearchResult[]> {
   return apiRequest<AletheiaDocumentSearchResult[]>(
     `/aletheia/matters/${matterId}/documents/search?q=${encodeURIComponent(query)}`,
+  );
+}
+
+export async function searchAletheia(
+  query: string,
+  limit = 40,
+  signal?: AbortSignal,
+): Promise<AletheiaSearchResponse> {
+  const params = new URLSearchParams({
+    q: query,
+    limit: String(limit),
+  });
+  return apiRequest<AletheiaSearchResponse>(
+    `/aletheia/search?${params.toString()}`,
+    { signal },
   );
 }
 
@@ -700,7 +3585,11 @@ export type AletheiaExternalSourceCapture = {
 
 export async function fetchAletheiaExternalSource(
   matterId: string,
-  payload: { url: string; externalAccessOptIn: true },
+  payload: {
+    url: string;
+    externalAccessOptIn: true;
+    approvalCheckpointId: string;
+  },
 ): Promise<AletheiaExternalSourceCapture> {
   return apiRequest<AletheiaExternalSourceCapture>(
     `/aletheia/matters/${matterId}/external-source/fetch`,
@@ -763,8 +3652,7 @@ export async function createAletheiaWorkProduct(
 export async function requestAletheiaApproval(
   matterId: string,
   payload: {
-    action:
-      "audit_pack_export" | "feedback_dataset_export" | "final_memo_export";
+    action: AletheiaApprovalAction;
     prompt?: string | null;
     requestedPayload?: Record<string, unknown>;
   },
@@ -797,6 +3685,27 @@ export async function decideAletheiaApproval(
       body: JSON.stringify(payload),
     },
   );
+}
+
+export async function archiveAletheiaMatter(matterId: string) {
+  return apiRequest<AletheiaMatterRecord>(
+    `/aletheia/matters/${matterId}/archive`,
+    { method: "POST", headers: { "Content-Type": "application/json" } },
+  );
+}
+
+export async function purgeAletheiaMatter(
+  matterId: string,
+  approvalCheckpointId: string,
+) {
+  return apiRequest<{
+    schema_version: "aletheia-matter-purge-tombstone-v1";
+    tombstoneHash: string;
+  }>(`/aletheia/matters/${matterId}/purge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirmMatterId: matterId, approvalCheckpointId }),
+  });
 }
 
 export async function resumeAletheiaAgentRun(
@@ -959,8 +3868,14 @@ export async function approveAletheiaLegalQaAnswer(
   );
 }
 
-export async function approveAletheiaWordAddinHandoff(matterId: string, handoffId: string): Promise<AletheiaWorkProductRecord> {
-  return apiRequest<AletheiaWorkProductRecord>(`/aletheia/matters/${matterId}/word-addin/${handoffId}/approve`, { method: "POST", headers: { "Content-Type": "application/json" } });
+export async function approveAletheiaWordAddinHandoff(
+  matterId: string,
+  handoffId: string,
+): Promise<AletheiaWorkProductRecord> {
+  return apiRequest<AletheiaWorkProductRecord>(
+    `/aletheia/matters/${matterId}/word-addin/${handoffId}/approve`,
+    { method: "POST", headers: { "Content-Type": "application/json" } },
+  );
 }
 
 export async function approveAletheiaPreferenceLearningCandidate(
@@ -1043,6 +3958,207 @@ export async function createAletheiaAgentRun(
   );
 }
 
+export type AletheiaDurableExecutorStatus = {
+  enabled: boolean;
+  starting?: boolean;
+  error?: string | null;
+  reason?: string;
+  modelId?: string;
+};
+
+export type AletheiaDurableRun = {
+  id: string;
+  matter_id: string;
+  workflow: string;
+  goal: string;
+  status:
+    | "queued"
+    | "running"
+    | "cancel_requested"
+    | "succeeded"
+    | "failed"
+    | "cancelled"
+    | "timed_out";
+  attempt_count: number;
+  deadline_at: string;
+  error: string | null;
+  metadata: Record<string, unknown>;
+  steps: Array<{
+    id: string;
+    step_key: string;
+    title: string;
+    status: string;
+    attempt_count: number;
+    output: Record<string, unknown>;
+    error: string | null;
+  }>;
+  events: Array<{
+    id: string;
+    sequence: number;
+    event_type: string;
+    event_hash: string;
+    created_at: string;
+  }>;
+};
+
+export type AletheiaDurableRunIntegrity = {
+  ok: boolean;
+  eventCount?: number;
+  lastHash?: string | null;
+  eventId?: string;
+};
+
+export async function getAletheiaDurableExecutorStatus(): Promise<AletheiaDurableExecutorStatus> {
+  return apiRequest<AletheiaDurableExecutorStatus>(
+    "/aletheia/durable-executor/status",
+  );
+}
+
+export async function createAletheiaDurableRun(
+  matterId: string,
+  payload: {
+    workflow: string;
+    goal: string;
+    prompt: string;
+    systemPrompt?: string;
+  },
+) {
+  return apiRequest<{ id: string }>(
+    `/aletheia/matters/${matterId}/durable-runs`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workflow: payload.workflow,
+        goal: payload.goal,
+        steps: [
+          {
+            key: "local_model_analysis",
+            title: "Generate local matter analysis",
+            handler: "local_model.generate",
+            input: {
+              prompt: payload.prompt,
+              systemPrompt: payload.systemPrompt,
+            },
+          },
+        ],
+      }),
+    },
+  );
+}
+
+export async function createLitigationDurableRun(
+  matterId: string,
+  payload: {
+    focus?: string;
+    retrievalManifestId?: string;
+  } = {},
+) {
+  const body: { focus?: string; retrievalManifestId?: string } = {};
+  if (payload.focus?.trim()) body.focus = payload.focus.trim();
+  if (payload.retrievalManifestId?.trim()) {
+    body.retrievalManifestId = payload.retrievalManifestId.trim();
+  }
+  return apiRequest<AletheiaDurableRun>(
+    `/aletheia/matters/${matterId}/litigation-durable-runs`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export async function getLatestLitigationDurableRun(matterId: string) {
+  return apiRequest<AletheiaDurableRun | null>(
+    `/aletheia/matters/${matterId}/litigation-durable-runs/latest`,
+  );
+}
+
+export async function createReviewedLitigationSynthesis(
+  matterId: string,
+  runId: string,
+) {
+  return apiRequest<AletheiaDurableRun>(
+    `/aletheia/matters/${matterId}/litigation-durable-runs/${runId}/synthesis`,
+    { method: "POST", headers: { "Content-Type": "application/json" } },
+  );
+}
+
+export async function requestLitigationAgentOutputReview(
+  matterId: string,
+  runId: string,
+) {
+  return apiRequest<LitigationAgentOutputReviewRecord>(
+    `/aletheia/matters/${matterId}/litigation/agent-runs/${runId}/review`,
+    { method: "POST", headers: { "Content-Type": "application/json" } },
+  );
+}
+
+export async function decideLitigationAgentOutputReview(
+  matterId: string,
+  reviewId: string,
+  payload: { decision: "approved" | "rejected"; comment: string },
+) {
+  return apiRequest<LitigationAgentOutputReviewRecord>(
+    `/aletheia/matters/${matterId}/litigation/agent-output-reviews/${reviewId}/decision`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function reviewLitigationAgentFinding(
+  matterId: string,
+  runId: string,
+  stepId: string,
+  findingIndex: number,
+  payload: {
+    assessment: "supported" | "partial" | "unsupported";
+    reason: string;
+  },
+) {
+  return apiRequest<LitigationAgentFindingReviewRecord>(
+    `/aletheia/matters/${matterId}/litigation/agent-runs/${runId}/steps/${stepId}/findings/${findingIndex}/review`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function runLitigationAgentFindingSemanticCheck(
+  matterId: string,
+  runId: string,
+  stepId: string,
+  findingIndex: number,
+) {
+  return apiRequest<LitigationAgentFindingSemanticCheckRecord>(
+    `/aletheia/matters/${matterId}/litigation/agent-runs/${runId}/steps/${stepId}/findings/${findingIndex}/semantic-check`,
+    { method: "POST", headers: { "Content-Type": "application/json" } },
+  );
+}
+
+export async function getAletheiaDurableRun(runId: string) {
+  return apiRequest<AletheiaDurableRun>(`/aletheia/durable-runs/${runId}`);
+}
+
+export async function cancelAletheiaDurableRun(runId: string) {
+  return apiRequest<AletheiaDurableRun>(
+    `/aletheia/durable-runs/${runId}/cancel`,
+    { method: "POST", headers: { "Content-Type": "application/json" } },
+  );
+}
+
+export async function getAletheiaDurableRunIntegrity(runId: string) {
+  return apiRequest<AletheiaDurableRunIntegrity>(
+    `/aletheia/durable-runs/${runId}/integrity`,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Projects
 // ---------------------------------------------------------------------------
@@ -1063,126 +4179,8 @@ export async function createProject(
   });
 }
 
-export async function deleteAccount(): Promise<void> {
-  return apiRequest<void>("/user/account", { method: "DELETE" });
-}
-
-export async function deleteAllChats(): Promise<void> {
-  return apiRequest<void>("/user/chats", { method: "DELETE" });
-}
-
-export async function deleteAllProjects(): Promise<void> {
-  return apiRequest<void>("/user/projects", { method: "DELETE" });
-}
-
-export async function deleteAllTabularReviews(): Promise<void> {
-  return apiRequest<void>("/user/tabular-reviews", { method: "DELETE" });
-}
-
-export async function exportAccountData(): Promise<{
-  blob: Blob;
-  filename: string | null;
-}> {
-  return apiBlobRequest("/user/export");
-}
-
-export async function exportChatData(): Promise<{
-  blob: Blob;
-  filename: string | null;
-}> {
-  return apiBlobRequest("/user/chats/export");
-}
-
-export async function exportTabularReviewsData(): Promise<{
-  blob: Blob;
-  filename: string | null;
-}> {
-  return apiBlobRequest("/user/tabular-reviews/export");
-}
-
-export interface UserProfile {
-  displayName: string | null;
-  organisation: string | null;
-  messageCreditsUsed: number;
-  creditsResetDate: string;
-  creditsRemaining: number;
-  tier: string;
-  titleModel: string;
-  tabularModel: string;
-  mfaOnLogin: boolean;
-  legalResearchUs: boolean;
-  apiKeyStatus: ApiKeyStatus;
-}
-
-export async function getUserProfile(): Promise<UserProfile> {
-  return apiRequest<UserProfile>("/user/profile");
-}
-
-export async function updateUserProfile(payload: {
-  displayName?: string | null;
-  organisation?: string | null;
-  titleModel?: string;
-  tabularModel?: string;
-  legalResearchUs?: boolean;
-}): Promise<UserProfile> {
-  return apiRequest<UserProfile>("/user/profile", {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function updateUserMfaOnLogin(
-  enabled: boolean,
-): Promise<UserProfile> {
-  return apiRequest<UserProfile>("/user/security/mfa-login", {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ enabled }),
-  });
-}
-
-export type ApiKeyProvider =
-  "claude" | "gemini" | "openai" | "openrouter" | "courtlistener";
-export type ApiKeySource = "user" | "env" | null;
-export type ApiKeyState = Record<
-  ApiKeyProvider,
-  {
-    configured: boolean;
-    source: ApiKeySource;
-  }
->;
-
-export type ApiKeyStatus = Record<ApiKeyProvider, boolean> & {
-  sources?: Partial<Record<ApiKeyProvider, ApiKeySource>>;
-};
-
-export async function getApiKeyStatus(): Promise<ApiKeyStatus> {
-  return apiRequest<ApiKeyStatus>("/user/api-keys");
-}
-
-export async function saveApiKey(
-  provider: ApiKeyProvider,
-  apiKey: string | null,
-): Promise<ApiKeyStatus> {
-  return apiRequest<ApiKeyStatus>(`/user/api-keys/${provider}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ api_key: apiKey }),
-  });
-}
-
 export interface McpToolSummary {
-  id: string;
-  toolName: string;
-  openaiToolName: string;
-  title: string | null;
-  description: string | null;
-  enabled: boolean;
-  readOnly: boolean;
-  destructive: boolean;
-  requiresConfirmation: boolean;
-  lastSeenAt: string;
+  [key: string]: unknown;
 }
 
 export interface McpConnectorSummary {
@@ -1190,12 +4188,18 @@ export interface McpConnectorSummary {
   name: string;
   transport: "streamable_http";
   serverUrl: string;
-  authType: "none" | "bearer" | "oauth";
+  authType: "none" | "bearer" | "headers" | "oauth" | "mixed";
   enabled: boolean;
-  hasAuthConfig: boolean;
-  customHeaderKeys: string[];
-  oauthConnected: boolean;
-  toolPolicy: Record<string, unknown>;
+  auth: {
+    hasBearerToken?: boolean;
+    bearerMasked?: string | null;
+    headerNames?: string[];
+    oauthConnected?: boolean;
+    oauthMasked?: string | null;
+  };
+  status: "disabled" | "idle" | "ready" | "error";
+  lastError: string | null;
+  lastRefreshedAt: string | null;
   tools: McpToolSummary[];
   toolCount: number;
   createdAt: string;
@@ -1203,22 +4207,35 @@ export interface McpConnectorSummary {
 }
 
 export async function listMcpConnectors(): Promise<McpConnectorSummary[]> {
-  return apiRequest<McpConnectorSummary[]>("/user/mcp-connectors");
+  const response = await apiRequest<{
+    connectors: McpConnectorSummary[];
+  }>("/aletheia/mcp-connectors");
+  return response.connectors;
 }
 
 export async function getMcpConnector(
   connectorId: string,
 ): Promise<McpConnectorSummary> {
-  return apiRequest<McpConnectorSummary>(`/user/mcp-connectors/${connectorId}`);
+  return apiRequest<McpConnectorSummary>(
+    `/aletheia/mcp-connectors/${connectorId}`,
+  );
 }
 
 export async function createMcpConnector(payload: {
   name: string;
   serverUrl: string;
-  bearerToken?: string | null;
-  headers?: Record<string, string>;
+  enabled?: boolean;
+  auth?: {
+    bearerToken?: string;
+    headers?: Record<string, string>;
+    oauth?: {
+      accessToken: string;
+      refreshToken?: string;
+      clientSecret?: string;
+    };
+  };
 }): Promise<McpConnectorSummary> {
-  return apiRequest<McpConnectorSummary>("/user/mcp-connectors", {
+  return apiRequest<McpConnectorSummary>("/aletheia/mcp-connectors", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1231,12 +4248,19 @@ export async function updateMcpConnector(
     name?: string;
     serverUrl?: string;
     enabled?: boolean;
-    bearerToken?: string | null;
-    headers?: Record<string, string>;
+    auth?: {
+      bearerToken?: string;
+      headers?: Record<string, string>;
+      oauth?: {
+        accessToken: string;
+        refreshToken?: string;
+        clientSecret?: string;
+      };
+    };
   },
 ): Promise<McpConnectorSummary> {
   return apiRequest<McpConnectorSummary>(
-    `/user/mcp-connectors/${connectorId}`,
+    `/aletheia/mcp-connectors/${connectorId}`,
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -1246,7 +4270,7 @@ export async function updateMcpConnector(
 }
 
 export async function deleteMcpConnector(connectorId: string): Promise<void> {
-  return apiRequest<void>(`/user/mcp-connectors/${connectorId}`, {
+  return apiRequest<void>(`/aletheia/mcp-connectors/${connectorId}`, {
     method: "DELETE",
   });
 }
@@ -1255,7 +4279,7 @@ export async function refreshMcpConnectorTools(
   connectorId: string,
 ): Promise<McpConnectorSummary> {
   return apiRequest<McpConnectorSummary>(
-    `/user/mcp-connectors/${connectorId}/refresh-tools`,
+    `/aletheia/mcp-connectors/${connectorId}/refresh-tools`,
     { method: "POST" },
   );
 }
@@ -1444,11 +4468,12 @@ export async function uploadDocumentVersion(
   filename?: string,
 ): Promise<DocumentVersion> {
   const authHeaders = await getAuthHeader();
+  const apiBase = await getAletheiaApiBase();
   const form = new FormData();
   form.append("file", file);
   if (filename) form.append("filename", filename);
   const response = await fetch(
-    `${API_BASE}/single-documents/${documentId}/versions`,
+    `${apiBase}/single-documents/${documentId}/versions`,
     {
       method: "POST",
       headers: { ...authHeaders },
@@ -1466,11 +4491,12 @@ export async function replaceDocumentVersionFile(
   filename?: string,
 ): Promise<DocumentVersion> {
   const authHeaders = await getAuthHeader();
+  const apiBase = await getAletheiaApiBase();
   const form = new FormData();
   form.append("file", file);
   if (filename) form.append("filename", filename);
   const response = await fetch(
-    `${API_BASE}/single-documents/${documentId}/versions/${versionId}/file`,
+    `${apiBase}/single-documents/${documentId}/versions/${versionId}/file`,
     {
       method: "PUT",
       headers: { ...authHeaders },
@@ -1531,9 +4557,10 @@ export async function uploadProjectDocument(
   file: File,
 ): Promise<Document> {
   const authHeaders = await getAuthHeader();
+  const apiBase = await getAletheiaApiBase();
   const form = new FormData();
   form.append("file", file);
-  const response = await fetch(`${API_BASE}/projects/${projectId}/documents`, {
+  const response = await fetch(`${apiBase}/projects/${projectId}/documents`, {
     method: "POST",
     headers: { ...authHeaders },
     body: form,
@@ -1556,9 +4583,10 @@ export async function createProjectOfficeDocument(
 
 export async function uploadStandaloneDocument(file: File): Promise<Document> {
   const authHeaders = await getAuthHeader();
+  const apiBase = await getAletheiaApiBase();
   const form = new FormData();
   form.append("file", file);
-  const response = await fetch(`${API_BASE}/single-documents`, {
+  const response = await fetch(`${apiBase}/single-documents`, {
     method: "POST",
     headers: { ...authHeaders },
     body: form,
@@ -1587,7 +4615,8 @@ export async function downloadDocumentsZip(
   documentIds: string[],
 ): Promise<Blob> {
   const authHeaders = await getAuthHeader();
-  const response = await fetch(`${API_BASE}/single-documents/download-zip`, {
+  const apiBase = await getAletheiaApiBase();
+  const response = await fetch(`${apiBase}/single-documents/download-zip`, {
     method: "POST",
     cache: "no-store",
     headers: {
@@ -1719,7 +4748,8 @@ export async function streamChat(payload: {
 }): Promise<Response> {
   const { signal, ...body } = payload;
   const authHeaders = await getAuthHeader();
-  return fetch(`${API_BASE}/chat`, {
+  const apiBase = await getAletheiaApiBase();
+  return fetch(`${apiBase}/chat`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -1749,7 +4779,8 @@ export async function streamProjectChat(payload: {
 }): Promise<Response> {
   const { projectId, signal, ...body } = payload;
   const authHeaders = await getAuthHeader();
-  return fetch(`${API_BASE}/projects/${projectId}/chat`, {
+  const apiBase = await getAletheiaApiBase();
+  return fetch(`${apiBase}/projects/${projectId}/chat`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -1863,7 +4894,8 @@ export async function streamTabularGeneration(
   reviewId: string,
 ): Promise<Response> {
   const authHeaders = await getAuthHeader();
-  return fetch(`${API_BASE}/tabular-review/${reviewId}/generate`, {
+  const apiBase = await getAletheiaApiBase();
+  return fetch(`${apiBase}/tabular-review/${reviewId}/generate`, {
     method: "POST",
     headers: { ...authHeaders },
   });
@@ -1877,7 +4909,8 @@ export async function streamTabularChat(
   context?: { reviewTitle?: string | null; projectName?: string | null },
 ): Promise<Response> {
   const authHeaders = await getAuthHeader();
-  return fetch(`${API_BASE}/tabular-review/${reviewId}/chat`, {
+  const apiBase = await getAletheiaApiBase();
+  return fetch(`${apiBase}/tabular-review/${reviewId}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders },
     body: JSON.stringify({

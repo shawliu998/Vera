@@ -2,7 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, ClipboardCheck, Download } from "lucide-react";
+import {
+  ArrowRight,
+  CircleAlert,
+  ClipboardCheck,
+  Download,
+  RefreshCw,
+} from "lucide-react";
 import {
   createAletheiaWorkProduct,
   getAletheiaMatter,
@@ -14,9 +20,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { downloadJson } from "./exports";
-import { getReviewQueue } from "./workflow";
 
-type RegistryStatus = "checking" | "connected" | "fallback";
+type RegistryStatus = "checking" | "connected" | "unavailable";
 
 type ReviewRow = AletheiaReviewRecord & {
   matterTitle: string;
@@ -49,7 +54,7 @@ function detailToReviewRows(detail: AletheiaMatterDetail): ReviewRow[] {
   return detail.reviews.map((review) => ({
     ...review,
     matterTitle: detail.matter.title,
-    href: `/aletheia/matters/${detail.matter.id}`,
+    href: `/aletheia/matters/${detail.matter.id}/litigation?view=positions`,
     matterRisk: detail.matter.risk_level ?? "low",
     status: "recorded",
   }));
@@ -62,11 +67,14 @@ export function AletheiaReviewRegistry() {
   const [tagFilter, setTagFilter] = useState("all");
   const [savingSnapshot, setSavingSnapshot] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
-  const fallbackReviews = useMemo(() => getReviewQueue(), []);
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     async function loadReviews() {
+      setStatus("checking");
+      setReviews([]);
+      setSaveMessage("");
       try {
         const matters = await listAletheiaMatters();
         const details = await Promise.all(
@@ -80,17 +88,16 @@ export function AletheiaReviewRegistry() {
         );
         setStatus("connected");
       } catch {
-        if (!cancelled) setStatus("fallback");
+        if (!cancelled) setStatus("unavailable");
       }
     }
     void loadReviews();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [retryKey]);
 
-  const visibleCount =
-    status === "connected" ? reviews.length : fallbackReviews.length;
+  const visibleCount = reviews.length;
   const filteredReviews = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return reviews.filter((item) => {
@@ -110,39 +117,18 @@ export function AletheiaReviewRegistry() {
       );
     });
   }, [query, reviews, tagFilter]);
-  const filteredFallbackReviews = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    return fallbackReviews.filter((item) => {
-      const matchesTag = tagFilter === "all" || item.tag === tagFilter;
-      const searchable = [
-        item.matterTitle,
-        item.title,
-        item.comment,
-        item.tag,
-        item.status,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return (
-        matchesTag && (!normalizedQuery || searchable.includes(normalizedQuery))
-      );
-    });
-  }, [fallbackReviews, query, tagFilter]);
-  const exportRows =
-    status === "connected" ? filteredReviews : filteredFallbackReviews;
-
   function exportFilteredReviews() {
+    if (status !== "connected") return;
     downloadJson("aletheia-filtered-review-registry", {
       schemaVersion: "aletheia-review-registry-export-v0",
       exportedAt: new Date().toISOString(),
-      source: status === "connected" ? "local_repository" : "demo_fallback",
+      source: "local_repository",
       filters: {
         query: query.trim(),
         tag: tagFilter,
       },
-      recordCount: exportRows.length,
-      records: exportRows,
+      recordCount: filteredReviews.length,
+      records: filteredReviews,
     });
   }
 
@@ -192,6 +178,52 @@ export function AletheiaReviewRegistry() {
     }
   }
 
+  if (status !== "connected") {
+    return (
+      <section
+        data-testid="aletheia-review-registry"
+        className="min-h-full bg-white px-5 py-6 md:px-8"
+      >
+        <h1 className="text-[22px] font-semibold text-gray-950">
+          Human Review
+        </h1>
+        {status === "checking" ? (
+          <p className="mt-4 text-sm text-gray-500">
+            Connecting to the local service...
+          </p>
+        ) : (
+          <div
+            role="alert"
+            data-testid="reviews-service-unavailable"
+            className="mt-5 max-w-2xl border border-gray-300 p-5"
+          >
+            <div className="flex items-start gap-3">
+              <CircleAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+              <div>
+                <h2 className="text-sm font-semibold text-gray-950">
+                  Local service unavailable
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-gray-600">
+                  Vera could not load reviews and has not substituted demo
+                  records. Reconnect the local service, then retry.
+                </p>
+                <p className="mt-2 text-xs text-gray-500">0 items</p>
+                <button
+                  type="button"
+                  onClick={() => setRetryKey((value) => value + 1)}
+                  className="mt-4 inline-flex h-9 items-center gap-2 border border-gray-300 px-3 text-sm font-medium text-gray-800 hover:bg-gray-50"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Retry
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+    );
+  }
+
   return (
     <section
       data-testid="aletheia-review-registry"
@@ -199,27 +231,21 @@ export function AletheiaReviewRegistry() {
     >
       <div className="flex flex-wrap items-center justify-between gap-4 px-8 py-4">
         <div>
-          <h1 className="font-serif text-2xl font-medium text-gray-900">
+          <h1 className="text-[22px] font-semibold text-gray-950">
             Human Review
           </h1>
           <p className="mt-1 text-xs text-gray-400">
-            {status === "connected"
-              ? "Live local review tags from persisted matters."
-              : status === "checking"
-                ? "Checking local review repository..."
-                : "Demo fallback review queue."}
+            Live local review tags from persisted matters.
           </p>
         </div>
         <Badge
           variant="outline"
           className={cn(
             "rounded-md px-2 py-1 text-xs",
-            status === "connected"
-              ? "border-emerald-100 bg-emerald-50 text-emerald-700"
-              : "border-gray-200 bg-gray-50 text-gray-600",
+            "border-emerald-100 bg-emerald-50 text-emerald-700",
           )}
         >
-          {status === "connected" ? "Local Repository" : titleize(status)}
+          Local Repository
         </Badge>
         <Button
           type="button"
@@ -235,7 +261,7 @@ export function AletheiaReviewRegistry() {
           type="button"
           variant="outline"
           data-testid="save-review-snapshot"
-          disabled={status !== "connected" || savingSnapshot}
+          disabled={savingSnapshot}
           onClick={() => void saveFilteredReviewSnapshot()}
           className="rounded-md border-gray-200 text-gray-700 hover:bg-gray-50"
         >
@@ -289,8 +315,7 @@ export function AletheiaReviewRegistry() {
             <div className="w-8 shrink-0" />
           </div>
 
-          {status === "connected"
-            ? filteredReviews.map((item) => (
+          {filteredReviews.map((item) => (
                 <Link
                   key={item.id}
                   href={item.href}
@@ -339,56 +364,9 @@ export function AletheiaReviewRegistry() {
                   </div>
                   <ArrowRight className="h-4 w-8 shrink-0 text-gray-300 transition-colors group-hover:text-gray-600" />
                 </Link>
-              ))
-            : filteredFallbackReviews.map((item) => (
-                <Link
-                  key={item.id}
-                  href="/aletheia/matters/matter-demo-legal-001"
-                  className="group flex min-h-16 items-center border-b border-gray-50 pr-8 transition-colors hover:bg-gray-50"
-                >
-                  <div className="flex w-8 shrink-0 justify-center">
-                    <ClipboardCheck className="h-3.5 w-3.5 text-gray-300 group-hover:text-gray-500" />
-                  </div>
-                  <div className="w-64 shrink-0 pl-2 pr-4">
-                    <p className="truncate text-sm text-gray-800">
-                      {item.matterTitle}
-                    </p>
-                    <p className="mt-0.5 truncate text-xs text-gray-400">
-                      {item.status}
-                    </p>
-                  </div>
-                  <div className="min-w-0 flex-1 py-3 pr-4">
-                    <p className="truncate text-sm text-gray-800">
-                      {item.title}
-                    </p>
-                    <p className="mt-0.5 line-clamp-2 text-xs leading-5 text-gray-500">
-                      {item.comment}
-                    </p>
-                  </div>
-                  <div className="w-44 shrink-0">
-                    <Badge
-                      variant="outline"
-                      className="rounded-md border-gray-200 bg-white px-2 py-0 text-[11px] text-gray-600"
-                    >
-                      {titleize(item.tag)}
-                    </Badge>
-                  </div>
-                  <div className="w-24 shrink-0">
-                    <Badge
-                      variant="outline"
-                      className={cn(
-                        "rounded-md px-2 py-0 text-[11px]",
-                        riskClass(item.riskLevel),
-                      )}
-                    >
-                      {item.riskLevel}
-                    </Badge>
-                  </div>
-                  <ArrowRight className="h-4 w-8 shrink-0 text-gray-300 transition-colors group-hover:text-gray-600" />
-                </Link>
               ))}
 
-          {status === "connected" && filteredReviews.length === 0 && (
+          {filteredReviews.length === 0 && (
             <p className="p-8 text-sm text-gray-500">
               No local review tags match the current filters. Review an issue or
               memo section from a matter workspace to populate this queue.

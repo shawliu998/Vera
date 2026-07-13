@@ -51,7 +51,6 @@ npm run test:aletheia:ui
 
 ```bash
 cd backend
-ALETHEIA_STORAGE_DRIVER=local \
 ALETHEIA_AUTH_MODE=single_user \
 ALETHEIA_DATA_DIR=.data/aletheia \
 ALETHEIA_UI_SMOKE_FRONTEND_URL=http://localhost:3000 \
@@ -77,7 +76,6 @@ Backend:
 ```bash
 cd backend
 FRONTEND_URL=http://localhost:3000 \
-ALETHEIA_STORAGE_DRIVER=local \
 ALETHEIA_AUTH_MODE=single_user \
 ALETHEIA_DATA_DIR=.data/aletheia \
 npm run dev

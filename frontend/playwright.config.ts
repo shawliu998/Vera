@@ -1,7 +1,9 @@
 import path from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 
-const frontendPort = Number(process.env.ALETHEIA_UI_SMOKE_FRONTEND_PORT ?? 3410);
+const frontendPort = Number(
+  process.env.ALETHEIA_UI_SMOKE_FRONTEND_PORT ?? 3410,
+);
 const backendPort = Number(process.env.ALETHEIA_UI_SMOKE_BACKEND_PORT ?? 3411);
 const frontendUrl = `http://127.0.0.1:${frontendPort}`;
 const backendUrl = `http://127.0.0.1:${backendPort}`;
@@ -10,6 +12,16 @@ const smokeDistDir = ".next-ui-smoke";
 const dataDir =
   process.env.ALETHEIA_UI_SMOKE_DATA_DIR ??
   path.join(repoRoot, "backend", ".data", "aletheia-ui-smoke-e2e");
+const anchorRoot = path.join(
+  repoRoot,
+  "backend",
+  ".data",
+  `aletheia-ui-smoke-anchor-${backendPort}`,
+);
+const anchorDir = path.join(anchorRoot, "journal");
+const anchorKeyDir = path.join(anchorRoot, "keys");
+const anchorPrivateKey = path.join(anchorKeyDir, "private.pem");
+const anchorPublicKey = path.join(anchorKeyDir, "public.pem");
 
 export default defineConfig({
   testDir: "./tests",
@@ -26,7 +38,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: `node -e 'require("fs").rmSync(${JSON.stringify(dataDir)}, { recursive: true, force: true })' && npm run dev`,
+      command: `node ${JSON.stringify(path.join(repoRoot, "frontend", "tests", "aletheia-ui-smoke-anchor-setup.mjs"))} ${JSON.stringify(dataDir)} ${JSON.stringify(anchorRoot)} && npm run dev`,
       cwd: path.join(repoRoot, "backend"),
       url: `${backendUrl}/health`,
       timeout: 120_000,
@@ -35,11 +47,17 @@ export default defineConfig({
         ...process.env,
         PORT: String(backendPort),
         FRONTEND_URL: frontendUrl,
-        ALETHEIA_STORAGE_DRIVER: "local",
         ALETHEIA_AUTH_MODE: "single_user",
         ALETHEIA_DATA_DIR: dataDir,
         ALETHEIA_LOCAL_USER_ID: "local-user",
         ALETHEIA_LOCAL_USER_EMAIL: "local@aletheia.internal",
+        ALETHEIA_AUDIT_ANCHOR_ENABLED: "true",
+        ALETHEIA_AUDIT_ANCHOR_DIR: anchorDir,
+        ALETHEIA_AUDIT_ANCHOR_PRIVATE_KEY_FILE: anchorPrivateKey,
+        ALETHEIA_AUDIT_ANCHOR_PUBLIC_KEY_FILE: anchorPublicKey,
+        RATE_LIMIT_GENERAL_MAX: "10000",
+        RATE_LIMIT_UPLOAD_MAX: "1000",
+        RATE_LIMIT_EXTERNAL_SOURCE_MAX: "1000",
       },
     },
     {

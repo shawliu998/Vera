@@ -11,13 +11,14 @@ import {
   ShieldAlert,
   Plus,
   Search,
-  Upload,
   Workflow,
   X,
 } from "lucide-react";
 import { AletheiaShell } from "./AletheiaShell";
+import { emitAletheiaNotification } from "./AletheiaNotificationCenter";
 import { RemoteMatterRunTrace } from "./RemoteMatterRunTrace";
 import { RemoteMatterSidebar } from "./RemoteMatterSidebar";
+import { MatterDocumentImporter } from "./MatterDocumentImporter";
 import {
   buildFinalMemoApprovalRequestedPayload,
   buildFinalMemoGateSnapshotContent,
@@ -47,21 +48,22 @@ import {
   approveAletheiaPlaybook,
   createAletheiaEvidenceItem,
   createAletheiaAgentRun,
+  createAletheiaDurableRun,
   createAletheiaPlaybook,
   createAletheiaWorkProduct,
   decideAletheiaApproval,
   generateAletheiaDraftMemo,
   generateAletheiaEvidenceMatrix,
   generateAletheiaIssueMap,
+  getAletheiaDurableExecutorStatus,
   getAletheiaMatter,
   listAletheiaV1SourceIndex,
   persistAletheiaGateSnapshot,
   proposeAletheiaPlaybookImprovement,
   requestAletheiaApproval,
   resumeAletheiaAgentRun,
+  retryAletheiaMatterDocumentParse,
   searchAletheiaMatterDocuments,
-  uploadAletheiaMatterDocument,
-  uploadAletheiaMatterDocuments,
   type AletheiaDocumentSearchResult,
   type AletheiaEvidenceRecord,
   type AletheiaHumanCheckpointRecord,
@@ -95,7 +97,6 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
   const [decidingApprovalId, setDecidingApprovalId] = useState<string | null>(
     null,
   );
-  const [uploadingDocument, setUploadingDocument] = useState(false);
   const [searchingDocuments, setSearchingDocuments] = useState(false);
   const [documentQuery, setDocumentQuery] = useState("");
   const [documentResults, setDocumentResults] = useState<
@@ -132,6 +133,9 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
   );
   const [reviewingIssueId, setReviewingIssueId] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState("");
+  const [retryingDocumentId, setRetryingDocumentId] = useState<string | null>(
+    null,
+  );
 
   const mappedChunkIds = useMemo(
     () =>
@@ -555,23 +559,51 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
     setError("");
 
     try {
-      await createAletheiaAgentRun(matterId, {
-        workflow: detail.matter.template,
-        goal: detail.matter.objective,
-        status: "queued",
-        budget: {
-          maxSteps: 7,
-          maxToolCalls: 12,
-          maxWallTimeMs: 600000,
-        },
-        metadata: {
-          source: "remote_matter_page",
-          runtimeVersion: "aletheia-agent-runtime-v0",
-        },
-      });
+      const durable = await getAletheiaDurableExecutorStatus();
+      if (durable.enabled) {
+        await createAletheiaDurableRun(matterId, {
+          workflow: detail.matter.template,
+          goal: detail.matter.objective,
+          prompt: [
+            `Matter: ${detail.matter.title}`,
+            `Objective: ${detail.matter.objective}`,
+            "Produce a concise local matter analysis with uncertainties and source needs clearly stated.",
+          ].join("\n\n"),
+          systemPrompt:
+            "You are Aletheia's local legal-analysis runtime. Do not claim facts beyond the supplied matter context.",
+        });
+        setSaveMessage("Local model run queued.");
+      } else {
+        await createAletheiaAgentRun(matterId, {
+          workflow: detail.matter.template,
+          goal: detail.matter.objective,
+          status: "queued",
+          budget: {
+            maxSteps: 7,
+            maxToolCalls: 12,
+            maxWallTimeMs: 600000,
+          },
+          metadata: {
+            source: "remote_matter_page",
+            runtimeVersion: "aletheia-agent-runtime-v0",
+            localModelUnavailable: true,
+          },
+        });
+        setSaveMessage(
+          "Review workflow queued. Local model worker is unavailable.",
+        );
+      }
       const refreshed = await getAletheiaMatter(matterId);
       setDetail(refreshed);
-      setSaveMessage("Agent run queued.");
+      emitAletheiaNotification({
+        title: durable.enabled
+          ? "Local model run queued"
+          : "Review workflow queued",
+        body: durable.enabled
+          ? "The configured local model will process this matter."
+          : "The workflow was recorded, but no local model worker is available.",
+        tag: `agent-run-${matterId}`,
+      });
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Agent run creation failed",
@@ -600,6 +632,28 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
       );
     } finally {
       setGeneratingEvidenceMatrix(false);
+    }
+  }
+
+  async function retryDocumentParse(documentId: string) {
+    setRetryingDocumentId(documentId);
+    setError("");
+    setSaveMessage("");
+    try {
+      await retryAletheiaMatterDocumentParse(matterId, documentId);
+      const refreshed = await getAletheiaMatter(matterId);
+      setDetail(refreshed);
+      setSaveMessage("Document text extraction completed.");
+    } catch (reason) {
+      const refreshed = await getAletheiaMatter(matterId);
+      setDetail(refreshed);
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Document text extraction failed",
+      );
+    } finally {
+      setRetryingDocumentId(null);
     }
   }
 
@@ -653,10 +707,10 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
 
     try {
       const decisionCopy = {
-        approved: "Approved from Aletheia run trace.",
-        rejected: "Rejected from Aletheia run trace.",
-        edited: "Edited approval request from Aletheia run trace.",
-        responded: "Human response added from Aletheia run trace.",
+        approved: "Approved from Vera run trace.",
+        rejected: "Rejected from Vera run trace.",
+        edited: "Edited approval request from Vera run trace.",
+        responded: "Human response added from Vera run trace.",
       } satisfies Record<
         "approved" | "rejected" | "edited" | "responded",
         string
@@ -695,11 +749,16 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
     try {
       await resumeAletheiaAgentRun(matterId, latestAgentRun.id, {
         checkpointId: checkpoint.id,
-        note: "Resume requested from Aletheia run trace after human edit/response.",
+        note: "Resume requested from Vera run trace after human edit/response.",
       });
       const refreshed = await getAletheiaMatter(matterId);
       setDetail(refreshed);
       setSaveMessage("Agent run resumed and revised draft memo generated.");
+      emitAletheiaNotification({
+        title: "Agent run resumed",
+        body: "The revised draft memo is ready for review.",
+        tag: `agent-run-resumed-${matterId}`,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Agent run resume failed");
     } finally {
@@ -835,7 +894,7 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
             : `Reviewer marked issue map claim for further review: ${issue.title}.`,
         workProductId: latestIssueMap.id,
         evidenceItemId: issue.representativeQuotes[0]?.evidenceId ?? null,
-        reviewerName: "Aletheia Reviewer",
+        reviewerName: "Vera Reviewer",
       });
       const refreshed = await getAletheiaMatter(matterId);
       setDetail(refreshed);
@@ -844,51 +903,6 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
       setError(err instanceof Error ? err.message : "Issue review failed");
     } finally {
       setReviewingIssueId(null);
-    }
-  }
-
-  async function uploadDocuments(files: FileList | File[] | null) {
-    const selectedFiles = Array.from(files ?? []);
-    if (selectedFiles.length === 0) return;
-
-    setUploadingDocument(true);
-    setSaveMessage("");
-    setError("");
-
-    try {
-      if (selectedFiles.length === 1) {
-        const [file] = selectedFiles;
-        await uploadAletheiaMatterDocument(matterId, file);
-        const refreshed = await getAletheiaMatter(matterId);
-        setDetail(refreshed);
-        setSaveMessage("Document uploaded and indexed.");
-        return;
-      }
-
-      const result = await uploadAletheiaMatterDocuments(
-        matterId,
-        selectedFiles,
-      );
-      const refreshed = await getAletheiaMatter(matterId);
-      setDetail(refreshed);
-      if (result.failed > 0) {
-        setSaveMessage(
-          `${result.imported} documents uploaded; ${result.failed} failed.`,
-        );
-        setError(
-          result.errors
-            .map((item) => `${item.filename}: ${item.detail}`)
-            .join("; "),
-        );
-      } else {
-        setSaveMessage(`${result.imported} documents uploaded and indexed.`);
-      }
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Document upload failed";
-      setError(message);
-    } finally {
-      setUploadingDocument(false);
     }
   }
 
@@ -1219,21 +1233,17 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
                         : ""}
                     </p>
                   </div>
-                  <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-[#e5e7eb] px-3 py-2 text-sm font-medium text-[#374151] hover:bg-[#f9fafb]">
-                    <Upload className="h-4 w-4" />
-                    {uploadingDocument ? "Uploading..." : "Upload"}
-                    <input
-                      type="file"
-                      className="hidden"
-                      accept=".pdf,.doc,.docx,.txt,.md,.xlsx"
-                      multiple
-                      disabled={uploadingDocument}
-                      onChange={(event) => {
-                        void uploadDocuments(event.target.files);
-                        event.currentTarget.value = "";
-                      }}
-                    />
-                  </label>
+                </div>
+
+                <div className="mt-4">
+                  <MatterDocumentImporter
+                    matterId={matterId}
+                    onImported={async () => {
+                      const refreshed = await getAletheiaMatter(matterId);
+                      setDetail(refreshed);
+                      setSaveMessage("Case file import finished.");
+                    }}
+                  />
                 </div>
 
                 <div className="mt-4 grid gap-3">
@@ -1249,6 +1259,7 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
                       return (
                         <div
                           key={document.id}
+                          data-testid="source-map-document-row"
                           className="rounded-md border border-[#e5e7eb] p-3"
                         >
                           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1279,6 +1290,21 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
                           <p className="mt-2 text-sm leading-5 text-[#6b7280]">
                             {document.summary}
                           </p>
+                          {document.parsedStatus === "needs_ocr" && (
+                            <p className="mt-2 text-xs text-amber-700">
+                              OCR is required. Configure a trusted local OCR
+                              runtime before processing this file.
+                            </p>
+                          )}
+                          {document.parsedStatus === "failed" && (
+                            <p className="mt-2 text-xs text-red-700">
+                              {document.lastParseError ??
+                                "Text extraction did not complete."}
+                              {document.parseAttemptCount > 0
+                                ? ` · ${document.parseAttemptCount} retry attempt${document.parseAttemptCount === 1 ? "" : "s"}`
+                                : ""}
+                            </p>
+                          )}
                           <div className="mt-2 flex flex-wrap gap-2 text-xs text-[#6b7280]">
                             <span>{titleize(document.documentType)}</span>
                             <span>
@@ -1288,7 +1314,7 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
                             </span>
                             <span>{document.evidenceCount} evidence items</span>
                           </div>
-                          <div className="mt-3">
+                          <div className="mt-3 flex flex-wrap gap-2">
                             <Button
                               type="button"
                               size="sm"
@@ -1302,6 +1328,28 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
                               <FileSearch className="h-4 w-4" />
                               Preview source
                             </Button>
+                            {document.parsedStatus === "failed" && (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                data-testid={`retry-document-${document.id}`}
+                                disabled={retryingDocumentId === document.id}
+                                onClick={() =>
+                                  void retryDocumentParse(document.id)
+                                }
+                                className="border-[#d1d5db] text-[#374151] hover:bg-[#f9fafb]"
+                              >
+                                <History
+                                  className={`h-4 w-4 ${
+                                    retryingDocumentId === document.id
+                                      ? "animate-spin"
+                                      : ""
+                                  }`}
+                                />
+                                Retry extraction
+                              </Button>
+                            )}
                           </div>
                           {previewChunks.length > 0 && (
                             <div className="mt-3 space-y-2 rounded-md border border-[#e5e7eb] bg-[#f9fafb] p-3">

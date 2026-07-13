@@ -2,7 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Download, FileSearch, ShieldAlert } from "lucide-react";
+import {
+  ArrowRight,
+  CircleAlert,
+  Download,
+  FileSearch,
+  RefreshCw,
+  ShieldAlert,
+} from "lucide-react";
 import {
   createAletheiaWorkProduct,
   getAletheiaMatter,
@@ -14,9 +21,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { downloadJson } from "./exports";
-import { getEvidenceQueue } from "./workflow";
 
-type RegistryStatus = "checking" | "connected" | "fallback";
+type RegistryStatus = "checking" | "connected" | "unavailable";
 
 type EvidenceRow = AletheiaEvidenceRecord & {
   matterTitle: string;
@@ -74,7 +80,7 @@ function detailToEvidenceRows(detail: AletheiaMatterDetail): EvidenceRow[] {
   return detail.evidence.map((item) => ({
     ...item,
     matterTitle: detail.matter.title,
-    href: `/aletheia/matters/${detail.matter.id}`,
+    href: `/aletheia/matters/${detail.matter.id}/litigation?view=facts`,
     matterRisk: detail.matter.risk_level ?? "low",
   }));
 }
@@ -86,11 +92,14 @@ export function AletheiaEvidenceRegistry() {
   const [supportFilter, setSupportFilter] = useState("all");
   const [savingSnapshot, setSavingSnapshot] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
-  const fallbackEvidence = useMemo(() => getEvidenceQueue(), []);
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     async function loadEvidence() {
+      setStatus("checking");
+      setEvidence([]);
+      setSaveMessage("");
       try {
         const matters = await listAletheiaMatters();
         const details = await Promise.all(
@@ -104,17 +113,16 @@ export function AletheiaEvidenceRegistry() {
         );
         setStatus("connected");
       } catch {
-        if (!cancelled) setStatus("fallback");
+        if (!cancelled) setStatus("unavailable");
       }
     }
     void loadEvidence();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [retryKey]);
 
-  const visibleCount =
-    status === "connected" ? evidence.length : fallbackEvidence.length;
+  const visibleCount = evidence.length;
   const filteredEvidence = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return evidence.filter((item) => {
@@ -141,41 +149,18 @@ export function AletheiaEvidenceRegistry() {
       );
     });
   }, [evidence, query, supportFilter]);
-  const filteredFallbackEvidence = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    return fallbackEvidence.filter((item) => {
-      const matchesSupport =
-        supportFilter === "all" || item.supportStatus === supportFilter;
-      const searchable = [
-        item.matterTitle,
-        item.documentName,
-        item.issueTitle,
-        item.quote,
-        item.supportStatus,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return (
-        matchesSupport &&
-        (!normalizedQuery || searchable.includes(normalizedQuery))
-      );
-    });
-  }, [fallbackEvidence, query, supportFilter]);
-  const exportRows =
-    status === "connected" ? filteredEvidence : filteredFallbackEvidence;
-
   function exportFilteredEvidence() {
+    if (status !== "connected") return;
     downloadJson("aletheia-filtered-evidence-registry", {
       schemaVersion: "aletheia-evidence-registry-export-v0",
       exportedAt: new Date().toISOString(),
-      source: status === "connected" ? "local_repository" : "demo_fallback",
+      source: "local_repository",
       filters: {
         query: query.trim(),
         supportStatus: supportFilter,
       },
-      recordCount: exportRows.length,
-      records: exportRows,
+      recordCount: filteredEvidence.length,
+      records: filteredEvidence,
     });
   }
 
@@ -225,6 +210,52 @@ export function AletheiaEvidenceRegistry() {
     }
   }
 
+  if (status !== "connected") {
+    return (
+      <section
+        data-testid="aletheia-evidence-registry"
+        className="min-h-full bg-white px-5 py-6 md:px-8"
+      >
+        <h1 className="text-[22px] font-semibold text-gray-950">
+          Evidence Registry
+        </h1>
+        {status === "checking" ? (
+          <p className="mt-4 text-sm text-gray-500">
+            Connecting to the local service...
+          </p>
+        ) : (
+          <div
+            role="alert"
+            data-testid="evidence-service-unavailable"
+            className="mt-5 max-w-2xl border border-gray-300 p-5"
+          >
+            <div className="flex items-start gap-3">
+              <CircleAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+              <div>
+                <h2 className="text-sm font-semibold text-gray-950">
+                  Local service unavailable
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-gray-600">
+                  Vera could not load evidence and has not substituted demo
+                  records. Reconnect the local service, then retry.
+                </p>
+                <p className="mt-2 text-xs text-gray-500">0 records</p>
+                <button
+                  type="button"
+                  onClick={() => setRetryKey((value) => value + 1)}
+                  className="mt-4 inline-flex h-9 items-center gap-2 border border-gray-300 px-3 text-sm font-medium text-gray-800 hover:bg-gray-50"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Retry
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+    );
+  }
+
   return (
     <section
       data-testid="aletheia-evidence-registry"
@@ -232,27 +263,21 @@ export function AletheiaEvidenceRegistry() {
     >
       <div className="flex flex-wrap items-center justify-between gap-4 px-8 py-4">
         <div>
-          <h1 className="font-serif text-2xl font-medium text-gray-900">
+          <h1 className="text-[22px] font-semibold text-gray-950">
             Evidence Registry
           </h1>
           <p className="mt-1 text-xs text-gray-400">
-            {status === "connected"
-              ? "Live local source-backed evidence from persisted matters."
-              : status === "checking"
-                ? "Checking local evidence repository..."
-                : "Demo fallback evidence registry."}
+            Live local source-backed evidence from persisted matters.
           </p>
         </div>
         <Badge
           variant="outline"
           className={cn(
             "rounded-md px-2 py-1 text-xs",
-            status === "connected"
-              ? "border-emerald-100 bg-emerald-50 text-emerald-700"
-              : "border-gray-200 bg-gray-50 text-gray-600",
+            "border-emerald-100 bg-emerald-50 text-emerald-700",
           )}
         >
-          {status === "connected" ? "Local Repository" : titleize(status)}
+          Local Repository
         </Badge>
         <Button
           type="button"
@@ -268,7 +293,7 @@ export function AletheiaEvidenceRegistry() {
           type="button"
           variant="outline"
           data-testid="save-evidence-snapshot"
-          disabled={status !== "connected" || savingSnapshot}
+          disabled={savingSnapshot}
           onClick={() => void saveFilteredEvidenceSnapshot()}
           className="rounded-md border-gray-200 text-gray-700 hover:bg-gray-50"
         >
@@ -320,8 +345,7 @@ export function AletheiaEvidenceRegistry() {
             <div className="w-8 shrink-0" />
           </div>
 
-          {status === "connected"
-            ? filteredEvidence.map((item) => (
+          {filteredEvidence.map((item) => (
                 <Link
                   key={item.id}
                   id={evidenceAnchorId(item.id)}
@@ -422,59 +446,9 @@ export function AletheiaEvidenceRegistry() {
                   </div>
                   <ArrowRight className="h-4 w-8 shrink-0 text-gray-300 transition-colors group-hover:text-gray-600" />
                 </Link>
-              ))
-            : filteredFallbackEvidence.map((item) => (
-                <Link
-                  key={item.id}
-                  href="/aletheia/matters/matter-demo-legal-001"
-                  className="group flex min-h-16 items-center border-b border-gray-50 pr-8 transition-colors hover:bg-gray-50"
-                >
-                  <div className="flex w-8 shrink-0 justify-center">
-                    <FileSearch className="h-3.5 w-3.5 text-gray-300 group-hover:text-gray-500" />
-                  </div>
-                  <div className="w-64 shrink-0 pl-2 pr-4">
-                    <p className="truncate text-sm text-gray-800">
-                      {item.documentName}
-                    </p>
-                    <p className="mt-0.5 truncate text-xs text-gray-400">
-                      {item.matterTitle} · p.{item.page}
-                    </p>
-                  </div>
-                  <div className="min-w-0 flex-1 py-3 pr-4">
-                    <p className="truncate text-sm text-gray-800">
-                      {item.issueTitle}
-                    </p>
-                    <p className="mt-0.5 line-clamp-2 text-xs leading-5 text-gray-500">
-                      {item.quote}
-                    </p>
-                  </div>
-                  <div className="w-32 shrink-0">
-                    <Badge
-                      variant="outline"
-                      className={cn(
-                        "rounded-md px-2 py-0 text-[11px]",
-                        supportClass(item.supportStatus),
-                      )}
-                    >
-                      {titleize(item.supportStatus)}
-                    </Badge>
-                  </div>
-                  <div className="w-24 shrink-0">
-                    <Badge
-                      variant="outline"
-                      className={cn(
-                        "rounded-md px-2 py-0 text-[11px]",
-                        riskClass(item.riskLevel),
-                      )}
-                    >
-                      {item.riskLevel}
-                    </Badge>
-                  </div>
-                  <ArrowRight className="h-4 w-8 shrink-0 text-gray-300 transition-colors group-hover:text-gray-600" />
-                </Link>
               ))}
 
-          {status === "connected" && filteredEvidence.length === 0 && (
+          {filteredEvidence.length === 0 && (
             <p className="p-8 text-sm text-gray-500">
               No local evidence matches the current filters. Search and map a
               source chunk from a matter workspace to populate this registry.

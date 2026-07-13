@@ -23,9 +23,15 @@ coverage
 .data
 backend/.data
 frontend/.next-ui-smoke
+frontend/.next-build
 frontend/.next-review-studio
 frontend/.next-agentops-route
+frontend/.next-*/
+backend/dist [0-9]*/
+frontend/.next-build [0-9]*/
 test-results
 frontend/test-results
+.next-ui-smoke-state.json
+frontend/.next-ui-smoke-state.json
 playwright-report
 frontend/playwright-report

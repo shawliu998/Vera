@@ -9,7 +9,6 @@ const dataDir = mkdtempSync(
 );
 
 process.env.ALETHEIA_DATA_DIR = dataDir;
-process.env.ALETHEIA_STORAGE_DRIVER = "local";
 process.env.ALETHEIA_AUTH_MODE = "single_user";
 process.env.ALETHEIA_LOCAL_USER_ID = "approved-skill-audit-user";
 

@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "noEmit": false
+  },
+  "include": [
+    "src/index.ts",
+    "src/desktopMigrate.ts",
+    "src/desktopBackup.ts",
+    "src/scripts/desktopBackupAudit.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

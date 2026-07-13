@@ -3,21 +3,38 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import { chatRouter } from "./routes/chat";
-import { projectsRouter } from "./routes/projects";
-import { projectChatRouter } from "./routes/projectChat";
-import { documentsRouter } from "./routes/documents";
-import { tabularRouter } from "./routes/tabular";
-import { workflowsRouter } from "./routes/workflows";
-import { userRouter } from "./routes/user";
-import { downloadsRouter } from "./routes/downloads";
-import { caseLawRouter } from "./routes/caseLaw";
 import { aletheiaRouter } from "./routes/aletheia";
+import { litigationRouter } from "./routes/litigation";
+import { durableAgentRunsRouter } from "./routes/durableAgentRuns";
+import { localGovernanceRouter } from "./routes/localGovernance";
+import { localModelsRouter } from "./routes/localModels";
+import { createLocalVoiceRouter } from "./routes/localVoice";
+import { createAletheiaLocalControlRouter } from "./routes/aletheiaLocalControl";
+import { legalResearchRouter } from "./routes/legalResearch";
+import { legalResearchIssuesRouter } from "./routes/legalResearchIssues";
+import { legalOpinionsRouter } from "./routes/legalOpinions";
 import { seedAletheiaDemoIfNeeded } from "./lib/aletheia/demoSeed";
+import { configureDurableAgentRuntimeFromEnvironment } from "./lib/aletheia/durableAgentRuntime";
+import { closeLocalModelRuntime } from "./lib/aletheia/localModelRuntime";
+import { closeLocalVoiceRuntime } from "./lib/aletheia/localVoiceRuntime";
+import { assertLocalEncryptionStartupPolicy } from "./lib/aletheia/localEnvelopeCrypto";
+import { assertComplianceDeploymentStartupPolicy } from "./lib/aletheia/localCompliancePreset";
+import {
+  auditAnchorRuntimeStatus,
+  shouldFailClosedForAuditAnchor,
+  startAuditAnchorRuntimeFromEnvironment,
+} from "./lib/aletheia/auditAnchorJournal";
+
+assertComplianceDeploymentStartupPolicy();
+assertLocalEncryptionStartupPolicy();
+const auditAnchorRuntime = startAuditAnchorRuntimeFromEnvironment();
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
 const isProduction = process.env.NODE_ENV === "production";
+const HOST =
+  process.env.ALETHEIA_BACKEND_HOST ?? process.env.HOST ?? "127.0.0.1";
+const durableAgentRuntime = configureDurableAgentRuntimeFromEnvironment();
 
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -46,8 +63,7 @@ function makeLimiter(options: {
     legacyHeaders: false,
     skip: (req) => req.method === "OPTIONS",
     message: {
-      detail:
-        options.message ?? "Too many requests. Please try again later.",
+      detail: options.message ?? "Too many requests. Please try again later.",
     },
   });
 }
@@ -55,17 +71,6 @@ function makeLimiter(options: {
 const generalLimiter = makeLimiter({
   windowMs: minutes(envInt("RATE_LIMIT_GENERAL_WINDOW_MINUTES", 15)),
   max: envInt("RATE_LIMIT_GENERAL_MAX", 300),
-});
-
-const chatLimiter = makeLimiter({
-  windowMs: minutes(envInt("RATE_LIMIT_CHAT_WINDOW_MINUTES", 15)),
-  max: envInt("RATE_LIMIT_CHAT_MAX", 30),
-  message: "Too many chat requests. Please try again later.",
-});
-
-const chatCreateLimiter = makeLimiter({
-  windowMs: minutes(envInt("RATE_LIMIT_CHAT_CREATE_WINDOW_MINUTES", 15)),
-  max: envInt("RATE_LIMIT_CHAT_CREATE_MAX", 60),
 });
 
 const uploadLimiter = makeLimiter({
@@ -77,27 +82,12 @@ const uploadLimiter = makeLimiter({
 const externalSourceLimiter = makeLimiter({
   windowMs: minutes(envInt("RATE_LIMIT_EXTERNAL_SOURCE_WINDOW_MINUTES", 15)),
   max: envInt("RATE_LIMIT_EXTERNAL_SOURCE_MAX", 20),
-  message: "Too many external-source retrieval requests. Please try again later.",
+  message:
+    "Too many external-source retrieval requests. Please try again later.",
 });
-
-const exportLimiter = makeLimiter({
-  windowMs: hours(envInt("RATE_LIMIT_EXPORT_WINDOW_HOURS", 1)),
-  max: envInt("RATE_LIMIT_EXPORT_MAX", 10),
-  message: "Too many export requests. Please try again later.",
-});
-
-const dataDeleteLimiter = makeLimiter({
-  windowMs: hours(envInt("RATE_LIMIT_DATA_DELETE_WINDOW_HOURS", 1)),
-  max: envInt("RATE_LIMIT_DATA_DELETE_MAX", 20),
-  message: "Too many data deletion requests. Please try again later.",
-});
-
-function jsonLimitForPath(path: string): string {
-  return "50mb";
-}
 
 app.disable("x-powered-by");
-app.set("trust proxy", envInt("TRUST_PROXY_HOPS", 1));
+app.set("trust proxy", envInt("TRUST_PROXY_HOPS", isProduction ? 1 : 0));
 
 app.use(
   helmet({
@@ -128,48 +118,53 @@ app.use(
 
 app.use(generalLimiter);
 
-app.post("/chat", chatLimiter);
-app.post("/projects/:projectId/chat", chatLimiter);
-app.post("/tabular-review/:reviewId/chat", chatLimiter);
-app.post("/tabular-review/:reviewId/generate", chatLimiter);
-app.post("/aletheia/matters/:matterId/external-source/fetch", externalSourceLimiter);
-app.post("/chat/create", chatCreateLimiter);
-app.post("/chat/:chatId/generate-title", chatCreateLimiter);
-app.post("/single-documents", uploadLimiter);
-app.post("/single-documents/:documentId/versions", uploadLimiter);
-app.put(
-  "/single-documents/:documentId/versions/:versionId/file",
-  uploadLimiter,
+app.post(
+  "/aletheia/matters/:matterId/external-source/fetch",
+  externalSourceLimiter,
 );
-app.post("/projects/:projectId/documents", uploadLimiter);
-app.get("/user/export", exportLimiter);
-app.get("/user/chats/export", exportLimiter);
-app.get("/user/tabular-reviews/export", exportLimiter);
-app.delete("/user/account", dataDeleteLimiter);
-app.delete("/user/chats", dataDeleteLimiter);
-app.delete("/user/projects", dataDeleteLimiter);
-app.delete("/user/tabular-reviews", dataDeleteLimiter);
+app.post("/aletheia/matters/:matterId/research/*", externalSourceLimiter);
+app.post("/aletheia/matters/:matterId/documents", uploadLimiter);
+app.post("/aletheia/matters/:matterId/documents/batch", uploadLimiter);
 
 app.use((req, res, next) =>
-  express.json({ limit: jsonLimitForPath(req.path) })(req, res, next),
+  express.json({ limit: process.env.ALETHEIA_JSON_BODY_LIMIT ?? "5mb" })(
+    req,
+    res,
+    next,
+  ),
 );
 
-app.use("/chat", chatRouter);
-app.use("/projects", projectsRouter);
-app.use("/projects/:projectId/chat", projectChatRouter);
-app.use("/single-documents", documentsRouter);
-app.use("/tabular-review", tabularRouter);
-app.use("/workflows", workflowsRouter);
-app.use("/user", userRouter);
-app.use("/users", userRouter);
-app.use("/download", downloadsRouter);
-app.use("/case-law", caseLawRouter);
+app.use("/aletheia", (req, res, next) => {
+  const readOnlyMethod = req.method === "GET" || req.method === "HEAD";
+  if (!readOnlyMethod && shouldFailClosedForAuditAnchor()) {
+    return void res.status(503).json({
+      detail:
+        "High-assurance audit anchoring is unhealthy. State-changing operations are blocked until an operator restores and verifies the external anchor journal.",
+      code: "audit_anchor_fail_closed",
+    });
+  }
+  next();
+});
+
 app.use("/aletheia", aletheiaRouter);
+app.use("/aletheia", legalResearchRouter);
+app.use("/aletheia", legalResearchIssuesRouter);
+app.use("/aletheia", legalOpinionsRouter);
+app.use("/aletheia", litigationRouter);
+app.use("/aletheia", durableAgentRunsRouter);
+app.use("/aletheia", localGovernanceRouter);
+app.use("/aletheia", localModelsRouter);
+app.use("/aletheia", createLocalVoiceRouter());
+app.use("/aletheia", createAletheiaLocalControlRouter());
 
-app.get("/health", (_req, res) => res.json({ ok: true }));
+app.get("/health", (_req, res) => {
+  const auditAnchor = auditAnchorRuntimeStatus();
+  const healthy = !auditAnchor.enabled || auditAnchor.healthy;
+  res.status(healthy ? 200 : 503).json({ ok: healthy, auditAnchor });
+});
 
-app.listen(PORT, () => {
-  console.log(`Aletheia backend running on port ${PORT}`);
+const server = app.listen(Number(PORT), HOST, () => {
+  console.log(`Aletheia backend running at http://${HOST}:${PORT}`);
   seedAletheiaDemoIfNeeded()
     .then((result) => {
       if ("matterId" in result) {
@@ -182,3 +177,30 @@ app.listen(PORT, () => {
       console.error("[aletheia-demo-seed] failed", error);
     });
 });
+
+let shutdownPromise: Promise<void> | null = null;
+
+function shutdown() {
+  shutdownPromise ??= (async () => {
+    if (server.listening) {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+    await durableAgentRuntime?.close();
+    await closeLocalModelRuntime();
+    await closeLocalVoiceRuntime();
+    auditAnchorRuntime?.close();
+  })();
+  return shutdownPromise;
+}
+
+function requestShutdown() {
+  void shutdown().catch((error) => {
+    console.error("[aletheia-shutdown] failed", error);
+    process.exitCode = 1;
+  });
+}
+
+process.once("SIGINT", requestShutdown);
+process.once("SIGTERM", requestShutdown);

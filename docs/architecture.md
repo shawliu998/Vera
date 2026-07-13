@@ -123,18 +123,16 @@ connected.
 
 ### Storage Boundary
 
-The Aletheia backend route now talks to a repository contract instead of calling
-Supabase directly:
+The Aletheia backend route talks to a repository contract backed by the local
+repository only:
 
 ```text
 Aletheia Route
 -> AletheiaRepository
--> SupabaseAletheiaRepository
 -> LocalAletheiaRepository
 ```
 
-The current default is Supabase/Postgres because it matches the base
-application. The intended local-first deployment replaces that adapter with:
+The repository persists to:
 
 ```text
 .data/aletheia/aletheia.db
@@ -143,7 +141,7 @@ application. The intended local-first deployment replaces that adapter with:
 .data/aletheia/index/
 ```
 
-The local adapter now supports Aletheia routes in single-user local mode with
+The local repository supports Aletheia routes in single-user local mode with
 SQLite persistence, filesystem document storage, parsed source chunks, FTS5
 search, matter-scoped memory, draft/approved playbooks, agent run traces, and
 approval-gated high-risk exports.

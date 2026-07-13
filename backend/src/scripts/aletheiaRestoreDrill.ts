@@ -71,7 +71,6 @@ function main() {
   if (dataDir && manifestPath) {
     backup = parseJsonOutput<any>(
       runNpm(["run", "check:aletheia:backup"], {
-        ALETHEIA_STORAGE_DRIVER: "local",
         ALETHEIA_AUTH_MODE: "single_user",
         ALETHEIA_DATA_DIR: dataDir,
         ALETHEIA_BACKUP_MANIFEST_OUT: manifestPath,
@@ -79,7 +78,6 @@ function main() {
     );
     restore = parseJsonOutput<any>(
       runNpm(["run", "check:aletheia:restore"], {
-        ALETHEIA_STORAGE_DRIVER: "local",
         ALETHEIA_AUTH_MODE: "single_user",
         ALETHEIA_DATA_DIR: dataDir,
         ALETHEIA_RESTORE_SOURCE_DIR: dataDir,
@@ -87,7 +85,6 @@ function main() {
     );
     audit = parseJsonOutput<any>(
       runNpm(["run", "check:aletheia:audit-integrity"], {
-        ALETHEIA_STORAGE_DRIVER: "local",
         ALETHEIA_AUTH_MODE: "single_user",
         ALETHEIA_DATA_DIR: dataDir,
         ALETHEIA_AUDIT_SOURCE_DIR: dataDir,

@@ -32,7 +32,7 @@ export function PreferenceLearningPanel({ matterId, detail, onPersisted }: {
   const proposals = useMemo(() => {
     const auditByMemoryId = new Map<string, PreferenceProposalAuditDetails>();
     for (const event of detail.auditEvents) {
-      if (event.action !== "preference_learning_proposal_recorded") continue;
+      if (event.action !== "human_note.preference_learning_proposal_recorded") continue;
       const audit = event.details as PreferenceProposalAuditDetails;
       if (audit.memoryItemId) auditByMemoryId.set(audit.memoryItemId, audit);
     }
@@ -71,7 +71,7 @@ export function PreferenceLearningPanel({ matterId, detail, onPersisted }: {
         comment: `Review preference proposal ${memory.id} before any playbook or output behavior changes.`,
       });
       await appendAletheiaAuditEvent(matterId, {
-        actor: "system", action: "preference_learning_proposal_recorded",
+        actor: "human", action: "human_note.preference_learning_proposal_recorded",
         workflowVersion: "hermes-preference-learning-v0",
         details: { memoryItemId: memory.id, reviewCommentId: review.id, scopeType: "matter", scopeId: matterId, optIn: true, revocable: true, status: "candidate", autoApply: false },
       });

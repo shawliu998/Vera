@@ -1,16 +1,15 @@
 # Local Deployment
 
-Aletheia can run in a local-first mode for private professional workflows. In
-this mode, Aletheia routes do not require Supabase auth and Aletheia data is
-stored under a local data directory.
+Aletheia runs locally for private professional workflows. Its routes, SQLite
+database, documents, exports, and indexes remain under a local data directory.
 
 For packaging and single-tenant notes, see `docs/private_deployment.md`.
 
 ## Environment
 
 ```bash
-ALETHEIA_STORAGE_DRIVER=local
 ALETHEIA_AUTH_MODE=single_user
+ALETHEIA_BACKEND_HOST=127.0.0.1
 ALETHEIA_DATA_DIR=.data/aletheia
 ALETHEIA_LOCAL_USER_ID=local-user
 ALETHEIA_LOCAL_USER_EMAIL=local@aletheia.internal
@@ -33,7 +32,6 @@ injects the backend bearer token.
 The backend also accepts these aliases:
 
 ```bash
-ALET_HEIA_STORAGE_MODE=local
 ALET_HEIA_AUTH_MODE=single_user
 ALET_HEIA_DATA_DIR=.data/aletheia
 ```
@@ -42,6 +40,7 @@ ALET_HEIA_DATA_DIR=.data/aletheia
 
 ```text
 .data/aletheia/
+  .audit-hmac-key
   aletheia.db
   documents/
   exports/
@@ -49,7 +48,10 @@ ALET_HEIA_DATA_DIR=.data/aletheia
 ```
 
 - `aletheia.db` stores matters, work products, reviews, audit events, agent
-  runs, steps, tool calls, and human checkpoints.
+  runs, steps, tool calls, human checkpoints, and purge tombstones.
+- `.audit-hmac-key` is generated only when
+  `ALETHEIA_AUDIT_HMAC_SECRET` is not configured and is needed to verify the
+  local audit chains.
 - `documents/` stores uploaded source files in local mode.
 - `exports/` stores approval-gated audit packs, feedback datasets, and final
   memos as local JSON artifacts.
@@ -57,12 +59,29 @@ ALET_HEIA_DATA_DIR=.data/aletheia
 
 ## Run
 
-Docker one-command local install:
+Docker compliance deployment:
 
 ```bash
 cp .env.example .env
+${EDITOR:-vi} .env
+docker compose config
 docker compose up --build
 ```
+
+This is deliberately not a one-command quick start. The default Compose preset
+is `compliance`, and it refuses startup until application encryption, SQLCipher,
+an operator-attested encrypted data volume, a live high-assurance audit anchor,
+and a local ClamAV scanner are configured. Provision the four owner-controlled
+host directories and keys described in [compliance deployment](compliance_deployment.md)
+before setting the encrypted-volume attestation to true. Desktop and direct
+backend development remain `standard` by default; they do not inherit Docker's
+compliance preset.
+
+Compose publishes the frontend and backend on `127.0.0.1` only. The backend
+uses `0.0.0.0` inside its container solely for container-to-container traffic;
+that does not make the published host port LAN-accessible. Review auth, TLS,
+proxy rules, and network policy before intentionally changing either published
+binding.
 
 Open:
 
@@ -70,8 +89,8 @@ Open:
 http://localhost:3000/aletheia
 ```
 
-See `docs/install_local.md` for Docker volume layout, health checks, local
-private-token mode, and reset commands.
+See [compliance deployment](compliance_deployment.md) for Docker custody layout
+and health checks.
 
 Before packaging or handing off a private local pilot, run the full private
 preflight:
@@ -92,9 +111,7 @@ npm run check:aletheia:doctor
 ```
 
 The doctor checks Node, `node:sqlite`, local storage/auth settings, writable
-data directories, retrieval defaults, and semantic-index boundaries. It reports
-cloud/external model keys as warnings so an operator can confirm whether any
-fallbacks were intentionally enabled.
+data directories, retrieval defaults, and semantic-index boundaries.
 
 Before packaging or handing off a private workstation build, run the operational
 readiness audit:
@@ -143,7 +160,6 @@ Manual backend:
 
 ```bash
 cd backend
-ALETHEIA_STORAGE_DRIVER=local \
 ALETHEIA_AUTH_MODE=single_user \
 ALETHEIA_DATA_DIR=.data/aletheia \
 npm run dev
@@ -164,13 +180,47 @@ http://localhost:3000/aletheia
 
 ## Local Privacy Mode
 
+- Local `single_user` runs default the backend listener to `127.0.0.1` unless
+  `ALETHEIA_BACKEND_HOST` or `HOST` is explicitly set.
 - Documents stay on local filesystem paths.
 - SQLite stores structured metadata and audit records.
 - Retrieval indexes stay under `.data/aletheia/index`.
+- Local directories are restricted to the owner (`0700`); the database,
+  uploaded files, exports, semantic indexes, and generated audit HMAC key use
+  owner-only file permissions (`0600`) where POSIX permissions are supported.
+- Uploads allow at most 100 MB per file and 100 files per batch (10 GB
+  aggregate). Aletheia streams them through an owner-only temporary directory,
+  cleans all success/error paths, and removes stale temporary files after 24
+  hours by default. It accepts PDF, DOCX, XLSX, TXT, and MD and validates
+  PDF/Office container signatures.
+  Direct-development mode may intentionally leave scanning disabled. The
+  compliance Docker preset requires its local ClamAV scanner and blocks uploads
+  when the executable or its definitions are unavailable.
+- External-source access requires an HTTPS domain allowlist, explicit opt-in,
+  and an approved matter-scoped `external_source_use` checkpoint. Authorization
+  and capture metadata are audited.
+- Audit events are sequenced and HMAC-SHA256 chained per matter. Configure
+  `ALETHEIA_AUDIT_HMAC_SECRET` for an operator-managed key, or preserve the
+  generated `.audit-hmac-key` with backups. The chain detects unexpected
+  changes when the verification key remains trustworthy; it is not an
+  append-only external ledger.
+- Archive is a status transition with an audit event. Purge additionally
+  requires exact matter-ID confirmation and an approved `matter_purge`
+  checkpoint, deletes the local matter artifacts, and leaves a signed deletion
+  tombstone. Backup and filesystem snapshot copies remain subject to the
+  operator's retention process.
 - The frontend uses local system font stacks and does not require Google Fonts
   requests during production builds.
 - External model and web calls should remain disabled by default.
 - Cloud model fallback should require explicit user configuration.
+- Source documents and persisted local exports support versioned AES-256-GCM
+  envelope encryption. Set `ALETHEIA_APPLICATION_ENCRYPTION=required` and use
+  an independent operator key; see [application encryption](application_encryption.md).
+  SQLite defaults to the compatible plaintext `node:sqlite` driver. Operators
+  may migrate offline and explicitly require the verified SQLCipher driver;
+  see [SQLCipher integration](sqlcipher_integration.md). The optional semantic
+  JSON index remains outside SQLCipher and still requires an encrypted volume
+  and encrypted backups when enabled.
 
 ## Current Limitations
 
@@ -205,16 +255,16 @@ http://localhost:3000/aletheia
 - Local export package and durable eval export routes write JSON export files,
   SQLite export metadata, source-index manifests, export hashes, and audit
   events.
+- Local audit events use a per-matter HMAC hash chain, and the audit-integrity
+  command verifies chain sequence, links, and signatures.
+- Matter archive and approval-gated purge are available in local mode. Purge
+  retains a signed tombstone in SQLite and does not delete backup copies.
 - Review-derived eval cases are persisted for the local review-resolution
   workflow.
-- Supabase V1 document/chunk/source listing is unavailable.
-- Supabase V1 runtime persistence is unavailable.
 - The local runtime-result route can record approval retry/resume state, but it
   does not dispatch a real external provider.
 - Approved skill activation is implemented for the local workflow and requires
   explicit human approval before candidate skill suggestions become approved
   matter playbooks.
-- External model calls remain off by default for sensitive/private data and
-  must stay explicit, configurable, logged, and auditable if enabled later.
-- The broader inherited app still has Supabase-dependent routes. Local mode
-  currently applies to Aletheia routes.
+- Agent inference uses an explicitly configured loopback local-model endpoint;
+  no cloud-model fallback is part of the product runtime.

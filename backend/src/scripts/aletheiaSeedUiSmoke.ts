@@ -2,8 +2,6 @@ import "dotenv/config";
 import { seedAletheiaDemoIfNeeded } from "../lib/aletheia/demoSeed";
 
 async function main() {
-  process.env.ALETHEIA_STORAGE_DRIVER =
-    process.env.ALETHEIA_STORAGE_DRIVER ?? "local";
   process.env.ALETHEIA_AUTH_MODE =
     process.env.ALETHEIA_AUTH_MODE ?? "single_user";
   process.env.ALETHEIA_DATA_DIR =

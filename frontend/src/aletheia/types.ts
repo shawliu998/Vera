@@ -1,5 +1,8 @@
 export type AletheiaTemplate =
-  "legal_matter_review" | "compliance_impact_review" | "deal_due_diligence";
+  | "legal_matter_review"
+  | "compliance_impact_review"
+  | "deal_due_diligence"
+  | "civil_litigation";
 
 export type RiskLevel = "low" | "medium" | "high";
 export type ConfidenceLevel = "low" | "medium" | "high";

@@ -71,7 +71,8 @@ const HIGH_CONFIDENCE_SECRET_PATTERNS = [
   {
     id: "github-pat",
     pattern: /\bgithub_pat_[A-Za-z0-9_]{40,}\b/,
-    detail: "Tracked file contains a value shaped like a GitHub fine-grained PAT.",
+    detail:
+      "Tracked file contains a value shaped like a GitHub fine-grained PAT.",
   },
 ];
 
@@ -107,11 +108,14 @@ function isAllowedEnvPath(relativePath: string) {
 }
 
 function isBlockedTrackedPath(relativePath: string) {
-  return BLOCKED_TRACKED_PATHS.some((prefix) => relativePath.startsWith(prefix));
+  return BLOCKED_TRACKED_PATHS.some((prefix) =>
+    relativePath.startsWith(prefix),
+  );
 }
 
 function isLikelyTextFile(root: string, relativePath: string) {
   const target = path.join(root, relativePath);
+  if (!existsSync(target)) return false;
   const stats = statSync(target);
   if (!stats.isFile() || stats.size > 1024 * 1024) return false;
   const sample = readFileSync(target).subarray(0, 4096);
@@ -232,7 +236,7 @@ function main() {
       "env-example-local-privacy-defaults",
       contains(root, "backend/.env.example", [
         "ALETHEIA_DATA_DIR=.data/aletheia",
-        "ALETHEIA_AUTH_MODE=supabase",
+        "ALETHEIA_AUTH_MODE=single_user",
         "ALETHEIA_AUTH_MODE=private_token",
         "ALETHEIA_PRIVATE_AUTH_TOKEN=replace-with-a-random-local-private-token",
         "ALETHEIA_SEMANTIC_INDEX_ENABLED=false",

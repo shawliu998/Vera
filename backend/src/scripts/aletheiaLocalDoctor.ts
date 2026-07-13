@@ -1,5 +1,17 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import {
+  assertLocalEncryptionStartupPolicy,
+  localEncryptionStatus,
+} from "../lib/aletheia/localEnvelopeCrypto";
+import {
+  auditAnchorConfigFromEnvironment,
+  validateAuditAnchorConfiguration,
+} from "../lib/aletheia/auditAnchorJournal";
+import {
+  aletheiaDeploymentPreset,
+  assertComplianceDeploymentStartupPolicy,
+} from "../lib/aletheia/localCompliancePreset";
 
 type DoctorCheck = {
   id: string;
@@ -31,17 +43,16 @@ function resolveDataDir() {
   return path.resolve(process.cwd(), configured);
 }
 
-function storageDriver() {
-  return env("ALETHEIA_STORAGE_DRIVER") ?? env("ALET_HEIA_STORAGE_MODE") ?? "local";
-}
-
 function authMode() {
-  return env("ALETHEIA_AUTH_MODE") ?? env("ALET_HEIA_AUTH_MODE") ?? "single_user";
+  return (
+    env("ALETHEIA_AUTH_MODE") ?? env("ALET_HEIA_AUTH_MODE") ?? "single_user"
+  );
 }
 
 function semanticEnabled() {
-  return (env("ALETHEIA_SEMANTIC_INDEX_ENABLED") ?? "false").toLowerCase() ===
-    "true";
+  return (
+    (env("ALETHEIA_SEMANTIC_INDEX_ENABLED") ?? "false").toLowerCase() === "true"
+  );
 }
 
 function check(
@@ -81,13 +92,15 @@ function assertWritableDataDirs(dataDir: string) {
 
 function isSubpath(parent: string, child: string) {
   const relative = path.relative(parent, child);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
 }
 
 async function main() {
   const root = repoRoot();
   const dataDir = resolveDataDir();
-  const actualStorageDriver = storageDriver();
   const actualAuthMode = authMode();
   const retrievalMode = env("ALETHEIA_RETRIEVAL_MODE") ?? "keyword";
   const semanticDriver = env("ALETHEIA_SEMANTIC_INDEX_DRIVER") ?? "disabled";
@@ -113,7 +126,45 @@ async function main() {
   const privateToken = env("ALETHEIA_PRIVATE_AUTH_TOKEN");
   const privateTokenOk =
     actualAuthMode !== "private_token" ||
-    Boolean(privateToken && privateToken.length >= 24);
+    Boolean(privateToken && privateToken.length >= 32);
+  const encryptedVolumeRequired =
+    env("ALETHEIA_REQUIRE_ENCRYPTED_VOLUME") === "true";
+  const encryptedVolumeAttested =
+    env("ALETHEIA_ENCRYPTED_VOLUME_ATTESTED") === "true";
+  let encryptionStatus: ReturnType<typeof localEncryptionStatus> | null = null;
+  let encryptionError: string | null = null;
+  try {
+    assertLocalEncryptionStartupPolicy();
+    encryptionStatus = localEncryptionStatus();
+  } catch (error) {
+    encryptionError = error instanceof Error ? error.message : String(error);
+  }
+  let deploymentPreset = "unknown";
+  let complianceError: string | null = null;
+  try {
+    deploymentPreset = aletheiaDeploymentPreset();
+    assertComplianceDeploymentStartupPolicy();
+  } catch (error) {
+    complianceError = error instanceof Error ? error.message : String(error);
+  }
+  const auditAnchorEnabled = env("ALETHEIA_AUDIT_ANCHOR_ENABLED") === "true";
+  const auditAnchorHighAssurance =
+    env("ALETHEIA_AUDIT_ANCHOR_HIGH_ASSURANCE") === "true";
+  let auditAnchorDetail = "Independent Ed25519 audit anchoring is disabled.";
+  let auditAnchorConfigurationOk = !auditAnchorEnabled;
+  if (auditAnchorEnabled) {
+    try {
+      const anchor = validateAuditAnchorConfiguration(
+        auditAnchorConfigFromEnvironment(),
+      );
+      auditAnchorConfigurationOk = true;
+      auditAnchorDetail = `Independent audit anchor key ${anchor.key_id} is valid; journal contains ${anchor.journal_entries} signed entries.`;
+    } catch (error) {
+      auditAnchorConfigurationOk = false;
+      auditAnchorDetail =
+        error instanceof Error ? error.message : String(error);
+    }
+  }
 
   const checks: DoctorCheck[] = [
     check(
@@ -127,11 +178,6 @@ async function main() {
       "node:sqlite must be importable for the default local repository.",
     ),
     check(
-      "local-storage-driver",
-      actualStorageDriver === "local",
-      `ALETHEIA_STORAGE_DRIVER resolved to ${actualStorageDriver}; local professional workflows should run with local storage.`,
-    ),
-    check(
       "local-auth-mode",
       actualAuthMode === "single_user" || actualAuthMode === "private_token",
       `ALETHEIA_AUTH_MODE resolved to ${actualAuthMode}; expected single_user or private_token for local/private deployment.`,
@@ -139,7 +185,7 @@ async function main() {
     check(
       "private-token",
       privateTokenOk,
-      "private_token mode requires ALETHEIA_PRIVATE_AUTH_TOKEN with at least 24 characters.",
+      "private_token mode requires ALETHEIA_PRIVATE_AUTH_TOKEN with at least 32 characters.",
     ),
     check(
       "data-directory",
@@ -149,8 +195,63 @@ async function main() {
         : `Local data directory is not writable: ${writableError ?? "unknown error"}`,
     ),
     check(
+      "encrypted-volume",
+      !encryptedVolumeRequired || encryptedVolumeAttested,
+      encryptedVolumeRequired
+        ? "Encrypted-volume enforcement is enabled and requires an explicit operator attestation."
+        : "Encrypted-volume enforcement is disabled; enable it for sensitive production deployments.",
+      encryptedVolumeRequired ? "critical" : "warning",
+    ),
+    check(
+      "application-encryption-configuration",
+      encryptionError === null,
+      encryptionError ?? "Application encryption configuration is usable.",
+    ),
+    check(
+      "deployment-preset",
+      complianceError === null,
+      complianceError ??
+        (deploymentPreset === "compliance"
+          ? "The compliance deployment preset admission checks passed."
+          : "The standard preset is intended for development; use the Docker compliance preset for regulated deployments."),
+      deploymentPreset === "compliance" || complianceError !== null
+        ? "critical"
+        : "warning",
+    ),
+    check(
+      "protected-local-files",
+      encryptionStatus?.file_encryption === "aes-256-gcm-envelope-v1",
+      encryptionStatus?.file_encryption === "aes-256-gcm-envelope-v1"
+        ? `Source documents and local exports use ${encryptionStatus.file_encryption} with ${encryptionStatus.key_source}.`
+        : "Application file encryption is disabled; set ALETHEIA_APPLICATION_ENCRYPTION=required for sensitive deployments.",
+      "warning",
+    ),
+    check(
+      "database-encryption-boundary",
+      encryptionStatus?.database_encryption === "sqlcipher_required",
+      encryptionStatus?.database_encryption === "sqlcipher_required"
+        ? `The SQLCipher-required driver and key passed startup verification: ${JSON.stringify(encryptionStatus.database_driver)}.`
+        : "The default node:sqlite database is plaintext; parsed text, FTS terms, work products, audit details, and metadata require full-disk encryption or an offline SQLCipher migration.",
+      "warning",
+    ),
+    check(
+      "audit-anchor-high-assurance",
+      !auditAnchorHighAssurance || auditAnchorEnabled,
+      auditAnchorHighAssurance
+        ? "High-assurance mode requires independent audit anchoring to be enabled."
+        : "High-assurance audit-anchor fail-closed mode is disabled.",
+    ),
+    check(
+      "audit-anchor-configuration",
+      auditAnchorEnabled && auditAnchorConfigurationOk,
+      auditAnchorDetail,
+      auditAnchorEnabled ? "critical" : "warning",
+    ),
+    check(
       "retrieval-default",
-      retrievalMode === "keyword" || retrievalMode === "hybrid" || retrievalMode === "semantic",
+      retrievalMode === "keyword" ||
+        retrievalMode === "hybrid" ||
+        retrievalMode === "semantic",
       `ALETHEIA_RETRIEVAL_MODE resolved to ${retrievalMode}; expected keyword, hybrid, or semantic.`,
     ),
     check(

@@ -43,7 +43,7 @@ export function WordAddinHandoffPanel({ matterId, detail, onPersisted }: {
   const persisted = useMemo(() => {
     const audits = new Map<string, HandoffAuditDetails>();
     for (const event of detail.auditEvents) {
-      if (event.action !== "word_addin_handoff_persisted") continue;
+      if (event.action !== "human_note.word_addin_handoff_persisted") continue;
       const details = event.details as HandoffAuditDetails;
       if (details.workpaperId) audits.set(details.workpaperId, details);
     }
@@ -68,7 +68,7 @@ export function WordAddinHandoffPanel({ matterId, detail, onPersisted }: {
       const selectedTextHash = await sha256(selected);
       const requestedAudit = await appendAletheiaAuditEvent(matterId, {
         actor: "human",
-        action: "word_addin_handoff_requested",
+        action: "human_note.word_addin_handoff_requested",
         workflowVersion: "hermes-word-addin-handoff-v0",
         details: { documentId: document.id, documentName: document.name, selectedTextHash, operation: "tracked_change", wordClientApplied: false },
       });
@@ -94,7 +94,7 @@ export function WordAddinHandoffPanel({ matterId, detail, onPersisted }: {
       };
       const validation = validateAnduParityContracts({ wordAddinHandoffs: [handoff] });
       if (validation.some((item) => item.status === "failed")) throw new Error("Word handoff provenance validation failed before persistence.");
-      await appendAletheiaAuditEvent(matterId, { actor: "system", action: "word_addin_handoff_persisted", workflowVersion: "hermes-word-addin-handoff-v0", details: { workpaperId: workpaper.id, reviewCommentId: review.id, requestAuditEventId: requestedAudit.id, handoff, validation, wordClientApplied: false } });
+      await appendAletheiaAuditEvent(matterId, { actor: "human", action: "human_note.word_addin_handoff_persisted", workflowVersion: "hermes-word-addin-handoff-v0", details: { workpaperId: workpaper.id, reviewCommentId: review.id, requestAuditEventId: requestedAudit.id, handoff, validation, wordClientApplied: false } });
       setSelectedText(""); setSuggestedEdit(""); await onPersisted(); setMessage(`Word Add-in handoff recorded (${workpaper.id}).`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Word Add-in handoff could not be recorded.");

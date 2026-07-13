@@ -1,7 +1,7 @@
 # Private Deployment Notes
 
-Aletheia is intended to run as a local-first or private single-tenant
-professional agent workspace.
+Aletheia is intended to run as a local single-workstation professional agent
+workspace.
 
 ## Local Desktop / Workstation
 
@@ -20,13 +20,13 @@ MCP: stdio wrapper via npm run mcp:aletheia
 Recommended environment:
 
 ```bash
-ALETHEIA_STORAGE_DRIVER=local
 ALETHEIA_AUTH_MODE=single_user
+ALETHEIA_BACKEND_HOST=127.0.0.1
 ALETHEIA_DATA_DIR=.data/aletheia
 ALETHEIA_LOCAL_USER_ID=local-user
 ALETHEIA_LOCAL_USER_EMAIL=local@aletheia.internal
-FRONTEND_URL=http://localhost:3000
-NEXT_PUBLIC_API_BASE_URL=http://localhost:3001
+FRONTEND_URL=http://127.0.0.1:3000
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:3001
 ```
 
 For private token mode on Aletheia routes:
@@ -37,11 +37,80 @@ ALETHEIA_PRIVATE_AUTH_TOKEN=replace-with-a-random-local-private-token
 NEXT_PUBLIC_ALETHEIA_PRIVATE_AUTH_TOKEN=replace-with-the-same-token-for-local-browser-only
 ```
 
-This mode applies only to `/aletheia` routes. Inherited routes continue to use
-the base app auth path. Because `NEXT_PUBLIC_*` variables are exposed to browser
-clients, use that frontend fallback only for local workstation or trusted
-private-network deployments; otherwise inject the bearer token at a reverse
-proxy or implement an operator-specific server-side session.
+This mode applies to the local `/aletheia` API. Because `NEXT_PUBLIC_*`
+variables are exposed to browser clients, use that frontend fallback only for
+a loopback workstation. The desktop app does not embed the token; it supplies a
+fresh per-launch token through the trusted desktop bridge.
+
+## Current Security Hardening
+
+- The local `single_user` backend defaults to the loopback listener
+  `127.0.0.1`. Set `ALETHEIA_BACKEND_HOST` explicitly only when the backend is
+  deliberately placed behind a private network or reverse proxy.
+- Docker containers listen on their internal container interfaces so the
+  frontend can reach the backend, but Compose publishes both host ports on
+  `127.0.0.1` only. A LAN-accessible deployment requires an intentional proxy
+  or port-binding change plus authentication and TLS review.
+- The desktop app always uses `private_token` auth. It generates a fresh random
+  32-byte token for each app launch and gives it only to the trusted local
+  renderer through the desktop bridge; it is not stored in the packaged
+  frontend or written to `.env`.
+- In local mode, Aletheia sets data directories to owner-only (`0700`) and the
+  SQLite database, uploaded documents, exports, local semantic indexes, and
+  generated audit HMAC key to owner read/write only (`0600`) on platforms that
+  support POSIX permissions.
+- Each uploaded file is limited to 100 MB and a batch is limited to 100 files
+  (10 GB aggregate ceiling). Uploads stream through an owner-only temporary
+  directory, are cleaned on every success/error path, and have a 24-hour stale
+  file janitor by default (`ALETHEIA_UPLOAD_TEMP_TTL_MS` can adjust the TTL).
+  Accepted document extensions are PDF, DOCX, XLSX, TXT, and MD. PDF headers
+  and the ZIP container signatures used by DOCX/XLSX are checked before the
+  files enter the matter repository; this is validation, not malware scanning.
+- External-source fetches remain allowlisted and opt-in, and now also require
+  an approved, matter-scoped `external_source_use` checkpoint. Authorization
+  and completion are written to the audit trail with hashes and response size.
+- Local audit events are sequenced per matter and linked with HMAC-SHA256. Set
+  `ALETHEIA_AUDIT_HMAC_SECRET` to an operator-managed secret, or local mode
+  creates `.data/aletheia/.audit-hmac-key` with mode `0600`. Run the audit
+  integrity check after real workflows and before restore or handoff. This
+  chain is tamper-evident; it does not prevent an attacker who controls both the
+  data and HMAC key from rewriting history.
+- Public note-only audit append APIs accept only `human_note.*` or
+  `agent_note.*` actions. Lifecycle, approval, export, and security events are
+  emitted only by the backend operation that actually performed them.
+- Archiving changes the matter status and records an audit event. Permanent
+  purge requires the matter ID to be re-entered and an approved
+  `matter_purge` checkpoint. Purge removes matter records and local document,
+  export, and semantic-index files, then preserves a signed tombstone with a
+  hashed title, last audit hash, approval ID, deletion counts, and timestamp.
+  Purge does not erase copies already present in backups or filesystem
+  snapshots.
+- Aletheia supports authenticated AES-256-GCM envelopes for uploaded source
+  files and persisted local exports. The desktop app stores its independent
+  master key in macOS Keychain; backend-only operators can use an environment
+  or owner-only key file. See [application encryption](application_encryption.md)
+  for migration, recovery, and key-loss constraints.
+- Direct backend development uses the compatible `node:sqlite` database by
+  default and is therefore plaintext. Parsed chunks,
+  FTS terms, work-product content, audit details, and metadata remain readable
+  until an operator completes the offline migration and explicitly sets
+  `ALETHEIA_DATABASE_ENCRYPTION=sqlcipher_required`. Required mode uses the
+  verified `@signalapp/sqlcipher` adapter and fails closed on a missing/wrong
+  key or failed cipher/integrity verification; see
+  [SQLCipher integration](sqlcipher_integration.md). The optional semantic JSON
+  index is outside SQLite and remains plaintext when enabled.
+- The supplied Docker Compose configuration instead defaults to the
+  admission-controlled `compliance` preset: AES-GCM file envelopes, SQLCipher,
+  encrypted-volume attestation, required ClamAV scanning, and an independent
+  high-assurance Ed25519 anchor must all be live before it listens. See
+  [compliance deployment](compliance_deployment.md). Do not copy its
+  attestation into an unverified environment.
+- For stronger tamper evidence, configure the independent Ed25519 anchor journal
+  described in [audit anchoring](audit_anchoring.md). Keep its private key and
+  journal outside the vault. Ordinary external storage is not automatically
+  WORM; retain signed heads or bundles with a separate custodian.
+- Cloud model, web, connector, and other external calls remain disabled unless
+  an operator explicitly configures the capability and its approval policy.
 
 Operational notes:
 
@@ -109,30 +178,13 @@ Operational notes:
   starts backend and frontend when ports are free, leaves existing dev servers
   untouched, and prints the MCP command.
 
-## Private Single-Tenant Server
+## Deployment Boundary
 
-Use this shape for a controlled internal server.
-
-```text
-Reverse proxy / TLS
--> Frontend
--> Backend
--> SQLite or Postgres
--> Filesystem or private object storage
-```
-
-Recommended hardening:
-
-- Serve only over TLS.
-- Put the backend behind private network or reverse proxy rules.
-- Use `private_token`, single-tenant auth, or SSO before enabling multi-user
-  workflows.
-- Keep Aletheia Tool Adapter tools on a whitelist.
-- Keep terminal, browser automation, external search, email, and destructive
-  file operations disabled by default.
-- Require human approval for audit packs, feedback datasets, final memos,
-  playbook updates, and external calls.
-- Log retention should match the client engagement and professional rules.
+The supported package is local SQLite plus an owner-only filesystem on one
+workstation. Remote SaaS, Postgres, object storage, shared multi-user hosting,
+and public service bindings are outside this product boundary. Reconsidering
+that boundary requires a separate threat model, authentication design, tenant
+isolation review, encryption/key-management plan, and deployment approval.
 
 ## MCP Wrapper
 
@@ -140,7 +192,6 @@ For local MCP clients:
 
 ```bash
 cd backend
-ALETHEIA_STORAGE_DRIVER=local \
 ALETHEIA_AUTH_MODE=single_user \
 ALETHEIA_DATA_DIR=.data/aletheia \
 npm run mcp:aletheia
@@ -184,23 +235,27 @@ Before upgrading:
 - V1 source-index listing is available for local Aletheia storage and can be
   included in local AgentOps export packages as
   `audit_pack.source_index_manifest`.
-- Supabase V1 document/chunk/source listing is unavailable.
-- Supabase V1 runtime persistence is unavailable.
 - Local export package and durable eval export routes write JSON export files,
   SQLite export metadata, source-index manifests, export hashes, and audit
   events.
+- Local audit events form a per-matter HMAC-SHA256 chain. The integrity audit
+  validates event order, previous-hash links, and event hashes when the HMAC key
+  is available.
+- Local matter archive and approval-gated purge are implemented. Purge retains
+  a signed deletion tombstone but does not reach backup or snapshot copies.
 - Local runtime approval retry records authorization and trace state only; it
   does not dispatch a real external provider.
 - Review-derived eval cases are persisted for the local review-resolution
-  workflow; Supabase parity is not claimed.
+  workflow.
 - Approved skill activation is implemented for the local workflow and requires
   explicit human approval before candidate skill suggestions become approved
   matter playbooks.
-- External model calls remain off by default for sensitive/private data and
-  must stay explicit, configurable, logged, and auditable if enabled later.
+- Agent inference is restricted to explicitly configured loopback local-model
+  endpoints. No cloud-model fallback is part of the product runtime.
 - Aletheia is a professional expert-support workspace, not legal advice
   generation, production SaaS, or a guarantee of legal correctness.
-- Broader inherited app routes may still assume Supabase-backed services.
+- The compiled backend and packaged desktop expose only the local Aletheia
+  product surface; see `docs/local_only_dependency_boundary.md`.
 - Node 22 currently emits an ExperimentalWarning for `node:sqlite`.
 - SQLite FTS5 keyword retrieval is the default. The optional local-json
   semantic/hybrid adapter is a deterministic prototype and must be explicitly

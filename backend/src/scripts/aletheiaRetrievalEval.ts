@@ -73,30 +73,110 @@ async function createMatterWithDocument(args: {
 
 function compactLoadFixtureDocuments() {
   return [
-    ["asset-purchase-agreement", "The asset transfer schedule lists assumed contracts and excluded liabilities."],
-    ["board-consent", "The board consent authorizes officers to execute closing certificates."],
-    ["cap-table-summary", "The capitalization summary identifies preferred shares and option grants."],
-    ["customer-contract-index", "The customer contract index marks renewal terms and assignment consents."],
-    ["data-processing-addendum", "The data processing addendum limits subprocessors and audit requests."],
-    ["disclosure-schedule", "The disclosure schedule lists pending disputes and regulatory notices."],
-    ["escrow-source-code-release", "Escrow source code release is triggered by uncured vendor bankruptcy or service cessation."],
-    ["employment-agreement", "The employment agreement includes invention assignment and non-solicit covenants."],
-    ["financial-statements", "The unaudited financial statements include revenue recognition notes."],
-    ["insurance-certificate", "The insurance certificate lists cyber liability and errors omissions coverage."],
-    ["ip-assignment", "The intellectual property assignment transfers platform source materials."],
-    ["lease-summary", "The lease summary identifies renewal options and landlord consent requirements."],
-    ["litigation-memo", "The litigation memo describes threatened claims and settlement posture."],
-    ["material-contract-review", "The material contract review flags change of control restrictions."],
-    ["open-source-inventory", "The open source inventory flags copyleft license review items."],
-    ["privacy-policy", "The privacy policy describes consumer deletion requests and retention periods."],
-    ["security-report", "The security report summarizes penetration test remediation status."],
-    ["tax-certificate", "The tax certificate confirms sales tax nexus assumptions."],
-    ["transition-services-agreement", "The transition services agreement defines migration support milestones."],
-    ["vendor-master-agreement", "The vendor master agreement requires incident notice within forty eight hours."],
-    ["warranty-schedule", "The warranty schedule excludes beta features and customer modifications."],
-    ["working-capital-schedule", "The working capital schedule defines normalized inventory adjustments."],
-    ["export-control-memo", "The export control memo confirms encryption classification review."],
-    ["regulatory-permit-index", "The regulatory permit index lists state operating approvals."],
+    [
+      "asset-purchase-agreement",
+      "The asset transfer schedule lists assumed contracts and excluded liabilities.",
+    ],
+    [
+      "board-consent",
+      "The board consent authorizes officers to execute closing certificates.",
+    ],
+    [
+      "cap-table-summary",
+      "The capitalization summary identifies preferred shares and option grants.",
+    ],
+    [
+      "customer-contract-index",
+      "The customer contract index marks renewal terms and assignment consents.",
+    ],
+    [
+      "data-processing-addendum",
+      "The data processing addendum limits subprocessors and audit requests.",
+    ],
+    [
+      "disclosure-schedule",
+      "The disclosure schedule lists pending disputes and regulatory notices.",
+    ],
+    [
+      "escrow-source-code-release",
+      "Escrow source code release is triggered by uncured vendor bankruptcy or service cessation.",
+    ],
+    [
+      "employment-agreement",
+      "The employment agreement includes invention assignment and non-solicit covenants.",
+    ],
+    [
+      "financial-statements",
+      "The unaudited financial statements include revenue recognition notes.",
+    ],
+    [
+      "insurance-certificate",
+      "The insurance certificate lists cyber liability and errors omissions coverage.",
+    ],
+    [
+      "ip-assignment",
+      "The intellectual property assignment transfers platform source materials.",
+    ],
+    [
+      "lease-summary",
+      "The lease summary identifies renewal options and landlord consent requirements.",
+    ],
+    [
+      "litigation-memo",
+      "The litigation memo describes threatened claims and settlement posture.",
+    ],
+    [
+      "material-contract-review",
+      "The material contract review flags change of control restrictions.",
+    ],
+    [
+      "open-source-inventory",
+      "The open source inventory flags copyleft license review items.",
+    ],
+    [
+      "privacy-policy",
+      "The privacy policy describes consumer deletion requests and retention periods.",
+    ],
+    [
+      "security-report",
+      "The security report summarizes penetration test remediation status.",
+    ],
+    [
+      "tax-certificate",
+      "The tax certificate confirms sales tax nexus assumptions.",
+    ],
+    [
+      "transition-services-agreement",
+      "The transition services agreement defines migration support milestones.",
+    ],
+    [
+      "vendor-master-agreement",
+      "The vendor master agreement requires incident notice within forty eight hours.",
+    ],
+    [
+      "warranty-schedule",
+      "The warranty schedule excludes beta features and customer modifications.",
+    ],
+    [
+      "working-capital-schedule",
+      "The working capital schedule defines normalized inventory adjustments.",
+    ],
+    [
+      "export-control-memo",
+      "The export control memo confirms encryption classification review.",
+    ],
+    [
+      "regulatory-permit-index",
+      "The regulatory permit index lists state operating approvals.",
+    ],
+    [
+      "closing-checklist",
+      "The closing checklist assigns signature and funds-flow responsibilities.",
+    ],
+    [
+      "consent-tracker",
+      "The consent tracker records counterpart approvals and delivery status.",
+    ],
   ].map(([slug, sentence], index) => ({
     filename: `v1-load-${String(index + 1).padStart(2, "0")}-${slug}.txt`,
     body: [
@@ -135,7 +215,10 @@ async function createCompactLoadFixture(args: {
         buffer: Buffer.from(document.body, "utf8"),
       },
     );
-    assert(uploaded.parsed_status === "parsed", `${document.filename} should parse`);
+    assert(
+      uploaded.parsed_status === "parsed",
+      `${document.filename} should parse`,
+    );
     assert(
       uploaded.metadata?.chunkCount >= 1,
       `${document.filename} should create at least one source chunk`,
@@ -157,8 +240,14 @@ async function createCompactLoadFixture(args: {
     top.method === "keyword" &&
     typeof top.ranking_basis === "string";
 
-  assert(top?.document_name === targetDocument, "Load fixture query should rank escrow document first");
-  assert(v1AliasesPassed, "Load fixture retrieval should expose V1 retrieval aliases");
+  assert(
+    top?.document_name === targetDocument,
+    "Load fixture query should rank escrow document first",
+  );
+  assert(
+    v1AliasesPassed,
+    "Load fixture retrieval should expose V1 retrieval aliases",
+  );
 
   return {
     matterId: matter.id,
@@ -228,7 +317,6 @@ async function main() {
   );
   rmSync(dataDir, { recursive: true, force: true });
 
-  process.env.ALETHEIA_STORAGE_DRIVER = "local";
   process.env.ALETHEIA_AUTH_MODE = "single_user";
   process.env.ALETHEIA_DATA_DIR = dataDir;
   process.env.ALETHEIA_LOCAL_USER_ID = "local-user";
@@ -266,6 +354,233 @@ async function main() {
     ].join("\n"),
   });
   const compactLoadFixture = await createCompactLoadFixture({ ctx, repo });
+  const retrievalManifest: any = await repo.createLitigationRetrievalManifest(
+    ctx,
+    compactLoadFixture.matterId,
+    { focus: compactLoadFixture.targetQuery },
+  );
+  assert(
+    retrievalManifest?.schemaVersion ===
+      "aletheia-litigation-retrieval-manifest-v1",
+    "Litigation retrieval manifest should expose its schema version",
+  );
+  assert(
+    retrievalManifest.candidateSetComplete === true &&
+      retrievalManifest.inputBinding === false &&
+      retrievalManifest.omissionPolicy === "none",
+    "Retrieval diagnostics must disclose completeness and input-binding scope",
+  );
+  assert(
+    /^sha256:[a-f0-9]{64}$/.test(retrievalManifest.indexFingerprint) &&
+      /^sha256:[a-f0-9]{64}$/.test(retrievalManifest.manifestHash),
+    "Retrieval manifest and source index must be hash-bound",
+  );
+  const persistedManifest: any = await repo.getLitigationRetrievalManifest(
+    ctx,
+    compactLoadFixture.matterId,
+    retrievalManifest.id,
+  );
+  assert(
+    persistedManifest?.manifestHash === retrievalManifest.manifestHash &&
+      persistedManifest?.candidateCount === retrievalManifest.candidateCount,
+    "Retrieval manifest must be queryable from persistent matter storage",
+  );
+  const selectedCandidate = retrievalManifest.candidates[0];
+  const confirmedExcerpt: any = await repo.confirmLitigationRetrievalExcerpt(
+    ctx,
+    compactLoadFixture.matterId,
+    retrievalManifest.id,
+    {
+      chunkId: selectedCandidate.chunkId,
+      comment:
+        "Counsel verified this complete source chunk against the local record.",
+    },
+  );
+  assert(
+    confirmedExcerpt?.status === "confirmed" &&
+      /^([a-f0-9]{64})$/.test(confirmedExcerpt.quote_sha256),
+    "Confirmed retrieval excerpt must persist an exact quote hash",
+  );
+  assert(
+    (
+      (await repo.getLitigationRetrievalManifest(
+        ctx,
+        compactLoadFixture.matterId,
+        retrievalManifest.id,
+      )) as any
+    ).excerpts.some(
+      (excerpt: Record<string, unknown>) =>
+        excerpt.id === confirmedExcerpt.id && excerpt.status === "confirmed",
+    ),
+    "Confirmed excerpt must project through its persistent manifest",
+  );
+  const reviewedInput: any = await repo.prepareLitigationReviewedExcerptInput(
+    ctx,
+    compactLoadFixture.matterId,
+    retrievalManifest.id,
+  );
+  assert(
+    reviewedInput?.inputBinding === true &&
+      reviewedInput?.excerpts?.length === 1 &&
+      reviewedInput.excerpts[0].sourceId ===
+        `retrieval-excerpt:${confirmedExcerpt.id}` &&
+      /^sha256:[a-f0-9]{64}$/.test(reviewedInput.bindingHash),
+    "Counsel-confirmed excerpts must compile into a hash-bound Agent input",
+  );
+  const withdrawnExcerpt: any = await repo.withdrawLitigationRetrievalExcerpt(
+    ctx,
+    compactLoadFixture.matterId,
+    confirmedExcerpt.id,
+    {
+      comment:
+        "Counsel withdrew this excerpt because it should not enter analysis.",
+    },
+  );
+  assert(
+    withdrawnExcerpt?.status === "withdrawn",
+    "Confirmed retrieval excerpts must support audited withdrawal",
+  );
+  let withdrawnBindingRejected = false;
+  try {
+    await repo.prepareLitigationReviewedExcerptInput(
+      ctx,
+      compactLoadFixture.matterId,
+      retrievalManifest.id,
+    );
+  } catch (error) {
+    withdrawnBindingRejected =
+      error instanceof Error &&
+      error.message.includes("At least one counsel-confirmed");
+  }
+  assert(
+    withdrawnBindingRejected,
+    "A manifest with no currently confirmed excerpt must not bind Agent input",
+  );
+  let withdrawnReconfirmationRejected = false;
+  try {
+    await repo.confirmLitigationRetrievalExcerpt(
+      ctx,
+      compactLoadFixture.matterId,
+      retrievalManifest.id,
+      {
+        chunkId: selectedCandidate.chunkId,
+        comment:
+          "Attempting to reuse a withdrawn excerpt must be rejected safely.",
+      },
+    );
+  } catch (error) {
+    withdrawnReconfirmationRejected =
+      error instanceof Error && /cannot be reconfirmed/.test(error.message);
+  }
+  assert(
+    withdrawnReconfirmationRejected,
+    "Withdrawn excerpts must not silently return to confirmed state",
+  );
+  const staleManifest: any = await repo.createLitigationRetrievalManifest(
+    ctx,
+    compactLoadFixture.matterId,
+    { focus: compactLoadFixture.targetQuery },
+  );
+  await repo.confirmLitigationRetrievalExcerpt(
+    ctx,
+    compactLoadFixture.matterId,
+    staleManifest.id,
+    {
+      chunkId: staleManifest.candidates[0].chunkId,
+      comment:
+        "Counsel confirmed this excerpt before the source index changed.",
+    },
+  );
+  const bindingBeforeIndexChange: any =
+    await repo.prepareLitigationReviewedExcerptInput(
+      ctx,
+      compactLoadFixture.matterId,
+      staleManifest.id,
+    );
+  assert(
+    /^sha256:[a-f0-9]{64}$/.test(bindingBeforeIndexChange.bindingHash),
+    "Reviewed input must be valid before the source index changes",
+  );
+  const postManifestBody =
+    "A later local document changes the retrieval index.";
+  await repo.uploadMatterDocument(ctx, compactLoadFixture.matterId, {
+    filename: "post-manifest-change.txt",
+    mimeType: "text/plain",
+    sizeBytes: Buffer.byteLength(postManifestBody, "utf8"),
+    buffer: Buffer.from(postManifestBody, "utf8"),
+  });
+  let staleManifestRejected = false;
+  try {
+    await repo.confirmLitigationRetrievalExcerpt(
+      ctx,
+      compactLoadFixture.matterId,
+      staleManifest.id,
+      {
+        chunkId: staleManifest.candidates[0].chunkId,
+        comment:
+          "A stale manifest must not authorize a retrieved excerpt confirmation.",
+      },
+    );
+  } catch (error) {
+    staleManifestRejected =
+      error instanceof Error &&
+      /documents changed after retrieval/.test(error.message);
+  }
+  assert(
+    staleManifestRejected,
+    "Document changes must invalidate excerpt confirmation from an old manifest",
+  );
+  let staleBindingRejected = false;
+  try {
+    await repo.prepareLitigationReviewedExcerptInput(
+      ctx,
+      compactLoadFixture.matterId,
+      staleManifest.id,
+    );
+  } catch (error) {
+    staleBindingRejected =
+      error instanceof Error &&
+      error.message.includes("Matter documents changed after retrieval");
+  }
+  assert(
+    staleBindingRejected,
+    "Document changes must invalidate a previously valid Agent input binding",
+  );
+  const manifestMatter: any = await repo.getMatterDetail(
+    ctx,
+    compactLoadFixture.matterId,
+  );
+  assert(
+    manifestMatter.auditEvents.some(
+      (event: Record<string, unknown>) =>
+        event.action === "litigation_retrieval_manifest_created",
+    ),
+    "Retrieval manifest creation must append a matter-scoped audit event",
+  );
+  assert(
+    (await repo.createLitigationRetrievalManifest(
+      { userId: "other-local-user" },
+      compactLoadFixture.matterId,
+      { focus: compactLoadFixture.targetQuery },
+    )) === null,
+    "Retrieval manifest must remain user/matter scoped",
+  );
+  let broadManifestRejected = false;
+  try {
+    await repo.createLitigationRetrievalManifest(
+      ctx,
+      compactLoadFixture.matterId,
+      { focus: "representative due diligence record" },
+    );
+  } catch (error) {
+    broadManifestRejected =
+      error instanceof Error &&
+      /matched 26 chunks; limit is 25/.test(error.message);
+  }
+  assert(
+    broadManifestRejected,
+    "Broad retrieval focus must fail closed instead of silently truncating candidates",
+  );
 
   let failClosedPassed = false;
   try {
@@ -341,6 +656,8 @@ async function main() {
       "matter-scoped search",
       "cross-matter isolation",
       "retrieval diagnostics",
+      "hash-bound complete litigation retrieval manifest",
+      "broad-focus no-truncation rejection",
       "20-100 representative compact load fixture",
     ],
     matters: {

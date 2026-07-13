@@ -110,7 +110,6 @@ function localSourceIndex(): V1SourceIndexSnapshot {
     ],
     limitations: [
       "Local source index lists parsed document records, chunks, and evidence source links; full document/page preview remains a separate UI concern.",
-      "Supabase V1 document retrieval/listing is not implemented for the private pilot.",
     ],
   };
 }
@@ -464,7 +463,7 @@ test("buildExportPackage can consume a local-only V1 source index manifest", () 
   assert.ok(
     sourceIndexManifest.limitations.some((item) =>
       item.includes(
-        "Supabase V1 document, chunk, and source-link listing remains unavailable",
+        "original document/page preview is not embedded",
       ),
     ),
   );

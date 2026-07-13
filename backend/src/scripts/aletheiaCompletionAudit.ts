@@ -70,15 +70,21 @@ function main() {
         "Aletheia has a local-first persistence boundary with SQLite, filesystem documents, exports, and local auth modes.",
       evidence: [
         "backend/src/lib/aletheia/localRepository.ts",
+        "backend/src/lib/aletheia/localDatabase.ts",
         "backend/src/lib/aletheia/documentParser.ts",
         "backend/src/middleware/auth.ts",
         "docs/local_deployment.md",
       ],
       checks: [
         contains(root, "backend/src/lib/aletheia/localRepository.ts", [
-          "DatabaseSync",
+          "LocalDatabase",
           "writeMatterDocumentFile",
           "shouldPersistLocalExport",
+        ]),
+        contains(root, "backend/src/lib/aletheia/localDatabase.ts", [
+          "node:sqlite",
+          "@signalapp/sqlcipher",
+          "cipher_integrity_check",
         ]),
         contains(root, "backend/src/lib/aletheia/documentParser.ts", [
           "extractMatterDocumentText",
@@ -347,13 +353,21 @@ function main() {
           "fetchAllowlistedExternalSource",
           "external_source_policy",
         ]),
-        contains(root, "frontend/src/components/agentops/ExternalSourceWorkpaperPanel.tsx", [
-          "allowlisted_https_fetch",
-          "fetchAletheiaExternalSource",
-          "externalAccessOptIn",
-          "needs_review",
-        ]),
-        packageScript(root, "backend/package.json", "check:aletheia:external-source-connector"),
+        contains(
+          root,
+          "frontend/src/components/agentops/ExternalSourceWorkpaperPanel.tsx",
+          [
+            "allowlisted_https_fetch",
+            "fetchAletheiaExternalSource",
+            "externalAccessOptIn",
+            "needs_review",
+          ],
+        ),
+        packageScript(
+          root,
+          "backend/package.json",
+          "check:aletheia:external-source-connector",
+        ),
       ],
     }),
     item({
@@ -378,7 +392,11 @@ function main() {
           "addAletheiaReview",
           "wordClientApplied: false",
         ]),
-        packageScript(root, "backend/package.json", "check:aletheia:word-addin-manifest"),
+        packageScript(
+          root,
+          "backend/package.json",
+          "check:aletheia:word-addin-manifest",
+        ),
       ],
     }),
     item({
@@ -402,12 +420,16 @@ function main() {
           "/matters/:matterId/preference-learning/:memoryItemId/approve",
           "approvePreferenceLearningCandidate",
         ]),
-        contains(root, "frontend/src/components/agentops/PreferenceLearningPanel.tsx", [
-          "acceptProposalReview",
-          "approveProposal",
-          "approved playbook mapping",
-          "auto-change playbooks or other matters",
-        ]),
+        contains(
+          root,
+          "frontend/src/components/agentops/PreferenceLearningPanel.tsx",
+          [
+            "acceptProposalReview",
+            "approveProposal",
+            "approved playbook mapping",
+            "auto-change playbooks or other matters",
+          ],
+        ),
       ],
     }),
     item({

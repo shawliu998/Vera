@@ -69,9 +69,23 @@ function main() {
   const root = repoRoot();
   const backendDir = process.cwd();
   const frontendDir = path.join(root, "frontend");
+  const desktopDir = path.join(root, "desktop");
   const packageDir =
     process.env.ALETHEIA_LOCAL_PACKAGE_DIR ??
     mkdtempSync(path.join(tmpdir(), "aletheia-private-preflight-package-"));
+  const preflightDataDir = mkdtempSync(
+    path.join(tmpdir(), "aletheia-private-preflight-data-"),
+  );
+  const isolatedBackendEnvironment = {
+    ALETHEIA_AUTH_MODE: "single_user",
+    ALETHEIA_DATA_DIR: preflightDataDir,
+    ALETHEIA_APPLICATION_ENCRYPTION: "disabled",
+    ALETHEIA_DATABASE_ENCRYPTION: "metadata_plaintext",
+    ALETHEIA_SEMANTIC_INDEX_ENABLED: "false",
+    ALETHEIA_SEMANTIC_INDEX_DRIVER: "disabled",
+    ALETHEIA_AUDIT_HMAC_SECRET:
+      "aletheia-private-preflight-only-hmac-secret-2026",
+  };
   const releaseEvidenceOut =
     process.env.ALETHEIA_RELEASE_EVIDENCE_OUT ??
     path.join(tmpdir(), `aletheia-release-evidence-${process.pid}.json`);
@@ -81,6 +95,26 @@ function main() {
   const backendCommands: PreflightCommand[] = [
     { id: "backend-build", cwd: backendDir, args: ["run", "build"] },
     {
+      id: "application-encryption",
+      cwd: backendDir,
+      args: ["run", "test:aletheia:encryption"],
+    },
+    {
+      id: "sqlcipher-integration",
+      cwd: backendDir,
+      args: ["run", "test:aletheia:sqlcipher"],
+    },
+    {
+      id: "independent-audit-anchors",
+      cwd: backendDir,
+      args: ["run", "test:aletheia:audit-anchors"],
+    },
+    {
+      id: "local-control",
+      cwd: backendDir,
+      args: ["run", "check:aletheia:local-control"],
+    },
+    {
       id: "local-doctor",
       cwd: backendDir,
       args: ["run", "check:aletheia:doctor"],
@@ -89,11 +123,21 @@ function main() {
       id: "backup-manifest",
       cwd: backendDir,
       args: ["run", "check:aletheia:backup"],
+      env: {
+        ALETHEIA_BACKUP_MANIFEST_OUT: path.join(
+          preflightDataDir,
+          "backup-manifest.json",
+        ),
+      },
     },
     {
       id: "restore-preflight",
       cwd: backendDir,
       args: ["run", "check:aletheia:restore"],
+      env: {
+        ALETHEIA_DATA_DIR: preflightDataDir,
+        ALETHEIA_RESTORE_SOURCE_DIR: preflightDataDir,
+      },
     },
     {
       id: "privacy-preflight",
@@ -173,6 +217,13 @@ function main() {
     },
   ];
 
+  for (const command of backendCommands) {
+    command.env = {
+      ...isolatedBackendEnvironment,
+      ...command.env,
+    };
+  }
+
   const frontendCommands: PreflightCommand[] = skipFrontend
     ? []
     : [
@@ -181,6 +232,11 @@ function main() {
       ];
 
   const packagingCommands: PreflightCommand[] = [
+    {
+      id: "desktop-sqlcipher-runtime",
+      cwd: desktopDir,
+      args: ["run", "test:sqlcipher-runtime"],
+    },
     {
       id: "package-preflight",
       cwd: backendDir,
@@ -227,6 +283,7 @@ function main() {
         suite: "aletheia-private-preflight-v0",
         checkedAt: new Date().toISOString(),
         packageDir,
+        preflightDataDir,
         releaseEvidenceOut,
         includeUiSmoke,
         skipFrontend,

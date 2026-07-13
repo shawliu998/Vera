@@ -3,17 +3,17 @@ import path from "node:path";
 import { expect, test } from "@playwright/test";
 
 type SmokeState = {
-  projects: Record<string, { matterId: string }>;
+  projects: Record<string, Record<"external-source", { matterId: string }>>;
 };
 
 function matterIdFor(projectName: string) {
   const state = JSON.parse(
     readFileSync(
-      path.join(process.cwd(), "test-results", "aletheia-ui-smoke-state.json"),
+      path.join(process.cwd(), ".next-ui-smoke-state.json"),
       "utf8",
     ),
   ) as SmokeState;
-  const project = state.projects[projectName];
+  const project = state.projects[projectName]?.["external-source"];
   if (!project?.matterId) {
     throw new Error(`Missing UI smoke matter for ${projectName}`);
   }
@@ -52,7 +52,11 @@ test("external-source workpaper is opt-in, reviewable, and persisted", async ({
   await expect(page.getByTestId("legal-qa-status")).toContainText(
     "Legal Q&A answer recorded",
   );
-  await expect(page.getByTestId("legal-qa-record")).toContainText(
+  const legalQaRecord = page
+    .getByTestId("legal-qa-record")
+    .filter({ hasText: "What written notice is required before termination?" })
+    .first();
+  await expect(legalQaRecord).toContainText(
     "What written notice is required before termination?",
   );
   await page.locator('[data-testid^="accept-legal-qa-review-"]').click();
@@ -63,7 +67,7 @@ test("external-source workpaper is opt-in, reviewable, and persisted", async ({
   await expect(page.getByTestId("legal-qa-status")).toContainText(
     "Legal Q&A answer approved",
   );
-  await expect(page.getByTestId("legal-qa-record")).toContainText("accepted");
+  await expect(legalQaRecord).toContainText("accepted");
 
   await page
     .getByTestId("word-handoff-selected-text")
@@ -75,7 +79,8 @@ test("external-source workpaper is opt-in, reviewable, and persisted", async ({
   await expect(page.getByTestId("word-handoff-status")).toContainText(
     "Word Add-in handoff recorded",
   );
-  await expect(page.getByTestId("word-handoff-record")).toContainText(
+  const wordHandoffRecord = page.getByTestId("word-handoff-record").first();
+  await expect(wordHandoffRecord).toContainText(
     "no Word mutation applied",
   );
   await page.locator('[data-testid^="accept-word-handoff-review-"]').click();
@@ -86,7 +91,7 @@ test("external-source workpaper is opt-in, reviewable, and persisted", async ({
   await expect(page.getByTestId("word-handoff-status")).toContainText(
     "Word Add-in handoff approved",
   );
-  await expect(page.getByTestId("word-handoff-record")).toContainText(
+  await expect(wordHandoffRecord).toContainText(
     "accepted",
   );
 
@@ -98,7 +103,7 @@ test("external-source workpaper is opt-in, reviewable, and persisted", async ({
   await expect(page.getByTestId("preference-learning-status")).toContainText(
     "Preference proposal recorded",
   );
-  await expect(page.getByTestId("preference-learning-record")).toContainText(
+  await expect(page.getByTestId("preference-learning-record").last()).toContainText(
     "no automatic application",
   );
   await page.locator('[data-testid^="accept-preference-review-"]').click();
@@ -109,7 +114,7 @@ test("external-source workpaper is opt-in, reviewable, and persisted", async ({
   await expect(page.getByTestId("preference-learning-status")).toContainText(
     "Preference mapped to an approved matter playbook",
   );
-  await expect(page.getByTestId("preference-learning-record")).toContainText(
+  await expect(page.getByTestId("preference-learning-record").last()).toContainText(
     "approved playbook mapping",
   );
 
@@ -128,13 +133,17 @@ test("external-source workpaper is opt-in, reviewable, and persisted", async ({
   await expect(
     page.getByTestId("external-source-workpaper-status"),
   ).toContainText("External-source workpaper recorded");
-  await expect(page.getByTestId("external-source-workpaper-record")).toContainText(
+  const externalSourceRecord = page
+    .getByTestId("external-source-workpaper-record")
+    .filter({ hasText: "https://example.test/issuer" })
+    .first();
+  await expect(externalSourceRecord).toContainText(
     "https://example.test/issuer",
   );
-  await expect(page.getByTestId("external-source-workpaper-record")).toContainText(
+  await expect(externalSourceRecord).toContainText(
     "needs review",
   );
-  await expect(page.getByTestId("external-source-workpaper-record")).toContainText(
+  await expect(externalSourceRecord).toContainText(
     "Provenance validated",
   );
 
@@ -156,24 +165,13 @@ test("external-source workpaper is opt-in, reviewable, and persisted", async ({
   await expect(page.getByTestId("shareholder-graph-status")).toContainText(
     "Shareholder penetration graph recorded",
   );
-  await expect(
-    page.getByTestId("shareholder-penetration-graph-record"),
-  ).toContainText("Controller A");
-  await expect(
-    page.getByTestId("shareholder-penetration-graph-record"),
-  ).toContainText("Controller B");
-  await expect(
-    page.getByTestId("shareholder-penetration-graph-record"),
-  ).toContainText("Holding Co.");
-  await expect(
-    page.getByTestId("shareholder-penetration-graph-record"),
-  ).toContainText("Issuer Co.");
-  await expect(
-    page.getByTestId("shareholder-penetration-graph-record"),
-  ).toContainText("55% recorded ownership");
-  await expect(
-    page.getByTestId("shareholder-penetration-graph-record"),
-  ).toContainText("prior ownership disclosure");
+  const graphRecord = page.getByTestId("shareholder-penetration-graph-record").last();
+  await expect(graphRecord).toContainText("Controller A");
+  await expect(graphRecord).toContainText("Controller B");
+  await expect(graphRecord).toContainText("Holding Co.");
+  await expect(graphRecord).toContainText("Issuer Co.");
+  await expect(graphRecord).toContainText("55% recorded ownership");
+  await expect(graphRecord).toContainText("prior ownership disclosure");
   await page
     .locator('[data-testid^="accept-shareholder-graph-review-"]')
     .click();
@@ -191,13 +189,22 @@ test("external-source workpaper is opt-in, reviewable, and persisted", async ({
   ).toContainText("accepted");
 
   await page.reload();
-  await expect(page.getByTestId("external-source-workpaper-record")).toContainText(
+  await expect(
+    page
+      .getByTestId("external-source-workpaper-record")
+      .filter({ hasText: "https://example.test/issuer" })
+      .first(),
+  ).toContainText(
     "https://example.test/issuer",
   );
   await expect(page.getByTestId("adapter-backed-command-center")).toContainText(
     "external_source_workpaper_persisted",
   );
-  await expect(page.getByTestId("legal-qa-record")).toContainText(
+  await expect(
+    page
+      .getByTestId("legal-qa-record")
+      .filter({ hasText: "What written notice is required before termination?" }),
+  ).toContainText(
     "What written notice is required before termination?",
   );
   await expect(page.getByTestId("adapter-backed-command-center")).toContainText(
@@ -206,7 +213,7 @@ test("external-source workpaper is opt-in, reviewable, and persisted", async ({
   await expect(page.getByTestId("adapter-backed-command-center")).toContainText(
     "legal_qa_answer_approved",
   );
-  await expect(page.getByTestId("word-handoff-record")).toContainText(
+  await expect(page.getByTestId("word-handoff-record").first()).toContainText(
     "no Word mutation applied",
   );
   await expect(page.getByTestId("adapter-backed-command-center")).toContainText(

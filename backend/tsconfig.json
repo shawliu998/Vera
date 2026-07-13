@@ -15,6 +15,19 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src/**/*"],
+  "include": [
+    "src/index.ts",
+    "src/routes/aletheia.ts",
+    "src/routes/aletheiaLocalControl.ts",
+    "src/routes/durableAgentRuns.ts",
+    "src/routes/localGovernance.ts",
+    "src/routes/localModels.ts",
+    "src/lib/aletheia/**/*.ts",
+    "src/lib/upload.ts",
+    "src/lib/convert.ts",
+    "src/middleware/auth.ts",
+    "src/mcp/aletheiaServer.ts",
+    "src/scripts/aletheia*.ts"
+  ],
   "exclude": ["node_modules", "dist"]
 }

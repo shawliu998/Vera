@@ -5,9 +5,11 @@ import Link from "next/link";
 import {
   ArrowRight,
   CheckCircle2,
+  CircleAlert,
   Download,
   FileCheck2,
   History,
+  RefreshCw,
   ShieldCheck,
 } from "lucide-react";
 import {
@@ -25,9 +27,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { downloadJson } from "./exports";
-import { getAuditQueue, getWorkProductSummaries } from "./workflow";
 
-type AuditStatus = "checking" | "connected" | "fallback";
+type AuditStatus = "checking" | "connected" | "unavailable";
 
 type MatterAuditSummary = {
   id: string;
@@ -97,7 +98,7 @@ function overviewToSummary(matter: AletheiaMatterOverview): MatterAuditSummary {
   return {
     id: matter.id,
     title: matter.title,
-    href: `/aletheia/matters/${matter.id}`,
+    href: `/aletheia/matters/${matter.id}/litigation?view=overview`,
     riskLevel: matter.risk_level ?? "low",
     status: matter.status,
     documentCount: matter.document_count,
@@ -129,7 +130,7 @@ function detailToSummary(detail: AletheiaMatterDetail): MatterAuditSummary {
   return {
     id: detail.matter.id,
     title: detail.matter.title,
-    href: `/aletheia/matters/${detail.matter.id}`,
+    href: `/aletheia/matters/${detail.matter.id}/litigation?view=overview`,
     riskLevel: detail.matter.risk_level ?? "low",
     status: detail.matter.status,
     documentCount: detail.documents.length,
@@ -147,15 +148,6 @@ function detailToSummary(detail: AletheiaMatterDetail): MatterAuditSummary {
   };
 }
 
-function emptyMetrics() {
-  return [
-    { label: "Matters", value: 0 },
-    { label: "Audit Events", value: 0 },
-    { label: "Reviews", value: 0 },
-    { label: "Open Gates", value: 0 },
-  ];
-}
-
 export function AletheiaAuditWorkbench() {
   const [status, setStatus] = useState<AuditStatus>("checking");
   const [matters, setMatters] = useState<MatterAuditSummary[]>([]);
@@ -166,10 +158,17 @@ export function AletheiaAuditWorkbench() {
   const [actionFilter, setActionFilter] = useState("all");
   const [savingSnapshot, setSavingSnapshot] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     async function loadAuditWorkspace() {
+      setStatus("checking");
+      setMatters([]);
+      setAuditEvents([]);
+      setReviews([]);
+      setWorkProducts([]);
+      setSaveMessage("");
       try {
         const overviews = await listAletheiaMatters();
         const details = await Promise.all(
@@ -188,7 +187,7 @@ export function AletheiaAuditWorkbench() {
               detail.auditEvents.map((event) => ({
                 ...event,
                 matterTitle: detail.matter.title,
-                href: `/aletheia/matters/${detail.matter.id}`,
+                href: `/aletheia/matters/${detail.matter.id}/litigation?view=overview`,
               })),
             )
             .sort((a, b) => b.created_at.localeCompare(a.created_at)),
@@ -199,7 +198,7 @@ export function AletheiaAuditWorkbench() {
               detail.reviews.map((review) => ({
                 ...review,
                 matterTitle: detail.matter.title,
-                href: `/aletheia/matters/${detail.matter.id}`,
+                href: `/aletheia/matters/${detail.matter.id}/litigation?view=positions`,
               })),
             )
             .sort((a, b) => b.created_at.localeCompare(a.created_at)),
@@ -210,35 +209,23 @@ export function AletheiaAuditWorkbench() {
               detail.workProducts.map((workProduct) => ({
                 ...workProduct,
                 matterTitle: detail.matter.title,
-                href: `/aletheia/matters/${detail.matter.id}`,
+                href: `/aletheia/matters/${detail.matter.id}/litigation?view=artifacts`,
               })),
             )
             .sort((a, b) => b.created_at.localeCompare(a.created_at)),
         );
         setStatus("connected");
       } catch {
-        if (!cancelled) setStatus("fallback");
+        if (!cancelled) setStatus("unavailable");
       }
     }
     void loadAuditWorkspace();
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  const fallbackEvents = useMemo(() => getAuditQueue(), []);
-  const fallbackWorkProducts = useMemo(() => getWorkProductSummaries(), []);
+  }, [retryKey]);
 
   const metrics = useMemo(() => {
-    if (status === "fallback") {
-      return [
-        { label: "Matters", value: 1 },
-        { label: "Audit Events", value: fallbackEvents.length },
-        { label: "Reviews", value: 0 },
-        { label: "Open Gates", value: 0 },
-      ];
-    }
-    if (status === "checking") return emptyMetrics();
     return [
       { label: "Matters", value: matters.length },
       { label: "Audit Events", value: auditEvents.length },
@@ -251,13 +238,7 @@ export function AletheiaAuditWorkbench() {
         ),
       },
     ];
-  }, [
-    auditEvents.length,
-    fallbackEvents.length,
-    matters,
-    reviews.length,
-    status,
-  ]);
+  }, [auditEvents.length, matters, reviews.length]);
 
   const readinessItems = useMemo(
     () => [
@@ -334,28 +315,21 @@ export function AletheiaAuditWorkbench() {
   );
 
   function exportFilteredAudit() {
+    if (status !== "connected") return;
     downloadJson("aletheia-filtered-audit-workbench", {
       schemaVersion: "aletheia-audit-workbench-export-v0",
       exportedAt: new Date().toISOString(),
-      source: status === "connected" ? "local_repository" : "demo_fallback",
+      source: "local_repository",
       filters: {
         query: query.trim(),
         action: actionFilter,
       },
-      timelineEventCount:
-        status === "connected"
-          ? filteredAuditEvents.length
-          : fallbackEvents.length,
-      matterCount: status === "connected" ? filteredMatters.length : 0,
-      workProductCount:
-        status === "connected"
-          ? workProducts.length
-          : fallbackWorkProducts.length,
-      auditEvents:
-        status === "connected" ? filteredAuditEvents : fallbackEvents,
-      matters: status === "connected" ? filteredMatters : [],
-      workProducts:
-        status === "connected" ? workProducts : fallbackWorkProducts,
+      timelineEventCount: filteredAuditEvents.length,
+      matterCount: filteredMatters.length,
+      workProductCount: workProducts.length,
+      auditEvents: filteredAuditEvents,
+      matters: filteredMatters,
+      workProducts,
     });
   }
 
@@ -409,6 +383,52 @@ export function AletheiaAuditWorkbench() {
     }
   }
 
+  if (status !== "connected") {
+    return (
+      <section
+        data-testid="aletheia-audit-workbench"
+        className="min-h-full bg-white px-5 py-6 md:px-8"
+      >
+        <h1 className="text-[22px] font-semibold text-gray-950">
+          Audit Workbench
+        </h1>
+        {status === "checking" ? (
+          <p className="mt-4 text-sm text-gray-500">
+            Connecting to the local service...
+          </p>
+        ) : (
+          <div
+            role="alert"
+            data-testid="audit-service-unavailable"
+            className="mt-5 max-w-2xl border border-gray-300 p-5"
+          >
+            <div className="flex items-start gap-3">
+              <CircleAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+              <div>
+                <h2 className="text-sm font-semibold text-gray-950">
+                  Local service unavailable
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-gray-600">
+                  Vera could not load audit records and has not substituted demo
+                  records. Reconnect the local service, then retry.
+                </p>
+                <p className="mt-2 text-xs text-gray-500">0 records</p>
+                <button
+                  type="button"
+                  onClick={() => setRetryKey((value) => value + 1)}
+                  className="mt-4 inline-flex h-9 items-center gap-2 border border-gray-300 px-3 text-sm font-medium text-gray-800 hover:bg-gray-50"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Retry
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+    );
+  }
+
   return (
     <section
       data-testid="aletheia-audit-workbench"
@@ -416,27 +436,21 @@ export function AletheiaAuditWorkbench() {
     >
       <div className="flex flex-wrap items-center justify-between gap-4 px-8 py-4">
         <div>
-          <h1 className="font-serif text-2xl font-medium text-gray-900">
+          <h1 className="text-[22px] font-semibold text-gray-950">
             Audit Workbench
           </h1>
           <p className="mt-1 text-xs text-gray-400">
-            {status === "connected"
-              ? "Live local audit records from persisted matters."
-              : status === "checking"
-                ? "Checking local audit repository..."
-                : "Demo fallback audit records."}
+            Live local audit records from persisted matters.
           </p>
         </div>
         <Badge
           variant="outline"
           className={cn(
             "rounded-md px-2 py-1 text-xs",
-            status === "connected"
-              ? "border-emerald-100 bg-emerald-50 text-emerald-700"
-              : "border-gray-200 bg-gray-50 text-gray-600",
+            "border-emerald-100 bg-emerald-50 text-emerald-700",
           )}
         >
-          {status === "connected" ? "Local Repository" : titleize(status)}
+          Local Repository
         </Badge>
         <Button
           type="button"
@@ -452,7 +466,7 @@ export function AletheiaAuditWorkbench() {
           type="button"
           variant="outline"
           data-testid="save-audit-snapshot"
-          disabled={status !== "connected" || savingSnapshot}
+          disabled={savingSnapshot}
           onClick={() => void saveFilteredAuditSnapshot()}
           className="rounded-md border-gray-200 text-gray-700 hover:bg-gray-50"
         >
@@ -510,15 +524,12 @@ export function AletheiaAuditWorkbench() {
               Matter Audit Timeline
             </h2>
             <span className="ml-auto text-xs text-gray-400">
-              {status === "connected"
-                ? `${filteredAuditEvents.length} events`
-                : `${fallbackEvents.length} demo events`}
+              {filteredAuditEvents.length} events
             </span>
           </div>
 
           <div className="mt-4 space-y-0" data-testid="audit-timeline-results">
-            {status === "connected"
-              ? filteredAuditEvents.slice(0, 40).map((event) => (
+            {filteredAuditEvents.slice(0, 40).map((event) => (
                   <Link
                     key={event.id}
                     href={event.href}
@@ -545,27 +556,9 @@ export function AletheiaAuditWorkbench() {
                       {event.workflow_version ?? "manual"}
                     </p>
                   </Link>
-                ))
-              : fallbackEvents.map((event) => (
-                  <div
-                    key={event.id}
-                    className="relative border-l border-gray-200 pb-6 pl-5 last:pb-0"
-                  >
-                    <div className="absolute -left-1 top-1.5 h-2 w-2 rounded-full bg-gray-900" />
-                    <p className="text-sm font-medium text-gray-900">
-                      {titleize(event.action)}
-                    </p>
-                    <p className="mt-1 text-sm text-gray-500">
-                      {event.matterTitle}
-                    </p>
-                    <p className="mt-1 text-xs text-gray-400">
-                      {formatAuditTimestamp(event.timestamp)} ·{" "}
-                      {event.workflowVersion ?? "manual"}
-                    </p>
-                  </div>
                 ))}
-            {status === "connected" && filteredAuditEvents.length === 0 && (
-              <p className="rounded-md border border-dashed border-gray-200 p-4 text-sm text-gray-500">
+            {filteredAuditEvents.length === 0 && (
+              <p className="border border-gray-200 p-4 text-sm text-gray-500">
                 No persisted audit events match the current filters. Create a
                 matter workflow to start the local audit trail.
               </p>
@@ -643,7 +636,7 @@ export function AletheiaAuditWorkbench() {
                 </p>
               </Link>
             ))}
-            {status === "connected" && filteredMatters.length === 0 && (
+            {filteredMatters.length === 0 && (
               <p className="text-sm text-gray-500">
                 No local matters match the current filters.
               </p>
@@ -657,8 +650,7 @@ export function AletheiaAuditWorkbench() {
             </h2>
           </div>
           <div className="mt-4 space-y-3" data-testid="audit-work-products">
-            {status === "connected"
-              ? recentWorkProducts.slice(0, 10).map((item) => (
+            {recentWorkProducts.slice(0, 10).map((item) => (
                   <Link
                     key={item.id}
                     href={item.href}
@@ -682,25 +674,6 @@ export function AletheiaAuditWorkbench() {
                       {item.title} · {item.matterTitle}
                     </p>
                   </Link>
-                ))
-              : fallbackWorkProducts.map((item) => (
-                  <div
-                    key={item.id}
-                    className="border-b border-gray-100 pb-3 last:border-b-0"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-sm text-gray-800">{item.kind}</p>
-                      <Badge
-                        variant="outline"
-                        className="rounded-md border-gray-200 bg-white px-2 py-0 text-[11px] text-gray-600"
-                      >
-                        {titleize(item.status)}
-                      </Badge>
-                    </div>
-                    <p className="mt-1 text-xs leading-5 text-gray-500">
-                      {item.title}
-                    </p>
-                  </div>
                 ))}
           </div>
         </aside>

@@ -8,7 +8,6 @@ import { createAletheiaRepository } from "@/lib/aletheia";
 async function main() {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "aletheia-v1-source-"));
   process.env.ALETHEIA_DATA_DIR = dataDir;
-  process.env.ALETHEIA_STORAGE_DRIVER = "local";
 
   try {
     const repo = createAletheiaRepository();
@@ -98,7 +97,7 @@ async function main() {
     assert.equal(index.source_links.length, 1);
     assert.equal(index.source_links[0].evidence_item_id, evidence.id);
     assert.equal(index.source_links[0].source_chunk_id, searchResults[0].chunk_id);
-    assert.match(index.limitations.join(" "), /Supabase V1 document retrieval/);
+    assert.match(index.limitations.join(" "), /full document\/page preview/);
 
     console.log(
       "Aletheia backend/API scoping audit passed: local V1 source index lists documents, chunks, and evidence source links.",

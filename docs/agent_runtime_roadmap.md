@@ -48,16 +48,13 @@ matter context -> plan -> bounded tool loop -> evidence -> work product
 
    Local mode supports `resumeAgentRun(runId, checkpointId)` for edited/responded
    checkpoints. Resume appends a trace step, creates a revised Draft Memo, and
-   writes an `agent_run_resumed` audit event. Supabase-backed resume
-   intentionally fails closed until the production schema and policies are
-   explicitly added.
+   writes an `agent_run_resumed` audit event.
 
 3. Playbook Improvement Proposals - started
 
    Local mode converts reviewer feedback and review tags into draft playbook
    changes. Proposals remain separate from approved playbooks until a human
-   approves the update. Supabase-backed proposals intentionally fail closed
-   until the production schema and policies are explicitly added.
+   approves the update.
 
 4. Specialist Roles - started
 

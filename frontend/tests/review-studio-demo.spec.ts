@@ -1,64 +1,42 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { expect, test } from "@playwright/test";
 
-test("demo Review Studio completes approval path and records blockers", async ({
-  page,
-}) => {
+type SmokeState = {
+  projects: Record<string, Record<"review", { matterId: string; matterTitle: string }>>;
+};
+
+function smokeState(): SmokeState {
+  return JSON.parse(
+    readFileSync(
+      path.join(process.cwd(), ".next-ui-smoke-state.json"),
+      "utf8",
+    ),
+  ) as SmokeState;
+}
+
+test("seeded local matter retains fail-closed review gates", async ({ page }, testInfo) => {
+  const project = smokeState().projects[testInfo.project.name]?.review;
+  if (!project) throw new Error(`Missing UI smoke state for ${testInfo.project.name}`);
+
   const consoleErrors: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text());
   });
   page.on("pageerror", (error) => consoleErrors.push(error.message));
 
-  await page.goto("/aletheia/matters/matter-demo-legal-001");
-  await expect(page.getByText("Red Flag Dashboard", { exact: true })).toBeVisible();
-  await expect(page.getByText("Risk Register", { exact: true })).toBeVisible();
-  await expect(page.getByText("Final Export Gate", { exact: true })).toBeVisible();
-  await expect(page.getByTestId("review-studio-final-export-gate")).toHaveText(
-    "blocked",
-  );
+  await page.goto(`/aletheia/matters/${project.matterId}`);
+  await expect(page.getByRole("heading", { name: project.matterTitle })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Trust gates" })).toBeVisible();
+  await expect(page.getByText("Final export blocked").first()).toBeVisible();
   await expect(
-    page.getByText("Final export requires explicit expert approval."),
+    page.getByText("Open review comments remain on the memo or memo sections."),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Resolve or reject review comments before final export."),
   ).toBeVisible();
 
-  await page.getByTestId("approve-review-studio-final-export").click();
-  await expect(page.getByTestId("review-studio-final-export-gate")).toHaveText(
-    "blocked",
-  );
-  await expect(
-    page.getByText("Final export requires explicit expert approval."),
-  ).not.toBeVisible();
-  await expect(
-    page.getByText("Unresolved review on", { exact: false }).first(),
-  ).toBeVisible();
-
-  await page.goto("/aletheia/matters/matter-demo-legal-001");
-  await expect(page.getByTestId("review-studio-final-export-gate")).toHaveText(
-    "blocked",
-  );
-
-  await page.getByTestId("fact-override-ev-1").fill(
-    "Reviewer narrowed this fact to the delivery date only.",
-  );
-  await page.getByTestId("set-risk-claim-breach-medium").click();
-  await page.getByTestId("reject-evidence-ev-1").click();
-  await page.getByTestId("flag-selected-issue-omission").click();
-  await page
-    .getByTestId("supplemental-material-input")
-    .fill("Request acceptance testing records.");
-  await page.getByTestId("request-supplemental-material").click();
-
-  await expect(page.getByTestId("evidence-review-status-ev-1")).toHaveText(
-    "review: rejected",
-  );
-  await expect(page.getByTestId("review-log-review-fact-ev-1")).toBeVisible();
-  await expect(page.getByTestId("review-log-review-risk-claim-breach")).toBeVisible();
-  await expect(
-    page.getByTestId("review-log-review-omission-claim-breach"),
-  ).toBeVisible();
-  await expect(page.getByTestId("review-log-review-material-0")).toBeVisible();
-  await expect(page.getByTestId("review-studio-final-export-gate")).toHaveText(
-    "blocked",
-  );
-
+  await page.reload();
+  await expect(page.getByText("Final export blocked").first()).toBeVisible();
   expect(consoleErrors).toEqual([]);
 });

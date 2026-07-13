@@ -80,7 +80,6 @@ async function closeServer(server: http.Server) {
 
 async function main() {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "aletheia-v1-route-"));
-  process.env.ALETHEIA_STORAGE_DRIVER = "local";
   process.env.ALETHEIA_AUTH_MODE = "single_user";
   process.env.ALETHEIA_DATA_DIR = dataDir;
   process.env.ALETHEIA_LOCAL_USER_ID = "v1-route-user";

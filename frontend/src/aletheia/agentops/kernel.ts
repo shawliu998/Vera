@@ -80,7 +80,13 @@ export type KernelToolPolicyDecision = {
 export type KernelDomainPack = {
   id: string;
   name: string;
-  matter_type: "due_diligence" | "legal_review" | "compliance_review" | "audit_review" | "regulatory_response" | "other";
+  matter_type:
+    | "due_diligence"
+    | "legal_review"
+    | "compliance_review"
+    | "audit_review"
+    | "regulatory_response"
+    | "other";
   kernel_modules: KernelModule[];
   artifact_focus: string[];
   gate_focus: GateResult["gate_type"][];
@@ -181,15 +187,17 @@ export function createKernelProfile(
     ...DEFAULT_KERNEL_TOOL_POLICY,
     ...overrides.policy,
     allowed_tools:
-      overrides.policy?.allowed_tools ?? DEFAULT_KERNEL_TOOL_POLICY.allowed_tools,
+      overrides.policy?.allowed_tools ??
+      DEFAULT_KERNEL_TOOL_POLICY.allowed_tools,
     blocked_tools:
-      overrides.policy?.blocked_tools ?? DEFAULT_KERNEL_TOOL_POLICY.blocked_tools,
+      overrides.policy?.blocked_tools ??
+      DEFAULT_KERNEL_TOOL_POLICY.blocked_tools,
   };
 
   return {
     version: ALETHEIA_KERNEL_VERSION,
     positioning:
-      "Aletheia is a local-first agent harness for sensitive professional work.",
+      "Vera is a local-first agent harness for sensitive professional work.",
     modules: [...KERNEL_MODULES],
     default_policy: defaultPolicy,
     domain_pack: overrides.domain_pack ?? PRIVATE_CONTRACT_DUE_DILIGENCE_PACK,
@@ -361,7 +369,10 @@ export function decideKernelSkillActivation(params: {
     playbook?.status === "approved" &&
     Boolean(playbook.approved_by) &&
     Boolean(playbook.approved_at);
-  const canModifySkill = evaluateKernelToolPolicy(policy, "modify_skill").allowed;
+  const canModifySkill = evaluateKernelToolPolicy(
+    policy,
+    "modify_skill",
+  ).allowed;
   const active =
     params.skill.approval_status === "approved" &&
     Boolean(hasApprovedPlaybook) &&
@@ -370,7 +381,8 @@ export function decideKernelSkillActivation(params: {
   if (active) {
     return {
       active: true,
-      reason: "Skill has approved status, approved playbook provenance, and policy permission",
+      reason:
+        "Skill has approved status, approved playbook provenance, and policy permission",
       skill_id: params.skill.id,
       approval_status: params.skill.approval_status,
       requires_human_approval: false,

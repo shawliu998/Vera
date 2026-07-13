@@ -49,10 +49,6 @@ function main() {
     root,
     "backend/src/lib/aletheia/localRepository.ts",
   );
-  const supabaseRepository = readText(
-    root,
-    "backend/src/lib/aletheia/supabaseRepository.ts",
-  );
   const routes = readText(root, "backend/src/routes/aletheia.ts");
   const mcp = readText(root, "backend/src/mcp/aletheiaServer.ts");
   const localRegression = readText(
@@ -135,21 +131,6 @@ function main() {
         "playbook_improvement_proposed",
       ]),
       "Local repository must keep memory/playbooks matter-scoped, audited, human-approved, and proposal-only for agent-generated improvements.",
-    ),
-    check(
-      "supabase-knowledge-boundary",
-      hasAll(supabaseRepository, [
-        "aletheia_matter_memory_items",
-        "aletheia_playbooks",
-        "loadOwnedMatter(ctx, matterId)",
-        'status: "draft"',
-        'status: "approved"',
-        "approved_by: ctx.userId",
-        "playbook_approved",
-        "CapabilityNotAvailableError",
-        "Playbook improvement proposals are currently available only in local Aletheia storage mode.",
-      ]),
-      "Supabase adapter must keep memory/playbooks matter-scoped and fail closed for local-only playbook improvement proposals.",
     ),
     check(
       "human-approval-routes",

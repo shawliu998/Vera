@@ -2,6 +2,7 @@ export const TEMPLATES = new Set([
   "legal_matter_review",
   "compliance_impact_review",
   "deal_due_diligence",
+  "civil_litigation",
 ]);
 
 export const MATTER_STATUSES = new Set([
@@ -20,6 +21,10 @@ export const REVIEW_TARGET_TYPES = new Set([
   "memo_section",
   "work_product",
   "matter",
+  "fact",
+  "claim",
+  "deadline",
+  "procedural_event",
 ]);
 
 export const REVIEW_TAGS = new Set([
@@ -65,9 +70,24 @@ export const WORK_PRODUCT_KINDS = new Set([
   "feedback_export",
   "registry_snapshot",
   "external_source_workpaper",
+  "legal_research_case_context",
+  "legal_research_request",
+  "legal_research_issue_tree",
+  "legal_research_query_plan",
+  "legal_research_search_result",
+  "legal_research_excerpt",
+  "legal_research_input_manifest",
+  "legal_research_memo",
   "shareholder_penetration_graph",
   "legal_qa_answer",
+  "legal_opinion",
   "word_addin_handoff",
+  "claim_defense_matrix",
+  "procedural_clock",
+  "litigation_brief",
+  "hearing_plan",
+  "hearing_bundle_index",
+  "evidence_catalog",
 ]);
 
 export const WORK_PRODUCT_STATUSES = new Set([
@@ -130,11 +150,45 @@ export function auditActionForWorkProduct(kind: string) {
   if (kind === "external_source_workpaper") {
     return "external_source_workpaper_saved";
   }
+  if (kind === "legal_research_case_context") {
+    return "legal_research_case_context_saved";
+  }
+  if (kind === "legal_research_request") {
+    return "legal_research_request_saved";
+  }
+  if (kind === "legal_research_issue_tree") {
+    return "legal_research_issue_tree_saved";
+  }
+  if (kind === "legal_research_query_plan") {
+    return "legal_research_query_plan_saved";
+  }
+  if (kind === "legal_research_search_result") {
+    return "legal_research_candidates_saved";
+  }
+  if (kind === "legal_research_excerpt") {
+    return "legal_research_excerpt_confirmed";
+  }
+  if (kind === "legal_research_input_manifest") {
+    return "legal_research_input_manifest_saved";
+  }
+  if (kind === "legal_research_memo") {
+    return "legal_research_memo_saved";
+  }
   if (kind === "shareholder_penetration_graph") {
     return "shareholder_penetration_graph_saved";
   }
   if (kind === "legal_qa_answer") return "legal_qa_answer_saved";
   if (kind === "word_addin_handoff") return "word_addin_handoff_saved";
+  if (kind === "claim_defense_matrix") {
+    return "claim_defense_matrix_generated";
+  }
+  if (kind === "procedural_clock") return "procedural_clock_generated";
+  if (kind === "litigation_brief") return "litigation_brief_generated";
+  if (kind === "hearing_plan") return "hearing_plan_generated";
+  if (kind === "hearing_bundle_index") {
+    return "hearing_bundle_index_generated";
+  }
+  if (kind === "evidence_catalog") return "evidence_catalog_generated";
   return "work_product_saved";
 }
 
@@ -1259,6 +1313,10 @@ export function buildAgentWorkflowGraph(
         "feedback_dataset_export",
         "playbook_update",
         "external_source_use",
+        "litigation_artifact_export",
+        "litigation_matter_audit_export",
+        "litigation_template_publish",
+        "litigation_template_retire",
       ],
     },
   };

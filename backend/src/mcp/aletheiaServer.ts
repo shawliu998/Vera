@@ -5,7 +5,6 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import * as z from "zod/v4";
 import { createAletheiaRepository } from "../lib/aletheia";
 import {
-  ACTORS,
   GENERATED_BY,
   REVIEW_TAGS,
   REVIEW_TARGET_TYPES,
@@ -16,6 +15,10 @@ import {
   objectPayload,
   text,
 } from "../lib/aletheia/domain";
+import {
+  externalAuditActionHelp,
+  isAllowedExternalAuditAction,
+} from "../lib/aletheia/auditActionPolicy";
 import { ApprovalRequiredError } from "../lib/aletheia/repository";
 import type { AletheiaUserContext } from "../lib/aletheia/repository";
 
@@ -281,15 +284,19 @@ server.registerTool(
         throw new Error("targetType is invalid");
       }
       if (!REVIEW_TAGS.has(tag)) throw new Error("tag is invalid");
-      const result = await repository().addReview(userContext(), args.matterId, {
-        targetType,
-        targetId: text(args.targetId, 240),
-        tag,
-        comment: text(args.comment, 4000),
-        workProductId: nullableText(args.workProductId, 120),
-        evidenceItemId: nullableText(args.evidenceItemId, 120),
-        reviewerName: nullableText(args.reviewerName, 240),
-      });
+      const result = await repository().addReview(
+        userContext(),
+        args.matterId,
+        {
+          targetType,
+          targetId: text(args.targetId, 240),
+          tag,
+          comment: text(args.comment, 4000),
+          workProductId: nullableText(args.workProductId, 120),
+          evidenceItemId: nullableText(args.evidenceItemId, 120),
+          reviewerName: nullableText(args.reviewerName, 240),
+        },
+      );
       if (!result) throw new Error("Matter not found");
       return jsonToolResult(result);
     } catch (error) {
@@ -319,14 +326,16 @@ server.registerTool(
   },
   async (args) => {
     try {
-      const actor = text(args.actor, 40) || "agent";
-      if (!ACTORS.has(actor)) throw new Error("actor is invalid");
+      const action = text(args.action, 120);
+      if (!isAllowedExternalAuditAction("agent", action)) {
+        throw new Error(externalAuditActionHelp("agent"));
+      }
       const result = await repository().appendAuditEvent(
         userContext(),
         args.matterId,
         {
-          actor: actor as "system" | "agent" | "human",
-          action: text(args.action, 120),
+          actor: "agent",
+          action,
           workflowVersion: nullableText(args.workflowVersion, 120),
           model: nullableText(args.model, 120),
           details: objectPayload(args.details),

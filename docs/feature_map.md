@@ -45,8 +45,8 @@ Representative artifacts:
 - `red_flag_memo`
 - `final_memo`
 
-Status: MVP path exists for local demos and private pilot evaluation. Supabase
-document upload/search remains a documented boundary.
+Status: MVP path exists for local demos and private pilot evaluation. Storage
+is local SQLite plus owner-only filesystem data.
 
 ## Domain Packs
 
@@ -65,8 +65,8 @@ Purpose: configure the Kernel for specific sensitive-work workflows.
   review notes, and audit trail.
 
 Status: the local MVP path exists for demos and private pilot evaluation. The
-first pack should lead public storytelling. Supabase document upload/search and
-production deployment remain documented boundaries.
+first pack should lead public storytelling. Production SaaS deployment remains
+outside the current boundary.
 
 ## Reviewer Takeaway
 

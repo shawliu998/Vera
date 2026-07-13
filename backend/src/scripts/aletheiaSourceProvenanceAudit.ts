@@ -51,10 +51,6 @@ function main() {
     root,
     "backend/src/lib/aletheia/localRepository.ts",
   );
-  const supabaseRepository = readText(
-    root,
-    "backend/src/lib/aletheia/supabaseRepository.ts",
-  );
   const domain = readText(root, "backend/src/lib/aletheia/domain.ts");
   const localRegression = readText(
     root,
@@ -126,20 +122,6 @@ function main() {
         "evidence_mapped",
       ]),
       "Local evidence mapping must promote a selected source chunk into a source-linked Evidence Item and audit the mapping.",
-    ),
-    check(
-      "supabase-source-boundary",
-      hasAll(supabaseRepository, [
-        "createEvidenceItem",
-        "document_id: chunk.matter_document_id",
-        "source_chunk_id: chunk.id",
-        "quote: chunk.text",
-        "quote_start: chunk.quote_start ?? null",
-        "quote_end: chunk.quote_end ?? null",
-        "support_status: input.supportStatus",
-        "evidence_mapped",
-      ]),
-      "Supabase compatibility adapter must preserve the same source chunk, quote, offsets, support status, and audit metadata contract.",
     ),
     check(
       "work-products-keep-provenance",

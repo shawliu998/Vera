@@ -28,7 +28,6 @@ defaults, and high-risk approval posture.
 
    ```bash
    cd backend
-   ALETHEIA_STORAGE_DRIVER=local \
    ALETHEIA_AUTH_MODE=single_user \
    ALETHEIA_DATA_DIR=/tmp/aletheia-screenshot-data \
    ALETHEIA_UI_SMOKE_FRONTEND_URL=http://127.0.0.1:3014 \
@@ -40,7 +39,6 @@ defaults, and high-risk approval posture.
    ```bash
    cd backend
    FRONTEND_URL=http://127.0.0.1:3014 \
-   ALETHEIA_STORAGE_DRIVER=local \
    ALETHEIA_AUTH_MODE=single_user \
    ALETHEIA_DATA_DIR=/tmp/aletheia-screenshot-data \
    PORT=3114 \

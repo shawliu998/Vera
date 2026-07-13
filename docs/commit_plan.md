@@ -90,18 +90,10 @@ git add -- \
   backend/.env.example \
   backend/package.json \
   backend/package-lock.json \
-  backend/migrations/20260708_01_aletheia_workspace.sql \
-  backend/migrations/20260708_03_aletheia_document_chunks.sql \
-  backend/migrations/20260708_04_aletheia_final_memo_approval.sql \
-  backend/migrations/20260708_05_aletheia_playbooks_memory.sql \
-  backend/migrations/20260709_01_aletheia_agent_budget_policy.sql \
-  backend/migrations/20260709_02_aletheia_registry_snapshots.sql \
-  backend/schema.sql \
   backend/src/lib/aletheia/domain.ts \
   backend/src/lib/aletheia/index.ts \
   backend/src/lib/aletheia/localRepository.ts \
   backend/src/lib/aletheia/repository.ts \
-  backend/src/lib/aletheia/supabaseRepository.ts \
   backend/src/lib/aletheia/documentParser.ts \
   backend/src/lib/generatedOffice.ts \
   backend/src/middleware/auth.ts \
@@ -372,8 +364,7 @@ git diff --check
   `frontend/src/app/lib/aletheiaApi.ts` are intentionally large and should be
   reviewed carefully before commit. Splitting them hunk-by-hunk is possible but
   would be slower and higher risk at this stage.
-- The default Supabase path remains a compatibility path. Aletheia document
-  workflows are expected to run with `ALETHEIA_STORAGE_DRIVER=local`.
+- Aletheia uses the local SQLite/filesystem repository unconditionally.
 - `node:sqlite` emits an ExperimentalWarning during local tests. This is
   expected with the current Node runtime.
 - The remaining changes should not be committed as one patch. Use the groups

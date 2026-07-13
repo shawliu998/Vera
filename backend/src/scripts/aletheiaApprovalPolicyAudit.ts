@@ -12,12 +12,16 @@ const EXPORT_APPROVAL_ACTIONS = [
   "audit_pack_export",
   "feedback_dataset_export",
   "final_memo_export",
+  "litigation_artifact_export",
+  "litigation_matter_audit_export",
 ];
 
 const HIGH_RISK_POLICY_ACTIONS = [
   ...EXPORT_APPROVAL_ACTIONS,
   "playbook_update",
   "external_source_use",
+  "litigation_template_publish",
+  "litigation_template_retire",
 ];
 
 const HIGH_RISK_WORK_PRODUCTS = ["audit_pack", "feedback_export", "final_memo"];
@@ -56,11 +60,8 @@ function main() {
     root,
     "backend/src/lib/aletheia/localRepository.ts",
   );
-  const supabaseRepository = readText(
-    root,
-    "backend/src/lib/aletheia/supabaseRepository.ts",
-  );
   const routes = readText(root, "backend/src/routes/aletheia.ts");
+  const litigationRoutes = readText(root, "backend/src/routes/litigation.ts");
   const regression = readText(
     root,
     "backend/src/scripts/aletheiaLocalRegression.ts",
@@ -96,13 +97,9 @@ function main() {
     hasAll(localRepository, HIGH_RISK_WORK_PRODUCTS) &&
     hasAll(localRepository, EXPORT_APPROVAL_ACTIONS) &&
     localRepository.includes("loadApprovedApprovalCheckpoint") &&
-    localRepository.includes("throw new ApprovalRequiredError");
-  const supabaseExportGatePresent =
-    hasAll(supabaseRepository, HIGH_RISK_WORK_PRODUCTS) &&
-    hasAll(supabaseRepository, EXPORT_APPROVAL_ACTIONS) &&
-    supabaseRepository.includes("loadApprovedApprovalCheckpoint") &&
-    supabaseRepository.includes("throw new ApprovalRequiredError");
-
+    localRepository.includes("throw new ApprovalRequiredError") &&
+    localRepository.includes("exportLitigationArtifact(") &&
+    localRepository.includes('action: "litigation_artifact_exported"');
   const checks: ApprovalPolicyCheck[] = [
     check(
       "workflow-graph-high-risk-policy",
@@ -115,28 +112,37 @@ function main() {
     check(
       "local-repository-export-gates",
       localExportGatePresent,
-      "Local repository must require approved checkpoints before audit pack, feedback dataset, or final memo export work products.",
-    ),
-    check(
-      "supabase-repository-export-gates",
-      supabaseExportGatePresent,
-      "Supabase repository must keep parity with local export approval gates.",
+      "Local repository must require approved checkpoints before audit pack, feedback dataset, final memo, litigation artifact, or litigation matter audit export.",
     ),
     check(
       "approval-request-route-allowlist",
       routes.includes("/matters/:matterId/approvals") &&
         hasAll(routes, EXPORT_APPROVAL_ACTIONS) &&
+        routes.includes('"litigation_template_publish"') &&
+        routes.includes('"litigation_template_retire"') &&
         routes.includes("action is invalid") &&
         routes.includes("ApprovalRequiredError"),
       "HTTP approval route must allow only known high-risk export actions and surface approval_required errors.",
     ),
     check(
+      "litigation-export-route-surfaces-approval-required",
+      litigationRoutes.includes("exportLitigationArtifact(") &&
+        litigationRoutes.includes("createLitigationMatterAuditExport(") &&
+        litigationRoutes.includes('code: "approval_required"'),
+      "Litigation artifact and matter-audit exports must use the shared approval_required error contract.",
+    ),
+    check(
+      "security-policy-covers-litigation-export",
+      routes.includes("approvalRequiredFor") &&
+        routes.includes('"litigation_artifact_export"') &&
+        routes.includes('"litigation_matter_audit_export"'),
+      "Backend security policy must advertise litigation artifact and matter-audit exports as approval-gated.",
+    ),
+    check(
       "playbook-human-approval-route",
       routes.includes("/matters/:matterId/playbooks/:playbookId/approve") &&
         localRepository.includes('action: "playbook_approved"') &&
-        supabaseRepository.includes('action: "playbook_approved"') &&
-        localRepository.includes("status = 'approved'") &&
-        supabaseRepository.includes('status: "approved"'),
+        localRepository.includes("status = 'approved'"),
       "Playbook approval must remain an explicit human route with audited approved status.",
     ),
     check(
@@ -146,12 +152,7 @@ function main() {
         localRepository.includes("normalizeSkillCandidate") &&
         localRepository.includes("loadEvalCasesByIds") &&
         localRepository.includes('action: "approved_skill_activated"') &&
-        localRepository.includes(
-          "aletheia-approved-skill-playbook-local-v1",
-        ) &&
-        supabaseRepository.includes(
-          "Approved skill activation is currently available only in local Aletheia storage mode.",
-        ) &&
+        localRepository.includes("aletheia-approved-skill-playbook-local-v1") &&
         approvedSkillActivation.includes("created_from_eval_case_ids: []") &&
         approvedSkillActivation.includes("approved_skill_activated"),
       "Approved skill activation must require a local review-derived eval case, explicit human route approval, approved playbook persistence, and an audit event.",
@@ -175,8 +176,20 @@ function main() {
       "audit-integrity-checks-approved-links",
       auditIntegrity.includes("high-risk-exports-have-approved-checkpoints") &&
         auditIntegrity.includes("approvalCheckpointId") &&
-        hasAll(auditIntegrity, EXPORT_APPROVAL_ACTIONS),
+        hasAll(auditIntegrity, EXPORT_APPROVAL_ACTIONS) &&
+        auditIntegrity.includes("aletheia_exports") &&
+        auditIntegrity.includes("litigation_artifact_exported"),
       "Audit integrity must verify high-risk exports resolve to approved checkpoint links.",
+    ),
+    check(
+      "frontend-approval-action-contract",
+      frontendApi.includes("AletheiaApprovalAction") &&
+        frontendApi.includes('"litigation_artifact_export"') &&
+        frontendApi.includes('"litigation_matter_audit_export"') &&
+        frontendApi.includes('"litigation_template_publish"') &&
+        frontendApi.includes('"litigation_template_retire"') &&
+        frontendApi.includes("approvalRequiredFor: AletheiaApprovalAction[]"),
+      "Frontend approval types and security policy must include litigation artifact export.",
     ),
     check(
       "final-memo-requires-persisted-gate-snapshot",
@@ -194,21 +207,13 @@ function main() {
           "GATE_AUDIT_ACTIONS.finalExportBlocked",
           "gateSnapshotAuditEventId",
         ]) &&
-        hasAll(supabaseRepository, [
-          "persistFinalMemoGateAuthorization",
-          "persistGateSnapshot",
-          "GATE_AUDIT_ACTIONS.resultsPersisted",
-          "GATE_AUDIT_ACTIONS.finalExportAuthorized",
-          "GATE_AUDIT_ACTIONS.finalExportBlocked",
-          "gateSnapshotAuditEventId",
-        ]) &&
         routes.includes("/matters/:matterId/gate-snapshots") &&
         hasAll(auditIntegrity, [
           "final-memo-exports-have-persisted-gate-snapshots",
           "final-memo-gate-snapshots-pass",
           "final-memo-exports-have-gate-authorization-events",
         ]),
-      "Final memo export must persist and audit a passing gate snapshot in both repositories before final export authorization.",
+      "Final memo export must persist and audit a passing gate snapshot in the local repository before final export authorization.",
     ),
     check(
       "frontend-final-memo-approval-links-gate-snapshot",

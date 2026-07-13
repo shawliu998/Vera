@@ -84,7 +84,14 @@ export type PersistedV1AgentRunRow = {
   user_id: string;
   workflow: string;
   goal: string;
-  status: "queued" | "running" | "blocked" | "needs_human" | "completed" | "failed" | "cancelled";
+  status:
+    | "queued"
+    | "running"
+    | "blocked"
+    | "needs_human"
+    | "completed"
+    | "failed"
+    | "cancelled";
   current_step_key: string | null;
   model_profile: string | null;
   storage_driver: "local";
@@ -104,7 +111,13 @@ export type PersistedV1AgentStepRow = {
   step_key: string;
   title: string;
   sequence: number;
-  status: "pending" | "running" | "completed" | "needs_human" | "failed" | "skipped";
+  status:
+    | "pending"
+    | "running"
+    | "completed"
+    | "needs_human"
+    | "failed"
+    | "skipped";
   input: Record<string, unknown>;
   output: Record<string, unknown>;
   validation_errors: unknown[];
@@ -122,7 +135,12 @@ export type PersistedV1ToolCallRow = {
   user_id: string;
   tool_name: string;
   risk_level: "low" | "medium" | "high";
-  status: "pending" | "running" | "completed" | "failed" | "requires_confirmation";
+  status:
+    | "pending"
+    | "running"
+    | "completed"
+    | "failed"
+    | "requires_confirmation";
   input: Record<string, unknown>;
   output: Record<string, unknown>;
   error: string | null;
@@ -176,7 +194,9 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function runtimeStatusToPersisted(status: V1RuntimeStatus): PersistedV1AgentRunRow["status"] {
+function runtimeStatusToPersisted(
+  status: V1RuntimeStatus,
+): PersistedV1AgentRunRow["status"] {
   if (status === "working") return "running";
   if (status === "done") return "completed";
   if (status === "waiting_for_approval" || status === "review_needed") {
@@ -185,7 +205,9 @@ function runtimeStatusToPersisted(status: V1RuntimeStatus): PersistedV1AgentRunR
   return status;
 }
 
-function toolStatusToPersisted(status: V1RuntimeToolCall["status"]): PersistedV1ToolCallRow["status"] {
+function toolStatusToPersisted(
+  status: V1RuntimeToolCall["status"],
+): PersistedV1ToolCallRow["status"] {
   if (status === "started") return "running";
   if (status === "succeeded") return "completed";
   if (status === "failed") return "failed";
@@ -206,9 +228,9 @@ function traceStatusToPersisted(
 function approvalNeeded(decision: V1RuntimeProviderDecision | undefined) {
   return Boolean(
     decision &&
-      decision.externalCall &&
-      !decision.allowed &&
-      (decision.privacyMode === "private" || decision.privacyMode === "sensitive"),
+    decision.externalCall &&
+    (decision.privacyMode === "private" ||
+      decision.privacyMode === "sensitive"),
   );
 }
 
@@ -224,7 +246,9 @@ export function createV1RuntimePersistencePlan(
   const blockers = [
     ...input.run.errors,
     ...(needsApproval
-      ? ["Persisted human approval is required before any private/sensitive external model call."]
+      ? [
+          "Persisted human approval is required before any private/sensitive external model call.",
+        ]
       : []),
   ];
 
@@ -282,7 +306,9 @@ export function createV1RuntimePersistencePlan(
     },
     steps,
     toolCalls: input.run.tool_calls.map((call) => {
-      const phase = String(record(call.output).phase ?? record(call.input).phase ?? "");
+      const phase = String(
+        record(call.output).phase ?? record(call.input).phase ?? "",
+      );
       return {
         id: call.id,
         run_id: input.run.id,
@@ -308,12 +334,13 @@ export function createV1RuntimePersistencePlan(
       id: event.id,
       matter_id: input.matterId,
       user_id: input.userId,
-      actor: event.actor_type,
+      actor: "agent",
       action: event.action,
       workflow_version: "aletheia-v1-llm-runtime",
       model: input.run.model ?? null,
       details: {
         actorId: event.actor_id,
+        submittedActorType: event.actor_type,
         artifactId: event.artifact_id ?? null,
         artifactType: event.artifact_type ?? null,
         beforeHash: event.before_hash ?? null,
@@ -321,31 +348,32 @@ export function createV1RuntimePersistencePlan(
       },
       created_at: event.timestamp,
     })),
-    humanCheckpoints: needsApproval && input.providerDecision
-      ? [
-          {
-            id: `${input.run.id}-external-model-approval`,
-            run_id: input.run.id,
-            step_id: stepIdsByPhase.get("gate") ?? null,
-            matter_id: input.matterId,
-            user_id: input.userId,
-            checkpoint_type: "external_model_call",
-            status: "open",
-            prompt:
-              "Approve external model use for this private or sensitive Aletheia matter before dispatch.",
-            decision: null,
-            requested_payload: {
-              providerDecision: input.providerDecision,
-              requiredAction:
-                "Confirm provider, model, privacy mode, budget, and data-sharing approval before retrying.",
+    humanCheckpoints:
+      needsApproval && input.providerDecision
+        ? [
+            {
+              id: `${input.run.id}-external-model-approval`,
+              run_id: input.run.id,
+              step_id: stepIdsByPhase.get("gate") ?? null,
+              matter_id: input.matterId,
+              user_id: input.userId,
+              checkpoint_type: "external_model_call",
+              status: "open",
+              prompt:
+                "Approve external model use for this private or sensitive Aletheia matter before dispatch.",
+              decision: null,
+              requested_payload: {
+                providerDecision: input.providerDecision,
+                requiredAction:
+                  "Confirm provider, model, privacy mode, budget, and data-sharing approval before retrying.",
+              },
+              decision_payload: {},
+              decided_by: null,
+              decided_at: null,
+              created_at: timestamp,
             },
-            decision_payload: {},
-            decided_by: null,
-            decided_at: null,
-            created_at: timestamp,
-          },
-        ]
-      : [],
+          ]
+        : [],
     blockers,
   };
 }

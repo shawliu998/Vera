@@ -1,16 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ALLOWED_MODEL_IDS, DEFAULT_MODEL_ID } from "../components/assistant/ModelToggle";
-import { ALETHEIA_SETTINGS_EVENT } from "@/aletheia/settingsModel";
+import {
+    ALETHEIA_SETTINGS_EVENT,
+    SELECTED_MODEL_KEY,
+    readAletheiaSettings,
+} from "@/aletheia/settingsModel";
 
-const STORAGE_KEY = "aletheia.selectedModel";
+const SAFE_MODEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 
 function readStored(): string {
-    if (typeof window === "undefined") return DEFAULT_MODEL_ID;
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw && ALLOWED_MODEL_IDS.has(raw)) return raw;
-    return DEFAULT_MODEL_ID;
+    if (typeof window === "undefined") return "";
+    const raw = window.localStorage.getItem(SELECTED_MODEL_KEY);
+    if (raw && SAFE_MODEL_ID.test(raw)) return raw;
+    const configured = readAletheiaSettings().defaultModel;
+    return SAFE_MODEL_ID.test(configured) ? configured : "";
 }
 
 export function useSelectedModel(): [string, (id: string) => void] {
@@ -29,10 +33,11 @@ export function useSelectedModel(): [string, (id: string) => void] {
     }, []);
 
     const setModel = useCallback((id: string) => {
-        const next = ALLOWED_MODEL_IDS.has(id) ? id : DEFAULT_MODEL_ID;
+        const next = SAFE_MODEL_ID.test(id) ? id : "";
         setModelState(next);
         if (typeof window !== "undefined") {
-            window.localStorage.setItem(STORAGE_KEY, next);
+            if (next) window.localStorage.setItem(SELECTED_MODEL_KEY, next);
+            else window.localStorage.removeItem(SELECTED_MODEL_KEY);
         }
     }, []);
 

@@ -80,7 +80,6 @@ async function main() {
     ...process.env,
     PORT: String(backendPort),
     FRONTEND_URL: frontendUrl,
-    ALETHEIA_STORAGE_DRIVER: process.env.ALETHEIA_STORAGE_DRIVER ?? "local",
     ALETHEIA_AUTH_MODE: process.env.ALETHEIA_AUTH_MODE ?? "single_user",
     ALETHEIA_DATA_DIR: dataDir,
     ALETHEIA_LOCAL_USER_ID: process.env.ALETHEIA_LOCAL_USER_ID ?? "local-user",

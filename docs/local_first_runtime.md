@@ -1,8 +1,8 @@
 # Local-First Runtime Plan
 
 Aletheia should run as a local-first, privately deployable, auditable agent
-workspace. Supabase is the current compatibility adapter, not the product
-boundary.
+workspace. The Aletheia product path uses only local SQLite and owner-only
+filesystem storage.
 
 ## Storage Target
 
@@ -17,8 +17,8 @@ boundary.
   calls, and human checkpoints.
 - Filesystem storage keeps source documents, rendered exports, parsed text, and
   retrieval indexes.
-- A later private deployment can swap SQLite for Postgres and filesystem for
-  MinIO/S3 without changing the Aletheia API.
+- Storage adapters for remote databases or object stores are intentionally not
+  part of this product path.
 
 ## Runtime Model
 
@@ -38,8 +38,7 @@ structured artifacts.
 ## Current State
 
 - `AletheiaRepository` now defines the backend persistence boundary.
-- `SupabaseAletheiaRepository` is the default implementation.
-- `LocalAletheiaRepository` now persists matters, work products, source-linked
+- `LocalAletheiaRepository` is the only implementation and persists matters, work products, source-linked
   evidence items, reviews, audit events, and agent runs to SQLite.
 - Local mode persists uploaded source documents to the filesystem, extracts text
   from PDF/DOCX/TXT/MD files, chunks the text, and indexes chunks with SQLite
@@ -105,6 +104,17 @@ structured artifacts.
   facts, output preferences, excluded paths, missing materials, and reviewer
   feedback. It is intentionally not global memory, preventing cross-matter
   contamination.
+- The local settings runtime capability report marks Matter Memory as available
+  because the durable local-model executor injects bounded, authenticated
+  matter memory into the model system prompt. Auxiliary model routing remains
+  `unavailable` and cannot be saved because it has no reviewed consumer.
+- Context compression uses a local-only, fail-closed ContextDigest policy when
+  enabled: `Auto` triggers at 50% of the authoritative context budget, with an
+  85% safety threshold; `Manual` stops for a human digest request and `Off`
+  never silently drops history. A healthy local compressor must have a context
+  window at least as large as the main model. Digests retain source hashes,
+  evidence IDs, origin run, model/version and prior-digest linkage as immutable
+  matter-scoped work products; raw messages and evidence are never overwritten.
 - Matter Playbooks are implemented as versioned, auditable workflow manuals.
   They start as drafts and require explicit human approval before they can be
   treated as approved professional procedure.
@@ -128,10 +138,8 @@ structured artifacts.
   `list_matters`, `read_matter`, `search_matter_documents`,
   `read_evidence_item`, `create_work_product`, `add_review_tag`,
   `append_audit_event`, and `export_audit_pack`.
-- `ALETHEIA_AUTH_MODE=single_user` enables local single-user Aletheia routes
-  without Supabase auth.
-- `20260708_02_aletheia_agent_runtime.sql` adds runtime tables for private or
-  Supabase-backed deployments.
+- `ALETHEIA_AUTH_MODE=single_user` enables local single-user Aletheia routes;
+  desktop builds use a random per-launch private token.
 
 ## Future Retrieval Hardening
 

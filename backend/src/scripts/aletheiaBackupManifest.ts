@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { localEncryptionStatus } from "../lib/aletheia/localEnvelopeCrypto";
 
 type BackupCheck = {
   id: string;
@@ -89,7 +90,10 @@ function fileHash(target: string) {
 
 function isSubpath(parent: string, child: string) {
   const relative = path.relative(parent, child);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
 }
 
 function main() {
@@ -100,11 +104,16 @@ function main() {
   ensureDir(root);
 
   const sqlitePath = path.join(root, "aletheia.db");
+  const auditKeyPath = path.join(root, ".audit-hmac-key");
   const directories = [root, documentsDir, exportsDir, indexDir].map(
     summarizeDirectory,
   );
   const sqliteHash = fileHash(sqlitePath);
   const manifestOut = env("ALETHEIA_BACKUP_MANIFEST_OUT");
+  const applicationEncryption = localEncryptionStatus();
+  const masterKeyFile = env("ALETHEIA_MASTER_KEY_FILE");
+  const masterKeySeparated =
+    !masterKeyFile || !isSubpath(root, path.resolve(masterKeyFile));
 
   const checks: BackupCheck[] = [
     check(
@@ -134,6 +143,27 @@ function main() {
         directories.some((entry) => entry.path === indexDir),
       "backup scope includes documents/, exports/, and index/ alongside aletheia.db.",
     ),
+    check(
+      "audit-verification-key-present",
+      Boolean(env("ALETHEIA_AUDIT_HMAC_SECRET")) || existsSync(auditKeyPath),
+      "Back up .audit-hmac-key with the vault, or restore the operator-managed ALETHEIA_AUDIT_HMAC_SECRET.",
+      "warning",
+    ),
+    check(
+      "application-file-encryption",
+      applicationEncryption.file_encryption === "aes-256-gcm-envelope-v1",
+      applicationEncryption.file_encryption === "aes-256-gcm-envelope-v1"
+        ? `Document/export encryption is enabled with key id ${applicationEncryption.key_identifier}; escrow that key separately from this backup.`
+        : "Document/export application encryption is disabled.",
+      "warning",
+    ),
+    check(
+      "master-key-separated",
+      masterKeySeparated,
+      masterKeySeparated
+        ? "The configured application master-key file is outside ALETHEIA_DATA_DIR."
+        : "The application master key must not be stored inside ALETHEIA_DATA_DIR or copied with the data backup.",
+    ),
   ];
 
   const failedCritical = checks.filter(
@@ -150,10 +180,20 @@ function main() {
     dataDir: root,
     backupTogether: [
       "aletheia.db",
+      ".audit-hmac-key (or operator-managed ALETHEIA_AUDIT_HMAC_SECRET)",
       "documents/",
       "exports/",
       "index/",
     ],
+    restoreSeparately: [
+      "application master key from operator escrow or macOS Keychain (never embed it in the data backup)",
+      ...(applicationEncryption.database_encryption === "sqlcipher_required"
+        ? [
+            "dedicated SQLCipher database key from separate operator escrow or macOS Keychain",
+          ]
+        : []),
+    ],
+    applicationEncryption,
     sqlite: sqliteHash,
     directories,
     warnings: warnings.length,

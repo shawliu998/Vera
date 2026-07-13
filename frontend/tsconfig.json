@@ -42,9 +42,15 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts",
     ".next-ui-smoke/types/**/*.ts",
-    ".next-ui-smoke/dev/types/**/*.ts"
+    ".next-ui-smoke/dev/types/**/*.ts",
+    ".next-build/types/**/*.ts",
+    ".next-build/dev/types/**/*.ts",
+    ".next-anchor-settings-audit/types/**/*.ts",
+    ".next-anchor-settings-audit/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    ".next-ui-smoke",
+    ".next"
   ]
 }

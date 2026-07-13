@@ -6,7 +6,9 @@ import {
   addAletheiaReview,
   appendAletheiaAuditEvent,
   createAletheiaWorkProduct,
+  decideAletheiaApproval,
   fetchAletheiaExternalSource,
+  requestAletheiaApproval,
   type AletheiaMatterDetail,
 } from "@/app/lib/aletheiaApi";
 import {
@@ -82,7 +84,7 @@ export function ExternalSourceWorkpaperPanel({
   const persisted = useMemo(() => {
     const auditByWorkpaper = new Map<string, ExternalWorkpaperAuditDetails>();
     for (const event of detail.auditEvents) {
-      if (event.action !== "external_source_workpaper_persisted") continue;
+      if (event.action !== "human_note.external_source_workpaper_persisted") continue;
       const details = auditDetails(event.details);
       if (details.workpaperId) auditByWorkpaper.set(details.workpaperId, details);
     }
@@ -126,11 +128,30 @@ export function ExternalSourceWorkpaperPanel({
     setSaving(true);
     try {
       const manualCapture = captureMode === "manual_capture";
+      const approvalUrlHash = manualCapture ? null : await sha256(trimmedUrl);
+      const externalApproval = manualCapture
+        ? null
+        : await requestAletheiaApproval(matterId, {
+            action: "external_source_use",
+            prompt: `Authorize allowlisted retrieval for ${trimmedUrl}`,
+            requestedPayload: {
+              checkType,
+              query: trimmedQuery,
+              sourceUrlHash: approvalUrlHash,
+            },
+          });
+      if (externalApproval) {
+        await decideAletheiaApproval(matterId, externalApproval.id, {
+          decision: "approved",
+          comment: "Approved from the explicit external-source capture action.",
+        });
+      }
       const automaticCapture = manualCapture
         ? null
         : await fetchAletheiaExternalSource(matterId, {
             url: trimmedUrl,
             externalAccessOptIn: true,
+            approvalCheckpointId: externalApproval!.id,
           });
       const capturedAt = automaticCapture?.capturedAt ?? new Date().toISOString();
       const capturedUrl = automaticCapture?.url ?? trimmedUrl;
@@ -145,7 +166,7 @@ export function ExternalSourceWorkpaperPanel({
           ]);
       const consentAudit = await appendAletheiaAuditEvent(matterId, {
         actor: "human",
-        action: "external_source_access_opt_in_recorded",
+        action: "human_note.external_source_access_opt_in_recorded",
         workflowVersion: "hermes-external-source-workpaper-v0",
         details: {
           schemaVersion: "hermes-external-source-consent-v0",
@@ -235,8 +256,8 @@ export function ExternalSourceWorkpaperPanel({
         throw new Error("External-source provenance validation failed before persistence.");
       }
       await appendAletheiaAuditEvent(matterId, {
-        actor: "system",
-        action: "external_source_workpaper_persisted",
+        actor: "human",
+        action: "human_note.external_source_workpaper_persisted",
         workflowVersion: "hermes-external-source-workpaper-v0",
         details: {
           schemaVersion: "hermes-external-source-workpaper-v0",

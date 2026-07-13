@@ -20,22 +20,25 @@ export function AletheiaIcon({
 }) {
     void done;
     void error;
-    void brand;
+    const isWordmark = brand;
+    const width = isWordmark ? Math.round(size * 3.5) : size;
 
     return (
         <span
             className="inline-flex shrink-0 items-center justify-center"
             style={{
-                width: size,
+                width,
                 height: size,
                 ...style,
             }}
-            aria-hidden="true"
+            role={isWordmark ? "img" : undefined}
+            aria-label={isWordmark ? "Vera" : undefined}
+            aria-hidden={isWordmark ? undefined : "true"}
         >
             <Image
-                src="/aletheia-mark.png"
+                src={isWordmark ? "/vera-wordmark.png" : "/vera-mark.png"}
                 alt=""
-                width={size}
+                width={width}
                 height={size}
                 unoptimized
                 className={spin ? "animate-[spin_3s_linear_infinite]" : ""}
@@ -44,6 +47,7 @@ export function AletheiaIcon({
                     width: "100%",
                     height: "100%",
                     objectFit: "contain",
+                    borderRadius: isWordmark ? 0 : Math.max(2, size * 0.14),
                 }}
             />
         </span>

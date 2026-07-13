@@ -1,7 +1,7 @@
 import { readdirSync, statSync } from "node:fs";
 import { lstatSync, existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { LocalDatabase } from "../lib/aletheia/localDatabase";
 
 type RestoreCheck = {
   id: string;
@@ -60,7 +60,10 @@ function check(
 
 function isSubpath(parent: string, child: string) {
   const relative = path.relative(parent, child);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
 }
 
 function summarizeTree(target: string): TreeSummary {
@@ -114,7 +117,7 @@ function sqliteChecks(dbPath: string) {
   }
 
   try {
-    const db = new DatabaseSync(dbPath, { readOnly: true });
+    const db = new LocalDatabase(dbPath, { readOnly: true });
     try {
       const quickCheckRow = db.prepare("pragma quick_check").get() as
         | { quick_check?: string }
@@ -150,9 +153,12 @@ function manifestCheck(root: string) {
     path.join(root, "manifest.json"),
   ];
   const found = candidates.find((candidate) => existsSync(candidate));
-  if (!found) return { path: null as string | null, suite: null as string | null };
+  if (!found)
+    return { path: null as string | null, suite: null as string | null };
   try {
-    const parsed = JSON.parse(readFileSync(found, "utf8")) as { suite?: unknown };
+    const parsed = JSON.parse(readFileSync(found, "utf8")) as {
+      suite?: unknown;
+    };
     return {
       path: found,
       suite: typeof parsed.suite === "string" ? parsed.suite : null,
@@ -165,6 +171,7 @@ function manifestCheck(root: string) {
 function main() {
   const root = sourceDir();
   const dbPath = path.join(root, "aletheia.db");
+  const auditKeyPath = path.join(root, ".audit-hmac-key");
   const requiredTrees = REQUIRED_DIRS.map((name) =>
     summarizeTree(path.join(root, name)),
   );
@@ -216,8 +223,8 @@ function main() {
       !sqlite.present
         ? "SQLite schema check skipped because aletheia.db is not present."
         : missingTables.length
-        ? `Missing Aletheia tables: ${missingTables.join(", ")}`
-        : "Core Aletheia tables are present.",
+          ? `Missing Aletheia tables: ${missingTables.join(", ")}`
+          : "Core Aletheia tables are present.",
     ),
     check(
       "backup-manifest-present",
@@ -226,6 +233,13 @@ function main() {
         ? `Backup manifest found at ${manifest.path} with suite ${manifest.suite ?? "unknown"}.`
         : "No backup manifest found. Generate one with ALETHEIA_BACKUP_MANIFEST_OUT before handoff when possible.",
       "warning",
+    ),
+    check(
+      "audit-verification-key-present",
+      !sqlite.present ||
+        Boolean(env("ALETHEIA_AUDIT_HMAC_SECRET")) ||
+        existsSync(auditKeyPath),
+      "Restore .audit-hmac-key with the vault, or configure the original ALETHEIA_AUDIT_HMAC_SECRET.",
     ),
   ];
 
@@ -245,6 +259,7 @@ function main() {
         sourceDir: root,
         requiredBackupScope: [
           "aletheia.db",
+          ".audit-hmac-key (or operator-managed ALETHEIA_AUDIT_HMAC_SECRET)",
           "documents/",
           "exports/",
           "index/",

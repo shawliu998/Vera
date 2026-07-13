@@ -65,7 +65,7 @@ export function ShareholderPenetrationGraphPanel({
   const sourceWorkpapers = useMemo(() => {
     const auditByWorkpaper = new Map<string, ExternalCheckArtifact>();
     for (const event of detail.auditEvents) {
-      if (event.action !== "external_source_workpaper_persisted") continue;
+      if (event.action !== "human_note.external_source_workpaper_persisted") continue;
       const audit = details<ExternalWorkpaperAuditDetails>(event.details);
       if (audit.workpaperId && audit.externalCheck) {
         auditByWorkpaper.set(audit.workpaperId, audit.externalCheck);
@@ -89,7 +89,7 @@ export function ShareholderPenetrationGraphPanel({
   const persisted = useMemo(() => {
     const auditByWorkpaper = new Map<string, ShareholderGraphAuditDetails>();
     for (const event of detail.auditEvents) {
-      if (event.action !== "shareholder_penetration_graph_persisted") continue;
+      if (event.action !== "human_note.shareholder_penetration_graph_persisted") continue;
       const audit = details<ShareholderGraphAuditDetails>(event.details);
       if (audit.workpaperId) auditByWorkpaper.set(audit.workpaperId, audit);
     }
@@ -236,8 +236,8 @@ export function ShareholderPenetrationGraphPanel({
         throw new Error("Shareholder graph provenance validation failed before persistence.");
       }
       await appendAletheiaAuditEvent(matterId, {
-        actor: "system",
-        action: "shareholder_penetration_graph_persisted",
+        actor: "human",
+        action: "human_note.shareholder_penetration_graph_persisted",
         workflowVersion: "hermes-shareholder-penetration-v0",
         details: {
           schemaVersion: "hermes-shareholder-penetration-v0",

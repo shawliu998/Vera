@@ -83,7 +83,8 @@ cd frontend && npm run build
 ## Privacy Defaults
 
 - Documents remain in the configured local data directory.
-- SQLite metadata remains under the same data directory.
+- SQLite metadata defaults to plaintext \`node:sqlite\`; an operator can perform
+  the documented offline migration and require the verified SQLCipher driver.
 - External web search, browser automation, terminal execution, email, and
   destructive file operations remain outside the Aletheia Tool Adapter.
 - Retrieval defaults to SQLite FTS5 keyword search.
@@ -104,7 +105,6 @@ function envTemplate() {
 FRONTEND_URL=http://localhost:3000
 NEXT_PUBLIC_API_BASE_URL=http://localhost:3001
 
-ALETHEIA_STORAGE_DRIVER=local
 ALETHEIA_AUTH_MODE=single_user
 # For private single-tenant auth, set:
 # ALETHEIA_AUTH_MODE=private_token
@@ -114,13 +114,37 @@ ALETHEIA_DATA_DIR=.data/aletheia
 ALETHEIA_LOCAL_USER_ID=local-user
 ALETHEIA_LOCAL_USER_EMAIL=local@aletheia.internal
 
+ALETHEIA_APPLICATION_ENCRYPTION=disabled
+ALETHEIA_DATABASE_ENCRYPTION=metadata_plaintext
+# ALETHEIA_MASTER_KEY_SOURCE=file
+# ALETHEIA_MASTER_KEY_FILE=/secure/operator/aletheia-master-key
+# ALETHEIA_DATABASE_KEY_SOURCE=file
+# ALETHEIA_DATABASE_KEY_FILE=/secure/operator/aletheia-database-key
+# ALETHEIA_AUDIT_HMAC_SECRET=replace-with-a-random-32-byte-hex-string
+# ALETHEIA_AUDIT_ANCHOR_ENABLED=false
+# ALETHEIA_AUDIT_ANCHOR_DIR=/separate/append-only/anchor-journal
+# ALETHEIA_AUDIT_ANCHOR_PRIVATE_KEY_FILE=/secure/operator/anchor-private.pem
+# ALETHEIA_AUDIT_ANCHOR_PUBLIC_KEY_FILE=/secure/operator/anchor-public.pem
+
 ALETHEIA_RETRIEVAL_MODE=keyword
 ALETHEIA_SEMANTIC_INDEX_ENABLED=false
 ALETHEIA_SEMANTIC_INDEX_DRIVER=disabled
 ALETHEIA_SEMANTIC_INDEX_DIR=.data/aletheia/index/semantic-local
 
+# Leave the model name empty to keep durable model execution disabled.
+# ALETHEIA_LOCAL_MODEL_NAME=qwen3:8b
+# ALETHEIA_LOCAL_MODEL_ID=default-local
+# ALETHEIA_LOCAL_MODEL_ADAPTER=ollama
+# ALETHEIA_LOCAL_MODEL_ENDPOINT=http://127.0.0.1:11434
+# ALETHEIA_LOCAL_MODEL_CONTEXT_TOKENS=32768
+# ALETHEIA_LOCAL_MODEL_MAX_OUTPUT_TOKENS=4096
+# ALETHEIA_LOCAL_MODEL_CONCURRENCY=1
+# ALETHEIA_LOCAL_MODEL_QUEUE_LIMIT=16
+# ALETHEIA_LOCAL_MODEL_AUTOSTART=false
+# ALETHEIA_DURABLE_WORKER_POLL_MS=500
+# ALETHEIA_DURABLE_WORKER_HEARTBEAT_MS=1000
+
 DOWNLOAD_SIGNING_SECRET=replace-with-a-random-32-byte-hex-string
-USER_API_KEYS_ENCRYPTION_SECRET=replace-with-a-long-random-secret
 `;
 }
 
@@ -214,7 +238,8 @@ function main() {
       node: process.version,
       backend: "Express / TypeScript",
       frontend: "Next.js",
-      localDatabase: "SQLite via node:sqlite",
+      localDatabase:
+        "SQLite via node:sqlite by default; optional fail-closed @signalapp/sqlcipher",
       documentStore: "local filesystem",
       retrievalDefault: "sqlite_fts5_keyword",
       mcp: "stdio wrapper",
@@ -248,11 +273,10 @@ function main() {
       "run traces render with steps, tool calls, and checkpoints",
     ],
     startup: {
-      backend:
-        "cd backend && ALETHEIA_STORAGE_DRIVER=local ALETHEIA_AUTH_MODE=single_user npm run start",
+      backend: "cd backend && ALETHEIA_AUTH_MODE=single_user npm run start",
       frontend:
         "cd frontend && NEXT_PUBLIC_API_BASE_URL=http://localhost:3001 npm run start",
-      mcp: "cd backend && ALETHEIA_STORAGE_DRIVER=local ALETHEIA_AUTH_MODE=single_user npm run mcp:aletheia",
+      mcp: "cd backend && ALETHEIA_AUTH_MODE=single_user npm run mcp:aletheia",
       developmentLauncher: "cd backend && npm run dev:aletheia:local",
     },
     preflight: [
@@ -315,7 +339,6 @@ function main() {
     path.join(outDir, "start-backend.sh"),
     shellScript([
       `cd ${JSON.stringify(backendDir)}`,
-      'export ALETHEIA_STORAGE_DRIVER="${ALETHEIA_STORAGE_DRIVER:-local}"',
       'export ALETHEIA_AUTH_MODE="${ALETHEIA_AUTH_MODE:-single_user}"',
       'export ALETHEIA_DATA_DIR="${ALETHEIA_DATA_DIR:-.data/aletheia}"',
       "npm run start",
@@ -335,7 +358,6 @@ function main() {
     path.join(outDir, "start-mcp.sh"),
     shellScript([
       `cd ${JSON.stringify(backendDir)}`,
-      'export ALETHEIA_STORAGE_DRIVER="${ALETHEIA_STORAGE_DRIVER:-local}"',
       'export ALETHEIA_AUTH_MODE="${ALETHEIA_AUTH_MODE:-single_user}"',
       'export ALETHEIA_DATA_DIR="${ALETHEIA_DATA_DIR:-.data/aletheia}"',
       "npm run mcp:aletheia",

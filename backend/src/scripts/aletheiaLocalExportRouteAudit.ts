@@ -1,13 +1,15 @@
 import { strict as assert } from "node:assert";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import express from "express";
+import { readProtectedLocalFileSync } from "../lib/aletheia/localEnvelopeCrypto";
 
-const dataDir = mkdtempSync(path.join(tmpdir(), "aletheia-local-export-routes-"));
+const dataDir = mkdtempSync(
+  path.join(tmpdir(), "aletheia-local-export-routes-"),
+);
 
 process.env.ALETHEIA_DATA_DIR = dataDir;
-process.env.ALETHEIA_STORAGE_DRIVER = "local";
 process.env.ALETHEIA_AUTH_MODE = "single_user";
 process.env.ALETHEIA_LOCAL_USER_ID = "local-export-route-audit-user";
 
@@ -36,9 +38,8 @@ async function jsonFetch(
 }
 
 async function main() {
-  const { LocalAletheiaRepository } = await import(
-    "../lib/aletheia/localRepository"
-  );
+  const { LocalAletheiaRepository } =
+    await import("../lib/aletheia/localRepository");
   const { aletheiaRouter } = await import("../routes/aletheia");
   const repo = new LocalAletheiaRepository();
   const ctx = { userId: "local-export-route-audit-user" };
@@ -141,7 +142,10 @@ async function main() {
     assert.ok(auditExport.audit_event_id);
     assert.ok(existsSync(auditExport.export_path));
     const auditExportFile = JSON.parse(
-      readFileSync(auditExport.export_path, "utf8"),
+      readProtectedLocalFileSync({
+        filePath: auditExport.export_path,
+        purpose: "local_export",
+      }).toString("utf8"),
     );
     assert.equal(auditExportFile.export_hash, auditExport.export_hash);
     assert.ok(auditExport.source_index_manifest.counts.documents >= 1);

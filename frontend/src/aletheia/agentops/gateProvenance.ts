@@ -42,7 +42,9 @@ function hasStringField(
 }
 
 function uniqueStrings(values: Array<string | null | undefined>) {
-  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+  return [
+    ...new Set(values.filter((value): value is string => Boolean(value))),
+  ];
 }
 
 function relatedReviewsForArtifacts(
@@ -53,8 +55,12 @@ function relatedReviewsForArtifacts(
   return reviews.filter(
     (review) =>
       artifactSet.has(review.target_id) ||
-      (review.work_product_id ? artifactSet.has(review.work_product_id) : false) ||
-      (review.evidence_item_id ? artifactSet.has(review.evidence_item_id) : false),
+      (review.work_product_id
+        ? artifactSet.has(review.work_product_id)
+        : false) ||
+      (review.evidence_item_id
+        ? artifactSet.has(review.evidence_item_id)
+        : false),
   );
 }
 
@@ -68,8 +74,10 @@ function relatedAuditEventsForArtifacts(
     return (
       (typeof details.workProductId === "string" &&
         artifactSet.has(details.workProductId)) ||
-      (typeof details.artifactId === "string" && artifactSet.has(details.artifactId)) ||
-      (typeof details.evidenceId === "string" && artifactSet.has(details.evidenceId))
+      (typeof details.artifactId === "string" &&
+        artifactSet.has(details.artifactId)) ||
+      (typeof details.evidenceId === "string" &&
+        artifactSet.has(details.evidenceId))
     );
   });
 }
@@ -110,7 +118,11 @@ export function buildGateProvenance({
         (event) =>
           hasStringField(event.details, "checkpointId", checkpointId) ||
           (checkpoint?.checkpoint_type
-            ? hasStringField(event.details, "action", checkpoint.checkpoint_type)
+            ? hasStringField(
+                event.details,
+                "action",
+                checkpoint.checkpoint_type,
+              )
             : false),
       );
       const artifactAuditEvents = relatedAuditEventsForArtifacts(
@@ -240,7 +252,6 @@ export function buildAgentOpsSnapshotDetails({
       metadata: resolution.matches[0]?.metadata ?? null,
     })),
     evalMetrics,
-    note:
-      "This event records an adapter-derived AgentOps view snapshot; persisted Aletheia matter, evidence, review, gate, run, and audit records remain the source of truth.",
+    note: "This event records an adapter-derived AgentOps view snapshot; persisted Vera matter, evidence, review, gate, run, and audit records remain the source of truth.",
   };
 }
