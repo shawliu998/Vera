@@ -6,6 +6,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {
   deleteGenericPassword,
+  deleteWorkspaceModelCredential,
+  isMacOsKeychainItemCollision,
+  MacOsKeychainItemCollisionError,
   readGenericPassword,
   SECURITY_MAX_BUFFER_BYTES,
   SECURITY_PATH,
@@ -13,6 +16,7 @@ const {
   WORKSPACE_MODEL_CREDENTIAL_ACCOUNT_PREFIX,
   WORKSPACE_MODEL_CREDENTIAL_SERVICE,
   workspaceModelCredentialAccount,
+  workspaceModelCredentialLocator,
   writeGenericPassword,
 } = require("../macOsKeychain");
 
@@ -103,6 +107,7 @@ function auditWriteUsesBoundedRedactedCommand() {
         assertSecurityOptions(options, "pipe");
         assert.equal(options.input, `${secret}\n`);
         assert.equal(args.includes(secret), false);
+        assert.equal(args.includes("-U"), false);
       },
     },
   ]);
@@ -113,6 +118,62 @@ function auditWriteUsesBoundedRedactedCommand() {
     secret,
     execFileSyncImpl: mock.execFileSyncImpl,
   });
+  mock.assertComplete();
+}
+
+function auditCreateOnlyCollisionClassification() {
+  const account = workspaceModelCredentialAccount({
+    profileId: "00000000-0000-4000-8000-000000000908",
+    provider: "openai",
+    canonicalOrigin: "https://api.openai.com",
+    locatorId: "0000000000000908",
+  });
+  const secret = "must-not-overwrite-existing";
+  const collision = securityError({
+    status: 45,
+    stderr: "security: SecKeychainItemAdd: errSecDuplicateItem (-25299)",
+  });
+  assert.equal(isMacOsKeychainItemCollision(collision), true);
+  assert.equal(
+    isMacOsKeychainItemCollision(
+      securityError({ status: 1, stderr: "security: permission denied" }),
+    ),
+    false,
+  );
+  const mock = securityMock([
+    {
+      args: [
+        "add-generic-password",
+        "-s",
+        WORKSPACE_MODEL_CREDENTIAL_SERVICE,
+        "-a",
+        account,
+        "-w",
+      ],
+      error: collision,
+      assert({ args, options }) {
+        assert.equal(args.includes("-U"), false);
+        assert.equal(args.includes(secret), false);
+        assertSecurityOptions(options, "pipe");
+      },
+    },
+  ]);
+  assert.throws(
+    () =>
+      writeGenericPassword({
+        service: WORKSPACE_MODEL_CREDENTIAL_SERVICE,
+        account,
+        secret,
+        execFileSyncImpl: mock.execFileSyncImpl,
+      }),
+    (error) => {
+      assert.equal(error instanceof MacOsKeychainItemCollisionError, true);
+      assert.equal(error.code, "MACOS_KEYCHAIN_ITEM_COLLISION");
+      assert.equal(error.message.includes(account), false);
+      assert.equal(error.message.includes(secret), false);
+      return true;
+    },
+  );
   mock.assertComplete();
 }
 
@@ -205,6 +266,83 @@ function auditReadAndDeleteBehaviors() {
   deleteMock.assertComplete();
 }
 
+function auditRestartSafeBoundCredentialDeletion() {
+  const binding = {
+    profileId: "00000000-0000-4000-8000-000000000906",
+    provider: "anthropic",
+    canonicalOrigin: "https://api.anthropic.com",
+  };
+  const locatorId = "0000000000000906";
+  const reference = `keychain://vera/model-profile/${binding.profileId}/${locatorId}`;
+  const beforeRestart = workspaceModelCredentialLocator({
+    reference,
+    binding,
+  });
+  const afterRestart = workspaceModelCredentialLocator({
+    reference,
+    binding: { ...binding },
+  });
+  assert.deepEqual(afterRestart, beforeRestart);
+  assert.equal(
+    beforeRestart.account,
+    workspaceModelCredentialAccount({ ...binding, locatorId }),
+  );
+
+  const mock = securityMock([
+    {
+      args: [
+        "delete-generic-password",
+        "-s",
+        WORKSPACE_MODEL_CREDENTIAL_SERVICE,
+        "-a",
+        beforeRestart.account,
+      ],
+      assert({ options }) {
+        assertSecurityOptions(options, "ignore");
+      },
+    },
+  ]);
+  assert.equal(
+    deleteWorkspaceModelCredential({
+      reference,
+      binding: { ...binding },
+      execFileSyncImpl: mock.execFileSyncImpl,
+    }),
+    true,
+  );
+  mock.assertComplete();
+
+  assert.throws(
+    () =>
+      workspaceModelCredentialLocator({
+        reference,
+        binding: {
+          ...binding,
+          profileId: "00000000-0000-4000-8000-000000000907",
+        },
+      }),
+    /binding does not match/,
+  );
+  assert.throws(
+    () =>
+      workspaceModelCredentialLocator({
+        reference: `keychain://vera/model-profile/${binding.profileId}`,
+        binding,
+      }),
+    /locator is invalid/,
+  );
+  assert.notEqual(
+    workspaceModelCredentialLocator({
+      reference,
+      binding: {
+        ...binding,
+        canonicalOrigin: "https://proxy.example.com",
+      },
+    }).account,
+    beforeRestart.account,
+  );
+}
+
 function auditSanitizedFailures() {
   const account = workspaceModelCredentialAccount({
     profileId: "00000000-0000-4000-8000-000000000904",
@@ -226,6 +364,13 @@ function auditSanitizedFailures() {
       error: securityError({
         message: `security failed for ${account} with ${secret}`,
       }),
+      assert({ args }) {
+        assert.equal(
+          args.includes("-U"),
+          false,
+          "Credential writes must be create-only and never overwrite collisions.",
+        );
+      },
     },
   ]);
   assert.throws(
@@ -330,7 +475,9 @@ function auditStaticIntegration() {
 
 auditAccountNaming();
 auditWriteUsesBoundedRedactedCommand();
+auditCreateOnlyCollisionClassification();
 auditReadAndDeleteBehaviors();
+auditRestartSafeBoundCredentialDeletion();
 auditSanitizedFailures();
 auditWriteRejectsLineBreakSecrets();
 auditStaticIntegration();
@@ -342,8 +489,10 @@ console.log(
       suite: "vera-macos-keychain-credential-store-v1",
       checks: [
         "model-profile account naming is deterministic and origin-bound without exposing raw origin",
-        "generic password writes use argv arrays, stdin secret input, timeout, maxBuffer, and no shell",
+        "generic password writes are create-only without -U and use argv arrays, stdin secret input, timeout, maxBuffer, and no shell",
+        "duplicate-item failures are classified as definite no-write collisions without exposing account or secret material",
         "generic password reads and deletes stay bounded and classify missing items safely",
+        "reference plus immutable binding reconstructs the exact delete account after restart and rejects incomplete or cross-profile locators",
         "credential-store command failures stay redacted and never echo secret, account, or service names",
       ],
     },

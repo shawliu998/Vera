@@ -9,6 +9,7 @@ import {
 import type { ModelProfile } from "../types";
 import {
   assertStoredCredentialReference,
+  canonicalizeStoredCredentialReference,
   isStoredCredentialReference,
 } from "../services/credentialStore";
 
@@ -21,6 +22,19 @@ export type StoredModelProfileRecord = ModelProfile & {
   credentialState: CredentialState;
   migrationIssueCode: string | null;
   executionRevision: number;
+};
+
+export type CredentialCleanupIntent = {
+  reference: string;
+  profileId: string;
+  provider: ModelProfile["provider"];
+  canonicalOrigin: string | null;
+  reason:
+    | "binding_change"
+    | "credential_clear"
+    | "credential_replace"
+    | "credential_cas_rollback"
+    | "profile_delete";
 };
 
 export type ActiveModelProfileJob = {
@@ -217,6 +231,40 @@ export class ModelProfilesRepository {
         allowLocalDevelopmentBaseUrl: true,
       })?.canonicalOrigin ?? null
     );
+  }
+
+  private credentialCleanupIntent(
+    record: StoredModelProfileRecord,
+    reason: CredentialCleanupIntent["reason"],
+  ): CredentialCleanupIntent | null {
+    if (!record.credentialRef) return null;
+    return {
+      reference:
+        canonicalizeStoredCredentialReference(
+          record.credentialRef,
+          record.id,
+        ) ?? record.credentialRef,
+      profileId: record.id,
+      provider: record.provider,
+      canonicalOrigin: this.currentOrigin(record),
+      reason,
+    };
+  }
+
+  private credentialReferenceIdentity(reference: string | null) {
+    if (!reference) return null;
+    return canonicalizeStoredCredentialReference(reference) ?? reference;
+  }
+
+  private queueCredentialCleanupIntentInternal(
+    cleanup: CredentialCleanupIntent | null,
+    now: string,
+  ) {
+    if (!cleanup) return;
+    this.queueCredentialOrphanCleanup({
+      ...cleanup,
+      now,
+    });
   }
 
   private requireStoredInternal(id: string) {
@@ -589,7 +637,8 @@ export class ModelProfilesRepository {
     now: string,
     requireNoActiveJobs?: string,
   ) {
-    this.requireStoredInternal(id);
+    const current = this.requireStoredInternal(id);
+    const cleanup = this.credentialCleanupIntent(current, "profile_delete");
     if (requireNoActiveJobs) {
       this.ensureNoActiveJobs(id, requireNoActiveJobs);
     }
@@ -604,6 +653,8 @@ export class ModelProfilesRepository {
       )
       .run(now, id);
     this.database.prepare("DELETE FROM model_profiles WHERE id = ?").run(id);
+    this.queueCredentialCleanupIntentInternal(cleanup, now);
+    return cleanup;
   }
 
   private setCredentialBindingInternalTx(
@@ -618,7 +669,18 @@ export class ModelProfilesRepository {
     },
   ) {
     const current = this.requireStoredInternal(id);
-    this.validateCredentialBinding(id, input.reference, input.state);
+    const reference =
+      input.reference === null
+        ? null
+        : canonicalizeStoredCredentialReference(input.reference, id);
+    if (input.reference !== null && reference === null) {
+      throw new WorkspaceApiError(
+        400,
+        "VALIDATION_ERROR",
+        "Credential reference is invalid.",
+      );
+    }
+    this.validateCredentialBinding(id, reference, input.state);
     const schema = this.schema();
     const publicStatus = publicStatusFromCredentialState(input.state);
     const nextExecutionRevision =
@@ -642,7 +704,7 @@ export class ModelProfilesRepository {
             WHERE id = ?`,
         )
         .run(
-          input.reference,
+          reference,
           input.origin,
           input.state,
           publicStatus,
@@ -658,7 +720,7 @@ export class ModelProfilesRepository {
         .prepare(
           "UPDATE model_profiles SET credential_ref = ?, credential_status = ?, updated_at = ? WHERE id = ?",
         )
-        .run(input.reference, publicStatus, input.now, id);
+        .run(reference, publicStatus, input.now, id);
     }
     return this.requireStoredInternal(id);
   }
@@ -830,7 +892,18 @@ export class ModelProfilesRepository {
       capabilities: Caps;
     }> & { now: string },
   ) {
-    return this.tx(() => this.updateInternal(id, input));
+    return this.tx(() => {
+      const current = this.requireStoredInternal(id);
+      const cleanup =
+        input.credentialRef !== undefined &&
+        this.credentialReferenceIdentity(input.credentialRef) !==
+          this.credentialReferenceIdentity(current.credentialRef)
+          ? this.credentialCleanupIntent(current, "binding_change")
+          : null;
+      const profile = this.updateInternal(id, input);
+      this.queueCredentialCleanupIntentInternal(cleanup, input.now);
+      return profile;
+    });
   }
 
   updateWithActiveJobBarrier(
@@ -838,9 +911,36 @@ export class ModelProfilesRepository {
     input: Parameters<ModelProfilesRepository["update"]>[1],
     message: string,
   ) {
-    return this.tx(() =>
-      this.updateInternal(id, input, { requireNoActiveJobs: message }),
-    );
+    return this.tx(() => {
+      const current = this.requireStoredInternal(id);
+      const cleanup =
+        input.credentialRef !== undefined &&
+        this.credentialReferenceIdentity(input.credentialRef) !==
+          this.credentialReferenceIdentity(current.credentialRef)
+          ? this.credentialCleanupIntent(current, "binding_change")
+          : null;
+      const profile = this.updateInternal(id, input, {
+        requireNoActiveJobs: message,
+      });
+      this.queueCredentialCleanupIntentInternal(cleanup, input.now);
+      return profile;
+    });
+  }
+
+  updateBindingWithActiveJobBarrierAndCleanupIntent(
+    id: string,
+    input: Parameters<ModelProfilesRepository["update"]>[1],
+    message: string,
+  ) {
+    return this.tx(() => {
+      const current = this.requireStoredInternal(id);
+      const cleanup = this.credentialCleanupIntent(current, "binding_change");
+      const profile = this.updateInternal(id, input, {
+        requireNoActiveJobs: message,
+      });
+      this.queueCredentialCleanupIntentInternal(cleanup, input.now);
+      return { profile, cleanup };
+    });
   }
 
   setDefault(id: string, now: string) {
@@ -894,6 +994,14 @@ export class ModelProfilesRepository {
     return this.tx(() => this.deleteInternal(id, now, message));
   }
 
+  deleteWithActiveJobBarrierAndCleanupIntent(
+    id: string,
+    now: string,
+    message: string,
+  ) {
+    return this.tx(() => this.deleteInternal(id, now, message));
+  }
+
   setCredentialBindingInternal(
     id: string,
     input: {
@@ -904,7 +1012,87 @@ export class ModelProfilesRepository {
       now: string;
     },
   ) {
-    return this.tx(() => this.setCredentialBindingInternalTx(id, input));
+    return this.tx(() => {
+      const current = this.requireStoredInternal(id);
+      const cleanup =
+        this.credentialReferenceIdentity(input.reference) !==
+        this.credentialReferenceIdentity(current.credentialRef)
+          ? this.credentialCleanupIntent(
+              current,
+              input.reference === null
+                ? "credential_clear"
+                : "credential_replace",
+            )
+          : null;
+      const record = this.setCredentialBindingInternalTx(id, input);
+      this.queueCredentialCleanupIntentInternal(cleanup, input.now);
+      return record;
+    });
+  }
+
+  clearCredentialBindingWithCleanupIntent(id: string, now: string) {
+    return this.tx(() => {
+      const current = this.requireStoredInternal(id);
+      if (
+        current.credentialRef === null &&
+        current.credentialState === "missing"
+      ) {
+        return { record: current, cleanup: null };
+      }
+      const cleanup = this.credentialCleanupIntent(current, "credential_clear");
+      const record = this.setCredentialBindingInternalTx(id, {
+        reference: null,
+        state: "missing",
+        origin: this.currentOrigin(current),
+        migrationIssueCode: null,
+        now,
+      });
+      this.queueCredentialCleanupIntentInternal(cleanup, now);
+      return { record, cleanup };
+    });
+  }
+
+  compareAndSetCredentialInvalid(
+    id: string,
+    expected: {
+      provider: ModelProfile["provider"];
+      canonicalOrigin: string;
+      executionRevision: number;
+      credentialRef: string;
+      credentialState: "configured";
+    },
+    now: string,
+  ) {
+    return this.tx(() => {
+      const current = this.requireStoredInternal(id);
+      const expectedCredentialIdentity = canonicalizeStoredCredentialReference(
+        expected.credentialRef,
+        id,
+      );
+      const currentCredentialIdentity = current.credentialRef
+        ? canonicalizeStoredCredentialReference(current.credentialRef, id)
+        : null;
+      if (
+        !expectedCredentialIdentity ||
+        current.provider !== expected.provider ||
+        this.currentOrigin(current) !== expected.canonicalOrigin ||
+        current.executionRevision !== expected.executionRevision ||
+        currentCredentialIdentity !== expectedCredentialIdentity ||
+        current.credentialState !== expected.credentialState
+      ) {
+        throw new WorkspaceApiError(
+          409,
+          "CONFLICT",
+          "Credential probe result is stale; the model profile binding changed.",
+        );
+      }
+      return this.setCredentialBindingInternalTx(id, {
+        reference: current.credentialRef,
+        state: "invalid",
+        origin: this.currentOrigin(current),
+        now,
+      });
+    });
   }
 
   compareAndSetCredentialBindingInternal(
@@ -921,6 +1109,7 @@ export class ModelProfilesRepository {
       state: CredentialState;
       origin: string | null;
       migrationIssueCode?: string | null;
+      cleanupIntentReference: string;
       now: string;
     },
   ) {
@@ -939,7 +1128,14 @@ export class ModelProfilesRepository {
           "Model profile binding changed before credential storage completed.",
         );
       }
-      return this.setCredentialBindingInternalTx(id, input);
+      const cleanup = this.credentialCleanupIntent(
+        current,
+        "credential_replace",
+      );
+      const record = this.setCredentialBindingInternalTx(id, input);
+      this.clearCredentialOrphanCleanupInternal(input.cleanupIntentReference);
+      this.queueCredentialCleanupIntentInternal(cleanup, input.now);
+      return { record, cleanup };
     });
   }
 
@@ -975,15 +1171,17 @@ export class ModelProfilesRepository {
   }
 
   isCredentialReferenceBound(reference: string) {
+    const canonicalReference = canonicalizeStoredCredentialReference(reference);
+    if (!canonicalReference) return false;
     return Boolean(
       this.database
         .prepare(
           `SELECT 1 AS present
              FROM model_profiles
-            WHERE credential_ref = ?
+            WHERE credential_ref COLLATE NOCASE = ?
             LIMIT 1`,
         )
-        .get(reference),
+        .get(canonicalReference),
     );
   }
 
@@ -1002,6 +1200,11 @@ export class ModelProfilesRepository {
     now: string;
   }) {
     if (!this.hasTable("model_profile_credential_orphan_cleanups")) return;
+    const reference =
+      canonicalizeStoredCredentialReference(
+        input.reference,
+        input.profileId ?? undefined,
+      ) ?? input.reference;
     this.database
       .prepare(
         `INSERT INTO model_profile_credential_orphan_cleanups
@@ -1016,7 +1219,7 @@ export class ModelProfilesRepository {
            updated_at = excluded.updated_at`,
       )
       .run(
-        input.reference,
+        reference,
         input.profileId,
         input.provider,
         input.canonicalOrigin,
@@ -1064,25 +1267,39 @@ export class ModelProfilesRepository {
     now: string,
   ) {
     if (!this.hasTable("model_profile_credential_orphan_cleanups")) return;
+    const canonicalReference =
+      canonicalizeStoredCredentialReference(reference) ?? reference;
+    const referencePredicate = canonicalizeStoredCredentialReference(reference)
+      ? "reference COLLATE NOCASE = ?"
+      : "reference = ?";
     this.database
       .prepare(
         `UPDATE model_profile_credential_orphan_cleanups
             SET attempt_count = attempt_count + 1,
                 last_error = ?,
                 updated_at = ?
-          WHERE reference = ?`,
+          WHERE ${referencePredicate}`,
       )
-      .run(lastError, now, reference);
+      .run(lastError, now, canonicalReference);
   }
 
-  clearCredentialOrphanCleanup(reference: string) {
+  private clearCredentialOrphanCleanupInternal(reference: string) {
     if (!this.hasTable("model_profile_credential_orphan_cleanups")) return;
+    const canonicalReference =
+      canonicalizeStoredCredentialReference(reference) ?? reference;
+    const referencePredicate = canonicalizeStoredCredentialReference(reference)
+      ? "reference COLLATE NOCASE = ?"
+      : "reference = ?";
     this.database
       .prepare(
         `DELETE FROM model_profile_credential_orphan_cleanups
-          WHERE reference = ?`,
+          WHERE ${referencePredicate}`,
       )
-      .run(reference);
+      .run(canonicalReference);
+  }
+
+  clearCredentialOrphanCleanup(reference: string) {
+    this.clearCredentialOrphanCleanupInternal(reference);
   }
 
   requireEnabled(id: string) {

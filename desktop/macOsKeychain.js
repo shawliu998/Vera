@@ -8,12 +8,15 @@ const SECURITY_TIMEOUT_MS = 10_000;
 const SECURITY_MAX_BUFFER_BYTES = 64 * 1024;
 const ITEM_NOT_FOUND_MESSAGE =
   "The specified item could not be found in the keychain.";
+const DUPLICATE_ITEM_STATUS = 45;
 const WORKSPACE_MODEL_CREDENTIAL_SERVICE =
   "ai.aletheia.workspace-model-profile-credentials";
 const WORKSPACE_MODEL_CREDENTIAL_ACCOUNT_PREFIX = "vera-model-profile-account";
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const LOCATOR_ID_PATTERN = /^[a-z0-9]{16,128}$/;
+const WORKSPACE_MODEL_CREDENTIAL_REFERENCE_PATTERN =
+  /^keychain:\/\/vera\/model-profile\/([0-9a-f-]{36})\/([a-z0-9]{16,128})$/i;
 
 function securityExecOptions(overrides = {}) {
   return {
@@ -63,6 +66,25 @@ function isMacOsKeychainItemNotFound(error) {
     text.includes(ITEM_NOT_FOUND_MESSAGE) ||
     /\berrSecItemNotFound\b/.test(text) ||
     /\b-25300\b/.test(text)
+  );
+}
+
+class MacOsKeychainItemCollisionError extends Error {
+  constructor() {
+    super("The requested macOS Keychain item already exists.");
+    this.name = "MacOsKeychainItemCollisionError";
+    this.code = "MACOS_KEYCHAIN_ITEM_COLLISION";
+  }
+}
+
+function isMacOsKeychainItemCollision(error) {
+  const text = securityErrorText(error);
+  return (
+    (error &&
+      Number.isInteger(error.status) &&
+      error.status === DUPLICATE_ITEM_STATUS) ||
+    /\berrSecDuplicateItem\b/.test(text) ||
+    /\b-25299\b/.test(text)
   );
 }
 
@@ -127,7 +149,6 @@ function writeGenericPassword({
   service,
   account,
   secret,
-  replace = false,
   execFileSyncImpl = execFileSync,
 }) {
   if (typeof secret !== "string" || /[\r\n]/.test(secret)) {
@@ -135,22 +156,17 @@ function writeGenericPassword({
   }
   try {
     runSecurityCommand(
-      [
-        "add-generic-password",
-        ...(replace ? ["-U"] : []),
-        "-s",
-        service,
-        "-a",
-        account,
-        "-w",
-      ],
+      ["add-generic-password", "-s", service, "-a", account, "-w"],
       {
         execFileSyncImpl,
         input: `${secret}\n`,
         stdin: "pipe",
       },
     );
-  } catch {
+  } catch (error) {
+    if (isMacOsKeychainItemCollision(error)) {
+      throw new MacOsKeychainItemCollisionError();
+    }
     throw genericKeychainFailure("write");
   }
 }
@@ -178,7 +194,8 @@ function workspaceModelCredentialAccount({
   canonicalOrigin,
   locatorId,
 }) {
-  if (!UUID_PATTERN.test(String(profileId ?? ""))) {
+  const normalizedProfileId = String(profileId ?? "").toLowerCase();
+  if (!UUID_PATTERN.test(normalizedProfileId)) {
     throw new Error("Model credential profileId must be a UUID.");
   }
   if (typeof provider !== "string" || provider.trim().length === 0) {
@@ -202,7 +219,43 @@ function workspaceModelCredentialAccount({
     .update(canonicalOrigin)
     .digest("hex")
     .slice(0, 24);
-  return `${WORKSPACE_MODEL_CREDENTIAL_ACCOUNT_PREFIX}:${profileId}:${provider}:${originHash}:${locatorId}`;
+  return `${WORKSPACE_MODEL_CREDENTIAL_ACCOUNT_PREFIX}:${normalizedProfileId}:${provider}:${originHash}:${locatorId}`;
+}
+
+function workspaceModelCredentialLocator({ reference, binding }) {
+  const match =
+    typeof reference === "string"
+      ? reference.match(WORKSPACE_MODEL_CREDENTIAL_REFERENCE_PATTERN)
+      : null;
+  if (!match || !binding || typeof binding !== "object") {
+    throw new Error("Model credential locator is invalid.");
+  }
+  const profileId = String(binding.profileId ?? "");
+  if (match[1].toLowerCase() !== profileId.toLowerCase()) {
+    throw new Error("Model credential locator binding does not match.");
+  }
+  const locatorId = match[2].toLowerCase();
+  return {
+    service: WORKSPACE_MODEL_CREDENTIAL_SERVICE,
+    account: workspaceModelCredentialAccount({
+      profileId,
+      provider: binding.provider,
+      canonicalOrigin: binding.canonicalOrigin,
+      locatorId,
+    }),
+  };
+}
+
+function deleteWorkspaceModelCredential({
+  reference,
+  binding,
+  execFileSyncImpl = execFileSync,
+}) {
+  const locator = workspaceModelCredentialLocator({ reference, binding });
+  return deleteGenericPassword({
+    ...locator,
+    execFileSyncImpl,
+  });
 }
 
 function ensureMacOsKeychainKey({
@@ -263,12 +316,16 @@ module.exports = {
   SECURITY_MAX_BUFFER_BYTES,
   WORKSPACE_MODEL_CREDENTIAL_SERVICE,
   WORKSPACE_MODEL_CREDENTIAL_ACCOUNT_PREFIX,
+  MacOsKeychainItemCollisionError,
   deleteGenericPassword,
+  deleteWorkspaceModelCredential,
   ensureMacOsKeychainKey,
   isMacOsKeychainItemNotFound,
+  isMacOsKeychainItemCollision,
   readGenericPassword,
   strict32ByteBase64,
   stripSingleTrailingNewline,
   workspaceModelCredentialAccount,
+  workspaceModelCredentialLocator,
   writeGenericPassword,
 };

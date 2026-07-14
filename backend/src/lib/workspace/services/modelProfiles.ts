@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import { ZodError, z } from "zod";
 
@@ -19,12 +19,25 @@ import {
 import {
   ModelProfilesRepository,
   type ActiveModelProfileJob,
+  type CredentialCleanupIntent,
   type StoredModelProfileRecord,
 } from "../repositories/modelProfiles";
 import type { ModelProfile } from "../types";
-import type { CredentialStorePort } from "./credentialStore";
+import {
+  buildStoredCredentialReference,
+  canonicalizeStoredCredentialReference,
+  CredentialStoreCollisionError,
+  parseStoredCredentialReference,
+  type CredentialBindingKey,
+  type CredentialStorePort,
+} from "./credentialStore";
 
 const MAX_CREDENTIAL_SECRET_BYTES = 8 * 1024;
+const MAX_CREDENTIAL_LOCATOR_ALLOCATION_ATTEMPTS = 8;
+const CREDENTIAL_LOCATOR_ALLOCATION_ERROR =
+  "Credential locator allocation failed.";
+const CREDENTIAL_CLEANUP_INTENT_ERROR =
+  "Credential cleanup intent could not be persisted.";
 const CredentialSecretSchema = z
   .object({
     secret: z
@@ -55,6 +68,17 @@ const EndpointBindingSnapshotSchema = z
     canonicalOrigin: z.string().min(1).nullable(),
     executionRevision: z.number().int().nonnegative(),
     profileUpdatedAt: z.string().datetime({ offset: true }),
+  })
+  .strict();
+const CredentialProbeSnapshotSchema = EndpointBindingSnapshotSchema.pick({
+  provider: true,
+  canonicalOrigin: true,
+  executionRevision: true,
+})
+  .extend({
+    canonicalOrigin: z.string().min(1),
+    credentialRef: z.string().min(1),
+    credentialState: z.literal("configured"),
   })
   .strict();
 const WorkspaceModelProfileViewSchema = z
@@ -123,10 +147,14 @@ export type ModelProfilesServiceOptions = {
   adapterRegistry?: ModelProviderAdapterRegistryPort;
   clock?: () => Date;
   nextId?: () => string;
+  nextCredentialLocatorId?: () => string;
 };
 
 export type EndpointBindingSnapshot = z.infer<
   typeof EndpointBindingSnapshotSchema
+>;
+export type CredentialProbeSnapshot = z.infer<
+  typeof CredentialProbeSnapshotSchema
 >;
 export type WorkspaceModelProfileView = z.infer<
   typeof WorkspaceModelProfileViewSchema
@@ -139,6 +167,7 @@ export class ModelProfilesService {
   private readonly adapterRegistry: ModelProviderAdapterRegistryPort | null;
   private readonly clock: () => Date;
   private readonly nextId: () => string;
+  private readonly nextCredentialLocatorId: () => string;
 
   constructor(
     private readonly repository: ModelProfilesRepository,
@@ -152,6 +181,9 @@ export class ModelProfilesService {
     this.adapterRegistry = options.adapterRegistry ?? null;
     this.clock = options.clock ?? legacyClock;
     this.nextId = options.nextId ?? randomUUID;
+    this.nextCredentialLocatorId =
+      options.nextCredentialLocatorId ??
+      (() => randomBytes(32).toString("hex"));
   }
 
   private now() {
@@ -190,6 +222,71 @@ export class ModelProfilesService {
       allowLocalDevelopmentBaseUrl: this.allowLocalDevelopmentBaseUrl,
     });
     return normalized?.canonicalOrigin ?? null;
+  }
+
+  private allocateCredentialReference(
+    profileId: string,
+    currentReference: string | null,
+  ) {
+    const reservedReferences = new Set(
+      this.repository
+        .listCredentialOrphanCleanups()
+        .map(
+          (cleanup) =>
+            canonicalizeStoredCredentialReference(cleanup.reference) ??
+            cleanup.reference.toLowerCase(),
+        ),
+    );
+    if (currentReference) {
+      reservedReferences.add(
+        canonicalizeStoredCredentialReference(currentReference) ??
+          currentReference.toLowerCase(),
+      );
+    }
+    for (
+      let attempt = 0;
+      attempt < MAX_CREDENTIAL_LOCATOR_ALLOCATION_ATTEMPTS;
+      attempt += 1
+    ) {
+      let reference: string;
+      try {
+        reference = buildStoredCredentialReference(
+          profileId,
+          this.nextCredentialLocatorId(),
+        );
+      } catch {
+        throw new WorkspaceApiError(
+          500,
+          "INTERNAL_ERROR",
+          CREDENTIAL_LOCATOR_ALLOCATION_ERROR,
+        );
+      }
+      const parsed = parseStoredCredentialReference(reference, profileId);
+      if (!parsed?.locatorId) {
+        throw new WorkspaceApiError(
+          500,
+          "INTERNAL_ERROR",
+          CREDENTIAL_LOCATOR_ALLOCATION_ERROR,
+        );
+      }
+      const referenceIdentity = canonicalizeStoredCredentialReference(
+        reference,
+        profileId,
+      );
+      if (
+        !referenceIdentity ||
+        reservedReferences.has(referenceIdentity) ||
+        this.repository.isCredentialReferenceBound(reference)
+      ) {
+        continue;
+      }
+      return reference;
+    }
+    throw new WorkspaceApiError(
+      500,
+      "INTERNAL_ERROR",
+      CREDENTIAL_LOCATOR_ALLOCATION_ERROR,
+    );
   }
 
   private endpointBinding(
@@ -351,6 +448,68 @@ export class ModelProfilesService {
     });
   }
 
+  private persistCredentialCleanupIntent(
+    reference: string,
+    binding: CredentialBindingKey,
+  ) {
+    const canonicalReference = canonicalizeStoredCredentialReference(
+      reference,
+      binding.profileId,
+    );
+    if (!canonicalReference) {
+      throw new WorkspaceApiError(
+        500,
+        "INTERNAL_ERROR",
+        CREDENTIAL_CLEANUP_INTENT_ERROR,
+      );
+    }
+    this.repository.queueCredentialOrphanCleanup({
+      reference: canonicalReference,
+      profileId: binding.profileId,
+      provider: binding.provider,
+      canonicalOrigin: binding.canonicalOrigin,
+      reason: "credential_cas_rollback",
+      now: this.now(),
+    });
+    const persisted = this.repository
+      .listCredentialOrphanCleanups()
+      .find(
+        (cleanup) =>
+          canonicalizeStoredCredentialReference(
+            cleanup.reference,
+            binding.profileId,
+          ) === canonicalReference,
+      );
+    if (
+      !persisted ||
+      persisted.profileId?.toLowerCase() !== binding.profileId.toLowerCase() ||
+      persisted.provider !== binding.provider ||
+      persisted.canonicalOrigin !== binding.canonicalOrigin ||
+      persisted.reason !== "credential_cas_rollback"
+    ) {
+      throw new WorkspaceApiError(
+        500,
+        "INTERNAL_ERROR",
+        CREDENTIAL_CLEANUP_INTENT_ERROR,
+      );
+    }
+  }
+
+  private deleteCredentialCleanupBestEffort(
+    cleanup: CredentialCleanupIntent | null,
+  ) {
+    if (!cleanup) return;
+    this.deleteCredentialBestEffort(
+      cleanup.reference,
+      {
+        id: cleanup.profileId,
+        provider: cleanup.provider,
+        canonicalOrigin: cleanup.canonicalOrigin,
+      },
+      cleanup.reason,
+    );
+  }
+
   private deleteCredentialBestEffort(
     reference: string | null,
     record: {
@@ -372,8 +531,21 @@ export class ModelProfilesService {
     if (this.repository.isCredentialReferenceBound(reference)) {
       return;
     }
+    if (
+      !record.canonicalOrigin ||
+      !parseStoredCredentialReference(reference, record.id)?.locatorId
+    ) {
+      this.queueCredentialOrphanCleanup(reference, record, reason);
+      return;
+    }
+    const binding: CredentialBindingKey = {
+      profileId: record.id,
+      provider: record.provider,
+      canonicalOrigin: record.canonicalOrigin,
+    };
     try {
-      this.credentialStore.delete(reference);
+      this.credentialStore.delete({ reference, binding });
+      this.repository.clearCredentialOrphanCleanup(reference);
     } catch {
       this.queueCredentialOrphanCleanup(reference, record, reason);
     }
@@ -381,9 +553,54 @@ export class ModelProfilesService {
 
   reconcileCredentialOrphans() {
     return this.publicCall(() => {
-      this.requireCredentialLifecycleDormant(
+      const credentialStore = this.requireCredentialStore(
         "Credential lifecycle reconciliation is unavailable until the production credential bridge is completed.",
       );
+      let deleted = 0;
+      let rebound = 0;
+      let failed = 0;
+      for (const cleanup of this.repository.listCredentialOrphanCleanups()) {
+        if (this.repository.isCredentialReferenceBound(cleanup.reference)) {
+          this.repository.clearCredentialOrphanCleanup(cleanup.reference);
+          rebound += 1;
+          continue;
+        }
+        if (
+          !cleanup.profileId ||
+          !cleanup.provider ||
+          !cleanup.canonicalOrigin ||
+          !parseStoredCredentialReference(cleanup.reference, cleanup.profileId)
+            ?.locatorId
+        ) {
+          this.repository.markCredentialOrphanCleanupFailed(
+            cleanup.reference,
+            "Credential cleanup binding is incomplete.",
+            this.now(),
+          );
+          failed += 1;
+          continue;
+        }
+        try {
+          credentialStore.delete({
+            reference: cleanup.reference,
+            binding: {
+              profileId: cleanup.profileId,
+              provider: cleanup.provider,
+              canonicalOrigin: cleanup.canonicalOrigin,
+            },
+          });
+          this.repository.clearCredentialOrphanCleanup(cleanup.reference);
+          deleted += 1;
+        } catch {
+          this.repository.markCredentialOrphanCleanupFailed(
+            cleanup.reference,
+            "Credential cleanup failed.",
+            this.now(),
+          );
+          failed += 1;
+        }
+      }
+      return { deleted, rebound, failed };
     });
   }
 
@@ -408,8 +625,11 @@ export class ModelProfilesService {
     }
   }
 
-  private requireCredentialLifecycleDormant(message: string) {
-    throw new WorkspaceApiError(409, "CONFLICT", message);
+  private requireCredentialStore(message: string) {
+    if (!this.credentialStore) {
+      throw new WorkspaceApiError(409, "CONFLICT", message);
+    }
+    return this.credentialStore;
   }
 
   capabilities() {
@@ -518,7 +738,7 @@ export class ModelProfilesService {
       const executionBindingChanged =
         bindingChanged || modelChanged || disableRequested;
       if (bindingChanged && current.credentialRef !== null) {
-        this.requireCredentialLifecycleDormant(
+        this.requireCredentialStore(
           "Credential lifecycle mutations are unavailable until the production credential bridge is completed.",
         );
       }
@@ -535,34 +755,34 @@ export class ModelProfilesService {
             : "Model profile disable requested.",
           failureMessage,
         );
+        const updateInput = {
+          ...input,
+          provider,
+          baseUrl: normalized.baseUrl,
+          credentialOrigin: normalized.canonicalOrigin,
+          ...(bindingChanged
+            ? {
+                credentialRef: null,
+                credentialState: "missing" as const,
+              }
+            : {}),
+          now,
+        };
+        if (bindingChanged) {
+          const { profile, cleanup } =
+            this.repository.updateBindingWithActiveJobBarrierAndCleanupIntent(
+              id,
+              updateInput,
+              failureMessage,
+            );
+          this.deleteCredentialCleanupBestEffort(cleanup);
+          return this.toPublicModel(this.repository.requireStored(profile.id));
+        }
         const updated = this.repository.updateWithActiveJobBarrier(
           id,
-          {
-            ...input,
-            provider,
-            baseUrl: normalized.baseUrl,
-            credentialOrigin: normalized.canonicalOrigin,
-            ...(bindingChanged
-              ? {
-                  credentialRef: null,
-                  credentialState: "missing" as const,
-                }
-              : {}),
-            now,
-          },
+          updateInput,
           failureMessage,
         );
-        if (bindingChanged) {
-          this.deleteCredentialBestEffort(
-            current.credentialRef,
-            {
-              id: current.id,
-              provider: current.provider,
-              canonicalOrigin: currentOrigin,
-            },
-            "binding_change",
-          );
-        }
         return this.toPublicModel(this.repository.requireStored(updated.id));
       }
       const updated = this.repository.update(id, {
@@ -623,7 +843,7 @@ export class ModelProfilesService {
     return this.publicCall(() => {
       const current = this.repository.requireStored(id);
       if (current.credentialRef !== null) {
-        this.requireCredentialLifecycleDormant(
+        this.requireCredentialStore(
           "Credential lifecycle mutations are unavailable until the production credential bridge is completed.",
         );
       }
@@ -632,52 +852,124 @@ export class ModelProfilesService {
         "Model profile deletion requested.",
         "Model profile has active jobs and could not be deleted safely.",
       );
-      this.repository.deleteWithActiveJobBarrier(
-        id,
-        this.now(),
-        "Model profile has active jobs and could not be deleted safely.",
-      );
-      this.deleteCredentialBestEffort(
-        current.credentialRef,
-        {
-          id: current.id,
-          provider: current.provider,
-          canonicalOrigin: this.currentOrigin(current),
-        },
-        "profile_delete",
-      );
+      const cleanup =
+        this.repository.deleteWithActiveJobBarrierAndCleanupIntent(
+          id,
+          this.now(),
+          "Model profile has active jobs and could not be deleted safely.",
+        );
+      this.deleteCredentialCleanupBestEffort(cleanup);
     });
   }
 
   configureCredential(id: string, value: unknown) {
     return this.publicCall(() => {
-      throw new WorkspaceApiError(
-        409,
-        "CONFLICT",
+      const credentialStore = this.requireCredentialStore(
         "Credential lifecycle mutations are unavailable until the production credential bridge is completed.",
       );
+      const input = CredentialSecretSchema.parse(value);
+      const current = this.repository.requireStored(id);
+      const canonicalOrigin = this.currentOrigin(current);
+      if (!canonicalOrigin) {
+        throw new WorkspaceApiError(
+          409,
+          "CONFLICT",
+          "Model profile endpoint origin must be configured before storing a credential.",
+        );
+      }
+      const binding: CredentialBindingKey = {
+        profileId: current.id,
+        provider: current.provider,
+        canonicalOrigin,
+      };
+      const reference = this.allocateCredentialReference(
+        current.id,
+        current.credentialRef,
+      );
+      this.persistCredentialCleanupIntent(reference, binding);
+      try {
+        credentialStore.store({
+          reference,
+          binding,
+          secret: input.secret,
+        });
+      } catch (error) {
+        if (error instanceof CredentialStoreCollisionError) {
+          this.repository.clearCredentialOrphanCleanup(reference);
+        }
+        throw error;
+      }
+      let updated: StoredModelProfileRecord;
+      let replacedCredential: CredentialCleanupIntent | null;
+      try {
+        const result = this.repository.compareAndSetCredentialBindingInternal(
+          current.id,
+          {
+            provider: current.provider,
+            canonicalOrigin,
+            executionRevision: current.executionRevision,
+            credentialRef: current.credentialRef,
+            credentialState: current.credentialState,
+          },
+          {
+            reference,
+            state: "configured",
+            origin: canonicalOrigin,
+            migrationIssueCode: null,
+            cleanupIntentReference: reference,
+            now: this.now(),
+          },
+        );
+        updated = result.record;
+        replacedCredential = result.cleanup;
+      } catch (error) {
+        this.deleteCredentialBestEffort(
+          reference,
+          {
+            id: current.id,
+            provider: current.provider,
+            canonicalOrigin,
+          },
+          "credential_cas_rollback",
+        );
+        throw error;
+      }
+      this.deleteCredentialCleanupBestEffort(replacedCredential);
+      return this.describeStored(updated);
     });
   }
 
   clearCredential(id: string) {
     return this.publicCall(() => {
-      throw new WorkspaceApiError(
-        409,
-        "CONFLICT",
+      this.requireCredentialStore(
         "Credential lifecycle mutations are unavailable until the production credential bridge is completed.",
       );
+      const { record, cleanup } =
+        this.repository.clearCredentialBindingWithCleanupIntent(id, this.now());
+      this.deleteCredentialCleanupBestEffort(cleanup);
+      return this.describeStored(record);
     });
   }
 
-  markCredentialInvalid(id: string) {
+  markCredentialInvalid(id: string, probeSnapshot: unknown) {
     return this.publicCall(() => {
-      const current = this.repository.requireStored(id);
-      const updated = this.repository.setCredentialBindingInternal(id, {
-        reference: current.credentialRef,
-        state: "invalid",
-        origin: this.currentOrigin(current),
-        now: this.now(),
-      });
+      const expected = CredentialProbeSnapshotSchema.parse(probeSnapshot);
+      const credentialRef = canonicalizeStoredCredentialReference(
+        expected.credentialRef,
+        id,
+      );
+      if (!credentialRef) {
+        throw new WorkspaceApiError(
+          400,
+          "VALIDATION_ERROR",
+          "Credential probe snapshot is invalid.",
+        );
+      }
+      const updated = this.repository.compareAndSetCredentialInvalid(
+        id,
+        { ...expected, credentialRef },
+        this.now(),
+      );
       return this.describeStored(updated);
     });
   }

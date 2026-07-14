@@ -46,6 +46,7 @@ import { WORKFLOW_RUNTIME_V6_MIGRATION } from "../lib/workspace/migrations/v6Wor
 import { isWorkspaceConnectionSqlcipherEncrypted } from "../lib/workspace/migrations/encryptionPolicy";
 import { TABULAR_MIKE_SEMANTICS_V7_MIGRATION } from "../lib/workspace/migrations/v7TabularMikeSemantics";
 import { MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION } from "../lib/workspace/migrations/v8ModelCredentialOrigin";
+import { WorkspaceApiError } from "../lib/workspace/errors";
 import { ModelProfilesRepository } from "../lib/workspace/repositories/modelProfiles";
 import { ProjectsRepository } from "../lib/workspace/repositories/projects";
 import { SettingsRepository } from "../lib/workspace/repositories/settings";
@@ -56,9 +57,12 @@ import type {
 import { ModelProfilesService } from "../lib/workspace/services/modelProfiles";
 import {
   buildStoredCredentialReference,
-  type CredentialBindingKey,
+  CredentialStoreCollisionError,
+  type CredentialDeletionInput,
   type CredentialResolutionInput,
+  type CredentialStorageInput,
   type CredentialStorePort,
+  parseStoredCredentialReference,
 } from "../lib/workspace/services/credentialStore";
 import {
   buildEndpointBindingSnapshot,
@@ -211,67 +215,92 @@ class AuditCredentialStore implements CredentialStorePort {
   readonly accountPrefix = "vera-model-profile-account:";
   storeCalls = 0;
   resolveCalls = 0;
-  deleteCalls: string[] = [];
+  deleteCalls: CredentialDeletionInput[] = [];
   lastReference: string | null = null;
   lastAccount: string | null = null;
-  private readonly byReference = new Map<
-    string,
-    {
-      binding: CredentialBindingKey;
-      secret: string;
-      reference: string;
-      account: string;
-    }
-  >();
+  failNextDelete = false;
+  afterStore: (() => void) | null = null;
 
-  private key(binding: CredentialBindingKey) {
-    return JSON.stringify(binding);
+  constructor(
+    private readonly state: {
+      nextLocator: number;
+      byAccount: Map<
+        string,
+        {
+          secret: string;
+          reference: string;
+        }
+      >;
+    } = { nextLocator: 1, byAccount: new Map() },
+  ) {}
+
+  private account(input: CredentialResolutionInput) {
+    const parsed = parseStoredCredentialReference(
+      input.reference,
+      input.binding.profileId,
+    );
+    if (!parsed?.locatorId) throw new Error("invalid credential locator");
+    return `${this.accountPrefix}${input.binding.profileId.toLowerCase()}:${input.binding.provider}:${input.binding.canonicalOrigin}:${parsed.locatorId.toLowerCase()}`;
   }
 
-  store(input: { binding: CredentialBindingKey; secret: string }) {
+  restart() {
+    return new AuditCredentialStore(this.state);
+  }
+
+  nextLocatorId() {
+    return String(this.state.nextLocator++).padStart(16, "0");
+  }
+
+  store(input: CredentialStorageInput) {
     this.storeCalls += 1;
-    const locatorId = String(this.byReference.size + 1).padStart(16, "0");
-    const reference = buildStoredCredentialReference(
-      input.binding.profileId,
-      locatorId,
-    );
-    const account = `${this.accountPrefix}${input.binding.profileId}:${input.binding.provider}:${locatorId}`;
-    this.byReference.set(reference, {
-      binding: input.binding,
+    const account = this.account(input);
+    if (this.state.byAccount.has(account)) {
+      throw new CredentialStoreCollisionError();
+    }
+    this.state.byAccount.set(account, {
       secret: input.secret,
-      reference,
-      account,
+      reference: input.reference,
     });
-    this.lastReference = reference;
+    this.lastReference = input.reference;
     this.lastAccount = account;
-    return { reference };
+    this.afterStore?.();
   }
 
   resolve(input: CredentialResolutionInput) {
     this.resolveCalls += 1;
-    const stored = this.byReference.get(input.reference);
-    if (!stored) {
+    const stored = this.state.byAccount.get(this.account(input));
+    if (!stored || stored.reference !== input.reference) {
       throw new Error("missing credential");
-    }
-    if (this.key(stored.binding) !== this.key(input.binding)) {
-      throw new Error("binding mismatch");
     }
     return stored.secret;
   }
 
-  delete(reference: string) {
-    this.deleteCalls.push(reference);
-    this.byReference.delete(reference);
+  delete(input: CredentialDeletionInput) {
+    this.deleteCalls.push({
+      reference: input.reference,
+      binding: { ...input.binding },
+    });
+    const account = this.account(input);
+    if (this.failNextDelete) {
+      this.failNextDelete = false;
+      throw new Error("credential delete failed");
+    }
+    this.state.byAccount.delete(account);
   }
 
-  hasReference(reference: string | null) {
-    if (!reference) return false;
-    return this.byReference.has(reference);
+  has(input: CredentialResolutionInput) {
+    return this.state.byAccount.has(this.account(input));
   }
 }
 
 class UpdatingResources {
+  private afterNextCancel: (() => void) | null = null;
+
   constructor(private readonly database: WorkspaceDatabase) {}
+
+  setAfterNextCancel(callback: () => void) {
+    this.afterNextCancel = callback;
+  }
 
   private cancel(jobIds: readonly string[]) {
     const now = new Date("2026-07-14T00:00:00.000Z").toISOString();
@@ -280,6 +309,9 @@ class UpdatingResources {
         .prepare("UPDATE jobs SET status='cancelled', updated_at=? WHERE id=?")
         .run(now, jobId);
     }
+    const callback = this.afterNextCancel;
+    this.afterNextCancel = null;
+    callback?.();
   }
 
   cancelQueued(jobIds: readonly string[]) {
@@ -312,6 +344,7 @@ function createServices(
   allowLocalDevelopmentBaseUrl = false,
   resources: UpdatingResources | NoOpResources | undefined = undefined,
   adapterRegistry: ModelProviderAdapterRegistryPort | undefined = undefined,
+  nextCredentialLocatorId: () => string = () => store.nextLocatorId(),
 ) {
   const profiles = new ModelProfilesRepository(database);
   const settings = new SettingsRepository(database);
@@ -325,6 +358,7 @@ function createServices(
       resources,
       adapterRegistry,
       clock: () => new Date("2026-07-14T00:00:00.000Z"),
+      nextCredentialLocatorId,
     }),
     settingsService: new SettingsService(
       settings,
@@ -343,21 +377,27 @@ function seedConfiguredProfileCredential(input: {
   secret: string;
   nowAt: string;
 }) {
-  const stored = input.store.store({
-    binding: {
-      profileId: input.profile.id,
-      provider: input.profile.provider,
-      canonicalOrigin: input.origin,
-    },
+  const binding = {
+    profileId: input.profile.id,
+    provider: input.profile.provider,
+    canonicalOrigin: input.origin,
+  };
+  const reference = buildStoredCredentialReference(
+    input.profile.id,
+    input.store.nextLocatorId(),
+  );
+  input.store.store({
+    reference,
+    binding,
     secret: input.secret,
   });
   input.profiles.setCredentialBindingInternal(input.profile.id, {
-    reference: stored.reference,
+    reference,
     state: "configured",
     origin: input.origin,
     now: input.nowAt,
   });
-  return stored.reference;
+  return reference;
 }
 
 function insertLegacyProfile(
@@ -2931,10 +2971,10 @@ async function auditLoopbackGate() {
   database.close();
 }
 
-async function auditCredentialMutationsFailClosed() {
+async function auditCredentialReplacementAndCasRollbackBindings() {
   const database = createDatabase("configure-clears-issue.db");
   const store = new AuditCredentialStore();
-  const { modelService } = createServices(database, store, false);
+  const { modelService, profiles } = createServices(database, store, false);
   const profile = modelService.create({
     name: "Configure clears issue",
     provider: "openai",
@@ -2942,45 +2982,722 @@ async function auditCredentialMutationsFailClosed() {
     enabled: false,
     isDefault: false,
   });
-  const initialStoreCalls = store.lastReference;
+  const binding = {
+    profileId: profile.id,
+    provider: "openai" as const,
+    canonicalOrigin: "https://api.openai.com",
+  };
+  const first = modelService.configureCredential(profile.id, {
+    secret: "first-secret",
+  });
+  const firstReference = store.lastReference;
+  assert.ok(firstReference);
+  assert.equal(first.credential.status, "configured");
+  assert.equal(store.has({ reference: firstReference, binding }), true);
+
+  store.failNextDelete = true;
+  const replaced = modelService.configureCredential(profile.id, {
+    secret: "replacement-secret",
+  });
+  const replacementReference = store.lastReference;
+  assert.ok(replacementReference);
+  assert.notEqual(replacementReference, firstReference);
+  assert.equal(replaced.credential.status, "configured");
+  assert.equal(store.has({ reference: firstReference, binding }), true);
+  assert.equal(store.has({ reference: replacementReference, binding }), true);
+  assert.deepEqual(store.deleteCalls.at(-1), {
+    reference: firstReference,
+    binding,
+  });
+  assert.equal(
+    profiles
+      .listCredentialOrphanCleanups()
+      .find((cleanup) => cleanup.reference === firstReference)?.reason,
+    "credential_replace",
+  );
+  assert.deepEqual(modelService.reconcileCredentialOrphans(), {
+    deleted: 1,
+    rebound: 0,
+    failed: 0,
+  });
+  assert.equal(store.has({ reference: firstReference, binding }), false);
+
+  const restartedStore = store.restart();
+  const restarted = createServices(database, restartedStore, false);
+  restartedStore.failNextDelete = true;
+  const cleared = restarted.modelService.clearCredential(profile.id);
+  assert.equal(cleared.credential.status, "missing");
+  assert.equal(
+    restartedStore.has({ reference: replacementReference, binding }),
+    true,
+  );
+  assert.deepEqual(restartedStore.deleteCalls, [
+    { reference: replacementReference, binding },
+  ]);
+  assert.equal(
+    profiles
+      .listCredentialOrphanCleanups()
+      .find((cleanup) => cleanup.reference === replacementReference)?.reason,
+    "credential_clear",
+  );
+  assert.deepEqual(restarted.modelService.reconcileCredentialOrphans(), {
+    deleted: 1,
+    rebound: 0,
+    failed: 0,
+  });
+  assert.equal(
+    restartedStore.has({ reference: replacementReference, binding }),
+    false,
+  );
+
+  const racingProfile = modelService.create({
+    name: "CAS rollback binding",
+    provider: "openai",
+    model: "gpt-4.1",
+    enabled: false,
+    isDefault: false,
+  });
+  const racingBinding = {
+    profileId: racingProfile.id,
+    provider: "openai" as const,
+    canonicalOrigin: "https://api.openai.com",
+  };
+  store.afterStore = () => {
+    store.afterStore = null;
+    profiles.update(racingProfile.id, {
+      model: "gpt-4.1-raced",
+      now: now(9),
+    });
+  };
+  store.failNextDelete = true;
   assert.throws(
     () =>
-      modelService.configureCredential(profile.id, {
-        secret: "clear-issue-secret",
+      modelService.configureCredential(racingProfile.id, {
+        secret: "cas-secret",
       }),
-    /Credential lifecycle mutations are unavailable/,
+    /binding changed before credential storage completed/,
   );
+  const rolledBackReference = store.lastReference;
+  assert.ok(rolledBackReference);
+  assert.equal(
+    store.has({ reference: rolledBackReference, binding: racingBinding }),
+    true,
+  );
+  assert.deepEqual(store.deleteCalls.at(-1), {
+    reference: rolledBackReference,
+    binding: racingBinding,
+  });
+  assert.equal(
+    profiles
+      .listCredentialOrphanCleanups()
+      .find((cleanup) => cleanup.reference === rolledBackReference)?.reason,
+    "credential_cas_rollback",
+  );
+  assert.deepEqual(modelService.reconcileCredentialOrphans(), {
+    deleted: 1,
+    rebound: 0,
+    failed: 0,
+  });
+  assert.equal(
+    store.has({ reference: rolledBackReference, binding: racingBinding }),
+    false,
+  );
+
   assert.throws(
     () =>
       modelService.configureCredential(profile.id, {
         secret: "contains\rreturn",
       }),
-    /Credential lifecycle mutations are unavailable/,
+    /Model profile request is invalid/,
   );
   assert.throws(
     () =>
       modelService.configureCredential(profile.id, {
         secret: "contains\nnewline",
       }),
-    /Credential lifecycle mutations are unavailable/,
+    /Model profile request is invalid/,
   );
+  database.close();
+}
+
+async function auditCredentialLocatorAllocationGuards() {
+  const database = createDatabase("credential-locator-allocation.db");
+  const store = new AuditCredentialStore();
+  const { modelService, profiles } = createServices(database, store, false);
+  const profile = modelService.create({
+    name: "Credential locator allocation",
+    provider: "openai",
+    model: "gpt-4.1",
+    enabled: false,
+    isDefault: false,
+  });
+  const binding = {
+    profileId: profile.id,
+    provider: "openai" as const,
+    canonicalOrigin: "https://api.openai.com",
+  };
+  const canonicalProbeLocator = "ABCDEF0123456789";
+  const canonicalProbeReference = buildStoredCredentialReference(
+    profile.id.toUpperCase(),
+    canonicalProbeLocator,
+  );
+  assert.equal(
+    canonicalProbeReference,
+    `keychain://vera/model-profile/${profile.id}/${canonicalProbeLocator.toLowerCase()}`,
+  );
+  assert.deepEqual(
+    parseStoredCredentialReference(
+      canonicalProbeReference.toUpperCase(),
+      profile.id,
+    ),
+    {
+      profileId: profile.id,
+      locatorId: canonicalProbeLocator.toLowerCase(),
+    },
+  );
+  modelService.configureCredential(profile.id, { secret: "initial-secret" });
+  const currentReference = store.lastReference;
+  assert.ok(currentReference);
+  const currentLocator = parseStoredCredentialReference(
+    currentReference,
+    profile.id,
+  )?.locatorId;
+  assert.ok(currentLocator);
+
+  const orphanLocator = "0000000000000bad";
+  const orphanReference = buildStoredCredentialReference(
+    profile.id,
+    orphanLocator,
+  );
+  const orphanLedgerReference = `keychain://vera/model-profile/${profile.id}/${orphanLocator.toUpperCase()}`;
+  const orphanBinding = {
+    profileId: profile.id,
+    provider: "deepseek" as const,
+    canonicalOrigin: "https://api.deepseek.com",
+  };
+  store.store({
+    reference: orphanReference,
+    binding: orphanBinding,
+    secret: "orphan-secret",
+  });
+  profiles.queueCredentialOrphanCleanup({
+    reference: orphanLedgerReference,
+    profileId: profile.id,
+    provider: orphanBinding.provider,
+    canonicalOrigin: orphanBinding.canonicalOrigin,
+    reason: "credential_replace",
+    now: now(11),
+  });
+
+  const uniqueLocator = "0000000000000bee";
+  const candidates = [currentLocator, orphanLocator, uniqueLocator];
+  let candidateCalls = 0;
+  const retryingService = new ModelProfilesService(profiles, {
+    credentialStore: store,
+    clock: () => new Date("2026-07-14T00:00:00.000Z"),
+    nextCredentialLocatorId: () => {
+      candidateCalls += 1;
+      return candidates.shift() ?? uniqueLocator;
+    },
+  });
+  const storeCallsBeforeRetry = store.storeCalls;
+  const rotated = retryingService.configureCredential(profile.id, {
+    secret: "rotated-secret",
+  });
+  const uniqueReference = buildStoredCredentialReference(
+    profile.id,
+    uniqueLocator,
+  );
+  assert.equal(candidateCalls, 3);
+  assert.equal(store.storeCalls, storeCallsBeforeRetry + 1);
+  assert.equal(
+    profiles.requireStored(profile.id).credentialRef,
+    uniqueReference,
+  );
+  assert.equal(rotated.credential.status, "configured");
+  assert.equal(store.has({ reference: uniqueReference, binding }), true);
+  assert.equal(
+    profiles
+      .listCredentialOrphanCleanups()
+      .some((cleanup) => cleanup.reference === orphanReference),
+    true,
+  );
+  assert.deepEqual(retryingService.reconcileCredentialOrphans(), {
+    deleted: 1,
+    rebound: 0,
+    failed: 0,
+  });
+  assert.equal(
+    store.has({ reference: orphanReference, binding: orphanBinding }),
+    false,
+  );
+
+  const currentAliasReference = uniqueReference
+    .replace("keychain://vera", "KEYCHAIN://VERA")
+    .replace(uniqueLocator, uniqueLocator.toUpperCase());
+  database
+    .prepare(
+      `INSERT INTO model_profile_credential_orphan_cleanups
+         (reference, profile_id, provider, canonical_origin, reason,
+          attempt_count, last_error, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?)`,
+    )
+    .run(
+      currentAliasReference,
+      profile.id,
+      binding.provider,
+      binding.canonicalOrigin,
+      "credential_cas_rollback",
+      now(12),
+      now(12),
+    );
+  assert.equal(
+    profiles.isCredentialReferenceBound(currentAliasReference),
+    true,
+  );
+  const deletesBeforeAliasReconcile = store.deleteCalls.length;
+  assert.deepEqual(retryingService.reconcileCredentialOrphans(), {
+    deleted: 0,
+    rebound: 1,
+    failed: 0,
+  });
+  assert.equal(store.deleteCalls.length, deletesBeforeAliasReconcile);
+  assert.equal(
+    store.resolve({ reference: uniqueReference, binding }),
+    "rotated-secret",
+  );
+
+  database
+    .prepare(
+      `INSERT INTO model_profile_credential_orphan_cleanups
+         (reference, profile_id, provider, canonical_origin, reason,
+          attempt_count, last_error, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?)`,
+    )
+    .run(
+      currentAliasReference,
+      profile.id,
+      binding.provider,
+      binding.canonicalOrigin,
+      "credential_cas_rollback",
+      now(12),
+      now(12),
+    );
+  profiles.markCredentialOrphanCleanupFailed(
+    uniqueReference,
+    "canonical identity failure probe",
+    now(13),
+  );
+  const aliasFailure = profiles
+    .listCredentialOrphanCleanups()
+    .find((cleanup) => cleanup.reference === currentAliasReference);
+  assert.equal(aliasFailure?.attemptCount, 1);
+  assert.equal(aliasFailure?.lastError, "canonical identity failure probe");
+  profiles.clearCredentialOrphanCleanup(uniqueReference);
+  assert.equal(
+    profiles
+      .listCredentialOrphanCleanups()
+      .some((cleanup) => cleanup.reference === currentAliasReference),
+    false,
+  );
+  assert.equal(
+    store.resolve({ reference: uniqueReference, binding }),
+    "rotated-secret",
+  );
+
+  const blockedLocator = "0000000000000c01";
+  const blockedReference = buildStoredCredentialReference(
+    profile.id,
+    blockedLocator,
+  );
+  store.store({
+    reference: blockedReference,
+    binding: orphanBinding,
+    secret: "blocked-orphan-secret",
+  });
+  profiles.queueCredentialOrphanCleanup({
+    reference: blockedReference,
+    profileId: profile.id,
+    provider: orphanBinding.provider,
+    canonicalOrigin: orphanBinding.canonicalOrigin,
+    reason: "credential_replace",
+    now: now(12),
+  });
+  const uniqueCurrentLocator = parseStoredCredentialReference(
+    uniqueReference,
+    profile.id,
+  )?.locatorId;
+  assert.ok(uniqueCurrentLocator);
+  let exhaustedCalls = 0;
+  const exhaustedService = new ModelProfilesService(profiles, {
+    credentialStore: store,
+    clock: () => new Date("2026-07-14T00:00:00.000Z"),
+    nextCredentialLocatorId: () => {
+      const value =
+        exhaustedCalls % 2 === 0
+          ? uniqueCurrentLocator.toUpperCase()
+          : blockedLocator;
+      exhaustedCalls += 1;
+      return value;
+    },
+  });
+  const storeCallsBeforeExhaustion = store.storeCalls;
   assert.throws(
-    () => modelService.clearCredential(profile.id),
-    /Credential lifecycle mutations are unavailable/,
+    () =>
+      exhaustedService.configureCredential(profile.id, {
+        secret: "must-not-be-written",
+      }),
+    /Credential locator allocation failed/,
   );
-  assert.equal(store.lastReference, initialStoreCalls);
+  assert.equal(exhaustedCalls, 8);
+  assert.equal(store.storeCalls, storeCallsBeforeExhaustion);
+  assert.equal(
+    profiles.requireStored(profile.id).credentialRef,
+    uniqueReference,
+  );
+  assert.equal(
+    store.resolve({ reference: uniqueReference, binding }),
+    "rotated-secret",
+  );
+
+  let maliciousCalls = 0;
+  const maliciousService = new ModelProfilesService(profiles, {
+    credentialStore: store,
+    clock: () => new Date("2026-07-14T00:00:00.000Z"),
+    nextCredentialLocatorId: () => {
+      maliciousCalls += 1;
+      return "../../must-not-be-a-locator";
+    },
+  });
+  const storeCallsBeforeMaliciousLocator = store.storeCalls;
+  let maliciousError: unknown = null;
+  try {
+    maliciousService.configureCredential(profile.id, {
+      secret: "malicious-locator-secret",
+    });
+  } catch (error) {
+    maliciousError = error;
+  }
+  assert.ok(maliciousError instanceof Error);
+  assert.match(String(maliciousError), /Credential locator allocation failed/);
+  assert.equal(
+    String(maliciousError).includes("malicious-locator-secret"),
+    false,
+  );
+  assert.equal(maliciousCalls, 1);
+  assert.equal(store.storeCalls, storeCallsBeforeMaliciousLocator);
+
+  const createOnlyReference = buildStoredCredentialReference(
+    profile.id,
+    "0000000000000c02",
+  );
+  store.store({
+    reference: createOnlyReference,
+    binding,
+    secret: "create-only-original",
+  });
+  assert.throws(
+    () =>
+      store.store({
+        reference: createOnlyReference,
+        binding,
+        secret: "must-not-overwrite",
+      }),
+    /Credential locator already exists/,
+  );
+  assert.equal(
+    store.resolve({ reference: createOnlyReference, binding }),
+    "create-only-original",
+  );
+  let storeCollisionLocatorCalls = 0;
+  const storeCollisionService = new ModelProfilesService(profiles, {
+    credentialStore: store,
+    clock: () => new Date("2026-07-14T00:00:00.000Z"),
+    nextCredentialLocatorId: () => {
+      storeCollisionLocatorCalls += 1;
+      return "0000000000000c02";
+    },
+  });
+  const deletesBeforeStoreCollision = store.deleteCalls.length;
+  let storeCollisionError: unknown = null;
+  try {
+    storeCollisionService.configureCredential(profile.id, {
+      secret: "must-not-overwrite-through-service",
+    });
+  } catch (error) {
+    storeCollisionError = error;
+  }
+  assert.ok(storeCollisionError instanceof Error);
+  assert.match(String(storeCollisionError), /Model profile operation failed/);
+  assert.equal(storeCollisionLocatorCalls, 1);
+  assert.equal(
+    profiles.requireStored(profile.id).credentialRef,
+    uniqueReference,
+  );
+  assert.equal(
+    store.resolve({ reference: createOnlyReference, binding }),
+    "create-only-original",
+  );
+  assert.equal(store.deleteCalls.length, deletesBeforeStoreCollision);
+  assert.equal(
+    String(storeCollisionError).includes("must-not-overwrite-through-service"),
+    false,
+  );
+  assert.equal(
+    profiles
+      .listCredentialOrphanCleanups()
+      .some((cleanup) => cleanup.reference === createOnlyReference),
+    false,
+  );
+  assert.deepEqual(retryingService.reconcileCredentialOrphans(), {
+    deleted: 1,
+    rebound: 0,
+    failed: 0,
+  });
+  assert.equal(
+    store.resolve({ reference: createOnlyReference, binding }),
+    "create-only-original",
+  );
+  assert.equal(
+    store.resolve({ reference: uniqueReference, binding }),
+    "rotated-secret",
+  );
+  store.delete({ reference: createOnlyReference, binding });
+
+  const indeterminateLocator = "0000000000000c03";
+  const indeterminateReference = buildStoredCredentialReference(
+    profile.id,
+    indeterminateLocator,
+  );
+  const indeterminateService = new ModelProfilesService(profiles, {
+    credentialStore: store,
+    clock: () => new Date("2026-07-14T00:00:00.000Z"),
+    nextCredentialLocatorId: () => indeterminateLocator,
+  });
+  store.afterStore = () => {
+    store.afterStore = null;
+    throw new Error("simulated timeout after Keychain write");
+  };
+  assert.throws(
+    () =>
+      indeterminateService.configureCredential(profile.id, {
+        secret: "indeterminate-write-secret",
+      }),
+    /Model profile operation failed/,
+  );
+  assert.equal(
+    profiles.requireStored(profile.id).credentialRef,
+    uniqueReference,
+  );
+  assert.equal(store.has({ reference: indeterminateReference, binding }), true);
+  const indeterminateCleanup = profiles
+    .listCredentialOrphanCleanups()
+    .find((cleanup) => cleanup.reference === indeterminateReference);
+  assert.equal(indeterminateCleanup?.provider, binding.provider);
+  assert.equal(indeterminateCleanup?.canonicalOrigin, binding.canonicalOrigin);
+  assert.equal(indeterminateCleanup?.reason, "credential_cas_rollback");
+  const afterCrashStore = store.restart();
+  const afterCrash = createServices(database, afterCrashStore, false);
+  assert.deepEqual(afterCrash.modelService.reconcileCredentialOrphans(), {
+    deleted: 1,
+    rebound: 0,
+    failed: 0,
+  });
+  assert.equal(
+    afterCrashStore.has({ reference: indeterminateReference, binding }),
+    false,
+  );
+  assert.equal(
+    afterCrashStore.resolve({ reference: uniqueReference, binding }),
+    "rotated-secret",
+  );
+  database.close();
+}
+
+async function auditCredentialUnbindUsesTransactionalCurrent() {
+  const database = createDatabase("credential-transactional-current.db");
+  const store = new AuditCredentialStore();
+  const resources = new UpdatingResources(database);
+  const { modelService, profiles } = createServices(
+    database,
+    store,
+    false,
+    resources,
+  );
+
+  const updateProfile = modelService.create({
+    name: "Binding race update",
+    provider: "openai",
+    model: "gpt-4.1",
+    enabled: false,
+    isDefault: false,
+  });
+  modelService.configureCredential(updateProfile.id, {
+    secret: "update-race-a",
+  });
+  forceEnableProfileFixture(profiles, updateProfile.id, 13);
+  insertAssistantSnapshotJob(
+    database,
+    updateProfile.id,
+    "credential-update-race-job",
+  );
+  let updateRaceReference: string | null = null;
+  resources.setAfterNextCancel(() => {
+    modelService.configureCredential(updateProfile.id, {
+      secret: "update-race-b",
+    });
+    updateRaceReference = store.lastReference;
+  });
+  const updated = modelService.update(updateProfile.id, {
+    provider: "deepseek",
+  });
+  assert.equal(updated.provider, "deepseek");
+  assert.equal(updated.credentialStatus, "not_configured");
+  assert.ok(updateRaceReference);
+  assert.equal(
+    store.has({
+      reference: updateRaceReference,
+      binding: {
+        profileId: updateProfile.id,
+        provider: "openai",
+        canonicalOrigin: "https://api.openai.com",
+      },
+    }),
+    false,
+  );
+
+  const deleteProfile = modelService.create({
+    name: "Binding race delete",
+    provider: "anthropic",
+    model: "claude-sonnet-4",
+    enabled: false,
+    isDefault: false,
+  });
+  modelService.configureCredential(deleteProfile.id, {
+    secret: "delete-race-a",
+  });
+  forceEnableProfileFixture(profiles, deleteProfile.id, 14);
+  insertAssistantSnapshotJob(
+    database,
+    deleteProfile.id,
+    "credential-delete-race-job",
+  );
+  let deleteRaceReference: string | null = null;
+  resources.setAfterNextCancel(() => {
+    modelService.configureCredential(deleteProfile.id, {
+      secret: "delete-race-b",
+    });
+    deleteRaceReference = store.lastReference;
+  });
+  modelService.delete(deleteProfile.id);
+  assert.equal(profiles.getStored(deleteProfile.id), null);
+  assert.ok(deleteRaceReference);
+  assert.equal(
+    store.has({
+      reference: deleteRaceReference,
+      binding: {
+        profileId: deleteProfile.id,
+        provider: "anthropic",
+        canonicalOrigin: "https://api.anthropic.com",
+      },
+    }),
+    false,
+  );
+
+  const invalidProfile = modelService.create({
+    name: "Mark invalid current",
+    provider: "gemini",
+    model: "gemini-2.5-pro",
+    enabled: false,
+    isDefault: false,
+  });
+  modelService.configureCredential(invalidProfile.id, {
+    secret: "invalid-race-a",
+  });
+  const invalidProbeARecord = profiles.requireStored(invalidProfile.id);
+  assert.ok(invalidProbeARecord.credentialRef);
+  assert.ok(invalidProbeARecord.credentialOrigin);
+  const invalidProbeA = {
+    provider: invalidProbeARecord.provider,
+    canonicalOrigin: invalidProbeARecord.credentialOrigin,
+    executionRevision: invalidProbeARecord.executionRevision,
+    credentialRef: invalidProbeARecord.credentialRef,
+    credentialState: "configured" as const,
+  };
+  modelService.configureCredential(invalidProfile.id, {
+    secret: "invalid-race-b",
+  });
+  const invalidProbeBRecord = profiles.requireStored(invalidProfile.id);
+  const invalidCurrentReference = invalidProbeBRecord.credentialRef;
+  assert.ok(invalidCurrentReference);
+  assert.ok(invalidProbeBRecord.credentialOrigin);
+  const invalidProbeB = {
+    provider: invalidProbeBRecord.provider,
+    canonicalOrigin: invalidProbeBRecord.credentialOrigin,
+    executionRevision: invalidProbeBRecord.executionRevision,
+    credentialRef: invalidCurrentReference,
+    credentialState: "configured" as const,
+  };
+  const expectStaleCredentialProbe = (snapshot: unknown) => {
+    let staleError: unknown = null;
+    try {
+      modelService.markCredentialInvalid(invalidProfile.id, snapshot);
+    } catch (error) {
+      staleError = error;
+    }
+    assert.ok(staleError instanceof WorkspaceApiError);
+    assert.equal(staleError.status, 409);
+    assert.equal(staleError.code, "CONFLICT");
+    assert.match(staleError.message, /probe result is stale/);
+  };
+  const beforeStaleProbe = profiles.requireStored(invalidProfile.id);
+  expectStaleCredentialProbe(invalidProbeA);
+  expectStaleCredentialProbe({
+    ...invalidProbeB,
+    provider: "openai",
+  });
+  expectStaleCredentialProbe({
+    ...invalidProbeB,
+    canonicalOrigin: "https://stale.example",
+  });
+  expectStaleCredentialProbe({
+    ...invalidProbeB,
+    executionRevision: invalidProbeB.executionRevision + 1,
+  });
+  assert.deepEqual(profiles.requireStored(invalidProfile.id), beforeStaleProbe);
+  const invalid = modelService.markCredentialInvalid(invalidProfile.id, {
+    ...invalidProbeB,
+    credentialRef: invalidProbeB.credentialRef.toUpperCase(),
+  });
+  assert.equal(invalid.credential.status, "invalid");
+  const invalidatedRecord = profiles.requireStored(invalidProfile.id);
+  assert.equal(invalidatedRecord.credentialRef, invalidCurrentReference);
+  assert.equal(
+    invalidatedRecord.executionRevision,
+    invalidProbeB.executionRevision + 1,
+  );
+  expectStaleCredentialProbe(invalidProbeB);
+  assert.deepEqual(
+    profiles.requireStored(invalidProfile.id),
+    invalidatedRecord,
+  );
+  assert.deepEqual(profiles.listCredentialOrphanCleanups(), []);
   database.close();
 }
 
 async function auditDormantLifecycleCrudGuards() {
   const database = createDatabase("dormant-lifecycle.db");
   const store = new AuditCredentialStore();
-  const { modelService, settingsService, profiles } = createServices(
+  const { settingsService, profiles } = createServices(
     database,
     store,
     false,
     new UpdatingResources(database),
   );
+  const modelService = new ModelProfilesService(profiles, {
+    resources: new UpdatingResources(database),
+    clock: () => new Date("2026-07-14T00:00:00.000Z"),
+  });
   const profile = modelService.create({
     name: "Dormant lifecycle",
     provider: "openai",
@@ -3144,25 +3861,172 @@ async function auditSettingsDefaultModelDormantGate() {
   database.close();
 }
 
-async function auditReusedCredentialReferenceRejected() {
-  const database = createDatabase("configure-same-ref.db");
+async function auditCredentialDeletionAcrossBindingChangesAndOrphans() {
+  const database = createDatabase("credential-bound-deletions.db");
   const store = new AuditCredentialStore();
-  const { modelService } = createServices(database, store, false);
+  const { modelService, profiles } = createServices(database, store, false);
   const profile = modelService.create({
-    name: "Same ref guard",
+    name: "Binding change cleanup",
     provider: "openai",
     model: "gpt-4.1",
     enabled: false,
     isDefault: false,
   });
-  assert.throws(
-    () =>
-      modelService.configureCredential(profile.id, {
-        secret: "rotated-secret",
-      }),
-    /Credential lifecycle mutations are unavailable/,
+  modelService.configureCredential(profile.id, {
+    secret: "binding-change-secret",
+  });
+  const oldReference = store.lastReference;
+  assert.ok(oldReference);
+  const oldBinding = {
+    profileId: profile.id,
+    provider: "openai" as const,
+    canonicalOrigin: "https://api.openai.com",
+  };
+  store.failNextDelete = true;
+  const rebound = modelService.update(profile.id, { provider: "deepseek" });
+  assert.equal(rebound.provider, "deepseek");
+  assert.equal(profiles.requireStored(profile.id).credentialRef, null);
+  assert.deepEqual(store.deleteCalls.at(-1), {
+    reference: oldReference,
+    binding: oldBinding,
+  });
+  assert.deepEqual(profiles.listCredentialOrphanCleanups(), [
+    {
+      reference: oldReference,
+      profileId: profile.id,
+      provider: "openai",
+      canonicalOrigin: "https://api.openai.com",
+      reason: "binding_change",
+      attemptCount: 0,
+      lastError: null,
+      createdAt: "2026-07-14T00:00:00.000Z",
+      updatedAt: "2026-07-14T00:00:00.000Z",
+    },
+  ]);
+
+  const restartedStore = store.restart();
+  const restarted = createServices(database, restartedStore, false);
+  assert.deepEqual(restarted.modelService.reconcileCredentialOrphans(), {
+    deleted: 1,
+    rebound: 0,
+    failed: 0,
+  });
+  assert.deepEqual(restartedStore.deleteCalls, [
+    { reference: oldReference, binding: oldBinding },
+  ]);
+  assert.equal(
+    restartedStore.has({ reference: oldReference, binding: oldBinding }),
+    false,
   );
-  assert.equal(store.lastReference, null);
+  assert.deepEqual(profiles.listCredentialOrphanCleanups(), []);
+
+  const deletedProfile = modelService.create({
+    name: "Profile delete cleanup",
+    provider: "anthropic",
+    model: "claude-sonnet-4",
+    enabled: false,
+    isDefault: false,
+  });
+  modelService.configureCredential(deletedProfile.id, {
+    secret: "profile-delete-secret",
+  });
+  const deletedReference = store.lastReference;
+  assert.ok(deletedReference);
+  const deletedBinding = {
+    profileId: deletedProfile.id,
+    provider: "anthropic" as const,
+    canonicalOrigin: "https://api.anthropic.com",
+  };
+  store.failNextDelete = true;
+  modelService.delete(deletedProfile.id);
+  assert.equal(profiles.getStored(deletedProfile.id), null);
+  assert.deepEqual(store.deleteCalls.at(-1), {
+    reference: deletedReference,
+    binding: deletedBinding,
+  });
+  assert.equal(
+    store.has({ reference: deletedReference, binding: deletedBinding }),
+    true,
+  );
+  assert.equal(
+    profiles
+      .listCredentialOrphanCleanups()
+      .find((cleanup) => cleanup.reference === deletedReference)?.reason,
+    "profile_delete",
+  );
+  assert.deepEqual(restarted.modelService.reconcileCredentialOrphans(), {
+    deleted: 1,
+    rebound: 0,
+    failed: 0,
+  });
+  assert.equal(
+    restartedStore.has({
+      reference: deletedReference,
+      binding: deletedBinding,
+    }),
+    false,
+  );
+
+  const legacyProfileId = "00000000-0000-4000-8000-000000000399";
+  const legacyReference = `keychain://vera/model-profile/${legacyProfileId}`;
+  profiles.queueCredentialOrphanCleanup({
+    reference: legacyReference,
+    profileId: legacyProfileId,
+    provider: "openai",
+    canonicalOrigin: "https://api.openai.com",
+    reason: "migration_reconfiguration",
+    now: now(9),
+  });
+  const deletesBeforeLegacyReconcile = restartedStore.deleteCalls.length;
+  assert.deepEqual(restarted.modelService.reconcileCredentialOrphans(), {
+    deleted: 0,
+    rebound: 0,
+    failed: 1,
+  });
+  assert.equal(restartedStore.deleteCalls.length, deletesBeforeLegacyReconcile);
+  const legacyCleanup = profiles
+    .listCredentialOrphanCleanups()
+    .find((entry) => entry.reference === legacyReference);
+  assert.equal(legacyCleanup?.attemptCount, 1);
+  assert.equal(legacyCleanup?.reason, "migration_reconfiguration");
+  assert.equal(
+    legacyCleanup?.lastError,
+    "Credential cleanup binding is incomplete.",
+  );
+
+  const boundProfile = modelService.create({
+    name: "Bound ledger cleanup",
+    provider: "gemini",
+    model: "gemini-2.5-pro",
+    enabled: false,
+    isDefault: false,
+  });
+  modelService.configureCredential(boundProfile.id, {
+    secret: "bound-ledger-secret",
+  });
+  const boundRecord = profiles.requireStored(boundProfile.id);
+  assert.ok(boundRecord.credentialRef);
+  profiles.queueCredentialOrphanCleanup({
+    reference: boundRecord.credentialRef,
+    profileId: boundProfile.id,
+    provider: "gemini",
+    canonicalOrigin: "https://generativelanguage.googleapis.com",
+    reason: "credential_replace",
+    now: now(10),
+  });
+  const deletesBeforeBoundReconcile = restartedStore.deleteCalls.length;
+  assert.deepEqual(restarted.modelService.reconcileCredentialOrphans(), {
+    deleted: 0,
+    rebound: 1,
+    failed: 1,
+  });
+  assert.equal(restartedStore.deleteCalls.length, deletesBeforeBoundReconcile);
+  assert.equal(
+    profiles
+      .listCredentialOrphanCleanups()
+      .some((entry) => entry.reference === boundRecord.credentialRef),
+    false,
+  );
   database.close();
 }
 
@@ -3647,7 +4511,12 @@ async function auditModelGateway() {
     createdAt: now(10),
     updatedAt: now(10),
   };
-  const stored = store.store({
+  const reference = buildStoredCredentialReference(
+    profile.id,
+    store.nextLocatorId(),
+  );
+  store.store({
+    reference,
     binding: {
       profileId: profile.id,
       provider: profile.provider,
@@ -3655,7 +4524,7 @@ async function auditModelGateway() {
     },
     secret: "gateway-secret",
   });
-  profile.credentialRef = stored.reference;
+  profile.credentialRef = reference;
   const expectedBinding = buildEndpointBindingSnapshot(profile, false);
 
   const mismatchGateway = new ModelGateway(store);
@@ -3895,10 +4764,12 @@ async function main() {
     await auditMigrationBackfill();
     await auditV8MigrationActiveWorkReconciliation();
     await auditLoopbackGate();
-    await auditCredentialMutationsFailClosed();
+    await auditCredentialReplacementAndCasRollbackBindings();
+    await auditCredentialLocatorAllocationGuards();
+    await auditCredentialUnbindUsesTransactionalCurrent();
     await auditDormantLifecycleCrudGuards();
     await auditSettingsDefaultModelDormantGate();
-    await auditReusedCredentialReferenceRejected();
+    await auditCredentialDeletionAcrossBindingChangesAndOrphans();
     await auditBoundedReaderPreAbortCancelFailure();
     await auditCompiledMigrationGraphParity();
     await auditV8ChecksumStrategyBinding();

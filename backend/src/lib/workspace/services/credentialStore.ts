@@ -12,6 +12,19 @@ export type CredentialResolutionInput = {
   reference: StoredCredentialReference;
   binding: CredentialBindingKey;
 };
+export type CredentialDeletionInput = CredentialResolutionInput;
+export type CredentialStorageInput = CredentialResolutionInput & {
+  secret: string;
+};
+
+export class CredentialStoreCollisionError extends Error {
+  readonly code = "CREDENTIAL_STORE_COLLISION";
+
+  constructor() {
+    super("Credential locator already exists.");
+    this.name = "CredentialStoreCollisionError";
+  }
+}
 
 const LEGACY_CREDENTIAL_REFERENCE =
   /^keychain:\/\/vera\/model-profile\/([0-9a-f-]{36})$/i;
@@ -23,10 +36,16 @@ export interface CredentialResolverPort {
 }
 
 export interface CredentialStorePort extends CredentialResolverPort {
-  store(input: { binding: CredentialBindingKey; secret: string }): {
-    reference: StoredCredentialReference;
-  };
-  delete(reference: StoredCredentialReference): void;
+  /**
+   * Creates the exact preallocated locator without replacement. Implementations
+   * must throw CredentialStoreCollisionError only when collision-before-write
+   * is certain. Other failures are treated as indeterminate and may have written
+   * the item. A successful return attests that the exact reference and binding
+   * were stored.
+   */
+  store(input: CredentialStorageInput): void;
+  /** The binding is required to reconstruct an origin-bound account after restart. */
+  delete(input: CredentialDeletionInput): void;
 }
 
 export function buildStoredCredentialReference(
@@ -47,23 +66,7 @@ export function buildStoredCredentialReference(
       "Credential reference is invalid.",
     );
   }
-  return `keychain://vera/model-profile/${profileId}/${locatorId.toLowerCase()}`;
-}
-
-export function isStoredCredentialReference(
-  value: unknown,
-  expectedProfileId?: string,
-) {
-  if (typeof value !== "string") return false;
-  const modern = value.match(OPAQUE_CREDENTIAL_REFERENCE);
-  if (modern) {
-    return expectedProfileId ? modern[1] === expectedProfileId : true;
-  }
-  const legacy = value.match(LEGACY_CREDENTIAL_REFERENCE);
-  if (legacy) {
-    return expectedProfileId ? legacy[1] === expectedProfileId : true;
-  }
-  return false;
+  return `keychain://vera/model-profile/${profileId.toLowerCase()}/${locatorId.toLowerCase()}`;
 }
 
 export function parseStoredCredentialReference(
@@ -71,23 +74,45 @@ export function parseStoredCredentialReference(
   expectedProfileId?: string,
 ) {
   if (typeof value !== "string") return null;
+  const expected = expectedProfileId?.toLowerCase();
   const modern = value.match(OPAQUE_CREDENTIAL_REFERENCE);
   if (modern) {
-    if (expectedProfileId && modern[1] !== expectedProfileId) return null;
+    const profileId = modern[1].toLowerCase();
+    if (expected && profileId !== expected) return null;
     return {
-      profileId: modern[1],
-      locatorId: modern[2],
+      profileId,
+      locatorId: modern[2].toLowerCase(),
     };
   }
   const legacy = value.match(LEGACY_CREDENTIAL_REFERENCE);
   if (legacy) {
-    if (expectedProfileId && legacy[1] !== expectedProfileId) return null;
+    const profileId = legacy[1].toLowerCase();
+    if (expected && profileId !== expected) return null;
     return {
-      profileId: legacy[1],
+      profileId,
       locatorId: null,
     };
   }
   return null;
+}
+
+export function canonicalizeStoredCredentialReference(
+  value: unknown,
+  expectedProfileId?: string,
+) {
+  const parsed = parseStoredCredentialReference(value, expectedProfileId);
+  if (!parsed) return null;
+  const prefix = `keychain://vera/model-profile/${parsed.profileId}`;
+  return parsed.locatorId ? `${prefix}/${parsed.locatorId}` : prefix;
+}
+
+export function isStoredCredentialReference(
+  value: unknown,
+  expectedProfileId?: string,
+) {
+  return (
+    canonicalizeStoredCredentialReference(value, expectedProfileId) !== null
+  );
 }
 
 export function assertStoredCredentialReference(
@@ -107,13 +132,8 @@ export function redactStoredCredentialReference(
   value: StoredCredentialReference | null,
 ) {
   if (!value) return null;
-  const modern = value.match(OPAQUE_CREDENTIAL_REFERENCE);
-  if (modern) {
-    return `keychain://vera/model-profile/${modern[1]}/[redacted]`;
-  }
-  const legacy = value.match(LEGACY_CREDENTIAL_REFERENCE);
-  if (legacy) {
-    return `keychain://vera/model-profile/${legacy[1]}/[redacted]`;
-  }
+  const parsed = parseStoredCredentialReference(value);
+  if (parsed)
+    return `keychain://vera/model-profile/${parsed.profileId}/[redacted]`;
   return "[redacted]";
 }
