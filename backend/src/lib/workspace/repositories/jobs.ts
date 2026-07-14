@@ -2,6 +2,15 @@ import { isDeepStrictEqual } from "node:util";
 
 import type { WorkspaceDatabaseAdapter } from "../migrations";
 import {
+  WORKSPACE_JOB_SELECT_COLUMNS as JOB_SELECT_COLUMNS,
+  WorkspaceJobPersistenceError,
+  assertWorkspaceJobResourceTypeV7,
+  parseWorkspaceJobRowV7,
+  type WorkspaceJobResourceType,
+  type WorkspaceJobRow,
+  type WorkspaceJobStoredRecord,
+} from "../jobPersistenceV7";
+import {
   assertWorkspaceJobRecord,
   canRetryWorkspaceJob,
   createWorkspaceJob,
@@ -20,26 +29,10 @@ import type {
   WorkspaceJobType,
 } from "../jobs/types";
 
-export type WorkspaceJobResourceType =
-  | "document"
-  | "chat"
-  | "workflow_run"
-  | "tabular_cell"
-  | "tabular_review"
-  | "project";
-
-export interface WorkspaceJobStoredRecord extends WorkspaceJobRecord {
-  resourceType: WorkspaceJobResourceType;
-  resourceId: string;
-  priority: number;
-  scheduledAt: string;
-  lockedAt: string | null;
-  cancelRequestedAt: string | null;
-  cancellationReason: string | null;
-  retryable: boolean;
-  leaseOwner: string | null;
-  leaseExpiresAt: string | null;
-}
+export type {
+  WorkspaceJobResourceType,
+  WorkspaceJobStoredRecord,
+} from "../jobPersistenceV7";
 
 export interface CreateWorkspaceStoredJobInput {
   job: WorkspaceJobRecord;
@@ -57,45 +50,6 @@ export interface ListWorkspaceJobsInput {
   resourceId?: string;
   limit?: number;
 }
-
-type WorkspaceJobRow = Record<string, unknown>;
-
-const RESOURCE_TYPES: readonly WorkspaceJobResourceType[] = [
-  "document",
-  "chat",
-  "workflow_run",
-  "tabular_cell",
-  "tabular_review",
-  "project",
-] as const;
-
-const JOB_SELECT_COLUMNS = `
-  id,
-  type,
-  status,
-  resource_type,
-  resource_id,
-  idempotency_key,
-  priority,
-  attempt,
-  max_attempts,
-  retryable,
-  payload_json,
-  result_json,
-  error_json,
-  error_code,
-  scheduled_at,
-  queued_at,
-  locked_at,
-  lease_owner,
-  lease_expires_at,
-  started_at,
-  completed_at,
-  cancel_requested_at,
-  cancellation_reason,
-  created_at,
-  updated_at
-`;
 
 export class WorkspaceJobsRepositoryError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -229,13 +183,14 @@ function stringifyJson(value: unknown): string | null {
 }
 
 function assertResourceType(value: unknown): WorkspaceJobResourceType {
-  if (
-    typeof value !== "string" ||
-    !(RESOURCE_TYPES as readonly string[]).includes(value)
-  ) {
-    invariant(`Unsupported resourceType ${String(value)}.`);
+  try {
+    return assertWorkspaceJobResourceTypeV7(value);
+  } catch (error) {
+    if (error instanceof WorkspaceJobPersistenceError) {
+      throw new WorkspaceJobsRepositoryError(error.message, { cause: error });
+    }
+    throw error;
   }
-  return value as WorkspaceJobResourceType;
 }
 
 function retryableFromJob(job: WorkspaceJobRecord) {
@@ -342,101 +297,16 @@ export class WorkspaceJobsRepository {
   }
 
   private rowToRecord(row: WorkspaceJobRow): WorkspaceJobStoredRecord {
-    const status = assertNonEmptyString(
-      row.status,
-      "row.status",
-    ) as WorkspaceJobStatus;
-    const payload = parseJsonText(row.payload_json, "row.payload_json");
-    const parsedResult = parseJsonText(row.result_json, "row.result_json");
-    const parsedError = parseJsonText(row.error_json, "row.error_json");
-    const completedAt = parseOptionalTimestamp(
-      row.completed_at,
-      "row.completed_at",
-    );
-    const cancelRequestedAt = parseOptionalTimestamp(
-      row.cancel_requested_at,
-      "row.cancel_requested_at",
-    );
-    const cancellationReason = parseOptionalString(
-      row.cancellation_reason,
-      "row.cancellation_reason",
-    );
-    const legacyCancellation = parseLegacyCancellationEnvelope(parsedResult);
-    const cancellation =
-      status === "cancelled"
-        ? {
-            requestedAt:
-              cancelRequestedAt ??
-              legacyCancellation?.requestedAt ??
-              completedAt ??
-              assertTimestamp(row.updated_at, "row.updated_at"),
-            reason: cancellationReason ?? legacyCancellation?.reason ?? null,
-          }
-        : null;
-    const queuedAt = assertTimestamp(
-      row.queued_at ?? row.scheduled_at,
-      "row.queued_at",
-    );
-    const leaseOwner = parseOptionalString(row.lease_owner, "row.lease_owner");
-    const leaseExpiresAt = parseOptionalTimestamp(
-      row.lease_expires_at,
-      "row.lease_expires_at",
-    );
-    if ((leaseOwner === null) !== (leaseExpiresAt === null)) {
-      invariant("row lease owner and expiry must be paired.");
+    try {
+      return parseWorkspaceJobRowV7(row);
+    } catch (error) {
+      if (error instanceof WorkspaceJobPersistenceError) {
+        throw new WorkspaceJobsRepositoryError(error.message, {
+          cause: error,
+        });
+      }
+      throw error;
     }
-    const record: WorkspaceJobStoredRecord = {
-      id: assertNonEmptyString(row.id, "row.id"),
-      type: assertNonEmptyString(
-        row.type,
-        "row.type",
-      ) as WorkspaceJobStoredRecord["type"],
-      status,
-      payload,
-      result: status === "complete" ? parsedResult : null,
-      error: parsedError as WorkspaceJobRecord["error"],
-      attempt: parseInteger(row.attempt, "row.attempt"),
-      maxAttempts: parseInteger(row.max_attempts, "row.max_attempts"),
-      idempotencyKey: parseOptionalString(
-        row.idempotency_key,
-        "row.idempotency_key",
-      ),
-      createdAt: assertTimestamp(row.created_at, "row.created_at"),
-      queuedAt,
-      startedAt: parseOptionalTimestamp(row.started_at, "row.started_at"),
-      completedAt,
-      cancellation,
-      updatedAt: assertTimestamp(row.updated_at, "row.updated_at"),
-      resourceType: assertResourceType(row.resource_type),
-      resourceId: assertNonEmptyString(row.resource_id, "row.resource_id"),
-      priority: parseInteger(row.priority, "row.priority"),
-      scheduledAt: queuedAt,
-      lockedAt: leaseExpiresAt,
-      cancelRequestedAt,
-      cancellationReason,
-      retryable: parseBooleanFlag(row.retryable, "row.retryable"),
-      leaseOwner,
-      leaseExpiresAt,
-    };
-    if (
-      record.error === null &&
-      row.error_code !== null &&
-      row.error_code !== undefined
-    ) {
-      invariant("row.error_code requires error_json.");
-    }
-    if (record.error && record.error.code !== (row.error_code ?? null)) {
-      invariant("row.error_code must match error_json.code.");
-    }
-    assertWorkspaceJobRecord(record);
-    if (
-      (record.status === "failed" || record.status === "interrupted") &&
-      record.error &&
-      record.retryable !== record.error.retryable
-    ) {
-      invariant("row.retryable must match error_json.retryable.");
-    }
-    return record;
   }
 
   private updateStoredJob(

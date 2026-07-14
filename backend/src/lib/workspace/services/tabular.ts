@@ -3,7 +3,6 @@ import { z } from "zod";
 
 import {
   StructuredErrorSchema,
-  TabularCellValueSchema,
   UpdateTabularReviewRequestSchema,
   WorkspaceIdSchema,
 } from "../contracts";
@@ -13,14 +12,23 @@ import {
   TabularRepository,
   TabularSourceRefSchema,
   type TabularCellRecord,
+  type TabularColumnRecord,
   type TabularReviewDetail,
   type TabularSourceRef,
 } from "../repositories/tabular";
-import type {
-  StructuredError,
-  TabularCellValue,
-  TabularColumn,
-} from "../types";
+import type { StructuredError } from "../types";
+import {
+  legacyOutputTypeForFormat,
+  formatForLegacyOutputType,
+  normalizeTabularCellContent,
+  TabularColumnPromptSchemaV7,
+  TabularColumnTitleSchemaV7,
+  TabularColumnFormatSchema,
+  TabularReviewTitleSchemaV7,
+  TrimmedTabularTagSchemaV7,
+  type TabularCellContent,
+  type TabularColumnFormat,
+} from "./tabularCompatibility";
 import type { JobEnqueuer } from "./jobEnqueuer";
 
 export const MAX_TABULAR_MATRIX_CELLS = 10_000;
@@ -28,40 +36,73 @@ export const MAX_TABULAR_CELL_ATTEMPTS = 3;
 export const TABULAR_GENERATION_DISABLED_MESSAGE =
   "Tabular generation requires a document-level authoritative extracted-text runtime.";
 
-export function failTabularGenerationDisabled(): never {
-  throw new WorkspaceApiError(
-    409,
-    "CONFLICT",
-    TABULAR_GENERATION_DISABLED_MESSAGE,
-  );
-}
-
 const DraftColumnInputSchema = z
   .object({
-    key: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
-    title: z.string().trim().min(1).max(160),
-    outputType: z.enum(["text", "boolean", "enum", "number"]),
-    prompt: z.string().trim().min(1).max(20_000),
-    enumValues: z
-      .array(z.string().trim().min(1).max(160))
-      .min(1)
-      .max(100)
+    key: z
+      .string()
+      .regex(/^[a-z][a-z0-9_]{0,63}$/)
       .optional(),
+    title: TabularColumnTitleSchemaV7.transform((value) =>
+      value.trim(),
+    ).optional(),
+    outputType: z.enum(["text", "boolean", "enum", "number"]).optional(),
+    index: z.number().int().nonnegative().optional(),
+    name: TabularColumnTitleSchemaV7.transform((value) =>
+      value.trim(),
+    ).optional(),
+    format: TabularColumnFormatSchema.optional(),
+    prompt: TabularColumnPromptSchemaV7.transform((value) =>
+      value.trim(),
+    ).default(""),
+    tags: z.array(TrimmedTabularTagSchemaV7).max(100).optional(),
+    enumValues: z.array(TrimmedTabularTagSchemaV7).min(1).max(100).optional(),
   })
   .strict()
   .superRefine((value, context) => {
-    if (value.outputType === "enum" && !value.enumValues?.length) {
+    const outputType =
+      value.outputType ?? legacyOutputTypeForFormat(value.format ?? "text");
+    const format = value.format ?? formatForLegacyOutputType(outputType);
+    if (
+      value.outputType !== undefined &&
+      value.format !== undefined &&
+      legacyOutputTypeForFormat(value.format) !== value.outputType
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["format"],
+        message: "format must match outputType.",
+      });
+    }
+    if (!value.title && !value.name) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["title"],
+        message: "column title or name is required",
+      });
+    }
+    if (
+      outputType === "enum" &&
+      !value.enumValues?.length &&
+      !value.tags?.length
+    ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["enumValues"],
-        message: "enum columns require enumValues",
+        message: "enum/tag columns require enumValues or tags",
       });
     }
-    if (value.outputType !== "enum" && value.enumValues) {
+    if (outputType !== "enum" && value.enumValues) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["enumValues"],
         message: "enumValues are only valid for enum columns",
+      });
+    }
+    if (format !== "tag" && value.tags?.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["tags"],
+        message: "tags are only valid for tag columns",
       });
     }
   });
@@ -71,7 +112,7 @@ const CreateTabularDraftSchema = z
   .object({
     projectId: WorkspaceIdSchema.nullable().optional(),
     workflowId: WorkspaceIdSchema.nullable().optional(),
-    title: z.string().trim().min(1).max(240),
+    title: TabularReviewTitleSchemaV7.transform((value) => value.trim()),
     documentIds: WorkspaceIdSchema.array().max(1_000).default([]),
     modelProfileId: WorkspaceIdSchema.nullable().optional(),
     columns: DraftColumnInputSchema.array().max(100).default([]),
@@ -113,40 +154,96 @@ function sanitizeError(value: unknown): StructuredError {
   });
 }
 
-function validateCellValue(
-  column: TabularColumn,
+export function failTabularGenerationDisabled(): never {
+  throw new WorkspaceApiError(
+    409,
+    "CONFLICT",
+    TABULAR_GENERATION_DISABLED_MESSAGE,
+  );
+}
+
+function slugKey(value: string, fallback: string) {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 64);
+  return /^[a-z][a-z0-9_]{0,63}$/.test(slug) ? slug : fallback;
+}
+
+function columnRecordFromInput(
+  input: z.infer<typeof DraftColumnInputSchema>,
+  ids: { reviewId: string; columnId: string; ordinal: number },
+): TabularColumnRecord {
+  const title = (input.title ?? input.name ?? "").trim();
+  const format =
+    input.format ?? formatForLegacyOutputType(input.outputType ?? "text");
+  const outputType = input.outputType ?? legacyOutputTypeForFormat(format);
+  const tags = format === "tag" ? (input.tags ?? input.enumValues ?? []) : [];
+  const key =
+    input.key ?? slugKey(title, `column_${input.index ?? ids.ordinal}`);
+  return {
+    id: ids.columnId,
+    reviewId: ids.reviewId,
+    key,
+    title,
+    outputType,
+    format,
+    prompt: input.prompt,
+    enumValues: outputType === "enum" ? tags : null,
+    tags,
+    ordinal: input.index ?? ids.ordinal,
+    legacyMetadata: {
+      schema: "vera-tabular-column-v2",
+      legacyOutputType: input.outputType ?? outputType,
+      mikeFormat: format,
+    },
+  };
+}
+
+function validateCellContent(
+  column: TabularColumnRecord,
   value: unknown,
-): TabularCellValue {
-  const parsed = TabularCellValueSchema.parse(value);
+): TabularCellContent {
+  const parsed = normalizeTabularCellContent(value);
   if (parsed === null) {
     throw new WorkspaceApiError(
       400,
       "VALIDATION_ERROR",
-      "A completed cell requires a value.",
+      "A completed cell requires structured content.",
     );
   }
-  if (column.outputType === "text" && typeof parsed === "string") {
-    return redactText(parsed);
-  }
-  if (column.outputType === "boolean" && typeof parsed === "boolean")
-    return parsed;
-  if (column.outputType === "number" && typeof parsed === "number")
-    return parsed;
-  if (column.outputType === "enum" && typeof parsed === "string") {
-    if (!column.enumValues?.includes(parsed)) {
+  const summary = redactText(parsed.summary);
+  const content = {
+    summary,
+    ...(parsed.flag ? { flag: parsed.flag } : {}),
+    ...(parsed.reasoning === undefined
+      ? {}
+      : { reasoning: redactText(parsed.reasoning) }),
+  };
+  if (column.outputType === "enum") {
+    const normalized = summary.replace(/^\[\[|\]\]$/g, "");
+    if (!column.tags.includes(normalized)) {
       throw new WorkspaceApiError(
         400,
         "VALIDATION_ERROR",
-        "Enum cell value is not in the configured value set.",
+        "Tag cell value is not in the configured value set.",
       );
     }
-    return parsed;
+    return { ...content, summary: normalized };
   }
-  throw new WorkspaceApiError(
-    400,
-    "VALIDATION_ERROR",
-    `Cell value does not match ${column.outputType} output type.`,
-  );
+  if (
+    column.outputType === "number" &&
+    Number.isNaN(Number(summary.replace(/,/g, "")))
+  ) {
+    throw new WorkspaceApiError(
+      400,
+      "VALIDATION_ERROR",
+      "Number cell value must contain a number.",
+    );
+  }
+  return content;
 }
 
 function sanitizeSourceRefs(
@@ -169,7 +266,10 @@ function sanitizeSourceRefs(
   });
 }
 
-function assertDraftMatrix(documentIds: string[], columnKeys: string[]) {
+function assertDraftMatrix(
+  columns: TabularColumnRecord[],
+  documentIds: string[],
+) {
   if (new Set(documentIds).size !== documentIds.length) {
     throw new WorkspaceApiError(
       400,
@@ -177,6 +277,7 @@ function assertDraftMatrix(documentIds: string[], columnKeys: string[]) {
       "Review document ids must be unique.",
     );
   }
+  const columnKeys = columns.map((column) => column.key);
   if (new Set(columnKeys).size !== columnKeys.length) {
     throw new WorkspaceApiError(
       400,
@@ -184,7 +285,15 @@ function assertDraftMatrix(documentIds: string[], columnKeys: string[]) {
       "Review column keys must be unique.",
     );
   }
-  if (documentIds.length * columnKeys.length > MAX_TABULAR_MATRIX_CELLS) {
+  const ordinals = columns.map((column) => column.ordinal);
+  if (new Set(ordinals).size !== ordinals.length) {
+    throw new WorkspaceApiError(
+      400,
+      "VALIDATION_ERROR",
+      "Review column indexes must be unique.",
+    );
+  }
+  if (documentIds.length * columns.length > MAX_TABULAR_MATRIX_CELLS) {
     throw new WorkspaceApiError(
       400,
       "VALIDATION_ERROR",
@@ -220,10 +329,15 @@ export class TabularService {
 
   create(value: unknown) {
     const input = CreateTabularDraftSchema.parse(value);
-    assertDraftMatrix(
-      input.documentIds,
-      input.columns.map((column) => column.key),
+    const reviewId = this.idFactory();
+    const columns = input.columns.map((column, ordinal) =>
+      columnRecordFromInput(column, {
+        reviewId,
+        columnId: this.idFactory(),
+        ordinal,
+      }),
     );
+    assertDraftMatrix(columns, input.documentIds);
     const documentProjectId = this.repository.documentProjectForDraft(
       input.documentIds,
     );
@@ -240,17 +354,6 @@ export class TabularService {
       );
     }
     const now = this.now();
-    const reviewId = this.idFactory();
-    const columns: TabularColumn[] = input.columns.map((column, ordinal) => ({
-      id: this.idFactory(),
-      reviewId,
-      key: column.key,
-      title: column.title,
-      outputType: column.outputType,
-      prompt: column.prompt,
-      enumValues: column.enumValues ?? null,
-      ordinal,
-    }));
     const cells = input.documentIds.flatMap((documentId) =>
       columns.map((column) => ({
         id: this.idFactory(),
@@ -275,10 +378,14 @@ export class TabularService {
   updateDraftMatrix(id: string, value: unknown) {
     const input = UpdateTabularDraftMatrixSchema.parse(value);
     const existing = this.repository.requireDetail(id);
-    assertDraftMatrix(
-      input.documentIds,
-      input.columns.map((column) => column.key),
+    const columns = input.columns.map((column, ordinal) =>
+      columnRecordFromInput(column, {
+        reviewId: id,
+        columnId: this.idFactory(),
+        ordinal,
+      }),
     );
+    assertDraftMatrix(columns, input.documentIds);
     const documentProjectId = this.repository.documentProjectForDraft(
       input.documentIds,
     );
@@ -299,16 +406,6 @@ export class TabularService {
       );
     }
     const now = this.now();
-    const columns: TabularColumn[] = input.columns.map((column, ordinal) => ({
-      id: this.idFactory(),
-      reviewId: id,
-      key: column.key,
-      title: column.title,
-      outputType: column.outputType,
-      prompt: column.prompt,
-      enumValues: column.enumValues ?? null,
-      ordinal,
-    }));
     return this.repository.replaceDraftMatrix({
       id,
       projectId,
@@ -438,14 +535,14 @@ export class TabularService {
         "Tabular column is unavailable.",
       );
     }
-    const safeValue = validateCellValue(column, value);
+    const safeValue = validateCellContent(column, value);
     const safeRefs = sanitizeSourceRefs(sourceRefs, cell.documentId);
     const now = this.now();
     return this.repository.completeCell(cellId, safeValue, safeRefs, now, () =>
       this.jobs.transitionInCurrentTransaction(cell.jobId!, {
         type: "complete",
         at: now,
-        result: { value: safeValue, sourceCount: safeRefs.length },
+        result: { content: safeValue, sourceCount: safeRefs.length },
       }),
     );
   }

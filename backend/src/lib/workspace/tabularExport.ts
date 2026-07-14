@@ -4,7 +4,6 @@ import {
   TabularRepository,
   type TabularExportData,
 } from "./repositories/tabular";
-import type { TabularCellValue } from "./types";
 
 const ZIP_DATE = new Date("1980-01-01T00:00:00.000Z");
 const sensitiveToken =
@@ -23,10 +22,9 @@ export function protectSpreadsheetFormula(value: string) {
   return /^[\t\r\n ]*[=+\-@]/.test(safe) ? `'${safe}` : safe;
 }
 
-function displayValue(value: TabularCellValue) {
-  if (value === null) return "";
-  if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
-  return protectSpreadsheetFormula(String(value));
+function displayValue(value: string | null | undefined) {
+  if (!value) return "";
+  return protectSpreadsheetFormula(value);
 }
 
 function matrix(data: TabularExportData) {
@@ -44,7 +42,9 @@ function matrix(data: TabularExportData) {
       protectSpreadsheetFormula(row.documentTitle),
       ...data.columns.map((column) => {
         const cell = cellsByColumn.get(column.id);
-        return cell?.status === "complete" ? displayValue(cell.value) : "";
+        return cell?.status === "complete"
+          ? displayValue(cell.content?.summary)
+          : "";
       }),
     ];
   });

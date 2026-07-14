@@ -1,4 +1,9 @@
 import { redactSensitiveText } from "../../safeError";
+import {
+  JOB_CONTRACT_V7_MANIFEST,
+  WORKSPACE_JOB_ALLOWED_TRANSITIONS as WORKSPACE_JOB_ALLOWED_TRANSITIONS_V7,
+  assertWorkspaceJobRecordV7,
+} from "../jobContractV7";
 import type {
   CreateWorkspaceJobInput,
   WorkspaceJobCancellation,
@@ -11,28 +16,20 @@ import type {
   WorkspaceJobType,
   WorkspaceJobValueProjection,
 } from "./types";
-import {
-  WORKSPACE_JOB_STATUSES,
-  WORKSPACE_JOB_TYPES,
-} from "./types";
+import { WORKSPACE_JOB_STATUSES, WORKSPACE_JOB_TYPES } from "./types";
 
-const MAX_JOB_ATTEMPTS = 100;
-const MAX_PROJECTION_KEYS = 8;
-const MAX_VALIDATION_DEPTH = 8;
-const SENSITIVE_KEY_PATTERN =
-  /(prompt|document|content|text|api[_-]?key|token|secret|authorization|bearer)/i;
+const MAX_JOB_ATTEMPTS = JOB_CONTRACT_V7_MANIFEST.limits.maxAttempts;
+const MAX_PROJECTION_KEYS = JOB_CONTRACT_V7_MANIFEST.limits.maxProjectionKeys;
+const MAX_VALIDATION_DEPTH = JOB_CONTRACT_V7_MANIFEST.limits.maxValidationDepth;
+const SENSITIVE_KEY_PATTERN = new RegExp(
+  JOB_CONTRACT_V7_MANIFEST.logProjection.sensitiveKeyRegex,
+  JOB_CONTRACT_V7_MANIFEST.logProjection.sensitiveKeyRegexFlags,
+);
 
 export const WORKSPACE_JOB_ALLOWED_TRANSITIONS: Record<
   WorkspaceJobStatus,
   readonly WorkspaceJobStatus[]
-> = {
-  queued: ["running", "cancelled"],
-  running: ["complete", "failed", "cancelled", "interrupted"],
-  complete: [],
-  failed: ["queued", "cancelled"],
-  cancelled: [],
-  interrupted: ["queued", "cancelled"],
-};
+> = WORKSPACE_JOB_ALLOWED_TRANSITIONS_V7;
 
 function invariant(message: string): never {
   throw new Error(message);
@@ -108,7 +105,8 @@ function validateWorkspaceJobValue(
     return;
   }
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) invariant(`${name} must not contain NaN or Infinity.`);
+    if (!Number.isFinite(value))
+      invariant(`${name} must not contain NaN or Infinity.`);
     return;
   }
   if (Array.isArray(value)) {
@@ -314,64 +312,7 @@ export function createWorkspaceJob(
 }
 
 export function assertWorkspaceJobRecord(job: WorkspaceJobRecord): void {
-  assertNonEmptyString(job.id, "job.id");
-  assertWorkspaceJobType(job.type);
-  const status = assertWorkspaceJobStatus(job.status);
-  validateWorkspaceJobValue(job.payload, "job.payload");
-  if (job.result !== null) validateWorkspaceJobValue(job.result, "job.result");
-  assertPositiveInteger(job.maxAttempts, "job.maxAttempts");
-  if (!Number.isSafeInteger(job.attempt) || job.attempt < 0) {
-    invariant("job.attempt must be a non-negative integer.");
-  }
-  if (job.attempt > job.maxAttempts) {
-    invariant("job.attempt must not exceed job.maxAttempts.");
-  }
-  normalizeIdempotencyKey(job.type, job.idempotencyKey);
-  assertTimestamp(job.createdAt, "job.createdAt");
-  assertTimestamp(job.queuedAt, "job.queuedAt");
-  assertTimestamp(job.updatedAt, "job.updatedAt");
-  if (job.startedAt !== null) assertTimestamp(job.startedAt, "job.startedAt");
-  if (job.completedAt !== null) {
-    assertTimestamp(job.completedAt, "job.completedAt");
-  }
-  if (job.error) {
-    assertNonEmptyString(job.error.code, "job.error.code");
-    assertNonEmptyString(job.error.message, "job.error.message");
-    if (typeof job.error.retryable !== "boolean") {
-      invariant("job.error.retryable must be a boolean.");
-    }
-  }
-  if (job.cancellation) {
-    assertTimestamp(job.cancellation.requestedAt, "job.cancellation.requestedAt");
-  }
-  if (status === "queued") {
-    if (job.startedAt !== null || job.completedAt !== null) {
-      invariant("Queued jobs must not carry startedAt or completedAt.");
-    }
-  }
-  if (status === "running") {
-    if (job.startedAt === null || job.completedAt !== null) {
-      invariant("Running jobs require startedAt and must not carry completedAt.");
-    }
-  }
-  if (status === "complete") {
-    if (job.startedAt === null || job.completedAt === null) {
-      invariant("Complete jobs require startedAt and completedAt.");
-    }
-    if (job.error !== null) {
-      invariant("Complete jobs must not carry an error.");
-    }
-  }
-  if (status === "failed" || status === "interrupted") {
-    if (job.startedAt === null || job.completedAt === null || job.error === null) {
-      invariant(`${status} jobs require startedAt, completedAt, and an error.`);
-    }
-  }
-  if (status === "cancelled") {
-    if (job.completedAt === null || job.cancellation === null) {
-      invariant("Cancelled jobs require completedAt and cancellation details.");
-    }
-  }
+  assertWorkspaceJobRecordV7(job);
 }
 
 export function transitionWorkspaceJob(
@@ -519,6 +460,20 @@ export function projectWorkspaceJobForLogs(
   job: WorkspaceJobRecord,
 ): WorkspaceJobLogProjection {
   assertWorkspaceJobRecord(job);
+  const cancellation =
+    job.cancellation === null
+      ? null
+      : {
+          requestedAt: job.cancellation.requestedAt,
+          reason: sanitizeReason(job.cancellation.reason),
+        };
+  const error =
+    job.error === null
+      ? null
+      : {
+          ...job.error,
+          message: sanitizeMessage(job.error.message, "Workspace job error."),
+        };
   return {
     id: job.id,
     type: job.type,
@@ -530,8 +485,8 @@ export function projectWorkspaceJobForLogs(
     queuedAt: job.queuedAt,
     startedAt: job.startedAt,
     completedAt: job.completedAt,
-    cancellation: job.cancellation,
-    error: job.error,
+    cancellation,
+    error,
     payload: projectWorkspaceJobValueForLogs(job.payload),
     result:
       job.result === null ? null : projectWorkspaceJobValueForLogs(job.result),

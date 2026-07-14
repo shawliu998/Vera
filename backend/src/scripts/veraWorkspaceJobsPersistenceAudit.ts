@@ -5,7 +5,16 @@ import os from "node:os";
 import path from "node:path";
 
 import { WorkspaceDatabase } from "../lib/workspace/database";
-import { projectWorkspaceJobForLogs } from "../lib/workspace/jobs/stateMachine";
+import {
+  createWorkspaceJob,
+  projectWorkspaceJobForLogs,
+  transitionWorkspaceJob,
+} from "../lib/workspace/jobs/stateMachine";
+import {
+  WorkspaceJobPersistenceError,
+  parseWorkspaceJobRowV7,
+  type WorkspaceJobRow,
+} from "../lib/workspace/jobPersistenceV7";
 import {
   DuplicateWorkspaceJobError,
   WorkspaceJobConflictError,
@@ -117,8 +126,18 @@ function rowFor(database: WorkspaceDatabase, id: string) {
 }
 
 function assertSnapshot(
-  value: { id: string; attempt: number; maxAttempts: number; status: string } | null,
-  expected: Partial<{ id: string; attempt: number; maxAttempts: number; status: string }>,
+  value: {
+    id: string;
+    attempt: number;
+    maxAttempts: number;
+    status: string;
+  } | null,
+  expected: Partial<{
+    id: string;
+    attempt: number;
+    maxAttempts: number;
+    status: string;
+  }>,
 ) {
   assert.ok(value);
   for (const [key, item] of Object.entries(expected)) {
@@ -136,6 +155,219 @@ function assertStableLeaseLost(action: () => unknown) {
   assert.ok(thrown instanceof WorkspaceJobLeaseLostError);
   assert.equal(thrown.message, "Workspace job claim lease was lost.");
   assert.equal(thrown.message.includes(CLAIM_FENCE_SECRET), false);
+}
+
+function rawFailedJobRow(errorJson: string): WorkspaceJobRow {
+  const at = "2026-07-14T12:00:00.000Z";
+  return {
+    id: randomUUID(),
+    type: "document_parse",
+    status: "failed",
+    resource_type: "document",
+    resource_id: randomUUID(),
+    idempotency_key: null,
+    priority: 0,
+    attempt: 1,
+    max_attempts: 2,
+    retryable: 0,
+    payload_json: "{}",
+    result_json: null,
+    error_json: errorJson,
+    error_code: "workspace_job_failed",
+    scheduled_at: at,
+    queued_at: at,
+    locked_at: null,
+    lease_owner: null,
+    lease_expires_at: null,
+    started_at: at,
+    completed_at: at,
+    cancel_requested_at: null,
+    cancellation_reason: null,
+    created_at: at,
+    updated_at: at,
+  };
+}
+
+function rawCancelledJobRow(
+  reason: unknown,
+  input: { resultJson?: string | null } = {},
+): WorkspaceJobRow {
+  const at = "2026-07-14T12:00:00.000Z";
+  return {
+    id: randomUUID(),
+    type: "document_parse",
+    status: "cancelled",
+    resource_type: "document",
+    resource_id: randomUUID(),
+    idempotency_key: null,
+    priority: 0,
+    attempt: 0,
+    max_attempts: 2,
+    retryable: 0,
+    payload_json: "{}",
+    result_json: input.resultJson ?? null,
+    error_json: null,
+    error_code: null,
+    scheduled_at: at,
+    queued_at: at,
+    locked_at: null,
+    lease_owner: null,
+    lease_expires_at: null,
+    started_at: null,
+    completed_at: at,
+    cancel_requested_at: at,
+    cancellation_reason: reason,
+    created_at: at,
+    updated_at: at,
+  };
+}
+
+function legacyCancellationResultEnvelope(reason: unknown): string {
+  return JSON.stringify({
+    schema: "vera-workspace-job-cancellation-v1",
+    cancellation: {
+      requestedAt: "2026-07-14T12:00:00.000Z",
+      reason,
+    },
+  });
+}
+
+async function auditFrozenJobErrorParser() {
+  for (const errorJson of ["false", "0", '""']) {
+    assert.throws(
+      () => parseWorkspaceJobRowV7(rawFailedJobRow(errorJson)),
+      WorkspaceJobPersistenceError,
+    );
+  }
+  for (const reason of [false, 0, {}, ["x"], ""]) {
+    assert.throws(
+      () => parseWorkspaceJobRowV7(rawCancelledJobRow(reason)),
+      WorkspaceJobPersistenceError,
+    );
+    assert.throws(
+      () =>
+        parseWorkspaceJobRowV7(
+          rawCancelledJobRow(null, {
+            resultJson: legacyCancellationResultEnvelope(reason),
+          }),
+        ),
+      WorkspaceJobPersistenceError,
+    );
+  }
+  for (const reason of ["safe reason", null]) {
+    assert.equal(
+      parseWorkspaceJobRowV7(
+        rawCancelledJobRow(null, {
+          resultJson: legacyCancellationResultEnvelope(reason),
+        }),
+      ).cancellation?.reason,
+      reason,
+    );
+  }
+  for (const reason of [`A\0secret`, "\ud800"]) {
+    assert.throws(
+      () =>
+        parseWorkspaceJobRowV7(
+          rawCancelledJobRow(null, {
+            resultJson: legacyCancellationResultEnvelope(reason),
+          }),
+        ),
+      WorkspaceJobPersistenceError,
+    );
+  }
+  assert.throws(
+    () =>
+      parseWorkspaceJobRowV7(
+        rawFailedJobRow(
+          JSON.stringify({
+            code: "workspace_job_failed",
+            message: "Legacy failure",
+            retryable: false,
+            details: { api_key: "plaintext-secret" },
+          }),
+        ),
+      ),
+    WorkspaceJobPersistenceError,
+  );
+  const persistedSecretError = parseWorkspaceJobRowV7(
+    rawFailedJobRow(
+      JSON.stringify({
+        code: "workspace_job_failed",
+        message:
+          "provider failed with api_key=plaintextsecret and sk-test-secret-123456",
+        retryable: false,
+        details: null,
+      }),
+    ),
+  );
+  const projectedPersistedError = JSON.stringify(
+    projectWorkspaceJobForLogs(persistedSecretError),
+  );
+  assert.equal(projectedPersistedError.includes("plaintextsecret"), false);
+  assert.equal(
+    projectedPersistedError.includes("sk-test-secret-123456"),
+    false,
+  );
+
+  const persistedSecretCancellation = parseWorkspaceJobRowV7(
+    rawCancelledJobRow("user cancelled api_key=plaintextsecret"),
+  );
+  const projectedCancellation = JSON.stringify(
+    projectWorkspaceJobForLogs(persistedSecretCancellation),
+  );
+  assert.equal(projectedCancellation.includes("plaintextsecret"), false);
+  assert.throws(
+    () =>
+      parseWorkspaceJobRowV7(
+        rawFailedJobRow(
+          JSON.stringify({
+            code: "workspace_job_failed",
+            message: "Legacy failure",
+            retryable: false,
+            details: {
+              kind: "object",
+              totalKeys: 1,
+              keys: ["api_key"],
+              sensitiveKeyCount: 0,
+            },
+          }),
+        ),
+      ),
+    WorkspaceJobPersistenceError,
+  );
+
+  const queued = createWorkspaceJob({
+    id: randomUUID(),
+    type: "document_parse",
+    payload: { documentId: randomUUID() },
+    maxAttempts: 1,
+    createdAt: "2026-07-14T12:00:00.000Z",
+  });
+  const running = transitionWorkspaceJob(queued, {
+    type: "start",
+    at: "2026-07-14T12:00:01.000Z",
+  });
+  const failed = transitionWorkspaceJob(running, {
+    type: "fail",
+    at: "2026-07-14T12:00:02.000Z",
+    error: {
+      code: "workspace_job_failed",
+      message: "provider failed",
+      retryable: false,
+      details: { api_key: "plaintext-secret", visible: "safe" },
+    },
+  });
+  assert.equal(failed.error?.details?.kind, "object");
+  assert.deepEqual(
+    failed.error?.details?.kind === "object" ? failed.error.details.keys : [],
+    ["visible"],
+  );
+  assert.equal(
+    JSON.stringify(projectWorkspaceJobForLogs(failed)).includes(
+      "plaintext-secret",
+    ),
+    false,
+  );
 }
 
 function sentinelValue(database: WorkspaceDatabase, jobId: string) {
@@ -176,7 +408,10 @@ async function auditPersistenceAcrossReopen() {
     const service = createService(repository, undefined, [IDS.persistenceJob]);
     const created = service.createJob({
       type: "document_parse",
-      payload: { documentId: IDS.persistenceResource, prompt: "top secret prompt" },
+      payload: {
+        documentId: IDS.persistenceResource,
+        prompt: "top secret prompt",
+      },
       resourceType: "document",
       resourceId: IDS.persistenceResource,
       maxAttempts: 2,
@@ -775,7 +1010,9 @@ async function auditRuntimeRepositoryAndAdapter() {
       maxAttempts: 2,
     }).job;
     const leaseClaimTime = nextDate();
-    const leaseExpiresAt = new Date(leaseClaimTime.getTime() + 30_000).toISOString();
+    const leaseExpiresAt = new Date(
+      leaseClaimTime.getTime() + 30_000,
+    ).toISOString();
     const leased = repository.claimNextQueued(
       leaseClaimTime.toISOString(),
       "lease-worker",
@@ -871,17 +1108,26 @@ async function auditRuntimeRepositoryAndAdapter() {
         now: nextDate().toISOString(),
       });
       assertSnapshot(queued, { id: IDS.adapterCellJob, status: "queued" });
-      const started = adapter.transitionInCurrentTransaction(IDS.adapterCellJob, {
-        type: "start",
-        at: nextDate().toISOString(),
-      });
+      const started = adapter.transitionInCurrentTransaction(
+        IDS.adapterCellJob,
+        {
+          type: "start",
+          at: nextDate().toISOString(),
+        },
+      );
       assertSnapshot(started, { id: IDS.adapterCellJob, status: "running" });
-      const cancelled = adapter.transitionInCurrentTransaction(IDS.adapterCellJob, {
-        type: "cancel",
-        at: nextDate().toISOString(),
-        reason: "adapter cancelled",
+      const cancelled = adapter.transitionInCurrentTransaction(
+        IDS.adapterCellJob,
+        {
+          type: "cancel",
+          at: nextDate().toISOString(),
+          reason: "adapter cancelled",
+        },
+      );
+      assertSnapshot(cancelled, {
+        id: IDS.adapterCellJob,
+        status: "cancelled",
       });
-      assertSnapshot(cancelled, { id: IDS.adapterCellJob, status: "cancelled" });
       database.exec("COMMIT");
     } catch (error) {
       database.exec("ROLLBACK");
@@ -922,7 +1168,8 @@ async function auditRuntimeRepositoryAndAdapter() {
       database.exec("ROLLBACK");
       throw error;
     }
-    const originalLookup = raceRepository.getJobByIdempotencyKey.bind(raceRepository);
+    const originalLookup =
+      raceRepository.getJobByIdempotencyKey.bind(raceRepository);
     let hideFirstLookup = true;
     raceRepository.getJobByIdempotencyKey = (idempotencyKey: string) => {
       if (hideFirstLookup) {
@@ -993,7 +1240,10 @@ async function auditRuntimeRepositoryAndAdapter() {
     assert.notEqual(retried.queuedAt, retryCreated.queuedAt);
     const retryFailedAgain = await runtime.claimAndRun();
     assert.equal(retryFailedAgain?.status, "failed");
-    assert.throws(() => service.retryJob(retryCreated.id), /not eligible for retry/i);
+    assert.throws(
+      () => service.retryJob(retryCreated.id),
+      /not eligible for retry/i,
+    );
 
     const tabularFirst = service.createJob({
       type: "tabular_cell",
@@ -1017,7 +1267,10 @@ async function auditRuntimeRepositoryAndAdapter() {
       () =>
         service.createJob({
           type: "tabular_cell",
-          payload: { rowId: IDS.tabularResource, columnId: IDS.tabularResource },
+          payload: {
+            rowId: IDS.tabularResource,
+            columnId: IDS.tabularResource,
+          },
           resourceType: "tabular_cell",
           resourceId: IDS.tabularResource,
           idempotencyKey: "table:row-1:col-1:v1",
@@ -1054,12 +1307,18 @@ async function auditRuntimeRepositoryAndAdapter() {
     assert.equal(requestedCancel.status, "running");
     assert.ok(requestedCancel.cancelRequestedAt);
     assert.equal(requestedCancel.cancellation, null);
-    assert.equal(requestedCancel.cancellationReason, "User requested cancellation");
+    assert.equal(
+      requestedCancel.cancellationReason,
+      "User requested cancellation",
+    );
     const cancelRaw = rowFor(database, cancelCreated.id);
     assert.equal(cancelRaw?.cancellation_reason, "User requested cancellation");
     const cancelled = await cancelPromise;
     assert.equal(cancelled?.status, "cancelled");
-    assert.equal(cancelled?.cancellation?.reason, "User requested cancellation");
+    assert.equal(
+      cancelled?.cancellation?.reason,
+      "User requested cancellation",
+    );
     assert.equal(rowFor(database, cancelCreated.id)?.result_json, null);
     assert.throws(
       () => service.requestCancellation(cancelCreated.id, "again"),
@@ -1176,6 +1435,7 @@ async function auditRuntimeRepositoryAndAdapter() {
 
 async function main() {
   process.env.ALETHEIA_DATABASE_ENCRYPTION = "metadata_plaintext";
+  await auditFrozenJobErrorParser();
   await auditPersistenceAcrossReopen();
   await auditTransactionlessClaimFence();
   await auditRuntimeRepositoryAndAdapter();
@@ -1185,6 +1445,7 @@ async function main() {
         ok: true,
         suite: "vera-workspace-jobs-persistence-v2",
         checks: [
+          "frozen job row parser rejects scalar error_json and unsafe error details while log projection redacts secrets",
           "job rows persist queued_at and reload across database reopen",
           "claim is atomic across competing repositories and acquires a lease",
           "lease renew and release persist lease_owner and lease_expires_at",

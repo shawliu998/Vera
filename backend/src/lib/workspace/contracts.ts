@@ -2,12 +2,23 @@ import { z } from "zod";
 
 import { API_ERROR_CODES } from "./errors";
 import { MAX_PAGE_SIZE } from "./pagination";
+import {
+  BLOCKED_STRUCTURED_KEYS_V1,
+  IsoDateTimeSchema,
+  NullableWorkspaceIdSchema,
+  StructuredErrorSchema,
+  WorkspaceIdSchema,
+} from "./workspacePersistencePrimitivesV1";
+
+export {
+  IsoDateTimeSchema,
+  NullableWorkspaceIdSchema,
+  StructuredErrorSchema,
+  WorkspaceIdSchema,
+} from "./workspacePersistencePrimitivesV1";
 
 /** Public `/api/v1` contract. Every request object is strict by design. */
 
-export const WorkspaceIdSchema = z.string().uuid();
-export const IsoDateTimeSchema = z.string().datetime({ offset: true });
-export const NullableWorkspaceIdSchema = WorkspaceIdSchema.nullable();
 export const NonEmptyTextSchema = z.string().trim().min(1);
 export const OptionalDescriptionSchema = z
   .string()
@@ -433,8 +444,7 @@ type SafeStructuredValue =
   | null
   | SafeStructuredValue[]
   | { [key: string]: SafeStructuredValue };
-const blockedStructuredKeys =
-  /(?:secret|password|credential|private[_-]?key|api[_-]?key|token|authorization|cookie|(?:^|[_-])path(?:$|[_-])|storage[_-]?path|absolute[_-]?path|file[_-]?path|user[_-]?id|client[_-]?id)/i;
+const blockedStructuredKeys = BLOCKED_STRUCTURED_KEYS_V1;
 const rejectBlockedStructuredKeys = (
   value: Record<string, unknown>,
   context: z.RefinementCtx,
@@ -501,35 +511,6 @@ export const WorkflowSchema = z.discriminatedUnion("type", [
   AssistantWorkflowSchema,
   TabularWorkflowSchema,
 ]);
-
-export const StructuredErrorSchema = z
-  .object({
-    code: z.string().min(1).max(120),
-    message: z.string().min(1).max(2_000),
-    retryable: z.boolean(),
-    details: z
-      .record(
-        z.union([
-          z.string().max(2_000),
-          z.number().finite(),
-          z.boolean(),
-          z.null(),
-        ]),
-      )
-      .superRefine((value, context) => {
-        for (const key of Object.keys(value)) {
-          if (blockedStructuredKeys.test(key)) {
-            context.addIssue({
-              code: z.ZodIssueCode.custom,
-              path: [key],
-              message: "unsafe error detail key is not allowed",
-            });
-          }
-        }
-      })
-      .nullable(),
-  })
-  .strict();
 
 export const WorkflowRunSchema = z
   .object({

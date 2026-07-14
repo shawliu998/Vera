@@ -1,15 +1,5 @@
-import { z } from "zod";
+import { Buffer } from "node:buffer";
 
-import {
-  StructuredErrorSchema,
-  IsoDateTimeSchema,
-  NullableWorkspaceIdSchema,
-  TabularCellSchema,
-  TabularCellValueSchema,
-  TabularColumnSchema,
-  TabularReviewStatusSchema,
-  WorkspaceIdSchema,
-} from "../contracts";
 import type { WorkspaceDatabaseAdapter } from "../database";
 import { WorkspaceApiError } from "../errors";
 import {
@@ -21,68 +11,57 @@ import type {
   StructuredError,
   TabularCell,
   TabularCellStatus,
-  TabularCellValue,
-  TabularColumn,
   TabularReview,
 } from "../types";
+import {
+  legacyOutputTypeForFormat,
+  legacyValueForContent,
+  normalizeTabularCellContent,
+  type LegacyTabularOutputType,
+  type TabularCellContent,
+} from "../services/tabularCompatibility";
+import {
+  assertTabularSourceRefsV7,
+  mapTabularCellV7,
+  mapTabularChatMessageV7,
+  mapTabularChatV7,
+  mapTabularColumnV7,
+  mapTabularReviewV7,
+  TabularSourceRefSchema,
+  type TabularCellRecord,
+  type TabularChatMessageRecord,
+  type TabularChatRecord,
+  type TabularColumnRecord,
+  type TabularLegacyCellValue,
+  type TabularReviewDetail,
+  type TabularSourceRef,
+} from "../tabularPersistenceV7";
 
-type Row = Record<string, unknown>;
+export {
+  TabularSourceRefSchema,
+  type TabularCellRecord,
+  type TabularChatMessageRecord,
+  type TabularChatRecord,
+  type TabularColumnRecord,
+  type TabularLegacyCellValue,
+  type TabularReviewDetail,
+  type TabularSourceRef,
+} from "../tabularPersistenceV7";
 
-export const TabularSourceRefSchema = z
-  .object({
-    documentId: WorkspaceIdSchema,
-    versionId: WorkspaceIdSchema.nullable().optional(),
-    chunkId: WorkspaceIdSchema.nullable().optional(),
-    quote: z.string().min(1).max(8_000).nullable().optional(),
-    startOffset: z.number().int().nonnegative().nullable().optional(),
-    endOffset: z.number().int().nonnegative().nullable().optional(),
-  })
-  .strict()
-  .superRefine((value, context) => {
-    if ((value.startOffset == null) !== (value.endOffset == null)) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: [value.startOffset == null ? "startOffset" : "endOffset"],
-        message: "source offsets must be provided together",
-      });
-    }
-    if (
-      value.startOffset != null &&
-      value.endOffset != null &&
-      value.endOffset < value.startOffset
-    ) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["endOffset"],
-        message: "endOffset must not precede startOffset",
-      });
-    }
-    if (value.chunkId != null && value.versionId == null) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["versionId"],
-        message: "chunk sources require a versionId",
-      });
-    }
-    if (value.startOffset != null && value.versionId == null) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["versionId"],
-        message: "offset sources require a versionId",
-      });
-    }
-  });
-
-export type TabularSourceRef = z.infer<typeof TabularSourceRefSchema>;
-export type TabularCellRecord = TabularCell & {
-  attempt: number;
-  sourceRefs: TabularSourceRef[];
-  completedAt: string | null;
+export const MAX_TABULAR_EXPORT_SOURCE_BYTES = 8 * 1024 * 1024;
+export type TabularDocumentSnapshot = {
+  documentId: string;
+  versionId: string;
+  contentSha256: string;
+  textSha256: string;
+  textBytes: number;
+  chunkCount: number;
 };
-export type TabularReviewDetail = {
-  review: TabularReview;
-  columns: TabularColumn[];
-  cells: TabularCellRecord[];
+export type TabularDocumentSnapshotText = TabularDocumentSnapshot & {
+  id: string;
+  title: string;
+  filename: string;
+  text: string;
 };
 export type TabularExportRow = {
   documentId: string;
@@ -91,10 +70,9 @@ export type TabularExportRow = {
 };
 export type TabularExportData = {
   review: TabularReview;
-  columns: TabularColumn[];
+  columns: TabularColumnRecord[];
   rows: TabularExportRow[];
 };
-
 export type NewTabularReviewRecord = {
   id: string;
   projectId: string | null;
@@ -102,12 +80,12 @@ export type NewTabularReviewRecord = {
   modelProfileId: string | null;
   title: string;
   documentIds: string[];
-  columns: TabularColumn[];
+  columns: TabularColumnRecord[];
   cells: Array<{
     id: string;
     documentId: string;
     columnId: string;
-    outputType: TabularColumn["outputType"];
+    outputType: LegacyTabularOutputType;
   }>;
   now: string;
 };
@@ -139,150 +117,36 @@ function decodeCursor(cursor: string | null) {
   }
 }
 
-function parseJson<T>(
-  value: unknown,
-  schema: { parse(input: unknown): T },
-  label: string,
-): T {
-  if (typeof value !== "string") {
-    throw new WorkspaceApiError(
-      500,
-      "INTERNAL_ERROR",
-      `Invalid persisted ${label}.`,
-    );
-  }
-  try {
-    return schema.parse(JSON.parse(value));
-  } catch {
-    throw new WorkspaceApiError(
-      500,
-      "INTERNAL_ERROR",
-      `Invalid persisted ${label}.`,
-    );
-  }
-}
-
-function optionalJson<T>(
-  value: unknown,
-  schema: { parse(input: unknown): T },
-  label: string,
-) {
-  return value == null ? null : parseJson(value, schema, label);
-}
-
-function mapReview(
-  row: Row,
-  authoritativeDocumentIds: string[],
-): TabularReview {
-  const persistedReviewSchema = z
-    .object({
-      id: WorkspaceIdSchema,
-      projectId: NullableWorkspaceIdSchema,
-      workflowId: NullableWorkspaceIdSchema,
-      title: z.string().min(1).max(240),
-      status: TabularReviewStatusSchema,
-      documentIds: WorkspaceIdSchema.array().max(1_000),
-      modelProfileId: NullableWorkspaceIdSchema,
-      createdAt: IsoDateTimeSchema,
-      updatedAt: IsoDateTimeSchema,
-    })
-    .strict();
-  const candidate = {
-    id: String(row.id),
-    projectId: row.project_id == null ? null : String(row.project_id),
-    workflowId: row.workflow_id == null ? null : String(row.workflow_id),
-    title: String(row.title),
-    status: row.status,
-    documentIds: WorkspaceIdSchema.array()
-      .max(1_000)
-      .parse(authoritativeDocumentIds),
-    modelProfileId:
-      row.model_profile_id == null ? null : String(row.model_profile_id),
-    createdAt: String(row.created_at),
-    updatedAt: String(row.updated_at),
-  };
-  try {
-    return persistedReviewSchema.parse(candidate);
-  } catch {
-    throw new WorkspaceApiError(
-      500,
-      "INTERNAL_ERROR",
-      "Invalid persisted tabular review.",
-    );
-  }
-}
-
-function mapColumn(row: Row): TabularColumn {
-  const candidate = {
-    id: String(row.id),
-    reviewId: String(row.review_id),
-    key: String(row.key),
-    title: String(row.title),
-    outputType: row.output_type,
-    prompt: String(row.prompt),
-    enumValues: optionalJson(
-      row.enum_values_json,
-      z.array(z.string().min(1).max(160)).min(1).max(100),
-      "tabular enum values",
-    ),
-    ordinal: Number(row.ordinal),
-  };
-  try {
-    return TabularColumnSchema.parse(candidate);
-  } catch {
-    throw new WorkspaceApiError(
-      500,
-      "INTERNAL_ERROR",
-      "Invalid persisted tabular column.",
-    );
-  }
-}
-
-function mapCell(row: Row): TabularCellRecord {
-  const candidate = {
-    id: String(row.id),
-    reviewId: String(row.review_id),
-    documentId: String(row.document_id),
-    columnId: String(row.column_id),
-    outputType: row.output_type,
-    value: optionalJson(
-      row.value_json,
-      TabularCellValueSchema,
-      "tabular cell value",
-    ),
-    status: row.status,
-    error: optionalJson(
-      row.error_json,
-      StructuredErrorSchema,
-      "tabular cell error",
-    ),
-    jobId: row.job_id == null ? null : String(row.job_id),
-    updatedAt: String(row.updated_at),
-  };
-  try {
-    return {
-      ...TabularCellSchema.parse(candidate),
-      attempt: Number(row.attempt),
-      sourceRefs: parseJson(
-        row.citations_json,
-        TabularSourceRefSchema.array().max(1_000),
-        "tabular cell source references",
-      ),
-      completedAt: row.completed_at == null ? null : String(row.completed_at),
-    };
-  } catch (error) {
-    if (error instanceof WorkspaceApiError) throw error;
-    throw new WorkspaceApiError(
-      500,
-      "INTERNAL_ERROR",
-      "Invalid persisted tabular cell.",
-    );
-  }
-}
-
 const serialize = (value: unknown) => JSON.stringify(value);
 
+function tabularColumnsConfigJson(columns: TabularColumnRecord[]) {
+  return serialize(
+    [...columns]
+      .sort(
+        (left, right) =>
+          left.ordinal - right.ordinal || left.id.localeCompare(right.id),
+      )
+      .map((column) => ({
+        index: column.ordinal,
+        name: column.title,
+        prompt: column.prompt,
+        format: column.format,
+        tags: column.tags,
+      })),
+  );
+}
+
+function failDocumentSnapshot(
+  status: number,
+  code: "VALIDATION_ERROR" | "PRECONDITION_FAILED" | "CONFLICT",
+  message: string,
+): never {
+  throw new WorkspaceApiError(status, code, message);
+}
+
 export class TabularRepository {
+  private mikeSemanticsAvailable: boolean | null = null;
+
   constructor(readonly database: WorkspaceDatabaseAdapter) {}
 
   private transaction<T>(operation: () => T): T {
@@ -301,71 +165,29 @@ export class TabularRepository {
     }
   }
 
+  private hasColumn(table: string, column: string) {
+    return this.database
+      .prepare(`PRAGMA table_info("${table}")`)
+      .all()
+      .some((row) => String(row.name) === column);
+  }
+
+  private hasMikeSemantics() {
+    if (this.mikeSemanticsAvailable === null) {
+      this.mikeSemanticsAvailable = this.hasColumn(
+        "tabular_review_columns",
+        "format",
+      );
+    }
+    return this.mikeSemanticsAvailable;
+  }
+
   private assertSourceRefs(
     documentId: string,
     sourceRefs: TabularSourceRef[],
     persisted = false,
   ) {
-    const invalid = (): never => {
-      throw new WorkspaceApiError(
-        persisted ? 500 : 409,
-        persisted ? "INTERNAL_ERROR" : "CONFLICT",
-        persisted
-          ? "Persisted tabular cell source references are invalid."
-          : "Tabular cell source references are invalid.",
-      );
-    };
-    const document = this.database
-      .prepare("SELECT id FROM documents WHERE id = ? AND deleted_at IS NULL")
-      .get(documentId);
-    if (!document) invalid();
-    for (const source of sourceRefs) {
-      if (source.documentId !== documentId) invalid();
-      if (source.versionId == null) continue;
-      const version = this.database
-        .prepare(
-          `SELECT id FROM document_versions
-            WHERE id = ? AND document_id = ? AND deleted_at IS NULL`,
-        )
-        .get(source.versionId, documentId);
-      if (!version) invalid();
-      if (source.chunkId == null) {
-        if (source.startOffset != null) {
-          const bounds = this.database
-            .prepare(
-              `SELECT min(start_offset) AS start_offset,
-                      max(end_offset) AS end_offset
-                 FROM document_chunks
-                WHERE document_id = ? AND version_id = ?`,
-            )
-            .get(documentId, source.versionId);
-          if (
-            bounds?.start_offset == null ||
-            bounds?.end_offset == null ||
-            source.startOffset < Number(bounds.start_offset) ||
-            source.endOffset! > Number(bounds.end_offset)
-          ) {
-            invalid();
-          }
-        }
-        continue;
-      }
-      const chunk = this.database
-        .prepare(
-          `SELECT start_offset, end_offset FROM document_chunks
-            WHERE id = ? AND document_id = ? AND version_id = ?`,
-        )
-        .get(source.chunkId, documentId, source.versionId);
-      if (!chunk) invalid();
-      const confirmedChunk = chunk!;
-      if (
-        source.startOffset != null &&
-        (source.startOffset < Number(confirmedChunk.start_offset) ||
-          source.endOffset! > Number(confirmedChunk.end_offset))
-      ) {
-        invalid();
-      }
-    }
+    assertTabularSourceRefsV7(this.database, documentId, sourceRefs, persisted);
   }
 
   list(
@@ -398,7 +220,7 @@ export class TabularRepository {
       .all(...parameters);
     const items = rows
       .slice(0, page.limit)
-      .map((row) => mapReview(row, this.documentIds(String(row.id))));
+      .map((row) => mapTabularReviewV7(row, this.documentIds(String(row.id))));
     const last = items.at(-1);
     return {
       items,
@@ -413,7 +235,7 @@ export class TabularRepository {
     const row = this.database
       .prepare("SELECT * FROM tabular_reviews WHERE id = ?")
       .get(id);
-    return row ? mapReview(row, this.documentIds(id)) : null;
+    return row ? mapTabularReviewV7(row, this.documentIds(id)) : null;
   }
 
   private documentIds(reviewId: string) {
@@ -445,11 +267,11 @@ export class TabularRepository {
         "SELECT * FROM tabular_review_columns WHERE review_id = ? ORDER BY ordinal ASC, id ASC",
       )
       .all(id)
-      .map(mapColumn);
+      .map(mapTabularColumnV7);
     const cellRows = this.database
       .prepare("SELECT * FROM tabular_cells WHERE review_id = ?")
       .all(id)
-      .map(mapCell);
+      .map(mapTabularCellV7);
     const documentOrder = new Map(
       review.documentIds.map((documentId, ordinal) => [documentId, ordinal]),
     );
@@ -478,11 +300,12 @@ export class TabularRepository {
       const validEnum =
         column?.outputType !== "enum" ||
         cell.value === null ||
+        !column.enumValues?.length ||
         (typeof cell.value === "string" &&
           Boolean(column.enumValues?.includes(cell.value)));
       const validCompletion =
         cell.status !== "complete" ||
-        (cell.value !== null &&
+        (cell.content !== null &&
           cell.completedAt !== null &&
           cell.error === null);
       const validFailure = cell.status !== "failed" || cell.error !== null;
@@ -582,6 +405,20 @@ export class TabularRepository {
     return { id: modelProfileId };
   }
 
+  modelProfileContextWindowTokens(modelProfileId: string) {
+    const row = this.database
+      .prepare(
+        "SELECT context_window_tokens, enabled FROM model_profiles WHERE id = ?",
+      )
+      .get(modelProfileId);
+    if (!row || Number(row.enabled) !== 1) {
+      throw new WorkspaceApiError(404, "NOT_FOUND", "Model profile not found.");
+    }
+    return row.context_window_tokens == null
+      ? null
+      : Number(row.context_window_tokens);
+  }
+
   requireActiveTabularWorkflow(workflowId: string) {
     const row = this.database
       .prepare("SELECT type, status FROM workflows WHERE id = ?")
@@ -636,6 +473,35 @@ export class TabularRepository {
     }
   }
 
+  currentDocumentSnapshots(
+    projectId: string,
+    documentIds: string[],
+    _maxTextBytes: number,
+  ): TabularDocumentSnapshot[] {
+    this.requireReadyDocuments(projectId, documentIds);
+    failDocumentSnapshot(
+      409,
+      "CONFLICT",
+      "Tabular generation requires a document-level authoritative extracted-text snapshot reader.",
+    );
+  }
+
+  readDocumentSnapshotText(input: {
+    documentId: string;
+    versionId: string;
+    contentSha256: string;
+    textSha256?: string;
+    textBytes?: number;
+    maxTextBytes: number;
+  }): TabularDocumentSnapshotText {
+    void input;
+    failDocumentSnapshot(
+      409,
+      "CONFLICT",
+      "Tabular generation requires a document-level authoritative extracted-text snapshot reader.",
+    );
+  }
+
   documentProjectForDraft(documentIds: string[]) {
     if (documentIds.length === 0) return null;
     const placeholders = documentIds.map(() => "?").join(", ");
@@ -688,7 +554,7 @@ export class TabularRepository {
           input.modelProfileId,
           input.title,
           serialize(input.documentIds),
-          serialize(input.columns),
+          tabularColumnsConfigJson(input.columns),
           input.now,
           input.now,
         );
@@ -700,14 +566,21 @@ export class TabularRepository {
       input.documentIds.forEach((documentId, ordinal) => {
         membershipStatement.run(input.id, documentId, ordinal, input.now);
       });
+      const hasMikeSemantics = this.hasMikeSemantics();
       const columnStatement = this.database.prepare(
-        `INSERT INTO tabular_review_columns
-          (id, review_id, key, title, output_type, prompt, enum_values_json,
-           ordinal, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        hasMikeSemantics
+          ? `INSERT INTO tabular_review_columns
+              (id, review_id, key, title, output_type, prompt, enum_values_json,
+               ordinal, created_at, updated_at, format, tags_json,
+               legacy_output_type, legacy_metadata_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          : `INSERT INTO tabular_review_columns
+              (id, review_id, key, title, output_type, prompt, enum_values_json,
+               ordinal, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
       for (const column of input.columns) {
-        columnStatement.run(
+        const args = [
           column.id,
           input.id,
           column.key,
@@ -718,6 +591,19 @@ export class TabularRepository {
           column.ordinal,
           input.now,
           input.now,
+        ];
+        columnStatement.run(
+          ...(hasMikeSemantics
+            ? [
+                ...args,
+                column.format,
+                serialize(column.tags),
+                column.legacyMetadata.legacyOutputType == null
+                  ? column.outputType
+                  : String(column.legacyMetadata.legacyOutputType),
+                serialize(column.legacyMetadata),
+              ]
+            : args),
         );
       }
       const cellStatement = this.database.prepare(
@@ -773,7 +659,7 @@ export class TabularRepository {
           input.modelProfileId,
           input.workflowId,
           serialize(input.documentIds),
-          serialize(input.columns),
+          tabularColumnsConfigJson(input.columns),
           input.now,
           input.id,
         );
@@ -785,14 +671,21 @@ export class TabularRepository {
       input.documentIds.forEach((documentId, ordinal) => {
         membershipStatement.run(input.id, documentId, ordinal, input.now);
       });
+      const hasMikeSemantics = this.hasMikeSemantics();
       const columnStatement = this.database.prepare(
-        `INSERT INTO tabular_review_columns
-          (id, review_id, key, title, output_type, prompt, enum_values_json,
-           ordinal, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        hasMikeSemantics
+          ? `INSERT INTO tabular_review_columns
+              (id, review_id, key, title, output_type, prompt, enum_values_json,
+               ordinal, created_at, updated_at, format, tags_json,
+               legacy_output_type, legacy_metadata_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          : `INSERT INTO tabular_review_columns
+              (id, review_id, key, title, output_type, prompt, enum_values_json,
+               ordinal, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
       for (const column of input.columns) {
-        columnStatement.run(
+        const args = [
           column.id,
           input.id,
           column.key,
@@ -803,6 +696,19 @@ export class TabularRepository {
           column.ordinal,
           input.now,
           input.now,
+        ];
+        columnStatement.run(
+          ...(hasMikeSemantics
+            ? [
+                ...args,
+                column.format,
+                serialize(column.tags),
+                column.legacyMetadata.legacyOutputType == null
+                  ? column.outputType
+                  : String(column.legacyMetadata.legacyOutputType),
+                serialize(column.legacyMetadata),
+              ]
+            : args),
         );
       }
       const cellStatement = this.database.prepare(
@@ -918,7 +824,7 @@ export class TabularRepository {
     const row = this.database
       .prepare("SELECT * FROM tabular_cells WHERE id = ?")
       .get(id);
-    return row ? mapCell(row) : null;
+    return row ? mapTabularCellV7(row) : null;
   }
 
   requireCell(id: string) {
@@ -955,9 +861,45 @@ export class TabularRepository {
     });
   }
 
+  startClaimedCell(
+    cellId: string,
+    now: string,
+    assertJob: () => { id: string },
+  ) {
+    return this.transaction(() => {
+      const cell = this.requireCell(cellId);
+      if (
+        !cell.jobId ||
+        (cell.status !== "queued" && cell.status !== "running")
+      ) {
+        throw new WorkspaceApiError(
+          409,
+          "CONFLICT",
+          "Tabular cell is not claimed.",
+        );
+      }
+      const job = assertJob();
+      if (job.id !== cell.jobId) {
+        throw new WorkspaceApiError(
+          500,
+          "INTERNAL_ERROR",
+          "Tabular job state mismatch.",
+        );
+      }
+      if (cell.status === "queued") {
+        this.database
+          .prepare(
+            "UPDATE tabular_cells SET status = 'running', updated_at = ? WHERE id = ?",
+          )
+          .run(now, cellId);
+      }
+      return this.requireCell(cellId);
+    });
+  }
+
   completeCell(
     cellId: string,
-    value: TabularCellValue,
+    value: TabularLegacyCellValue | TabularCellContent,
     sourceRefs: TabularSourceRef[],
     now: string,
     completeJob: () => { id: string },
@@ -972,6 +914,15 @@ export class TabularRepository {
         );
       }
       this.assertSourceRefs(cell.documentId, sourceRefs);
+      const content = normalizeTabularCellContent(value);
+      if (!content) {
+        throw new WorkspaceApiError(
+          400,
+          "VALIDATION_ERROR",
+          "A completed cell requires structured content.",
+        );
+      }
+      const legacyValue = legacyValueForContent(content, cell.outputType);
       const job = completeJob();
       if (job.id !== cell.jobId) {
         throw new WorkspaceApiError(
@@ -988,14 +939,80 @@ export class TabularRepository {
            WHERE id = ?`,
         )
         .run(
-          serialize(value),
-          typeof value === "string" ? value : String(value),
+          serialize(legacyValue),
+          serialize(content),
           serialize(sourceRefs),
           now,
           now,
           cellId,
         );
       this.refreshStatus(cell.reviewId, now);
+      return this.requireCell(cellId);
+    });
+  }
+
+  completeClaimedCell(
+    cellId: string,
+    value: TabularCellContent,
+    sourceRefs: TabularSourceRef[],
+    now: string,
+    assertJob: () => { id: string },
+    finishJob: (result: unknown) => { id: string },
+  ) {
+    return this.transaction(() => {
+      const cell = this.requireCell(cellId);
+      if (cell.status !== "running" || !cell.jobId) {
+        throw new WorkspaceApiError(
+          409,
+          "CONFLICT",
+          "Tabular cell is not running.",
+        );
+      }
+      const asserted = assertJob();
+      if (asserted.id !== cell.jobId) {
+        throw new WorkspaceApiError(
+          500,
+          "INTERNAL_ERROR",
+          "Tabular job state mismatch.",
+        );
+      }
+      this.assertSourceRefs(cell.documentId, sourceRefs);
+      const content = normalizeTabularCellContent(value);
+      if (!content) {
+        throw new WorkspaceApiError(
+          400,
+          "VALIDATION_ERROR",
+          "A completed cell requires structured content.",
+        );
+      }
+      const legacyValue = legacyValueForContent(content, cell.outputType);
+      this.database
+        .prepare(
+          `UPDATE tabular_cells
+           SET status = 'complete', value_json = ?, content = ?, citations_json = ?,
+               error_json = NULL, error_code = NULL, completed_at = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(
+          serialize(legacyValue),
+          serialize(content),
+          serialize(sourceRefs),
+          now,
+          now,
+          cellId,
+        );
+      this.refreshStatus(cell.reviewId, now);
+      const finished = finishJob({
+        content,
+        sourceCount: sourceRefs.length,
+      });
+      if (finished.id !== cell.jobId) {
+        throw new WorkspaceApiError(
+          500,
+          "INTERNAL_ERROR",
+          "Tabular job state mismatch.",
+        );
+      }
       return this.requireCell(cellId);
     });
   }
@@ -1033,6 +1050,52 @@ export class TabularRepository {
         )
         .run(serialize(error), error.code, now, now, cellId);
       this.refreshStatus(cell.reviewId, now);
+      return this.requireCell(cellId);
+    });
+  }
+
+  failClaimedCell(
+    cellId: string,
+    error: StructuredError,
+    now: string,
+    assertJob: () => { id: string },
+    finishJob: (error: StructuredError) => { id: string },
+  ) {
+    return this.transaction(() => {
+      const cell = this.requireCell(cellId);
+      if (cell.status !== "running" || !cell.jobId) {
+        throw new WorkspaceApiError(
+          409,
+          "CONFLICT",
+          "Tabular cell is not running.",
+        );
+      }
+      const asserted = assertJob();
+      if (asserted.id !== cell.jobId) {
+        throw new WorkspaceApiError(
+          500,
+          "INTERNAL_ERROR",
+          "Tabular job state mismatch.",
+        );
+      }
+      this.database
+        .prepare(
+          `UPDATE tabular_cells
+           SET status = 'failed', value_json = NULL, content = NULL,
+               citations_json = '[]', error_json = ?, error_code = ?,
+               completed_at = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(serialize(error), error.code, now, now, cellId);
+      this.refreshStatus(cell.reviewId, now);
+      const finished = finishJob(error);
+      if (finished.id !== cell.jobId) {
+        throw new WorkspaceApiError(
+          500,
+          "INTERNAL_ERROR",
+          "Tabular job state mismatch.",
+        );
+      }
       return this.requireCell(cellId);
     });
   }
@@ -1075,7 +1138,236 @@ export class TabularRepository {
     });
   }
 
+  assertReviewScope(reviewId: string, projectId?: string | null) {
+    const review = this.require(reviewId);
+    if (projectId !== undefined && review.projectId !== projectId) {
+      throw new WorkspaceApiError(
+        404,
+        "NOT_FOUND",
+        "Tabular review not found.",
+      );
+    }
+    return review;
+  }
+
+  listChats(reviewId: string): TabularChatRecord[] {
+    this.require(reviewId);
+    return this.database
+      .prepare(
+        `SELECT * FROM tabular_review_chats
+          WHERE review_id = ?
+          ORDER BY updated_at DESC, id DESC`,
+      )
+      .all(reviewId)
+      .map(mapTabularChatV7);
+  }
+
+  getChat(reviewId: string, chatId: string): TabularChatRecord | null {
+    this.require(reviewId);
+    const row = this.database
+      .prepare(
+        `SELECT * FROM tabular_review_chats
+          WHERE id = ? AND review_id = ?`,
+      )
+      .get(chatId, reviewId);
+    return row ? mapTabularChatV7(row) : null;
+  }
+
+  createChat(input: {
+    id: string;
+    reviewId: string;
+    userId: string | null;
+    title?: string | null;
+    jobId?: string | null;
+    modelProfileId?: string | null;
+    now: string;
+  }): TabularChatRecord {
+    this.require(input.reviewId);
+    const hasMikeSemantics = this.hasColumn("tabular_review_chats", "user_id");
+    const statement = this.database.prepare(
+      hasMikeSemantics
+        ? `INSERT INTO tabular_review_chats
+            (id, review_id, title, user_id, job_id, model_profile_id,
+             created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        : `INSERT INTO tabular_review_chats
+            (id, review_id, title, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?)`,
+    );
+    statement.run(
+      ...(hasMikeSemantics
+        ? [
+            input.id,
+            input.reviewId,
+            input.title ?? "",
+            input.userId,
+            input.jobId ?? null,
+            input.modelProfileId ?? null,
+            input.now,
+            input.now,
+          ]
+        : [input.id, input.reviewId, input.title ?? "", input.now, input.now]),
+    );
+    const chat = this.getChat(input.reviewId, input.id);
+    if (!chat)
+      throw new WorkspaceApiError(
+        500,
+        "INTERNAL_ERROR",
+        "Tabular chat was not persisted.",
+      );
+    return chat;
+  }
+
+  deleteChat(reviewId: string, chatId: string, userId?: string | null) {
+    const chat = this.getChat(reviewId, chatId);
+    if (!chat)
+      throw new WorkspaceApiError(404, "NOT_FOUND", "Tabular chat not found.");
+    if (userId && chat.userId && chat.userId !== userId) {
+      throw new WorkspaceApiError(404, "NOT_FOUND", "Tabular chat not found.");
+    }
+    this.database
+      .prepare(
+        "DELETE FROM tabular_review_chats WHERE id = ? AND review_id = ?",
+      )
+      .run(chatId, reviewId);
+  }
+
+  listChatMessages(
+    reviewId: string,
+    chatId: string,
+  ): TabularChatMessageRecord[] {
+    if (!this.getChat(reviewId, chatId)) {
+      throw new WorkspaceApiError(404, "NOT_FOUND", "Tabular chat not found.");
+    }
+    return this.database
+      .prepare(
+        `SELECT * FROM tabular_review_chat_messages
+          WHERE review_chat_id = ?
+          ORDER BY sequence ASC, created_at ASC, id ASC`,
+      )
+      .all(chatId)
+      .map(mapTabularChatMessageV7);
+  }
+
+  appendChatMessage(input: {
+    id: string;
+    reviewId: string;
+    chatId: string;
+    role: "user" | "assistant" | "tool";
+    content: unknown;
+    annotations?: unknown[];
+    sources?: TabularSourceRef[];
+    status?: TabularChatMessageRecord["status"];
+    jobId?: string | null;
+    modelProfileId?: string | null;
+    now: string;
+  }): TabularChatMessageRecord {
+    return this.transaction(() => {
+      const detail = this.requireDetail(input.reviewId);
+      if (!this.getChat(input.reviewId, input.chatId)) {
+        throw new WorkspaceApiError(
+          404,
+          "NOT_FOUND",
+          "Tabular chat not found.",
+        );
+      }
+      const reviewDocuments = new Set(detail.review.documentIds);
+      const sourceRefs = input.sources ?? [];
+      for (const source of sourceRefs) {
+        if (!reviewDocuments.has(source.documentId)) {
+          throw new WorkspaceApiError(
+            409,
+            "CONFLICT",
+            "Tabular chat sources must belong to the review.",
+          );
+        }
+        this.assertSourceRefs(source.documentId, [source]);
+      }
+      const sequenceRow = this.database
+        .prepare(
+          `SELECT coalesce(max(sequence), -1) + 1 AS sequence
+             FROM tabular_review_chat_messages
+            WHERE review_chat_id = ?`,
+        )
+        .get(input.chatId);
+      const sequence = Number(sequenceRow?.sequence ?? 0);
+      const hasMikeSemantics = this.hasColumn(
+        "tabular_review_chat_messages",
+        "sources_json",
+      );
+      const statement = this.database.prepare(
+        hasMikeSemantics
+          ? `INSERT INTO tabular_review_chat_messages
+              (id, review_chat_id, sequence, role, content, annotations_json,
+               sources_json, status, job_id, model_profile_id, created_at,
+               updated_at, completed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          : `INSERT INTO tabular_review_chat_messages
+              (id, review_chat_id, sequence, role, content, annotations_json,
+               status, created_at, updated_at, completed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      const content =
+        typeof input.content === "string"
+          ? input.content
+          : serialize(input.content);
+      const annotations = serialize(input.annotations ?? []);
+      const completedAt =
+        input.status === undefined ||
+        input.status === "complete" ||
+        input.status === "failed" ||
+        input.status === "cancelled" ||
+        input.status === "interrupted"
+          ? input.now
+          : null;
+      statement.run(
+        ...(hasMikeSemantics
+          ? [
+              input.id,
+              input.chatId,
+              sequence,
+              input.role,
+              content,
+              annotations,
+              serialize(sourceRefs),
+              input.status ?? "complete",
+              input.jobId ?? null,
+              input.modelProfileId ?? null,
+              input.now,
+              input.now,
+              completedAt,
+            ]
+          : [
+              input.id,
+              input.chatId,
+              sequence,
+              input.role,
+              content,
+              annotations,
+              input.status ?? "complete",
+              input.now,
+              input.now,
+              completedAt,
+            ]),
+      );
+      this.database
+        .prepare("UPDATE tabular_review_chats SET updated_at = ? WHERE id = ?")
+        .run(input.now, input.chatId);
+      const row = this.database
+        .prepare("SELECT * FROM tabular_review_chat_messages WHERE id = ?")
+        .get(input.id);
+      if (!row)
+        throw new WorkspaceApiError(
+          500,
+          "INTERNAL_ERROR",
+          "Tabular chat message was not persisted.",
+        );
+      return mapTabularChatMessageV7(row);
+    });
+  }
+
   getExportData(reviewId: string): TabularExportData {
+    this.assertExportBudget(reviewId);
     const detail = this.requireDetail(reviewId);
     if (detail.review.documentIds.length === 0 || detail.columns.length === 0) {
       throw new WorkspaceApiError(
@@ -1110,6 +1402,50 @@ export class TabularRepository {
       };
     });
     return { review: detail.review, columns: detail.columns, rows };
+  }
+
+  private assertExportBudget(reviewId: string) {
+    const row = this.database
+      .prepare(
+        `SELECT
+           coalesce((
+             SELECT sum(length(document.title))
+               FROM tabular_review_documents review_document
+               JOIN documents document ON document.id = review_document.document_id
+              WHERE review_document.review_id = ?
+           ), 0) AS document_title_chars,
+           coalesce((
+             SELECT sum(length(title))
+               FROM tabular_review_columns
+              WHERE review_id = ?
+           ), 0) AS column_title_chars,
+           coalesce((
+             SELECT sum(length(json_extract(content, '$.summary')))
+               FROM tabular_cells
+              WHERE review_id = ?
+                AND status = 'complete'
+                AND content IS NOT NULL
+           ), 0) AS cell_summary_chars,
+           (SELECT count(*) FROM tabular_cells WHERE review_id = ?) AS cell_count,
+           (SELECT count(*) FROM tabular_review_columns WHERE review_id = ?) AS column_count`,
+      )
+      .get(reviewId, reviewId, reviewId, reviewId, reviewId) as
+      | Record<string, unknown>
+      | undefined;
+    const textChars =
+      Number(row?.document_title_chars ?? 0) +
+      Number(row?.column_title_chars ?? 0) +
+      Number(row?.cell_summary_chars ?? 0);
+    const structuralBytes =
+      (Number(row?.cell_count ?? 0) + Number(row?.column_count ?? 0) + 1) * 96;
+    const estimatedBytes = textChars * 4 + structuralBytes;
+    if (estimatedBytes > MAX_TABULAR_EXPORT_SOURCE_BYTES) {
+      throw new WorkspaceApiError(
+        413,
+        "VALIDATION_ERROR",
+        "Tabular export exceeds the local memory budget.",
+      );
+    }
   }
 
   private refreshStatus(reviewId: string, now: string) {
