@@ -8,7 +8,9 @@
     "src/index.ts",
     "src/desktopMigrate.ts",
     "src/desktopBackup.ts",
-    "src/scripts/desktopBackupAudit.ts"
+    "src/lib/workspace/**/*.ts",
+    "src/scripts/desktopBackupAudit.ts",
+    "src/scripts/veraWorkspace*.ts"
   ],
   "exclude": ["node_modules", "dist"]
 }
