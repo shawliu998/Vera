@@ -115,6 +115,28 @@ export const TABULAR_CONTRACT_V7_MANIFEST = {
     rejectUnpairedSurrogates: true,
     rejectNul: true,
   },
+  nulRecovery: {
+    schema: "tabular-v7-nul-recovery-snapshot-v1",
+    replacement: "\uFFFD",
+    table: "tabular_v7_nul_recovery_snapshots",
+    lockTriggers: {
+      insert: "tabular_v7_nul_recovery_snapshots_lock_insert",
+      update: "tabular_v7_nul_recovery_snapshots_lock_update",
+      delete: "tabular_v7_nul_recovery_snapshots_lock_delete",
+    },
+    liveWriteTriggers: {
+      reviewTitleInsert: "tabular_reviews_title_mike_insert",
+      reviewTitleUpdate: "tabular_reviews_title_mike_update",
+      columnTextInsert: "tabular_review_columns_text_mike_insert",
+      columnTextUpdate: "tabular_review_columns_text_mike_update",
+    },
+    fields: [
+      "tabular_reviews.title",
+      "tabular_review_columns.title",
+      "tabular_review_columns.prompt",
+      "tabular_review_columns.enum_values_json string items",
+    ],
+  },
 } as const;
 
 export const TABULAR_COLUMN_FORMATS =

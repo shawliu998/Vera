@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { randomBytes, randomUUID } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+} from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -8,12 +15,18 @@ import path from "node:path";
 import express from "express";
 import JSZip from "jszip";
 
+import { migratePlaintextDatabaseToSqlcipher } from "../lib/aletheia/sqlcipherMigration";
 import { WorkspaceDatabase } from "../lib/workspace/database";
+import {
+  CreateTabularReviewRequestSchema,
+  UpdateTabularReviewRequestSchema,
+} from "../lib/workspace/contracts";
 import { unicodeCodePointLengthV1 } from "../lib/workspace/workspacePersistencePrimitivesV1";
 import {
   WORKSPACE_MIGRATIONS,
   WorkspaceMigrationError,
   workspaceMigrationChecksum,
+  type WorkspaceMigration,
 } from "../lib/workspace/migrations";
 import { ASSISTANT_RUNTIME_MIGRATION } from "../lib/workspace/migrations/v5AssistantRuntime";
 import { WORKFLOW_RUNTIME_V6_MIGRATION } from "../lib/workspace/migrations/v6WorkflowRuntime";
@@ -37,12 +50,18 @@ import {
   TabularReviewTitleSchemaV7,
   parseTags,
 } from "../lib/workspace/services/tabularCompatibility";
+import { TABULAR_CONTRACT_V7_MANIFEST } from "../lib/workspace/tabularContractV7";
+import { validateTabularPersistenceV7 } from "../lib/workspace/tabularPersistenceV7";
 import {
   createWorkspaceTabularV1Router,
   type WorkspaceTabularV1RuntimePort,
 } from "../routes/workspaceTabularV1";
 
 const root = mkdtempSync(path.join(os.tmpdir(), "vera-tabular-mike-"));
+const sqlcipherBackupRoot = mkdtempSync(
+  path.join(os.tmpdir(), "vera-tabular-mike-sqlcipher-backup-"),
+);
+const auditDatabaseKey = randomBytes(32);
 const now = "2026-07-14T12:00:00.000Z";
 const later = "2026-07-14T12:01:00.000Z";
 function preV7Migrations() {
@@ -191,6 +210,125 @@ function openDatabase(name: string) {
   return new WorkspaceDatabase(path.join(root, name), {
     migrations: TABULAR_AUDIT_MIGRATIONS,
   });
+}
+
+function withSqlcipherEnvironment<T>(
+  operation: () => T,
+  key: Buffer = auditDatabaseKey,
+) {
+  const previousEnvironment = { ...process.env };
+  try {
+    process.env.ALETHEIA_DATABASE_ENCRYPTION = "sqlcipher_required";
+    process.env.ALETHEIA_DATABASE_KEY_SOURCE = "env";
+    process.env.ALETHEIA_DATABASE_KEY_BASE64 = key.toString("base64");
+    return operation();
+  } finally {
+    process.env = previousEnvironment;
+  }
+}
+
+function withSqlcipherRequiredNoKey<T>(operation: () => T) {
+  const previousEnvironment = { ...process.env };
+  try {
+    process.env.ALETHEIA_DATABASE_ENCRYPTION = "sqlcipher_required";
+    process.env.ALETHEIA_DATABASE_KEY_SOURCE = "env";
+    delete process.env.ALETHEIA_DATABASE_KEY_BASE64;
+    return operation();
+  } finally {
+    process.env = previousEnvironment;
+  }
+}
+
+function databaseArtifactPaths(databasePath: string) {
+  return [
+    databasePath,
+    `${databasePath}-wal`,
+    `${databasePath}-shm`,
+    `${databasePath}-journal`,
+  ];
+}
+
+function readDatabaseArtifacts(databasePath: string) {
+  return new Map(
+    databaseArtifactPaths(databasePath).map((artifactPath) => [
+      artifactPath,
+      existsSync(artifactPath) ? readFileSync(artifactPath) : null,
+    ]),
+  );
+}
+
+function assertDatabaseArtifactsEqual(
+  actualDatabasePath: string,
+  expected: ReadonlyMap<string, Buffer | null>,
+) {
+  const actual = readDatabaseArtifacts(actualDatabasePath);
+  for (const [artifactPath, expectedBytes] of expected) {
+    const actualBytes = actual.get(artifactPath) ?? null;
+    assert.equal(
+      actualBytes === null,
+      expectedBytes === null,
+      `database artifact existence changed unexpectedly: ${artifactPath}`,
+    );
+    if (actualBytes === null || expectedBytes === null) {
+      continue;
+    }
+    assert.equal(
+      actualBytes.equals(expectedBytes),
+      true,
+      `database artifact changed unexpectedly: ${artifactPath}`,
+    );
+  }
+}
+
+function assertDatabaseArtifactsDoNotContain(
+  databasePath: string,
+  markers: readonly string[],
+) {
+  for (const artifactPath of databaseArtifactPaths(databasePath)) {
+    if (!existsSync(artifactPath)) continue;
+    const bytes = readFileSync(artifactPath);
+    for (const marker of markers) {
+      assert.equal(
+        bytes.includes(Buffer.from(marker)),
+        false,
+        `database artifact ${artifactPath} leaked marker ${marker}`,
+      );
+    }
+  }
+}
+
+function migrateAuditDatabaseToSqlcipher(
+  databasePath: string,
+  fixtureName: string,
+  expectedPlaintextMarkers: readonly string[] = [],
+) {
+  const backupDir = path.join(sqlcipherBackupRoot, fixtureName);
+  mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+  const migrated = withSqlcipherEnvironment(() =>
+    migratePlaintextDatabaseToSqlcipher({
+      dataDir: path.dirname(databasePath),
+      databasePath,
+      backupDir,
+      apply: true,
+    }),
+  );
+  assert.equal(migrated.status, "migrated");
+  assert.ok(migrated.backup_path);
+  const backupPath = String(migrated.backup_path);
+  const backupBytes = readFileSync(backupPath);
+  for (const marker of expectedPlaintextMarkers) {
+    assert.equal(backupBytes.includes(Buffer.from(marker)), true);
+  }
+  unlinkSync(backupPath);
+}
+
+function openSqlcipherWorkspaceDatabase(
+  databasePath: string,
+  migrations: readonly WorkspaceMigration[] = TABULAR_AUDIT_MIGRATIONS,
+) {
+  return withSqlcipherEnvironment(
+    () => new WorkspaceDatabase(databasePath, { migrations }),
+  );
 }
 
 function seedProjectModel(db: WorkspaceDatabase) {
@@ -1168,10 +1306,33 @@ function expectThrows(message: string, operation: () => unknown) {
   assert.equal(threw, true, message);
 }
 
+function assertMigrationThrowsCause(
+  operation: () => unknown,
+  pattern: RegExp,
+  label: string,
+) {
+  assert.throws(
+    operation,
+    (error: unknown) =>
+      error instanceof WorkspaceMigrationError &&
+      error.cause instanceof Error &&
+      pattern.test(error.cause.message),
+    label,
+  );
+}
+
 function assertV7RolledBack(databasePath: string) {
-  const rolledBack = new WorkspaceDatabase(databasePath, {
-    migrations: PRE_V7_MIGRATIONS,
-  });
+  let rolledBack: WorkspaceDatabase;
+  try {
+    rolledBack = new WorkspaceDatabase(databasePath, {
+      migrations: PRE_V7_MIGRATIONS,
+    });
+  } catch {
+    rolledBack = openSqlcipherWorkspaceDatabase(
+      databasePath,
+      PRE_V7_MIGRATIONS,
+    );
+  }
   const versions = rolledBack
     .prepare("SELECT version FROM workspace_schema_migrations ORDER BY version")
     .all()
@@ -1185,14 +1346,668 @@ function assertV7RolledBack(databasePath: string) {
   rolledBack.close();
 }
 
+type NulRecoverySeed = {
+  reviewId: string;
+  documentId: string;
+  titleColumnId: string;
+  promptColumnId: string;
+  enumColumnId: string;
+  escapedEnumColumnId: string;
+  originalReviewTitle: string;
+  originalColumnTitle: string;
+  originalColumnPrompt: string;
+  originalEnumJson: string;
+  escapedEnumJson: string;
+};
+
+function seedNulRecoveryDatabase(
+  databasePath: string,
+  options: { enumCollision?: boolean; invalidUpdatedAt?: boolean } = {},
+): NulRecoverySeed {
+  const db = new WorkspaceDatabase(databasePath, {
+    migrations: PRE_V7_MIGRATIONS,
+  });
+  seedProjectModel(db);
+  const documentId = randomUUID();
+  insertDocument(db, {
+    id: documentId,
+    versionId: randomUUID(),
+    chunkId: randomUUID(),
+    text: "NUL_UNIQUE_MARKER_DOCUMENT",
+  });
+  const reviewId = randomUUID();
+  const titleColumnId = randomUUID();
+  const promptColumnId = randomUUID();
+  const enumColumnId = randomUUID();
+  const escapedEnumColumnId = randomUUID();
+  const originalReviewTitle = "NUL_UNIQUE_MARKER_REVIEW\0End";
+  const originalColumnTitle = "NUL_UNIQUE_MARKER_TITLE\0Middle";
+  const originalColumnPrompt = "\0";
+  const enumValues = options.enumCollision
+    ? ["A\0B", "A\uFFFDB"]
+    : ["\0Lead", "Mid\0d", "End\0", "\0"];
+  const originalEnumJson = json(enumValues);
+  const escapedEnumJson = '["\\u0041"]';
+  db.prepare(
+    `INSERT INTO tabular_reviews
+      (id, project_id, model_profile_id, title, status, document_ids_json,
+       columns_config_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'draft', ?, '[]', ?, ?)`,
+  ).run(
+    reviewId,
+    ids.project,
+    ids.model,
+    originalReviewTitle,
+    json([documentId]),
+    now,
+    options.invalidUpdatedAt ? "not-a-date" : now,
+  );
+  db.prepare(
+    `INSERT INTO tabular_review_documents (review_id, document_id, ordinal, created_at)
+     VALUES (?, ?, 0, ?)`,
+  ).run(reviewId, documentId, now);
+  const insertColumn = db.prepare(
+    `INSERT INTO tabular_review_columns
+      (id, review_id, key, title, output_type, prompt, enum_values_json,
+       ordinal, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  insertColumn.run(
+    titleColumnId,
+    reviewId,
+    "nul_title",
+    originalColumnTitle,
+    "text",
+    "title prompt",
+    null,
+    0,
+    now,
+    now,
+  );
+  insertColumn.run(
+    promptColumnId,
+    reviewId,
+    "nul_prompt",
+    "Prompt Column",
+    "text",
+    originalColumnPrompt,
+    null,
+    1,
+    now,
+    now,
+  );
+  insertColumn.run(
+    enumColumnId,
+    reviewId,
+    "nul_enum",
+    "Enum Column",
+    "enum",
+    "enum prompt",
+    originalEnumJson,
+    2,
+    now,
+    now,
+  );
+  insertColumn.run(
+    escapedEnumColumnId,
+    reviewId,
+    "escaped_enum",
+    "Escaped Enum",
+    "enum",
+    "escaped prompt",
+    escapedEnumJson,
+    3,
+    now,
+    now,
+  );
+  const insertCell = db.prepare(
+    `INSERT INTO tabular_cells
+      (id, review_id, document_id, column_id, output_type, value_json, content,
+       citations_json, status, job_id, attempt, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, NULL, NULL, '[]', 'empty', NULL, 0, ?, ?)`,
+  );
+  for (const [columnId, outputType] of [
+    [titleColumnId, "text"],
+    [promptColumnId, "text"],
+    [enumColumnId, "enum"],
+    [escapedEnumColumnId, "enum"],
+  ] as const) {
+    insertCell.run(
+      randomUUID(),
+      reviewId,
+      documentId,
+      columnId,
+      outputType,
+      now,
+      now,
+    );
+  }
+  db.close();
+  return {
+    reviewId,
+    documentId,
+    titleColumnId,
+    promptColumnId,
+    enumColumnId,
+    escapedEnumColumnId,
+    originalReviewTitle,
+    originalColumnTitle,
+    originalColumnPrompt,
+    originalEnumJson,
+    escapedEnumJson,
+  };
+}
+
+function assertNulRecoveryLocks(db: WorkspaceDatabase, reviewId: string) {
+  const table = TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.table;
+  assert.deepEqual(
+    db.prepare(`PRAGMA foreign_key_list(${table})`).all(),
+    [],
+    "NUL recovery snapshot table must not carry foreign keys",
+  );
+  expectThrows("NUL recovery snapshot insert must be locked", () =>
+    db
+      .prepare(
+        `INSERT INTO ${table}
+          (review_id, schema, replacement, review_json, columns_json)
+         VALUES (?, ?, ?, '{}', '[]')`,
+      )
+      .run(
+        randomUUID(),
+        TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.schema,
+        TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.replacement,
+      ),
+  );
+  expectThrows("NUL recovery snapshot update must be locked", () =>
+    db
+      .prepare(
+        `UPDATE ${table} SET replacement = replacement WHERE review_id = ?`,
+      )
+      .run(reviewId),
+  );
+  expectThrows("NUL recovery snapshot delete must be locked", () =>
+    db.prepare(`DELETE FROM ${table} WHERE review_id = ?`).run(reviewId),
+  );
+}
+
+function recreateNulRecoveryUpdateLock(db: WorkspaceDatabase) {
+  const table = TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.table;
+  db.exec(`
+    CREATE TRIGGER ${TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.lockTriggers.update}
+    BEFORE UPDATE ON ${table} BEGIN
+      SELECT RAISE(ABORT, 'tabular v7 NUL recovery snapshots are immutable');
+    END;
+  `);
+}
+
+async function auditNulRecoveryAndEncryptionGate() {
+  const databasePath = path.join(root, "nul-recovery.sqlite");
+  const seed = seedNulRecoveryDatabase(databasePath);
+  const beforePlaintextArtifacts = readDatabaseArtifacts(databasePath);
+  assertMigrationThrowsCause(
+    () =>
+      new WorkspaceDatabase(databasePath, {
+        migrations: TABULAR_AUDIT_MIGRATIONS,
+      }),
+    /npm run migrate:aletheia:sqlcipher --prefix backend/,
+    "plaintext NUL recovery must fail before v7 writes",
+  );
+  assertDatabaseArtifactsEqual(databasePath, beforePlaintextArtifacts);
+  migrateAuditDatabaseToSqlcipher(databasePath, "nul-recovery", [
+    "NUL_UNIQUE_MARKER_REVIEW",
+    "NUL_UNIQUE_MARKER_DOCUMENT",
+  ]);
+  assert.throws(
+    () =>
+      withSqlcipherRequiredNoKey(
+        () =>
+          new WorkspaceDatabase(databasePath, {
+            migrations: TABULAR_AUDIT_MIGRATIONS,
+          }),
+      ),
+    /SQLCipher|database key|Unable to open/i,
+  );
+  assert.throws(
+    () =>
+      withSqlcipherEnvironment(
+        () =>
+          new WorkspaceDatabase(databasePath, {
+            migrations: TABULAR_AUDIT_MIGRATIONS,
+          }),
+        randomBytes(32),
+      ),
+    /Unable to open the required SQLCipher database/,
+  );
+  const migrated = openSqlcipherWorkspaceDatabase(databasePath);
+  const table = TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.table;
+  const snapshotRow = migrated
+    .prepare(
+      `SELECT schema, replacement, review_json, columns_json
+         FROM ${table}
+        WHERE review_id = ?`,
+    )
+    .get(seed.reviewId) as Record<string, unknown>;
+  assert.equal(
+    snapshotRow.schema,
+    TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.schema,
+  );
+  assert.equal(
+    snapshotRow.replacement,
+    TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.replacement,
+  );
+  const reviewSnapshot = JSON.parse(String(snapshotRow.review_json)) as {
+    id: string;
+    title: { original: string; canonical: string };
+  };
+  const columnSnapshots = JSON.parse(
+    String(snapshotRow.columns_json),
+  ) as Array<{
+    id: string;
+    ordinal: number;
+    title: { original: string; canonical: string };
+    prompt: { original: string; canonical: string };
+    enumValues: { original: string[] | null; canonical: string[] | null };
+  }>;
+  assert.equal(snapshotRow.review_json, JSON.stringify(reviewSnapshot));
+  assert.equal(snapshotRow.columns_json, JSON.stringify(columnSnapshots));
+  assert.equal(reviewSnapshot.title.original, seed.originalReviewTitle);
+  assert.equal(
+    reviewSnapshot.title.canonical,
+    seed.originalReviewTitle.replaceAll("\0", "\uFFFD"),
+  );
+  assert.deepEqual(
+    columnSnapshots.map((column) => [column.id, column.ordinal]),
+    [
+      [seed.titleColumnId, 0],
+      [seed.promptColumnId, 1],
+      [seed.enumColumnId, 2],
+      [seed.escapedEnumColumnId, 3],
+    ],
+  );
+  const persistedReview = migrated
+    .prepare("SELECT title FROM tabular_reviews WHERE id = ?")
+    .get(seed.reviewId) as Record<string, unknown>;
+  assert.equal(persistedReview.title, reviewSnapshot.title.canonical);
+  const columns = migrated
+    .prepare(
+      `SELECT id, title, prompt, enum_values_json
+         FROM tabular_review_columns
+        WHERE review_id = ?
+        ORDER BY ordinal ASC, id ASC`,
+    )
+    .all(seed.reviewId) as Array<Record<string, unknown>>;
+  const columnsById = new Map(
+    columns.map((column) => [String(column.id), column]),
+  );
+  assert.equal(
+    columnsById.get(seed.titleColumnId)?.title,
+    seed.originalColumnTitle.replaceAll("\0", "\uFFFD"),
+  );
+  assert.equal(columnsById.get(seed.promptColumnId)?.prompt, "\uFFFD");
+  assert.equal(
+    columnsById.get(seed.enumColumnId)?.enum_values_json,
+    json(["\uFFFDLead", "Mid\uFFFDd", "End\uFFFD", "\uFFFD"]),
+  );
+  assert.equal(
+    columnsById.get(seed.escapedEnumColumnId)?.enum_values_json,
+    seed.escapedEnumJson,
+  );
+  validateTabularPersistenceV7(migrated);
+  assertNulRecoveryLocks(migrated, seed.reviewId);
+  for (const statement of [
+    [
+      "UPDATE tabular_reviews SET title = ? WHERE id = ?",
+      "after\0nul",
+      seed.reviewId,
+    ],
+    [
+      "UPDATE tabular_review_columns SET key = ? WHERE id = ?",
+      "key\0nul",
+      seed.titleColumnId,
+    ],
+    [
+      "UPDATE tabular_review_columns SET title = ? WHERE id = ?",
+      "title\0nul",
+      seed.titleColumnId,
+    ],
+    [
+      "UPDATE tabular_review_columns SET prompt = ? WHERE id = ?",
+      "prompt\0nul",
+      seed.titleColumnId,
+    ],
+    [
+      "UPDATE tabular_review_columns SET enum_values_json = ? WHERE id = ?",
+      json(["tag\0nul"]),
+      seed.enumColumnId,
+    ],
+    [
+      "UPDATE tabular_review_columns SET tags_json = ? WHERE id = ?",
+      json(["tag\0nul"]),
+      seed.enumColumnId,
+    ],
+  ] as const) {
+    expectThrows(`direct SQL NUL write rejected: ${statement[0]}`, () =>
+      migrated.prepare(statement[0]).run(statement[1], statement[2]),
+    );
+  }
+  migrated.close();
+  assertDatabaseArtifactsDoNotContain(databasePath, [
+    "NUL_UNIQUE_MARKER_REVIEW",
+    "NUL_UNIQUE_MARKER_DOCUMENT",
+  ]);
+}
+
+async function auditNulRecoveryCollisionFailsBeforeWrite() {
+  const databasePath = path.join(root, "nul-recovery-collision.sqlite");
+  seedNulRecoveryDatabase(databasePath, { enumCollision: true });
+  const beforeArtifacts = readDatabaseArtifacts(databasePath);
+  assertMigrationThrowsCause(
+    () =>
+      new WorkspaceDatabase(databasePath, {
+        migrations: TABULAR_AUDIT_MIGRATIONS,
+      }),
+    /without collision/,
+    "NUL canonical collision must fail before v7 writes",
+  );
+  assertDatabaseArtifactsEqual(databasePath, beforeArtifacts);
+  assertV7RolledBack(databasePath);
+}
+
+async function auditNulRecoveryValidatorMutationAndRollback() {
+  const mutationPath = path.join(
+    root,
+    "nul-recovery-validator-mutation.sqlite",
+  );
+  const seed = seedNulRecoveryDatabase(mutationPath);
+  migrateAuditDatabaseToSqlcipher(
+    mutationPath,
+    "nul-recovery-validator-mutation",
+  );
+  const migrated = openSqlcipherWorkspaceDatabase(mutationPath);
+  const table = TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.table;
+  migrated
+    .prepare(
+      `DROP TRIGGER ${TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.lockTriggers.update}`,
+    )
+    .run();
+  const snapshot = migrated
+    .prepare(
+      `SELECT review_json, columns_json FROM ${table} WHERE review_id = ?`,
+    )
+    .get(seed.reviewId) as Record<string, unknown>;
+  const reviewSnapshot = JSON.parse(String(snapshot.review_json));
+  migrated
+    .prepare(`UPDATE ${table} SET review_json = ? WHERE review_id = ?`)
+    .run(JSON.stringify(reviewSnapshot, null, 2), seed.reviewId);
+  recreateNulRecoveryUpdateLock(migrated);
+  assert.throws(
+    () => validateTabularPersistenceV7(migrated),
+    /not canonical JSON/,
+  );
+  migrated
+    .prepare(
+      `DROP TRIGGER ${TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.lockTriggers.update}`,
+    )
+    .run();
+  migrated
+    .prepare(`UPDATE ${table} SET review_json = ? WHERE review_id = ?`)
+    .run(JSON.stringify(reviewSnapshot), seed.reviewId);
+  const columnSnapshots = JSON.parse(
+    String(snapshot.columns_json),
+  ) as unknown[];
+  migrated
+    .prepare(`UPDATE ${table} SET columns_json = ? WHERE review_id = ?`)
+    .run(JSON.stringify(columnSnapshots.slice(0, -1)), seed.reviewId);
+  recreateNulRecoveryUpdateLock(migrated);
+  assert.throws(
+    () => validateTabularPersistenceV7(migrated),
+    /snapshot is incomplete/,
+  );
+  migrated.close();
+
+  const rollbackPath = path.join(
+    root,
+    "nul-recovery-validator-rollback.sqlite",
+  );
+  const rollbackSeed = seedNulRecoveryDatabase(rollbackPath, {
+    invalidUpdatedAt: true,
+  });
+  migrateAuditDatabaseToSqlcipher(
+    rollbackPath,
+    "nul-recovery-validator-rollback",
+  );
+  assertMigrationThrowsCause(
+    () => openSqlcipherWorkspaceDatabase(rollbackPath),
+    /timestamp|date|Invalid/,
+    "validator failure after NUL write plan must roll back the full v7 transaction",
+  );
+  assertV7RolledBack(rollbackPath);
+  const rolledBack = openSqlcipherWorkspaceDatabase(
+    rollbackPath,
+    PRE_V7_MIGRATIONS,
+  );
+  assert.equal(
+    rolledBack
+      .prepare("SELECT title FROM tabular_reviews WHERE id = ?")
+      .get(rollbackSeed.reviewId)?.title,
+    rollbackSeed.originalReviewTitle,
+  );
+  assert.equal(
+    Boolean(
+      rolledBack
+        .prepare(
+          `SELECT name FROM sqlite_master
+            WHERE type = 'table'
+              AND name = ?`,
+        )
+        .get(TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.table),
+    ),
+    false,
+  );
+  rolledBack.close();
+}
+
+async function auditEscapedEnumTargetEquivalencePlaintextSafe() {
+  const databasePath = path.join(
+    root,
+    "escaped-enum-target-equivalence.sqlite",
+  );
+  const db = new WorkspaceDatabase(databasePath, {
+    migrations: PRE_V7_MIGRATIONS,
+  });
+  seedProjectModel(db);
+  const documentId = randomUUID();
+  insertDocument(db, {
+    id: documentId,
+    versionId: randomUUID(),
+    chunkId: randomUUID(),
+    text: "escaped enum equivalence",
+  });
+  const reviewId = randomUUID();
+  db.prepare(
+    `INSERT INTO tabular_reviews
+      (id, project_id, model_profile_id, title, status, document_ids_json,
+       columns_config_json, created_at, updated_at)
+     VALUES (?, ?, ?, 'Escaped enum target equivalence', 'draft', ?, '[]', ?, ?)`,
+  ).run(reviewId, ids.project, ids.model, json([documentId]), now, now);
+  db.prepare(
+    `INSERT INTO tabular_review_documents (review_id, document_id, ordinal, created_at)
+     VALUES (?, ?, 0, ?)`,
+  ).run(reviewId, documentId, now);
+  const rawEnumJson = ['["\\u0041"]', '["a\\/b"]', '["\\ud83d\\ude00"]'];
+  const insertColumn = db.prepare(
+    `INSERT INTO tabular_review_columns
+      (id, review_id, key, title, output_type, prompt, enum_values_json,
+       ordinal, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'enum', '', ?, ?, ?, ?)`,
+  );
+  const insertCell = db.prepare(
+    `INSERT INTO tabular_cells
+      (id, review_id, document_id, column_id, output_type, value_json, content,
+       citations_json, status, job_id, attempt, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'enum', NULL, NULL, '[]', 'empty', NULL, 0, ?, ?)`,
+  );
+  rawEnumJson.forEach((enumJson, index) => {
+    const columnId = randomUUID();
+    insertColumn.run(
+      columnId,
+      reviewId,
+      `escaped_${index}`,
+      `Escaped ${index}`,
+      enumJson,
+      index,
+      now,
+      now,
+    );
+    insertCell.run(randomUUID(), reviewId, documentId, columnId, now, now);
+  });
+  const targetConfig = db
+    .prepare(
+      `SELECT coalesce(json_group_array(json(column_json)), '[]') AS target
+         FROM (
+           SELECT json_object(
+             'index', ordinal,
+             'name', title,
+             'prompt', prompt,
+             'format', 'tag',
+             'tags', json(enum_values_json)
+           ) AS column_json
+             FROM tabular_review_columns
+            WHERE review_id = ?
+            ORDER BY ordinal ASC, id ASC
+         )`,
+    )
+    .get(reviewId) as Record<string, unknown>;
+  db.prepare(
+    "UPDATE tabular_reviews SET columns_config_json = ? WHERE id = ?",
+  ).run(targetConfig.target, reviewId);
+  db.close();
+
+  const migrated = new WorkspaceDatabase(databasePath, {
+    migrations: TABULAR_AUDIT_MIGRATIONS,
+  });
+  const reviewRow = migrated
+    .prepare("SELECT columns_config_json FROM tabular_reviews WHERE id = ?")
+    .get(reviewId) as Record<string, unknown>;
+  assert.equal(reviewRow.columns_config_json, targetConfig.target);
+  const enumRows = migrated
+    .prepare(
+      `SELECT enum_values_json
+         FROM tabular_review_columns
+        WHERE review_id = ?
+        ORDER BY ordinal ASC`,
+    )
+    .all(reviewId) as Array<Record<string, unknown>>;
+  assert.deepEqual(
+    enumRows.map((row) => row.enum_values_json),
+    rawEnumJson,
+  );
+  migrated.close();
+}
+
+function auditTabularNulRequestBoundaries() {
+  const validCreate = {
+    title: "Valid",
+    columns: [
+      {
+        key: "valid_column",
+        title: "Column",
+        outputType: "enum" as const,
+        prompt: "Prompt",
+        enumValues: ["Alpha"],
+      },
+    ],
+  };
+  assert.doesNotThrow(() =>
+    CreateTabularReviewRequestSchema.parse(validCreate),
+  );
+  assert.throws(() =>
+    CreateTabularReviewRequestSchema.parse({
+      ...validCreate,
+      title: "Bad\0Title",
+    }),
+  );
+  assert.throws(() =>
+    CreateTabularReviewRequestSchema.parse({
+      ...validCreate,
+      columns: [{ ...validCreate.columns[0], title: "Bad\0Column" }],
+    }),
+  );
+  assert.throws(() =>
+    CreateTabularReviewRequestSchema.parse({
+      ...validCreate,
+      columns: [{ ...validCreate.columns[0], prompt: "Bad\0Prompt" }],
+    }),
+  );
+  assert.throws(() =>
+    CreateTabularReviewRequestSchema.parse({
+      ...validCreate,
+      columns: [{ ...validCreate.columns[0], enumValues: ["Bad\0Tag"] }],
+    }),
+  );
+  assert.doesNotThrow(() =>
+    UpdateTabularReviewRequestSchema.parse({ title: "Valid update" }),
+  );
+  assert.throws(() =>
+    UpdateTabularReviewRequestSchema.parse({ title: "Bad\0Update" }),
+  );
+}
+
 async function auditMigrationHardening() {
-  const db = new WorkspaceDatabase(path.join(root, "legacy-v7.sqlite"), {
+  const databasePath = path.join(root, "legacy-v7.sqlite");
+  const db = new WorkspaceDatabase(databasePath, {
     migrations: PRE_V7_MIGRATIONS,
   });
   seedLegacyBeforeV7(db);
   db.close();
 
-  const migrated = openDatabase("legacy-v7.sqlite");
+  const beforePlaintextArtifacts = readDatabaseArtifacts(databasePath);
+  assertMigrationThrowsCause(
+    () =>
+      new WorkspaceDatabase(databasePath, {
+        migrations: TABULAR_AUDIT_MIGRATIONS,
+      }),
+    /npm run migrate:aletheia:sqlcipher --prefix backend/,
+    "plaintext destructive v7 migration must fail closed with SQLCipher remediation",
+  );
+  assertDatabaseArtifactsEqual(databasePath, beforePlaintextArtifacts);
+  const rolledBack = new WorkspaceDatabase(databasePath, {
+    migrations: PRE_V7_MIGRATIONS,
+  });
+  assert.equal(
+    rolledBack
+      .prepare("SELECT content FROM tabular_cells WHERE id = ?")
+      .get(ids.legacyCellSecret)?.content,
+    json({ summary: "bad", secret: "sk-danger" }),
+  );
+  rolledBack.close();
+
+  migrateAuditDatabaseToSqlcipher(databasePath, "legacy-v7", [
+    "sk-danger",
+    "legacy old text",
+  ]);
+  assert.throws(
+    () =>
+      withSqlcipherRequiredNoKey(
+        () =>
+          new WorkspaceDatabase(databasePath, {
+            migrations: TABULAR_AUDIT_MIGRATIONS,
+          }),
+      ),
+    /SQLCipher|database key|Unable to open/i,
+  );
+  assert.throws(
+    () =>
+      withSqlcipherEnvironment(
+        () =>
+          new WorkspaceDatabase(databasePath, {
+            migrations: TABULAR_AUDIT_MIGRATIONS,
+          }),
+        randomBytes(32),
+      ),
+    /Unable to open the required SQLCipher database/,
+  );
+  const migrated = openSqlcipherWorkspaceDatabase(databasePath);
   const appliedVersions = migrated
     .prepare("SELECT version FROM workspace_schema_migrations ORDER BY version")
     .all()
@@ -1484,6 +2299,10 @@ async function auditMigrationHardening() {
     );
   }
   migrated.close();
+  assertDatabaseArtifactsDoNotContain(databasePath, [
+    "sk-danger",
+    "legacy old text",
+  ]);
 }
 
 function createServiceAuditDatabase() {
@@ -1558,6 +2377,61 @@ async function auditServiceRuntimeAndExport() {
       }),
     /format must match outputType/,
   );
+  const reviewCountBeforeBadNul = Number(
+    (
+      db
+        .prepare("SELECT COUNT(*) AS count FROM tabular_reviews")
+        .get() as Record<string, unknown>
+    ).count,
+  );
+  for (const input of [
+    {
+      title: "Bad\0Service",
+      projectId: ids.project,
+      documentIds: [ids.docA],
+      columns: [{ index: 0, name: "Text", format: "text" }],
+    },
+    {
+      title: "Bad service column",
+      projectId: ids.project,
+      documentIds: [ids.docA],
+      columns: [{ index: 0, name: "Text\0Column", format: "text" }],
+    },
+    {
+      title: "Bad service prompt",
+      projectId: ids.project,
+      documentIds: [ids.docA],
+      columns: [{ index: 0, name: "Text", prompt: "p\0", format: "text" }],
+    },
+    {
+      title: "Bad service tag",
+      projectId: ids.project,
+      documentIds: [ids.docA],
+      columns: [{ index: 0, name: "Tag", format: "tag", tags: ["A\0Tag"] }],
+    },
+  ]) {
+    assert.throws(() => service.create(input));
+  }
+  assert.equal(
+    Number(
+      (
+        db
+          .prepare("SELECT COUNT(*) AS count FROM tabular_reviews")
+          .get() as Record<string, unknown>
+      ).count,
+    ),
+    reviewCountBeforeBadNul,
+  );
+  assert.throws(() =>
+    service.update(created.review.id, { title: "Bad\0Update" }),
+  );
+  assert.throws(() =>
+    service.updateDraftMatrix(created.review.id, {
+      documentIds: [ids.docA],
+      columns: [{ index: 0, name: "Bad\0Draft", format: "text" }],
+    }),
+  );
+  assert.equal(repo.require(created.review.id).title, "Mike formats");
 
   assert.throws(
     () => service.runReview(created.review.id),
@@ -1849,15 +2723,11 @@ async function auditIncompleteMatrixFailClosed() {
      VALUES (?, ?, 'missing_cell', 'Missing Cell', 'text', '', NULL, 0, ?, ?)`,
   ).run(ids.incompleteColumn, ids.incompleteReview, now, now);
   db.close();
-  assert.throws(
-    () =>
-      new WorkspaceDatabase(databasePath, {
-        migrations: TABULAR_AUDIT_MIGRATIONS,
-      }),
-    (error) =>
-      error instanceof WorkspaceMigrationError &&
-      error.cause instanceof Error &&
-      /incomplete tabular matrix/.test(error.cause.message),
+  migrateAuditDatabaseToSqlcipher(databasePath, "incomplete-matrix");
+  assertMigrationThrowsCause(
+    () => openSqlcipherWorkspaceDatabase(databasePath),
+    /incomplete tabular matrix/,
+    "incomplete matrix must fail closed after SQLCipher gate is satisfied",
   );
 }
 
@@ -1915,15 +2785,11 @@ async function auditSoftDeletedReviewDocumentFailClosed() {
     now,
   );
   db.close();
-  assert.throws(
-    () =>
-      new WorkspaceDatabase(databasePath, {
-        migrations: TABULAR_AUDIT_MIGRATIONS,
-      }),
-    (error) =>
-      error instanceof WorkspaceMigrationError &&
-      error.cause instanceof Error &&
-      /inactive documents/.test(error.cause.message),
+  migrateAuditDatabaseToSqlcipher(databasePath, "soft-deleted-review-document");
+  assertMigrationThrowsCause(
+    () => openSqlcipherWorkspaceDatabase(databasePath),
+    /inactive documents/,
+    "soft-deleted document references must fail closed after SQLCipher gate is satisfied",
   );
 }
 
@@ -2061,9 +2927,8 @@ async function auditUnicodeCodePointTextBounds() {
     columnPrompt: "😀".repeat(20_000),
     enumValues: ["😀".repeat(160)],
   });
-  const migrated = new WorkspaceDatabase(passPath, {
-    migrations: TABULAR_AUDIT_MIGRATIONS,
-  });
+  migrateAuditDatabaseToSqlcipher(passPath, "unicode-code-point-bounds-pass");
+  const migrated = openSqlcipherWorkspaceDatabase(passPath);
   const detail = new TabularRepository(migrated).requireDetail(reviewId);
   assert.equal(Array.from(detail.review.title).length, 240);
   assert.equal(Array.from(detail.columns[0]!.tags[0]!).length, 160);
@@ -2076,6 +2941,7 @@ async function auditUnicodeCodePointTextBounds() {
       columnKey: "safe_key",
       columnTitle: "Safe title",
       columnPrompt: "",
+      pattern: /text bounds|CHECK constraint failed/,
     },
     {
       name: "review-title-spaces",
@@ -2083,6 +2949,7 @@ async function auditUnicodeCodePointTextBounds() {
       columnKey: "safe_key",
       columnTitle: "Safe title",
       columnPrompt: "",
+      pattern: /text bounds/,
     },
     {
       name: "column-key-spaces",
@@ -2090,6 +2957,7 @@ async function auditUnicodeCodePointTextBounds() {
       columnKey: `key${" ".repeat(300)}`,
       columnTitle: "Safe title",
       columnPrompt: "",
+      pattern: /text bounds/,
     },
     {
       name: "column-title-spaces",
@@ -2097,6 +2965,7 @@ async function auditUnicodeCodePointTextBounds() {
       columnKey: "safe_key",
       columnTitle: `Title${" ".repeat(300)}`,
       columnPrompt: "",
+      pattern: /text bounds/,
     },
     {
       name: "column-prompt-spaces",
@@ -2104,6 +2973,25 @@ async function auditUnicodeCodePointTextBounds() {
       columnKey: "safe_key",
       columnTitle: "Safe title",
       columnPrompt: `Prompt${" ".repeat(20_001)}`,
+      pattern: /text bounds/,
+    },
+    {
+      name: "enum-tab-schema-only",
+      reviewTitle: "Safe review",
+      columnKey: "safe_key",
+      columnTitle: "Safe title",
+      columnPrompt: "",
+      enumValues: ["\t"],
+      pattern: /Invalid persisted tabular enum values/,
+    },
+    {
+      name: "enum-nbsp-schema-only",
+      reviewTitle: "Safe review",
+      columnKey: "safe_key",
+      columnTitle: "Safe title",
+      columnPrompt: "",
+      enumValues: ["\u00a0"],
+      pattern: /Invalid persisted tabular enum values/,
     },
   ];
   for (const testCase of cases) {
@@ -2112,19 +3000,23 @@ async function auditUnicodeCodePointTextBounds() {
       `unicode-code-point-bounds-${testCase.name}.sqlite`,
     );
     seedTextBoundsDatabase(databasePath, testCase);
+    migrateAuditDatabaseToSqlcipher(databasePath, testCase.name);
     let thrown: unknown;
     try {
-      new WorkspaceDatabase(databasePath, {
-        migrations: TABULAR_AUDIT_MIGRATIONS,
-      });
+      openSqlcipherWorkspaceDatabase(databasePath);
     } catch (error) {
       thrown = error;
     }
     assert.ok(
       thrown instanceof WorkspaceMigrationError &&
         thrown.cause instanceof Error &&
-        /text bounds/.test(thrown.cause.message),
-      `expected text bounds migration failure for ${testCase.name}`,
+        testCase.pattern.test(thrown.cause.message),
+      `expected migration failure for ${testCase.name}, got ${
+        thrown instanceof WorkspaceMigrationError &&
+        thrown.cause instanceof Error
+          ? thrown.cause.message
+          : String(thrown)
+      }`,
     );
     assertV7RolledBack(databasePath);
   }
@@ -2168,15 +3060,11 @@ async function auditCardinalityBoundsFailClosed() {
     count: 1001,
   });
   db.close();
-  assert.throws(
-    () =>
-      new WorkspaceDatabase(databasePath, {
-        migrations: TABULAR_AUDIT_MIGRATIONS,
-      }),
-    (error) =>
-      error instanceof WorkspaceMigrationError &&
-      error.cause instanceof Error &&
-      /cardinality bounds/.test(error.cause.message),
+  migrateAuditDatabaseToSqlcipher(databasePath, "cardinality-1001");
+  assertMigrationThrowsCause(
+    () => openSqlcipherWorkspaceDatabase(databasePath),
+    /cardinality bounds/,
+    "1001 active memberships must fail closed after SQLCipher gate is satisfied",
   );
   assertV7RolledBack(databasePath);
 }
@@ -2189,9 +3077,8 @@ async function auditCardinalityBoundaryPasses() {
   const reviewId = randomUUID();
   seedMembershipCardinalityDatabase(db, { reviewId, count: 1000 });
   db.close();
-  const migrated = new WorkspaceDatabase(databasePath, {
-    migrations: TABULAR_AUDIT_MIGRATIONS,
-  });
+  migrateAuditDatabaseToSqlcipher(databasePath, "cardinality-1000");
+  const migrated = openSqlcipherWorkspaceDatabase(databasePath);
   const repo = new TabularRepository(migrated);
   assert.equal(repo.requireDetail(reviewId).review.documentIds.length, 1000);
   const mirror = migrated
@@ -2495,6 +3382,77 @@ async function auditRouteModule() {
     assert.equal(create.response.status, 201);
     assert.equal(JSON.stringify(create.body).includes("501"), false);
 
+    const emptyTitleCreate = await requestJson(baseUrl, "/tabular-review", {
+      method: "POST",
+      body: JSON.stringify({
+        title: "",
+        document_ids: [ids.docA],
+        columns_config: routeColumns,
+      }),
+    });
+    assert.equal(emptyTitleCreate.response.status, 201);
+    assert.match(JSON.stringify(emptyTitleCreate.body), /Untitled Review/);
+
+    const createCallsAfterValidCreate = calls.filter(
+      (call) => call === "create",
+    ).length;
+    for (const body of [
+      {
+        title: "Bad\0Route",
+        document_ids: [ids.docA],
+        columns_config: routeColumns,
+      },
+      {
+        title: "Bad route column",
+        document_ids: [ids.docA],
+        columns_config: [
+          {
+            index: 0,
+            name: "Bad\0Column",
+            prompt: "",
+            format: "text",
+            tags: [],
+          },
+        ],
+      },
+      {
+        title: "Bad route prompt",
+        document_ids: [ids.docA],
+        columns_config: [
+          {
+            index: 0,
+            name: "Column",
+            prompt: "Bad\0Prompt",
+            format: "text",
+            tags: [],
+          },
+        ],
+      },
+      {
+        title: "Bad route tag",
+        document_ids: [ids.docA],
+        columns_config: [
+          {
+            index: 0,
+            name: "Column",
+            prompt: "",
+            format: "tag",
+            tags: ["Bad\0Tag"],
+          },
+        ],
+      },
+    ]) {
+      const invalidCreate = await requestJson(baseUrl, "/tabular-review", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      assert.equal(invalidCreate.response.status, 422);
+    }
+    assert.equal(
+      calls.filter((call) => call === "create").length,
+      createCallsAfterValidCreate,
+    );
+
     const badPatchColumn = await requestJson(
       baseUrl,
       `/tabular-review/${ids.review}`,
@@ -2515,6 +3473,59 @@ async function auditRouteModule() {
       },
     );
     assert.equal(badPatchColumn.response.status, 422);
+    const updateCallsBeforeBadNulPatch = calls.filter(
+      (call) => call === "update",
+    ).length;
+    for (const body of [
+      { title: "Bad\0Patch" },
+      {
+        columns_config: [
+          {
+            index: 0,
+            name: "Bad\0Column",
+            prompt: "",
+            format: "text",
+            tags: [],
+          },
+        ],
+      },
+      {
+        columns_config: [
+          {
+            index: 0,
+            name: "Column",
+            prompt: "Bad\0Prompt",
+            format: "text",
+            tags: [],
+          },
+        ],
+      },
+      {
+        columns_config: [
+          {
+            index: 0,
+            name: "Column",
+            prompt: "",
+            format: "tag",
+            tags: ["Bad\0Tag"],
+          },
+        ],
+      },
+    ]) {
+      const invalidPatch = await requestJson(
+        baseUrl,
+        `/tabular-review/${ids.review}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(body),
+        },
+      );
+      assert.equal(invalidPatch.response.status, 422);
+    }
+    assert.equal(
+      calls.filter((call) => call === "update").length,
+      updateCallsBeforeBadNulPatch,
+    );
 
     const capabilities = await requestJson(
       baseUrl,
@@ -2661,6 +3672,11 @@ async function auditRouteModule() {
 async function main() {
   try {
     await auditMigrationHardening();
+    await auditNulRecoveryAndEncryptionGate();
+    await auditNulRecoveryCollisionFailsBeforeWrite();
+    await auditNulRecoveryValidatorMutationAndRollback();
+    await auditEscapedEnumTargetEquivalencePlaintextSafe();
+    auditTabularNulRequestBoundaries();
     await auditServiceRuntimeAndExport();
     await auditGenerationCapabilityFailClosed();
     await auditPartialV7MarkerFailClosed();
@@ -2676,6 +3692,7 @@ async function main() {
     console.log("veraWorkspaceTabularMikeAudit passed");
   } finally {
     rmSync(root, { recursive: true, force: true });
+    rmSync(sqlcipherBackupRoot, { recursive: true, force: true });
   }
 }
 

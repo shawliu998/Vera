@@ -390,11 +390,21 @@ export function createWorkspaceTabularV1Router(
     "/tabular-review",
     asyncRoute(async (request, response) => {
       const parsed = parseMikeTabularCreate(request.body);
+      const trimmedTitle = parsed.title?.trim();
+      const title =
+        trimmedTitle && trimmedTitle.length > 0
+          ? TabularReviewTitleSchemaV7.parse(trimmedTitle).trim()
+          : undefined;
+      const columnsConfig = z
+        .array(MikeColumnConfigSchema)
+        .max(100)
+        .parse(parsed.columns_config);
       safeJson(
         response,
         await runtime.createTabularReview(contextFor(request, options), {
           ...parsed,
-          title: parsed.title?.trim() || "Untitled Review",
+          title: title || "Untitled Review",
+          columns_config: columnsConfig,
         }),
         201,
       );

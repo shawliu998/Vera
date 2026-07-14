@@ -10,8 +10,11 @@ import {
   TabularChatMessageStatusSchema,
   TabularChatStatusSchema,
   TabularColumnFormatSchema,
+  TabularColumnPromptSchemaV7,
   TabularColumnRecordSchemaV7,
+  TabularColumnTitleSchemaV7,
   TabularReviewSchemaV7,
+  TabularReviewTitleSchemaV7,
   TabularSourceRefSchema,
   TabularTagSchemaV7,
   WorkspaceIdSchema,
@@ -34,6 +37,12 @@ import { JOB_CONTRACT_V7_MANIFEST } from "./jobContractV7";
 import { WORKSPACE_PERSISTENCE_PRIMITIVES_V1_MANIFEST } from "./workspacePersistencePrimitivesV1";
 
 type Row = Record<string, unknown>;
+const V7_NUL_RECOVERY_SCHEMA = TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.schema;
+const V7_NUL_REPLACEMENT = TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.replacement;
+const V7_NUL_RECOVERY_TABLE = TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.table;
+const V7_NUL_RECOVERY_LOCK_TRIGGERS = Object.values(
+  TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.lockTriggers,
+);
 
 export { TabularSourceRefSchema } from "./tabularContractV7";
 export type TabularSourceRef = z.infer<typeof TabularSourceRefSchema>;
@@ -412,7 +421,7 @@ export function assertTabularSourceRefsV7(
 }
 
 export const TABULAR_PERSISTED_V7_CONTRACT = {
-  version: "tabular-persisted-v7-frozen-parser-2",
+  version: "tabular-persisted-v7-frozen-parser-3",
   primitives: WORKSPACE_PERSISTENCE_PRIMITIVES_V1_MANIFEST,
   tabular: TABULAR_CONTRACT_V7_MANIFEST,
   jobs: JOB_CONTRACT_V7_MANIFEST,
@@ -438,6 +447,7 @@ export const TABULAR_PERSISTED_V7_CONTRACT = {
       nonCompleteResultProjection: null,
       terminalErrorCode: "workspace_migration_tabular_regeneration_required",
     },
+    nulRecovery: TABULAR_CONTRACT_V7_MANIFEST.nulRecovery,
   },
 } as const;
 
@@ -451,6 +461,270 @@ function persistedRows(
   ...parameters: unknown[]
 ): Row[] {
   return database.prepare(sql).all(...parameters) as Row[];
+}
+
+function hasTable(database: WorkspaceDatabaseAdapter, table: string) {
+  return Boolean(
+    database
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      )
+      .get(table),
+  );
+}
+
+function triggerSql(database: WorkspaceDatabaseAdapter, trigger: string) {
+  const row = database
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+    )
+    .get(trigger);
+  return row && row.sql != null ? String(row.sql) : null;
+}
+
+const V7NulFieldSnapshotSchema = z
+  .object({
+    original: z.string(),
+    canonical: z.string(),
+  })
+  .strict();
+
+const V7NulReviewSnapshotSchema = z
+  .object({
+    id: WorkspaceIdSchema,
+    title: V7NulFieldSnapshotSchema,
+  })
+  .strict();
+
+const V7NulColumnSnapshotSchema = z
+  .object({
+    id: WorkspaceIdSchema,
+    ordinal: z.number().int().nonnegative(),
+    title: V7NulFieldSnapshotSchema,
+    prompt: V7NulFieldSnapshotSchema,
+    enumValues: z
+      .object({
+        original: z.array(z.string()).nullable(),
+        canonical: z.array(z.string()).nullable(),
+      })
+      .strict(),
+  })
+  .strict();
+
+function canonicalizeNul(value: string) {
+  return value.replaceAll("\0", V7_NUL_REPLACEMENT);
+}
+
+function assertNulFieldSnapshot(
+  field: z.infer<typeof V7NulFieldSnapshotSchema>,
+  label: string,
+) {
+  if (field.canonical !== canonicalizeNul(field.original)) {
+    throw new Error(`${label} NUL recovery canonical value is invalid.`);
+  }
+  if (field.canonical.includes("\0")) {
+    throw new Error(
+      `${label} NUL recovery canonical value still contains NUL.`,
+    );
+  }
+}
+
+function parseJsonForNulRecovery<T>(
+  value: unknown,
+  schema: { parse(input: unknown): T },
+  label: string,
+): T {
+  if (typeof value !== "string") {
+    throw new Error(`${label} must be JSON text.`);
+  }
+  return schema.parse(JSON.parse(value));
+}
+
+function assertJsonArrayEqual(
+  actualJson: unknown,
+  expected: string[] | null,
+  label: string,
+) {
+  if (expected === null) {
+    if (actualJson !== null && actualJson !== undefined) {
+      throw new Error(`${label} must remain null.`);
+    }
+    return;
+  }
+  if (typeof actualJson !== "string") {
+    throw new Error(`${label} must be JSON text.`);
+  }
+  const actual = JSON.parse(actualJson) as unknown;
+  if (
+    !Array.isArray(actual) ||
+    actual.length !== expected.length ||
+    actual.some((item, index) => item !== expected[index])
+  ) {
+    throw new Error(
+      `${label} does not match its NUL recovery canonical value.`,
+    );
+  }
+}
+
+function assertNulRecoverySnapshotLocks(database: WorkspaceDatabaseAdapter) {
+  for (const trigger of V7_NUL_RECOVERY_LOCK_TRIGGERS) {
+    const sql = triggerSql(database, trigger);
+    if (
+      !sql ||
+      !sql.includes("tabular v7 NUL recovery snapshots are immutable")
+    ) {
+      throw new Error("Tabular v7 NUL recovery snapshot locks are incomplete.");
+    }
+  }
+}
+
+function validateNulRecoverySnapshotsV7(
+  database: WorkspaceDatabaseAdapter,
+): void {
+  if (!hasTable(database, V7_NUL_RECOVERY_TABLE)) {
+    throw new Error("Tabular v7 NUL recovery snapshot table is missing.");
+  }
+  assertNulRecoverySnapshotLocks(database);
+  for (const row of persistedRows(
+    database,
+    `SELECT review_id, schema, replacement, review_json, columns_json
+       FROM ${V7_NUL_RECOVERY_TABLE}
+      ORDER BY review_id ASC`,
+  )) {
+    if (row.schema !== V7_NUL_RECOVERY_SCHEMA) {
+      throw new Error("Tabular v7 NUL recovery snapshot schema is invalid.");
+    }
+    if (row.replacement !== V7_NUL_REPLACEMENT) {
+      throw new Error(
+        "Tabular v7 NUL recovery snapshot replacement is invalid.",
+      );
+    }
+    const review = parseJsonForNulRecovery(
+      row.review_json,
+      V7NulReviewSnapshotSchema,
+      "tabular v7 NUL recovery review snapshot",
+    );
+    if (row.review_json !== JSON.stringify(review)) {
+      throw new Error(
+        "Tabular v7 NUL recovery review snapshot is not canonical JSON.",
+      );
+    }
+    if (row.review_id !== review.id) {
+      throw new Error("Tabular v7 NUL recovery review id drifted.");
+    }
+    const columns = parseJsonForNulRecovery(
+      row.columns_json,
+      z
+        .array(V7NulColumnSnapshotSchema)
+        .max(TABULAR_CONTRACT_V7_MANIFEST.limits.reviewColumns),
+      "tabular v7 NUL recovery column snapshot",
+    );
+    if (row.columns_json !== JSON.stringify(columns)) {
+      throw new Error(
+        "Tabular v7 NUL recovery column snapshot is not canonical JSON.",
+      );
+    }
+    const authoritativeColumns = persistedRows(
+      database,
+      `SELECT id, ordinal
+         FROM tabular_review_columns
+        WHERE review_id = ?
+        ORDER BY ordinal ASC, id ASC`,
+      review.id,
+    );
+    if (authoritativeColumns.length !== columns.length) {
+      throw new Error("Tabular v7 NUL recovery column snapshot is incomplete.");
+    }
+    authoritativeColumns.forEach((columnRow, index) => {
+      const snapshotColumn = columns[index];
+      if (!snapshotColumn) {
+        throw new Error(
+          "Tabular v7 NUL recovery column snapshot is incomplete.",
+        );
+      }
+      if (
+        columnRow.id !== snapshotColumn.id ||
+        Number(columnRow.ordinal) !== snapshotColumn.ordinal
+      ) {
+        throw new Error(
+          "Tabular v7 NUL recovery column snapshot order drifted.",
+        );
+      }
+    });
+    let originalContainedNul = review.title.original.includes("\0");
+    assertNulFieldSnapshot(review.title, "tabular review title");
+    TabularReviewTitleSchemaV7.parse(review.title.canonical);
+    const persistedReview = database
+      .prepare("SELECT title FROM tabular_reviews WHERE id = ?")
+      .get(review.id);
+    if (!persistedReview || persistedReview.title !== review.title.canonical) {
+      throw new Error(
+        "Tabular v7 NUL recovery review title does not match canonical value.",
+      );
+    }
+    for (const column of columns) {
+      originalContainedNul =
+        originalContainedNul ||
+        column.title.original.includes("\0") ||
+        column.prompt.original.includes("\0") ||
+        Boolean(
+          column.enumValues.original?.some((value) => value.includes("\0")),
+        );
+      assertNulFieldSnapshot(column.title, "tabular column title");
+      assertNulFieldSnapshot(column.prompt, "tabular column prompt");
+      TabularColumnTitleSchemaV7.parse(column.title.canonical);
+      TabularColumnPromptSchemaV7.parse(column.prompt.canonical);
+      if (
+        (column.enumValues.original === null) !==
+        (column.enumValues.canonical === null)
+      ) {
+        throw new Error("Tabular v7 NUL recovery enum nullability drifted.");
+      }
+      if (column.enumValues.original && column.enumValues.canonical) {
+        if (
+          column.enumValues.original.length !==
+          column.enumValues.canonical.length
+        ) {
+          throw new Error("Tabular v7 NUL recovery enum length drifted.");
+        }
+        column.enumValues.original.forEach((original, index) => {
+          const canonical = column.enumValues.canonical![index];
+          if (canonical !== canonicalizeNul(original)) {
+            throw new Error(
+              "Tabular v7 NUL recovery enum canonical value is invalid.",
+            );
+          }
+          TabularTagSchemaV7.parse(canonical);
+        });
+      }
+      const persistedColumn = database
+        .prepare(
+          `SELECT title, prompt, enum_values_json
+             FROM tabular_review_columns
+            WHERE id = ? AND review_id = ?`,
+        )
+        .get(column.id, review.id);
+      if (
+        !persistedColumn ||
+        persistedColumn.title !== column.title.canonical ||
+        persistedColumn.prompt !== column.prompt.canonical
+      ) {
+        throw new Error(
+          "Tabular v7 NUL recovery column text does not match canonical value.",
+        );
+      }
+      assertJsonArrayEqual(
+        persistedColumn.enum_values_json,
+        column.enumValues.canonical,
+        "tabular v7 NUL recovery enum values",
+      );
+    }
+    if (!originalContainedNul) {
+      throw new Error(
+        "Tabular v7 NUL recovery snapshot does not contain original NUL evidence.",
+      );
+    }
+  }
 }
 
 function persistedDocumentIds(
@@ -571,6 +845,7 @@ function validatePersistedTabularJobsV7(
 export function validateTabularPersistenceV7(
   database: WorkspaceDatabaseAdapter,
 ): void {
+  validateNulRecoverySnapshotsV7(database);
   validatePersistedReviewsV7(database);
   validatePersistedChatsV7(database);
   validatePersistedTabularJobsV7(database);

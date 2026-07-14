@@ -7,6 +7,7 @@ import {
   IsoDateTimeSchema,
   NullableWorkspaceIdSchema,
   StructuredErrorSchema,
+  UnicodeCodePointStringSchemaV1,
   WorkspaceIdSchema,
 } from "./workspacePersistencePrimitivesV1";
 
@@ -122,6 +123,26 @@ export const TabularCellStatusSchema = z.enum([
   "failed",
   "cancelled",
 ]);
+const TabularReviewRequestTitleSchema = UnicodeCodePointStringSchemaV1({
+  min: 1,
+  max: 240,
+  trimForMin: true,
+}).transform((value) => value.trim());
+const TabularReviewRequestColumnTitleSchema = UnicodeCodePointStringSchemaV1({
+  min: 1,
+  max: 160,
+  trimForMin: true,
+}).transform((value) => value.trim());
+const TabularReviewRequestColumnPromptSchema = UnicodeCodePointStringSchemaV1({
+  min: 1,
+  max: 20_000,
+  trimForMin: true,
+}).transform((value) => value.trim());
+const TabularReviewRequestEnumValueSchema = UnicodeCodePointStringSchemaV1({
+  min: 1,
+  max: 160,
+  trimForMin: true,
+}).transform((value) => value.trim());
 export const JobTypeSchema = z.enum([
   "document_parse",
   "assistant_generate",
@@ -841,6 +862,36 @@ const WorkflowColumnInputSchema = z
     }
   });
 
+const TabularReviewColumnInputSchema = z
+  .object({
+    key: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
+    title: TabularReviewRequestColumnTitleSchema,
+    outputType: TabularOutputTypeSchema,
+    prompt: TabularReviewRequestColumnPromptSchema,
+    enumValues: z
+      .array(TabularReviewRequestEnumValueSchema)
+      .min(1)
+      .max(100)
+      .optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.outputType === "enum" && !value.enumValues?.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["enumValues"],
+        message: "enum columns require enumValues",
+      });
+    }
+    if (value.outputType !== "enum" && value.enumValues) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["enumValues"],
+        message: "enumValues are only valid for enum columns",
+      });
+    }
+  });
+
 export const CreateAssistantWorkflowRequestSchema = z
   .object({
     type: z.literal("assistant"),
@@ -907,16 +958,16 @@ export const CreateTabularReviewRequestSchema = z
   .object({
     projectId: NullableWorkspaceIdSchema.optional(),
     workflowId: NullableWorkspaceIdSchema.optional(),
-    title: z.string().trim().min(1).max(240),
+    title: TabularReviewRequestTitleSchema,
     documentIds: z.array(WorkspaceIdSchema).max(1_000).default([]),
     modelProfileId: NullableWorkspaceIdSchema.optional(),
-    columns: z.array(WorkflowColumnInputSchema).max(100).default([]),
+    columns: z.array(TabularReviewColumnInputSchema).max(100).default([]),
   })
   .strict();
 
 export const UpdateTabularReviewRequestSchema = z
   .object({
-    title: z.string().trim().min(1).max(240).optional(),
+    title: TabularReviewRequestTitleSchema.optional(),
     status: z.enum(["draft", "ready", "archived", "cancelled"]).optional(),
     modelProfileId: NullableWorkspaceIdSchema.optional(),
   })
