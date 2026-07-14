@@ -1,5 +1,10 @@
 import type { WorkspaceBlobLocator } from "../blobStore";
 import type { WorkspaceDatabaseAdapter } from "../database";
+import {
+  assertNoActiveProjectWorkflowForFolder,
+  assertNoDurableDocumentHistory,
+  listActiveFolderAssistantJobs,
+} from "../documentDeletionPolicy";
 import { WorkspaceApiError } from "../errors";
 import { workspaceBlobStorageKey } from "./blobRecords";
 import {
@@ -577,6 +582,11 @@ export class ProjectsRepository {
   folderDeletionPlan(folderId: string): FolderDeletionPlan {
     return this.safe(() => {
       const target = this.requireFolder(folderId);
+      assertNoDurableDocumentHistory(this.database, {
+        kind: "folder",
+        folderId,
+      });
+      assertNoActiveProjectWorkflowForFolder(this.database, folderId);
       this.assertLiveVersionAuthority("folder", folderId);
       const folders = this.listFolderSubtree(folderId);
       const documentIds = this.database
@@ -638,6 +648,11 @@ export class ProjectsRepository {
     return this.safe(() =>
       this.transaction(() => {
         const folder = this.requireFolder(folderId);
+        assertNoDurableDocumentHistory(this.database, {
+          kind: "folder",
+          folderId,
+        });
+        assertNoActiveProjectWorkflowForFolder(this.database, folderId);
         this.assertLiveVersionAuthority("folder", folderId);
         const current = this.listFolderBlobs(folderId);
         this.assertStagedAuthority(current, staged);
@@ -755,7 +770,7 @@ export class ProjectsRepository {
   }
 
   private listFolderActiveJobs(folderId: string) {
-    return this.database
+    const directJobs = this.database
       .prepare(
         `${FOLDER_SCOPE_CTE}
          SELECT DISTINCT j.id, j.status FROM jobs j
@@ -765,6 +780,19 @@ export class ProjectsRepository {
       )
       .all(folderId)
       .map(mapActiveJob);
+    const assistantJobs = listActiveFolderAssistantJobs(
+      this.database,
+      folderId,
+    ).map((job) => mapActiveJob(job));
+    return [
+      ...new Map(
+        [...directJobs, ...assistantJobs].map((job) => [job.id, job]),
+      ).values(),
+    ].sort(
+      (left, right) =>
+        left.status.localeCompare(right.status) ||
+        left.id.localeCompare(right.id),
+    );
   }
 
   private assertNoActiveProjectJobs(projectId: string) {

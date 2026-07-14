@@ -1,6 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import {
+  assertNoActiveProjectWorkflowForDocument,
+  assertNoDurableDocumentHistory,
+  hasExactAssistantDocumentBindings,
+} from "../documentDeletionPolicy";
+import {
   workspaceBlobStorageKey,
 } from "./blobRecords";
 import type {
@@ -824,6 +829,11 @@ export class WorkspaceDocumentsRepository {
     assertUuid(documentId, "documentId");
     const document = this.getDocument(documentId);
     if (!document) throw new Error("Document was not found.");
+    assertNoDurableDocumentHistory(this.database, {
+      kind: "document",
+      documentId,
+    });
+    assertNoActiveProjectWorkflowForDocument(this.database, documentId);
     this.assertNoUnsafeAssistantDependencies(documentId, document.projectId);
     this.assertTabularCellJobBindings(documentId);
     return { activeJobs: this.listActiveDocumentDependentJobs(documentId) };
@@ -835,6 +845,11 @@ export class WorkspaceDocumentsRepository {
       const versions = this.listVersions(documentId);
       const document = this.getDocument(documentId);
       if (!document) throw new Error("Document was not found.");
+      assertNoDurableDocumentHistory(this.database, {
+        kind: "document",
+        documentId,
+      });
+      assertNoActiveProjectWorkflowForDocument(this.database, documentId);
       this.assertNoUnsafeAssistantDependencies(documentId, document.projectId);
       this.assertTabularCellJobBindings(documentId);
       if (this.listActiveDocumentDependentJobs(documentId).length > 0) {
@@ -981,6 +996,11 @@ export class WorkspaceDocumentsRepository {
     documentId: string,
     projectId: string | null,
   ) {
+    // v5+ snapshots bind the exact document/version set. The shared durable
+    // history policy has already checked those rows, so retaining the legacy
+    // project-wide heuristic here would block unrelated document deletion.
+    if (hasExactAssistantDocumentBindings(this.database)) return;
+
     const activeAssistantJobs = this.database
       .prepare(
         `SELECT job.resource_type, chat.id AS chat_id,
