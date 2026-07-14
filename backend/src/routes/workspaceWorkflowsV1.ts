@@ -7,6 +7,7 @@ import {
 import { z, ZodError } from "zod";
 
 import { WorkspaceApiError } from "../lib/workspace/errors";
+import { WORKSPACE_LOCAL_PRINCIPAL_ID } from "../lib/workspace/principal";
 import {
   MikeCreateWorkflowRequestSchema,
   MikeUpdateWorkflowRequestSchema,
@@ -70,8 +71,9 @@ function contextFor(
   response: Response,
   options: WorkspaceWorkflowsV1RouterOptions,
 ) {
-  if (options.context) return options.context(request, response);
-  const principalId = response.locals.principalId;
+  const principalId = options.context
+    ? options.context(request, response).principalId
+    : response.locals.userId;
   if (typeof principalId !== "string" || !principalId.trim()) {
     throw new WorkspaceApiError(
       401,
@@ -79,7 +81,10 @@ function contextFor(
       "Authentication is required.",
     );
   }
-  return { principalId };
+  if (principalId !== WORKSPACE_LOCAL_PRINCIPAL_ID) {
+    throw new WorkspaceApiError(403, "FORBIDDEN", "Workspace is local-only.");
+  }
+  return { principalId: WORKSPACE_LOCAL_PRINCIPAL_ID };
 }
 
 function errorPayload(error: unknown) {

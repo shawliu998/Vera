@@ -12,6 +12,7 @@ import {
   WorkspaceDatabase,
 } from "../lib/workspace/database";
 import { WorkspaceApiError } from "../lib/workspace/errors";
+import { WORKSPACE_LOCAL_PRINCIPAL_ID } from "../lib/workspace/principal";
 import { WORKFLOW_RUNTIME_V6_MIGRATION } from "../lib/workspace/migrations/v6WorkflowRuntime";
 import {
   WORKSPACE_WORKFLOW_EXECUTION_CAPABILITY,
@@ -161,18 +162,22 @@ async function auditRouter(
 ) {
   const app = express();
   app.use(express.json({ limit: "64kb" }));
-  app.use(
-    "/workflows",
-    createWorkspaceWorkflowsV1Router(port, {
-      context: () => ({ principalId: "local-principal" }),
-    }),
-  );
+  app.use("/unauthenticated-workflows", createWorkspaceWorkflowsV1Router(port));
+  app.use("/workflows", (_request, response, next) => {
+    response.locals.userId = WORKSPACE_LOCAL_PRINCIPAL_ID;
+    next();
+  });
+  app.use("/workflows", createWorkspaceWorkflowsV1Router(port));
   const server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   const base = `http://127.0.0.1:${address.port}/workflows`;
   try {
+    const unauthenticated = await fetch(
+      `http://127.0.0.1:${address.port}/unauthenticated-workflows`,
+    );
+    assert.equal(unauthenticated.status, 401);
     const listed = await fetch(`${base}?type=assistant`);
     assert.equal(listed.status, 200);
     assert.ok(
@@ -530,6 +535,18 @@ async function run() {
       seededAgain.map((workflow) => workflow.id),
       seeded.map((workflow) => workflow.id),
     );
+    const driftedSeed = pinnedSeeds[0];
+    database
+      .prepare(
+        "UPDATE workflow_system_templates SET source_sha256 = ? WHERE upstream_id = ?",
+      )
+      .run("0".repeat(64), driftedSeed.upstreamId);
+    expectWorkspaceError(() => seedPinnedMikeSystemWorkflows(workflows), 409);
+    database
+      .prepare(
+        "UPDATE workflow_system_templates SET source_sha256 = ? WHERE upstream_id = ?",
+      )
+      .run(driftedSeed.sourceSha256, driftedSeed.upstreamId);
     const system = seeded.find(
       (workflow) =>
         workflows.getMikeBuiltinMapping(workflow.id)?.upstreamId ===
@@ -541,7 +558,9 @@ async function run() {
     assert.equal(mapping?.sourceSha256, MIKE_SYSTEM_WORKFLOWS_SOURCE_SHA256);
     assert.match(system.id, /^[0-9a-f-]{36}$/i);
     const adapter = new MikeWorkflowCrudPortAdapter(workflows);
-    const crudRequestContext = { principalId: "local-principal" };
+    const crudRequestContext = {
+      principalId: WORKSPACE_LOCAL_PRINCIPAL_ID,
+    };
     const mikeWire = await adapter.get(
       crudRequestContext,
       "builtin-nda-review",

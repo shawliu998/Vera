@@ -644,10 +644,23 @@ export class WorkflowsRepository {
       this.requireWorkflowRuntimeV6();
       const existing = this.database
         .prepare(
-          "SELECT workflow_id FROM workflow_system_templates WHERE upstream_id = ?",
+          `SELECT workflow_id, upstream_version, source_sha256
+             FROM workflow_system_templates WHERE upstream_id = ?`,
         )
         .get(input.upstreamId);
-      if (existing) return this.require(String(existing.workflow_id));
+      if (existing) {
+        if (
+          String(existing.upstream_version) !== input.upstreamVersion ||
+          String(existing.source_sha256) !== input.sourceSha256
+        ) {
+          throw new WorkspaceApiError(
+            409,
+            "CONFLICT",
+            "Pinned Mike workflow provenance does not match the existing system template.",
+          );
+        }
+        return this.require(String(existing.workflow_id));
+      }
 
       const occupied = this.get(input.workflow.id);
       if (occupied) {
