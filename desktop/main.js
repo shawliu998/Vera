@@ -54,7 +54,7 @@ const FRONTEND_PORT = Number(
 const HOST = "127.0.0.1";
 const BACKEND_URL = `http://${HOST}:${BACKEND_PORT}`;
 const FRONTEND_URL = `http://${HOST}:${FRONTEND_PORT}`;
-const WORKSPACE_PATH = "/aletheia/matters";
+const WORKSPACE_PATH = "/projects";
 const DESKTOP_SESSION_TOKEN = crypto.randomBytes(32).toString("base64url");
 const DESKTOP_DOWNLOAD_SIGNING_SECRET = crypto.randomBytes(32).toString("hex");
 const PENDING_RESTORE_SCHEMA = "aletheia-pending-restore-v1";
@@ -579,7 +579,7 @@ function assertPortFree(port) {
     server.once("error", () => {
       reject(
         new Error(
-          `Port ${port} is already in use. Quit the other local service or set ALETHEIA_DESKTOP_FRONTEND_PORT/ALETHEIA_DESKTOP_BACKEND_PORT before launching ${PRODUCT_NAME}.`,
+          `Port ${port} is already in use. Quit the other local service or choose different local desktop ports before launching ${PRODUCT_NAME}.`,
         ),
       );
     });

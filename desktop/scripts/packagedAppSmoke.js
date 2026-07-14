@@ -16,7 +16,7 @@ const FRONTEND_PORT = Number(
 const BACKEND_PORT = Number(
   process.env.ALETHEIA_DESKTOP_BACKEND_PORT ?? 43761,
 );
-const FRONTEND_URL = `http://${HOST}:${FRONTEND_PORT}/aletheia/matters`;
+const FRONTEND_URL = `http://${HOST}:${FRONTEND_PORT}/projects`;
 const BACKEND_URL = `http://${HOST}:${BACKEND_PORT}/health`;
 const STARTUP_TIMEOUT_MS = 180_000;
 const SHUTDOWN_TIMEOUT_MS = 20_000;

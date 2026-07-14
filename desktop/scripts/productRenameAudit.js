@@ -103,7 +103,15 @@ assert.match(
 assert.match(mainSource, /app\.setName\(PRODUCT_NAME\);/);
 assert.match(mainSource, /app\.setPath\(\s*"userData"/);
 assert.match(mainSource, /com\.aletheia\.desktop\.application-encryption/);
-assert.match(mainSource, /const WORKSPACE_PATH = "\/aletheia\/matters";/);
+assert.match(mainSource, /const WORKSPACE_PATH = "\/projects";/);
+assert.match(
+  mainSource,
+  /choose different local desktop ports before launching/,
+);
+assert.doesNotMatch(
+  mainSource,
+  /set ALETHEIA_DESKTOP_FRONTEND_PORT\/ALETHEIA_DESKTOP_BACKEND_PORT before launching/,
+);
 assert.ok(fs.existsSync(path.join(desktopDir, "build", "icon.icns")));
 assert.ok(fs.existsSync(path.join(desktopDir, "build", "icon.png")));
 auditLegalSourceConfiguration();
@@ -118,7 +126,8 @@ console.log(
         packageName: packageDocument.name,
         appId: packageDocument.build.appId,
         userDataDirectory: "aletheia-desktop",
-        internalWorkspacePath: "/aletheia/matters",
+        startupPath: "/projects",
+        legacyRoutesPreserved: true,
         legalSourceConfiguration: {
           forwardedToBackend: LEGAL_SOURCE_CONFIG_ENV_KEYS,
           composeMapped: true,

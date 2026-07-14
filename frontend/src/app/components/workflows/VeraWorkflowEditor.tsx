@@ -347,7 +347,7 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
             <div>
               <h2 className="text-sm font-medium text-gray-900">提取列</h2>
               <p className="mt-1 text-xs text-gray-500">
-                保留 Mike 的九种输出格式与标签语义。
+                支持九种输出格式与标签语义。
               </p>
             </div>
             {editable && (

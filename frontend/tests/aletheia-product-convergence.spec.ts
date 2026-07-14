@@ -36,12 +36,17 @@ async function stubConnectedEmpty(page: Page, backendUrl: string) {
   );
 }
 
-test("installed entry and matter links use the canonical litigation route", async ({
+test("Vera entries open Projects while legacy matter links remain compatible", async ({
   page,
 }, testInfo) => {
   const state = smokeState(testInfo.project.name);
 
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/projects$/);
   await page.goto("/aletheia");
+  await expect(page).toHaveURL(/\/projects$/);
+
+  await page.goto("/aletheia/matters");
   await expect(page).toHaveURL(/\/aletheia\/matters$/);
 
   const desktopNavigation = page

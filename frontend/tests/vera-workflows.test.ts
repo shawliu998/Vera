@@ -230,6 +230,8 @@ test("Workflow UI retains Mike CRUD provenance but excludes disabled execution a
   assert.match(list, /listVeraWorkflows\("tabular"/);
   assert.match(list, /listHiddenVeraWorkflows/);
   assert.match(editor, /VERA_WORKFLOW_FORMATS/);
+  assert.match(editor, /支持九种输出格式与标签语义。/);
+  assert.doesNotMatch(editor, /保留 Mike 的九种输出格式与标签语义。/);
   assert.match(list, /role="link"/);
   assert.match(list, /tabIndex=\{0\}/);
   assert.match(list, /event\.key === "Enter" \|\| event\.key === " "/);

@@ -96,6 +96,46 @@ test("stable backend error codes always resolve to localized safe copy", () => {
   expect(localized).not.toContain(internalBackendMessage);
 });
 
+test("capability copy distinguishes available workspace features from planned features", () => {
+  expect(MESSAGES["zh-CN"].projects.subtitle).toContain("创建项目");
+  expect(MESSAGES["zh-CN"].documents.subtitle).toContain("管理项目资料");
+  expect(MESSAGES["en-US"].projects.subtitle).toContain("Create projects");
+  expect(MESSAGES["en-US"].documents.subtitle).toContain(
+    "Manage project materials",
+  );
+
+  for (const copy of [
+    MESSAGES["zh-CN"].assistant.subtitle,
+    ...Object.values(MESSAGES["zh-CN"].assistant.errors),
+    MESSAGES["zh-CN"].workflows.subtitle,
+    ...Object.values(MESSAGES["zh-CN"].workflows.errors),
+    MESSAGES["zh-CN"].tabular.subtitle,
+    ...Object.values(MESSAGES["zh-CN"].tabular.errors),
+  ]) {
+    expect(copy).toMatch(/后续版本启用|尚未启用/);
+  }
+  for (const copy of [
+    MESSAGES["en-US"].assistant.subtitle,
+    ...Object.values(MESSAGES["en-US"].assistant.errors),
+    MESSAGES["en-US"].workflows.subtitle,
+    ...Object.values(MESSAGES["en-US"].workflows.errors),
+    MESSAGES["en-US"].tabular.subtitle,
+    ...Object.values(MESSAGES["en-US"].tabular.errors),
+  ]) {
+    expect(copy).toMatch(/later release|not enabled yet/);
+  }
+
+  expect(
+    localizeBackendError("REMOTE_PROVIDER_DISABLED", (key, values) =>
+      translateMessage("zh-CN", key, values),
+    ),
+  ).toBe("当前版本未启用远程模型。");
+  expect(MESSAGES["zh-CN"].errors.remoteDisabled).not.toMatch(/设置|本地模型/);
+  expect(MESSAGES["en-US"].errors.remoteDisabled).not.toMatch(
+    /Settings|local model/i,
+  );
+});
+
 test("date, number, and file-size formatting is delegated to Intl", () => {
   const instant = new Date("2026-07-14T00:00:00.000Z");
   const dateOptions = { dateStyle: "medium", timeZone: "UTC" } as const;
