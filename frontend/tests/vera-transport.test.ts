@@ -10,6 +10,7 @@ import {
   veraApiPathFromWireUrl,
   VeraRuntimeConfigurationError,
 } from "../src/app/lib/veraRuntime.ts";
+import { DOCUMENT_UPLOAD_ERROR_CODES } from "../src/app/lib/documentUploadValidation.ts";
 import {
   attachVeraProjectDocument,
   displayVeraDocument,
@@ -18,6 +19,8 @@ import {
   listVeraProjectDocuments,
   moveVeraProjectDocument,
   renameVeraProjectDocument,
+  uploadVeraDocument,
+  uploadVeraDocumentVersion,
   veraApiErrorFromResponse,
   veraApiRequest,
   VeraApiError,
@@ -411,6 +414,142 @@ test("typed document APIs follow the project/catalog routes and binary display c
       new Headers(calls[5].init?.headers).get("accept"),
       "application/octet-stream",
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("document uploads reject unsupported extensions before network access", async () => {
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error("fetch must not run");
+  };
+
+  try {
+    for (const name of ["legacy.doc", "sheet.xlsm", "slides.pptx", ".pdf"]) {
+      const secret = `secret-${name}`;
+      const file = Object.assign(new Blob([secret]), { name }) as File;
+      await assert.rejects(
+        uploadVeraDocument({ file, projectId: id }),
+        (error: unknown) => {
+          assert.ok(error instanceof VeraRuntimeConfigurationError);
+          assert.equal(
+            (error as { code?: unknown }).code,
+            DOCUMENT_UPLOAD_ERROR_CODES.unsupportedType,
+          );
+          assert.equal(error.message.includes(name), false);
+          assert.equal(error.message.includes(secret), false);
+          return true;
+        },
+      );
+      await assert.rejects(
+        uploadVeraDocumentVersion(otherId, file, { projectId: id }),
+        (error: unknown) => {
+          assert.equal(
+            (error as { code?: unknown }).code,
+            DOCUMENT_UPLOAD_ERROR_CODES.unsupportedType,
+          );
+          return true;
+        },
+      );
+    }
+    assert.equal(fetchCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("document uploads accept FormData-compatible files across Blob realms", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalBlob = Object.getOwnPropertyDescriptor(globalThis, "Blob");
+  const file = Object.assign(new Blob(["cross-realm"]), {
+    name: " evidence.pdf ",
+  }) as File;
+  let fetchCalls = 0;
+
+  Object.defineProperty(globalThis, "Blob", {
+    value: class ForeignRealmBlob {},
+    configurable: true,
+    writable: true,
+  });
+  assert.equal(file instanceof Blob, false);
+  globalThis.fetch = async (_input, init) => {
+    fetchCalls += 1;
+    assert.ok(init?.body instanceof FormData);
+    assert.equal((init.body.get("file") as File).name, "evidence.pdf");
+    return new Response("{}", {
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  try {
+    await assert.rejects(
+      uploadVeraDocument({ file, projectId: id }),
+      (error: unknown) => {
+        assert.equal(error instanceof VeraRuntimeConfigurationError, false);
+        return true;
+      },
+    );
+    assert.equal(fetchCalls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalBlob) Object.defineProperty(globalThis, "Blob", originalBlob);
+    else Reflect.deleteProperty(globalThis, "Blob");
+  }
+});
+
+test("document uploads fail closed for File lookalikes without reflecting secrets", async () => {
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error("fetch must not run");
+  };
+  const secret = "client-confidential-material";
+  const lookalike = {
+    name: `${secret}.pdf`,
+    size: 1,
+    type: "application/pdf",
+    arrayBuffer: async () => new ArrayBuffer(1),
+    stream: () => new ReadableStream(),
+    text: async () => secret,
+    slice: () => lookalike,
+    [Symbol.toStringTag]: "File",
+  } as unknown as File;
+  const oversizedName = `${"x".repeat(237)}.pdf`;
+  const oversized = Object.assign(new Blob([secret]), {
+    name: oversizedName,
+  }) as File;
+
+  try {
+    await assert.rejects(
+      uploadVeraDocument({ file: lookalike, projectId: id }),
+      (error: unknown) => {
+        assert.ok(error instanceof VeraRuntimeConfigurationError);
+        assert.equal(
+          (error as { code?: unknown }).code,
+          DOCUMENT_UPLOAD_ERROR_CODES.invalidFile,
+        );
+        assert.equal(error.message.includes(secret), false);
+        return true;
+      },
+    );
+    await assert.rejects(
+      uploadVeraDocument({ file: oversized, projectId: id }),
+      (error: unknown) => {
+        assert.ok(error instanceof VeraRuntimeConfigurationError);
+        assert.equal(
+          (error as { code?: unknown }).code,
+          DOCUMENT_UPLOAD_ERROR_CODES.invalidFile,
+        );
+        assert.equal(error.message.includes(oversizedName), false);
+        assert.equal(error.message.includes(secret), false);
+        return true;
+      },
+    );
+    assert.equal(fetchCalls, 0);
   } finally {
     globalThis.fetch = originalFetch;
   }

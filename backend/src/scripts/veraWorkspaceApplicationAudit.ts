@@ -448,9 +448,18 @@ async function auditApplicationSurface(): Promise<void> {
     assert.equal(remove.status, 204);
 
     const dormantProjectId = "00000000-0000-4000-8000-000000000001";
+    const dormantChatId = "00000000-0000-4000-8000-000000000002";
     const dormantRoutes = [
-      { method: "POST", path: "/api/v1/chat" },
-      { method: "POST", path: `/api/v1/projects/${dormantProjectId}/chat` },
+      { method: "GET", path: "/api/v1/chat" },
+      { method: "POST", path: "/api/v1/chat/create" },
+      { method: "GET", path: `/api/v1/projects/${dormantProjectId}/chats` },
+      { method: "GET", path: `/api/v1/chat/${dormantChatId}` },
+      {
+        method: "PATCH",
+        path: `/api/v1/chat/${dormantChatId}`,
+        body: { title: "Dormant chat" },
+      },
+      { method: "DELETE", path: `/api/v1/chat/${dormantChatId}` },
       { method: "POST", path: `/api/v1/workflows/${systemId}/runs` },
       { method: "GET", path: "/api/v1/tabular-review" },
       { method: "POST", path: "/api/v1/tabular-review" },
@@ -465,7 +474,11 @@ async function auditApplicationSurface(): Promise<void> {
       const response = await fetch(`${baseUrl}${route.path}`, {
         method: route.method,
         headers,
-        ...(route.method === "GET" ? {} : { body: "{}" }),
+        ...(route.method === "GET" || route.method === "DELETE"
+          ? {}
+          : {
+              body: JSON.stringify("body" in route ? route.body : {}),
+            }),
       });
       assert.equal(
         response.status,

@@ -21,7 +21,7 @@ async function main() {
   const frontendPort = Number(
     process.env.ALETHEIA_DESKTOP_FRONTEND_PORT ?? 43760,
   );
-  const frontendUrl = `http://127.0.0.1:${frontendPort}/aletheia/matters`;
+  const frontendUrl = `http://127.0.0.1:${frontendPort}/projects`;
   const root = fs.mkdtempSync(
     path.join(os.tmpdir(), "aletheia-notification-audit-"),
   );

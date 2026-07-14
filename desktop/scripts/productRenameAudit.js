@@ -10,6 +10,19 @@ const packageDocument = JSON.parse(
   fs.readFileSync(path.join(desktopDir, "package.json"), "utf8"),
 );
 const mainSource = fs.readFileSync(path.join(desktopDir, "main.js"), "utf8");
+const applicationMenuStart = mainSource.indexOf(
+  "function installApplicationMenu()",
+);
+const applicationMenuEnd = mainSource.indexOf("function registerIpc()");
+assert.notEqual(applicationMenuStart, -1, "the desktop menu installer exists");
+assert.ok(
+  applicationMenuEnd > applicationMenuStart,
+  "the desktop menu installer has an auditable static boundary",
+);
+const applicationMenuSource = mainSource.slice(
+  applicationMenuStart,
+  applicationMenuEnd,
+);
 const composeSource = fs.readFileSync(
   path.join(desktopDir, "..", "docker-compose.yml"),
   "utf8",
@@ -104,6 +117,13 @@ assert.match(mainSource, /app\.setName\(PRODUCT_NAME\);/);
 assert.match(mainSource, /app\.setPath\(\s*"userData"/);
 assert.match(mainSource, /com\.aletheia\.desktop\.application-encryption/);
 assert.match(mainSource, /const WORKSPACE_PATH = "\/projects";/);
+assert.match(applicationMenuSource, /label: "Open Data Folder"/);
+assert.match(applicationMenuSource, /label: "Open Logs Folder"/);
+assert.doesNotMatch(
+  applicationMenuSource,
+  /\/aletheia\/|New Matter|Settings\.\.\./,
+  "the primary desktop menu must not expose Legacy Vera product routes",
+);
 assert.match(
   mainSource,
   /choose different local desktop ports before launching/,

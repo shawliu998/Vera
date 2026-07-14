@@ -31,6 +31,7 @@ import { ConfirmPopup } from "@/app/components/shared/ConfirmPopup";
 import { VersionChip } from "@/app/components/shared/VersionChip";
 import { invalidateDirectoryCache } from "@/app/components/shared/useDirectoryData";
 import { useI18n } from "@/app/i18n";
+import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
 import {
     createVeraProjectFolder,
     deleteVeraDocument,
@@ -77,8 +78,6 @@ type FolderDeleteImpact = {
     documentIds: string[];
 };
 
-const ACCEPTED_DOCUMENTS =
-    ".pdf,.docx,.doc,.xlsx,.xlsm,.xls,.pptx,.ppt,.txt,.md";
 const VERA_DOCUMENT_DRAG = "application/vera-document";
 const VERA_FOLDER_DRAG = "application/vera-folder";
 
@@ -91,6 +90,7 @@ export function ProjectDocumentsView({ projectId }: Props) {
         setFolders,
         projectLoading,
         projectError,
+        refreshProject,
         search,
     } = useProjectWorkspace();
     const { t, formatDate, formatFileSize, formatNumber, errorMessage } =
@@ -1081,7 +1081,7 @@ export function ProjectDocumentsView({ projectId }: Props) {
             <input
                 ref={rootUploadRef}
                 type="file"
-                accept={ACCEPTED_DOCUMENTS}
+                accept={SUPPORTED_DOCUMENT_ACCEPT}
                 multiple
                 className="hidden"
                 onChange={(event) => {
@@ -1095,7 +1095,7 @@ export function ProjectDocumentsView({ projectId }: Props) {
             <input
                 ref={versionUploadRef}
                 type="file"
-                accept={ACCEPTED_DOCUMENTS}
+                accept={SUPPORTED_DOCUMENT_ACCEPT}
                 className="hidden"
                 onChange={(event) => {
                     const file = event.target.files?.[0];
@@ -1164,8 +1164,15 @@ export function ProjectDocumentsView({ projectId }: Props) {
                     {projectLoading ? (
                         <ProjectTableLoading />
                     ) : projectError ? (
-                        <div className="flex min-h-52 items-center justify-center p-8 text-sm text-red-600">
-                            {projectError}
+                        <div className="flex min-h-52 flex-col items-center justify-center gap-3 p-8 text-sm text-red-600">
+                            <p role="alert">{projectError}</p>
+                            <button
+                                type="button"
+                                onClick={() => void refreshProject()}
+                                className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50"
+                            >
+                                {t("common.actions.retry")}
+                            </button>
                         </div>
                     ) : query ? (
                         filteredDocuments.length > 0 ? (

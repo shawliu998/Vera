@@ -16,6 +16,7 @@ import { FileDirectory } from "@/app/components/shared/FileDirectory";
 import { Modal } from "@/app/components/shared/Modal";
 import { useDirectoryData } from "@/app/components/shared/useDirectoryData";
 import { useI18n } from "@/app/i18n";
+import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
 import {
   attachVeraProjectDocument,
   createVeraProject,
@@ -245,7 +246,7 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
           ref={fileInputRef}
           type="file"
           multiple
-          accept=".pdf,.doc,.docx,.xls,.xlsx,.xlsm,.ppt,.pptx,.txt,.md"
+          accept={SUPPORTED_DOCUMENT_ACCEPT}
           className="hidden"
           onChange={handleFileChange}
         />

@@ -5,6 +5,12 @@ import {
   VeraRuntimeConfigurationError,
   type VeraQuery,
 } from "./veraRuntime";
+import {
+  DOCUMENT_UPLOAD_ERROR_CODES,
+  isSupportedDocumentFile,
+  MAX_DOCUMENT_FILENAME_LENGTH,
+  type DocumentUploadErrorCode,
+} from "./documentUploadValidation";
 import type {
   VeraApiErrorWire,
   VeraDocumentJobWire,
@@ -763,19 +769,54 @@ function toDocumentQuery(filters: VeraDocumentListQuery): VeraQuery {
   };
 }
 
-function safeUploadFile(file: File): File {
-  if (
-    !(file instanceof Blob) ||
-    typeof file.name !== "string" ||
-    file.name.trim().length === 0 ||
-    file.name.length > 500 ||
-    /[\u0000-\u001f\u007f\\/]/.test(file.name)
-  ) {
-    throw new VeraRuntimeConfigurationError(
-      "The Vera document upload file is invalid.",
-    );
+function documentUploadError(
+  code: DocumentUploadErrorCode,
+): VeraRuntimeConfigurationError & { readonly code: DocumentUploadErrorCode } {
+  return Object.assign(
+    new VeraRuntimeConfigurationError("The Vera document upload is invalid."),
+    { code },
+  );
+}
+
+const blobSlice = Blob.prototype.slice;
+
+function isFormDataUploadFile(file: unknown, filename: string): file is File {
+  try {
+    // Calling the platform intrinsic validates Blob internal slots without an
+    // instanceof check, so genuine Files from another realm remain valid while
+    // objects that only spoof File properties or Symbol.toStringTag fail closed.
+    blobSlice.call(file, 0, 0);
+    const probe = new FormData();
+    // Supplying filename selects the Blob overload. Invalid lookalikes throw
+    // instead of being silently stringified; native cross-realm Files remain
+    // acceptable to the browser's own FormData implementation.
+    probe.append("file", file as Blob, filename);
+    return true;
+  } catch {
+    return false;
   }
-  return file;
+}
+
+function safeUploadFile(file: File): { file: File; filename: string } {
+  const name =
+    typeof file === "object" && file !== null && "name" in file
+      ? (file as { name?: unknown }).name
+      : undefined;
+  const filename = typeof name === "string" ? name.trim() : "";
+  if (
+    !filename ||
+    filename.length > MAX_DOCUMENT_FILENAME_LENGTH ||
+    filename === "." ||
+    filename === ".." ||
+    /[\u0000-\u001f\u007f\\/]/.test(filename) ||
+    !isFormDataUploadFile(file, filename)
+  ) {
+    throw documentUploadError(DOCUMENT_UPLOAD_ERROR_CODES.invalidFile);
+  }
+  if (!isSupportedDocumentFile({ name: filename })) {
+    throw documentUploadError(DOCUMENT_UPLOAD_ERROR_CODES.unsupportedType);
+  }
+  return { file, filename };
 }
 
 function documentCollectionPath(projectId: string | null | undefined): string {
@@ -802,14 +843,14 @@ export async function uploadVeraDocument(
   input: VeraDocumentUploadInput,
   signal?: AbortSignal,
 ): Promise<VeraDocumentMutationWire> {
-  const file = safeUploadFile(input.file);
+  const upload = safeUploadFile(input.file);
   if (input.folderId != null && typeof input.projectId !== "string") {
     throw new VeraRuntimeConfigurationError(
       "A Vera project id is required for a document folder.",
     );
   }
   const form = new FormData();
-  form.append("file", file, file.name);
+  form.append("file", upload.file, upload.filename);
   if (typeof input.folderId === "string") {
     form.append("folder_id", safeId(input.folderId, "folder id"));
   }
@@ -830,7 +871,7 @@ export async function uploadVeraDocumentVersion(
 ): Promise<VeraDocumentMutationWire> {
   const upload = safeUploadFile(file);
   const form = new FormData();
-  form.append("file", upload, upload.name);
+  form.append("file", upload.file, upload.filename);
   return parseVeraDocumentMutationWire(
     await veraApiRequest<unknown>(
       `${scopedDocumentPath(documentId, scope)}/versions`,

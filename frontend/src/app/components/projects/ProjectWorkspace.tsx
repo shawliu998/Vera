@@ -21,6 +21,7 @@ import {
     getVeraProject,
     listVeraProjectDocuments,
     listVeraProjectFolders,
+    VeraApiError,
 } from "@/app/lib/veraApi";
 import type {
     VeraDocumentWire,
@@ -51,6 +52,117 @@ type ProjectWorkspaceValue = {
 const ProjectWorkspaceContext =
     createContext<ProjectWorkspaceValue | null>(null);
 
+export const DOCUMENT_STATUS_POLL_DELAY_MS = 1_500;
+export const DOCUMENT_STATUS_POLL_MAX_CONSECUTIVE_FAILURES = 5;
+const DOCUMENT_STATUS_POLL_MAX_RETRY_DELAY_MS = 12_000;
+
+function isDocumentParseActive(document: VeraDocumentWire): boolean {
+    return document.status === "pending" || document.status === "processing";
+}
+
+function isRetryableDocumentPollError(error: unknown): boolean {
+    if (error instanceof TypeError) return true;
+    if (!(error instanceof VeraApiError)) return false;
+    return (
+        error.status === 408 ||
+        error.status === 425 ||
+        error.status === 429 ||
+        (error.status >= 500 && error.status < 600)
+    );
+}
+
+function documentPollRetryDelay(consecutiveFailures: number): number {
+    return Math.min(
+        DOCUMENT_STATUS_POLL_DELAY_MS * 2 ** consecutiveFailures,
+        DOCUMENT_STATUS_POLL_MAX_RETRY_DELAY_MS,
+    );
+}
+
+type DocumentStatusPollOptions = {
+    load: (signal: AbortSignal) => Promise<VeraDocumentWire[]>;
+    mutationGeneration: () => number;
+    applySnapshot: (documents: VeraDocumentWire[]) => void;
+    reportError: (error: unknown) => void;
+    clearError: () => void;
+    schedule: (callback: () => void, delayMs: number) => number;
+    cancelSchedule: (handle: number) => void;
+};
+
+export function createDocumentStatusPollCoordinator(
+    options: DocumentStatusPollOptions,
+) {
+    let stopped = true;
+    let timeoutHandle: number | null = null;
+    let requestController: AbortController | null = null;
+    let consecutiveFailures = 0;
+
+    const schedule = (delayMs: number) => {
+        if (stopped || timeoutHandle !== null) return;
+        timeoutHandle = options.schedule(() => {
+            timeoutHandle = null;
+            void poll();
+        }, delayMs);
+    };
+
+    const poll = async () => {
+        if (stopped || requestController !== null) return;
+        const controller = new AbortController();
+        requestController = controller;
+        const generationAtRequestStart = options.mutationGeneration();
+        try {
+            const snapshot = await options.load(controller.signal);
+            if (stopped || controller.signal.aborted) return;
+            consecutiveFailures = 0;
+            if (generationAtRequestStart !== options.mutationGeneration()) {
+                schedule(DOCUMENT_STATUS_POLL_DELAY_MS);
+                return;
+            }
+            options.clearError();
+            options.applySnapshot(snapshot);
+            if (snapshot.some(isDocumentParseActive)) {
+                schedule(DOCUMENT_STATUS_POLL_DELAY_MS);
+            }
+        } catch (error) {
+            if (stopped || controller.signal.aborted) return;
+            consecutiveFailures += 1;
+            if (
+                isRetryableDocumentPollError(error) &&
+                consecutiveFailures <
+                    DOCUMENT_STATUS_POLL_MAX_CONSECUTIVE_FAILURES
+            ) {
+                schedule(documentPollRetryDelay(consecutiveFailures));
+            } else {
+                // Keep recoverable failures non-disruptive while the finite
+                // retry budget remains. Permanent or exhausted failures must
+                // be visible rather than silently stopping status updates.
+                options.reportError(error);
+            }
+        } finally {
+            if (requestController === controller) {
+                requestController = null;
+            }
+        }
+    };
+
+    return {
+        start() {
+            if (!stopped) return;
+            stopped = false;
+            schedule(DOCUMENT_STATUS_POLL_DELAY_MS);
+        },
+        stop() {
+            if (stopped) return;
+            stopped = true;
+            if (timeoutHandle !== null) {
+                options.cancelSchedule(timeoutHandle);
+                timeoutHandle = null;
+            }
+            requestController?.abort();
+            requestController = null;
+        },
+    };
+}
+
 export function useProjectWorkspace() {
     const value = useContext(ProjectWorkspaceContext);
     if (!value) {
@@ -80,7 +192,7 @@ export function ProjectWorkspaceProvider({
     const segments = useSelectedLayoutSegments();
     const { t, errorMessage } = useI18n();
     const [project, setProject] = useState<VeraProjectWire | null>(null);
-    const [documents, setDocuments] = useState<VeraDocumentWire[]>([]);
+    const [documents, replaceDocumentsState] = useState<VeraDocumentWire[]>([]);
     const [folders, setFolders] = useState<VeraFolderWire[]>([]);
     const [projectLoading, setProjectLoading] = useState(true);
     const [projectError, setProjectError] = useState<string | null>(null);
@@ -94,6 +206,13 @@ export function ProjectWorkspaceProvider({
     >("idle");
     const [deleteError, setDeleteError] = useState<string | null>(null);
     const deletingProjectRef = useRef(false);
+    const documentMutationGenerationRef = useRef(0);
+    const setDocuments = useCallback<
+        React.Dispatch<React.SetStateAction<VeraDocumentWire[]>>
+    >((update) => {
+        documentMutationGenerationRef.current += 1;
+        replaceDocumentsState(update);
+    }, []);
 
     const activeSection = activeSectionFromSegments(segments);
     const search = searchBySection[activeSection];
@@ -118,7 +237,7 @@ export function ProjectWorkspaceProvider({
                         listVeraProjectFolders(projectId, {}, signal),
                     ]);
                 if (signal?.aborted) return;
-                setDocuments(loadedDocuments);
+                replaceDocumentsState(loadedDocuments);
                 setFolders(loadedFolders);
                 setProject({
                     ...loadedProject,
@@ -129,7 +248,7 @@ export function ProjectWorkspaceProvider({
             } catch (error) {
                 if (signal?.aborted) return;
                 setProject(null);
-                setDocuments([]);
+                replaceDocumentsState([]);
                 setFolders([]);
                 setProjectError(errorMessage(error as Error));
             } finally {
@@ -157,6 +276,28 @@ export function ProjectWorkspaceProvider({
                 : current,
         );
     }, [documents, folders]);
+
+    const hasActiveDocumentParsing = documents.some(isDocumentParseActive);
+
+    useEffect(() => {
+        if (!hasActiveDocumentParsing) return;
+
+        const coordinator = createDocumentStatusPollCoordinator({
+            load: (signal) =>
+                listVeraProjectDocuments(projectId, {}, signal),
+            mutationGeneration: () =>
+                documentMutationGenerationRef.current,
+            applySnapshot: replaceDocumentsState,
+            reportError: (error) =>
+                setProjectError(errorMessage(error as Error)),
+            clearError: () => setProjectError(null),
+            schedule: (callback, delayMs) =>
+                window.setTimeout(callback, delayMs),
+            cancelSchedule: (handle) => window.clearTimeout(handle),
+        });
+        coordinator.start();
+        return () => coordinator.stop();
+    }, [errorMessage, hasActiveDocumentParsing, projectId]);
 
     useEffect(() => {
         if (!deleteConfirmOpen) return;
@@ -201,6 +342,7 @@ export function ProjectWorkspaceProvider({
             projectLoading,
             refreshProject,
             search,
+            setDocuments,
             setSearch,
         ],
     );

@@ -1,7 +1,9 @@
 # Vera P0 Mike Desktop Migration
 
-Date: 2026-07-14  
-Status: Phase 0 complete; Phase 1 ready  
+Date: 2026-07-15
+
+Status: Phase 2 complete; Phase 3 secure Settings/model foundation in progress
+
 Product decision: **Mike is the product and workflow source of truth; Vera is the local desktop, storage, and security source of truth.**
 
 ## 1. Scope and upstream baseline
@@ -398,6 +400,41 @@ Tasks:
 - connect Project/folder/document/version/upload/preview UI to real local APIs;
 - retain explicit empty/error/retry states; no production fixtures;
 - hide Legacy Vera navigation without deleting it.
+
+Completion record (2026-07-15):
+
+- the Vera shell, PageHeader, Project overview, Project workspace, document
+  table/explorer, side panel, preview surfaces, and responsive structure are
+  locked to the pinned Mike source with audited local-only adaptations;
+- Project/folder/document/version create, update, archive/delete, upload,
+  authenticated preview/download, parse retry, and status refresh use the real
+  `/api/v1` Workspace composition root;
+- parse polling is serial, mutation-aware, abortable, bounded on failure, and
+  stops at terminal state rather than overwriting concurrent document actions;
+- upload selection and drag/drop share the backend-supported
+  PDF/DOCX/XLSX/TXT/MD contract and localized fail-closed errors;
+- the web shell and macOS native menu no longer expose Legacy Vera product
+  routes; packaged compatibility audits now observe the real `/projects`
+  landing page while retaining legacy-data assertions;
+- the default remains `/projects` until the global Assistant generation bundle
+  is genuinely mounted. Switching early would expose an inoperative Assistant
+  and violate the no-fake-functionality rule.
+
+Executed acceptance evidence:
+
+```text
+frontend Mike Shell/i18n source suite: 13 passed
+frontend Mike Projects + polling source/behavior suite: 22 passed
+frontend upload/transport suite: 12 passed
+frontend TypeScript, ESLint, diff check, production build: passed
+backend Workspace Application/API/Runtime audits and production build: passed
+desktop product rename, menu/landing source, legacy migration, syntax: passed
+```
+
+The pre-existing packaged `.app` is not counted as Phase 2 evidence: it still
+contains the prior `/aletheia/matters` landing bundle and is deliberately
+rejected by the updated packaged audits. A fresh package and the full packaged
+bridge E2E are Phase 7 acceptance gates.
 
 ### Phase 3 - model gateway and Settings
 

@@ -159,6 +159,10 @@ test("date, number, and file-size formatting is delegated to Intl", () => {
 
 test("brand primitives use Vera assets and expose accessible names", () => {
   const sourceRoot = path.join(process.cwd(), "src", "app");
+  const rootLayoutSource = readFileSync(
+    path.join(sourceRoot, "layout.tsx"),
+    "utf8",
+  );
   const markSource = readFileSync(
     path.join(sourceRoot, "components", "vera-brand", "VeraMark.tsx"),
     "utf8",
@@ -179,4 +183,5 @@ test("brand primitives use Vera assets and expose accessible names", () => {
   expect(logoSource).toContain("aria-label={label}");
   expect(providerSource).toContain("initialLocale = DEFAULT_LOCALE");
   expect(providerSource).toContain("document.documentElement.lang = locale");
+  expect(rootLayoutSource).toContain('<html lang="zh-CN">');
 });

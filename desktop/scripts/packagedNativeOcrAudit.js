@@ -21,7 +21,7 @@ async function main() {
   const backendPort = Number(
     process.env.ALETHEIA_DESKTOP_BACKEND_PORT ?? 43761,
   );
-  const frontendUrl = `http://127.0.0.1:${frontendPort}/aletheia/matters`;
+  const frontendUrl = `http://127.0.0.1:${frontendPort}/projects`;
   const backendBaseUrl = `http://127.0.0.1:${backendPort}`;
   const executablePath = path.join(appPath, "Contents", "MacOS", "Vera");
   const packagedHelper = path.join(

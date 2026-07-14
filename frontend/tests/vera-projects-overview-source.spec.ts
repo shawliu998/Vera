@@ -237,7 +237,7 @@ test("Vera project and document API methods retain Mike lineage behind one stric
     assert.match(api, new RegExp(`export (?:async )?function ${method}`));
   }
   assert.match(api, /json: \{ confirm_name: confirmName \}/);
-  assert.match(api, /form\.append\("file", file, file\.name\)/);
+  assert.match(api, /form\.append\("file", upload\.file, upload\.filename\)/);
   assert.doesNotMatch(api, /Content-Type[^\n]*multipart/i);
   assert.match(api, /parseVeraDocumentMutationWire/);
   assert.match(api, /parseVeraDocumentVersionsWire/);

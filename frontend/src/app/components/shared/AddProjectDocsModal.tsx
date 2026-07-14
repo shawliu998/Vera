@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2, Upload } from "lucide-react";
 import { useI18n } from "@/app/i18n";
+import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
 import {
     attachVeraProjectDocument,
     listVeraStandaloneDocuments,
@@ -13,9 +14,6 @@ import {
 import type { VeraDocumentWire } from "@/app/lib/veraWireTypes";
 import { FileDirectory } from "./FileDirectory";
 import { Modal } from "./Modal";
-
-const ACCEPTED_DOCUMENTS =
-    ".pdf,.docx,.doc,.xlsx,.xlsm,.xls,.pptx,.ppt,.txt,.md";
 
 interface Props {
     open: boolean;
@@ -177,7 +175,7 @@ export function AddProjectDocsModal({
             <input
                 ref={fileInputRef}
                 type="file"
-                accept={ACCEPTED_DOCUMENTS}
+                accept={SUPPORTED_DOCUMENT_ACCEPT}
                 multiple={allowMultiple}
                 className="hidden"
                 onChange={(event) => void handleUpload(event)}

@@ -1845,12 +1845,6 @@ function installApplicationMenu() {
             submenu: [
               { role: "about" },
               { type: "separator" },
-              {
-                label: "Settings...",
-                accelerator: "CommandOrControl+,",
-                click: () => void navigateWorkspace("/aletheia/settings"),
-              },
-              { type: "separator" },
               { role: "services" },
               { type: "separator" },
               { role: "hide" },
@@ -1865,12 +1859,6 @@ function installApplicationMenu() {
     {
       label: "File",
       submenu: [
-        {
-          label: "New Matter",
-          accelerator: "CommandOrControl+N",
-          click: () => void navigateWorkspace("/aletheia/matters?newMatter=1"),
-        },
-        { type: "separator" },
         {
           label: "Open Data Folder",
           click: () => void openLocalDirectory("data"),

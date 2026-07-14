@@ -28,6 +28,8 @@ export const WORKSPACE_ERROR_MESSAGE_KEYS = {
 } as const satisfies Record<WorkspaceBackendErrorCode, MessageKey>;
 
 const COMPATIBILITY_ERROR_MESSAGE_KEYS = {
+  INVALID_DOCUMENT_UPLOAD: "documents.errors.upload",
+  UNSUPPORTED_DOCUMENT_TYPE: "documents.errors.unsupported",
   INVALID_RESPONSE: "errors.invalidResponse",
   LOCAL_CONTROL_ERROR: "errors.localControl",
   LOCAL_MODEL_ERROR: "errors.modelUnavailable",

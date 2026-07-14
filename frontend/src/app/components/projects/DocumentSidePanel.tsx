@@ -21,13 +21,11 @@ import { PdfView, ViewerError } from "@/app/components/shared/views/PdfView";
 import { SpreadsheetView } from "@/app/components/shared/views/SpreadsheetView";
 import { TextView } from "@/app/components/shared/views/TextView";
 import { useI18n } from "@/app/i18n";
+import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
 import type {
     VeraDocumentVersionWire,
     VeraDocumentWire,
 } from "@/app/lib/veraWireTypes";
-
-const VERSION_ACCEPT =
-    ".pdf,.docx,.doc,.xlsx,.xlsm,.xls,.pptx,.ppt,.txt,.md";
 
 interface DocumentSidePanelProps {
     doc: VeraDocumentWire | null;
@@ -305,7 +303,7 @@ export function DocumentSidePanel({
                         <input
                             ref={fileInputRef}
                             type="file"
-                            accept={VERSION_ACCEPT}
+                            accept={SUPPORTED_DOCUMENT_ACCEPT}
                             className="hidden"
                             onChange={(event) => {
                                 const file = event.target.files?.[0];

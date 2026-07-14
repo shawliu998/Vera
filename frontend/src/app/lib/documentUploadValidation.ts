@@ -1,27 +1,37 @@
-export const SUPPORTED_DOCUMENT_ACCEPT = ".pdf,.docx,.doc,.xlsx";
-export const UNSUPPORTED_DOCUMENT_WARNING_MESSAGE =
-    "Unsupported file type. Only PDF, DOCX, DOC, and XLSX files can be uploaded.";
+export const SUPPORTED_DOCUMENT_EXTENSIONS = [
+  ".pdf",
+  ".docx",
+  ".xlsx",
+  ".txt",
+  ".md",
+] as const;
 
-const SUPPORTED_DOCUMENT_EXTENSIONS = new Set(["pdf", "docx", "doc", "xlsx"]);
+export const SUPPORTED_DOCUMENT_ACCEPT =
+  SUPPORTED_DOCUMENT_EXTENSIONS.join(",");
 
-export function isSupportedDocumentFile(file: File): boolean {
-    const extension = file.name.split(".").pop()?.toLowerCase();
-    return !!extension && SUPPORTED_DOCUMENT_EXTENSIONS.has(extension);
+export const MAX_DOCUMENT_FILENAME_LENGTH = 240;
+
+export const DOCUMENT_UPLOAD_ERROR_CODES = {
+  invalidFile: "INVALID_DOCUMENT_UPLOAD",
+  unsupportedType: "UNSUPPORTED_DOCUMENT_TYPE",
+} as const;
+
+export type DocumentUploadErrorCode =
+  (typeof DOCUMENT_UPLOAD_ERROR_CODES)[keyof typeof DOCUMENT_UPLOAD_ERROR_CODES];
+
+const SUPPORTED_EXTENSION_SET = new Set<string>(SUPPORTED_DOCUMENT_EXTENSIONS);
+
+function pathExtension(filename: string): string {
+  const normalized = filename.trim();
+  const lastDot = normalized.lastIndexOf(".");
+  // Mirrors path.extname for the safe, separator-free filenames accepted by
+  // the workspace API. A single leading dot denotes a dotfile, not a suffix.
+  return lastDot <= 0 ? "" : normalized.slice(lastDot).toLowerCase();
 }
 
-export function partitionSupportedDocumentFiles(files: File[]) {
-    const supported: File[] = [];
-    const unsupported: File[] = [];
-
-    for (const file of files) {
-        if (isSupportedDocumentFile(file)) supported.push(file);
-        else unsupported.push(file);
-    }
-
-    return { supported, unsupported };
-}
-
-export function formatUnsupportedDocumentWarning(files: File[]): string | null {
-    if (files.length === 0) return null;
-    return UNSUPPORTED_DOCUMENT_WARNING_MESSAGE;
+export function isSupportedDocumentFile(file: Pick<File, "name">): boolean {
+  const name = (file as { name?: unknown } | null)?.name;
+  return (
+    typeof name === "string" && SUPPORTED_EXTENSION_SET.has(pathExtension(name))
+  );
 }
