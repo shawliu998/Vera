@@ -1,19 +1,32 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import http from "node:http";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import express from "express";
+import SignalDatabase from "@signalapp/sqlcipher";
 
+import {
+  LocalDatabase,
+  SQLCIPHER_RUNTIME_PROBE_DIRECTORY_PREFIX,
+  verifySqlcipherRuntime,
+} from "../lib/aletheia/localDatabase";
+import { assertBundledDatabaseEncryptionPolicy } from "../lib/aletheia/localEnvelopeCrypto";
+import { migratePlaintextDatabaseToSqlcipher } from "../lib/aletheia/sqlcipherMigration";
 import {
   BoundedResponseBodyError,
   readBoundedResponseBody,
@@ -30,6 +43,7 @@ import {
 } from "../lib/workspace/migrations";
 import { ASSISTANT_RUNTIME_MIGRATION } from "../lib/workspace/migrations/v5AssistantRuntime";
 import { WORKFLOW_RUNTIME_V6_MIGRATION } from "../lib/workspace/migrations/v6WorkflowRuntime";
+import { isWorkspaceConnectionSqlcipherEncrypted } from "../lib/workspace/migrations/encryptionPolicy";
 import { MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION } from "../lib/workspace/migrations/v8ModelCredentialOrigin";
 import { ModelProfilesRepository } from "../lib/workspace/repositories/modelProfiles";
 import { ProjectsRepository } from "../lib/workspace/repositories/projects";
@@ -161,6 +175,77 @@ const PRE_V8_MIGRATIONS = FULL_MIGRATIONS.slice(0, FULL_MIGRATIONS.length - 1);
 const root = mkdtempSync(
   path.join(os.tmpdir(), "vera-workspace-model-settings-audit-"),
 );
+const sqlcipherBackupRoot = mkdtempSync(
+  path.join(os.tmpdir(), "vera-workspace-model-settings-sqlcipher-backup-"),
+);
+const auditDatabaseKey = randomBytes(32);
+
+function withSqlcipherEnvironment<T>(key: Buffer | null, operation: () => T) {
+  const previousEnvironment = { ...process.env };
+  try {
+    process.env.ALETHEIA_DATABASE_ENCRYPTION = "sqlcipher_required";
+    process.env.ALETHEIA_DATABASE_KEY_SOURCE = "env";
+    if (key) {
+      process.env.ALETHEIA_DATABASE_KEY_BASE64 = key.toString("base64");
+    } else {
+      delete process.env.ALETHEIA_DATABASE_KEY_BASE64;
+    }
+    return operation();
+  } finally {
+    process.env = previousEnvironment;
+  }
+}
+
+function migrateAuditDatabaseToSqlcipher(
+  databasePath: string,
+  fixtureName: string,
+  expectedPlaintextMarkers: readonly string[] = [],
+) {
+  const backupDir = path.join(sqlcipherBackupRoot, fixtureName);
+  mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+  const migrated = withSqlcipherEnvironment(auditDatabaseKey, () =>
+    migratePlaintextDatabaseToSqlcipher({
+      dataDir: path.dirname(databasePath),
+      databasePath,
+      backupDir,
+      apply: true,
+    }),
+  );
+  assert.equal(migrated.status, "migrated");
+  assert.ok(migrated.backup_path);
+  const backupPath = String(migrated.backup_path);
+  const backupBytes = readFileSync(backupPath);
+  for (const marker of expectedPlaintextMarkers) {
+    assert.equal(backupBytes.includes(Buffer.from(marker)), true);
+  }
+  unlinkSync(backupPath);
+  assert.equal(existsSync(backupPath), false);
+  return migrated;
+}
+
+function openSqlcipherWorkspaceDatabase(
+  databasePath: string,
+  migrations: readonly WorkspaceMigration[],
+) {
+  return withSqlcipherEnvironment(
+    auditDatabaseKey,
+    () => new WorkspaceDatabase(databasePath, { migrations }),
+  );
+}
+
+function databaseArtifactPaths(databasePath: string) {
+  const directory = path.dirname(databasePath);
+  const baseName = path.basename(databasePath);
+  return readdirSync(directory)
+    .filter(
+      (name) =>
+        name === baseName ||
+        name === `${baseName}-wal` ||
+        name === `${baseName}-shm` ||
+        name === `${baseName}-journal`,
+    )
+    .map((name) => path.join(directory, name));
+}
 
 class AuditCredentialStore implements CredentialStorePort {
   readonly serviceName = "ai.aletheia.workspace-model-profile-credentials";
@@ -874,6 +959,774 @@ async function auditRouteWireAndSecretScan() {
   assert.equal(bytes.includes(Buffer.from(secret)), false);
 }
 
+async function auditV8PlaintextSafeStateOnlyMigration() {
+  const databasePath = path.join(root, "migration-v8-plaintext-safe.db");
+  const preV8 = new WorkspaceDatabase(databasePath, {
+    migrations: PRE_V8_MIGRATIONS,
+  });
+  const profileId = "00000000-0000-4000-8000-000000000180";
+  const projectId = "00000000-0000-4000-8000-000000000181";
+  const jobId = "00000000-0000-4000-8000-000000000182";
+  const canonicalProfileId = "00000000-0000-4000-8000-000000000183";
+  preV8
+    .prepare(
+      `INSERT INTO model_profiles
+        (id, name, provider, model, base_url, credential_ref,
+         credential_status, is_default, enabled)
+       VALUES (?, 'Plaintext safe state', 'openai', 'gpt-safe', NULL, NULL,
+               'not_configured', 1, 1)`,
+    )
+    .run(profileId);
+  preV8
+    .prepare(
+      `INSERT INTO model_profiles
+        (id, name, provider, model, base_url, credential_ref,
+         credential_status, is_default, enabled)
+       VALUES (?, 'Canonical plaintext endpoint', 'openai', 'gpt-safe',
+               'https://api.openai.com/v1', NULL, 'not_configured', 0, 0)`,
+    )
+    .run(canonicalProfileId);
+  preV8
+    .prepare(
+      `INSERT INTO projects
+        (id, name, default_model_profile_id, status, created_at, updated_at)
+       VALUES (?, 'Plaintext safe project', ?, 'active', ?, ?)`,
+    )
+    .run(projectId, profileId, now(1), now(1));
+  preV8
+    .prepare(
+      `UPDATE workspace_settings
+          SET default_model_profile_id = ?, updated_at = ?
+        WHERE id = 'workspace'`,
+    )
+    .run(profileId, now(1));
+  insertJob(preV8, {
+    id: jobId,
+    type: "assistant_generate",
+    resourceType: "chat",
+    resourceId: "plaintext-safe-chat",
+    status: "queued",
+  });
+  preV8.close();
+
+  const migrated = new WorkspaceDatabase(databasePath, {
+    migrations: FULL_MIGRATIONS,
+  });
+  assert.equal(migrated.migration?.currentVersion, 8);
+  assert.equal(migrated.migration?.capabilities.sqlcipherEncrypted, false);
+  assert.deepEqual(
+    {
+      ...migrated
+        .prepare(
+          `SELECT enabled, is_default, credential_ref, credential_status
+             FROM model_profiles WHERE id = ?`,
+        )
+        .get(profileId),
+    },
+    {
+      enabled: 0,
+      is_default: 0,
+      credential_ref: null,
+      credential_status: "not_configured",
+    },
+  );
+  assert.equal(
+    migrated
+      .prepare(
+        `SELECT default_model_profile_id
+           FROM workspace_settings WHERE id = 'workspace'`,
+      )
+      .get()?.default_model_profile_id,
+    null,
+  );
+  assert.equal(
+    migrated.prepare("SELECT status FROM jobs WHERE id = ?").get(jobId)?.status,
+    "interrupted",
+  );
+  assert.equal(
+    migrated
+      .prepare("SELECT base_url FROM model_profiles WHERE id = ?")
+      .get(canonicalProfileId)?.base_url,
+    "https://api.openai.com/v1",
+  );
+  migrated.close();
+}
+
+async function auditTrustedSqlcipherConnectionCapability() {
+  const runtimeProbeDirectories = () =>
+    readdirSync(os.tmpdir())
+      .filter((name) =>
+        name.startsWith(SQLCIPHER_RUNTIME_PROBE_DIRECTORY_PREFIX),
+      )
+      .sort();
+  const runtimeProbeDirectoriesBefore = runtimeProbeDirectories();
+  const rawSqlcipher = new SignalDatabase(":memory:");
+  try {
+    const unkeyedCipherVersion = rawSqlcipher.pragma("cipher_version", {
+      simple: true,
+    });
+    assert.equal(
+      typeof unkeyedCipherVersion === "string" &&
+        unkeyedCipherVersion.trim().length > 0,
+      true,
+    );
+    assert.equal(
+      isWorkspaceConnectionSqlcipherEncrypted(
+        rawSqlcipher as unknown as Parameters<
+          typeof isWorkspaceConnectionSqlcipherEncrypted
+        >[0],
+      ),
+      false,
+    );
+  } finally {
+    rawSqlcipher.close();
+  }
+
+  const spoofedAdapter = {
+    exec() {},
+    prepare() {
+      return {
+        run() {},
+        get() {
+          return { cipher_version: "4.10.0" };
+        },
+        all() {
+          return [{ cipher_version: "4.10.0" }];
+        },
+      };
+    },
+  };
+  assert.equal(isWorkspaceConnectionSqlcipherEncrypted(spoofedAdapter), false);
+  const forgedLocalDatabase = Object.assign(
+    Object.create(LocalDatabase.prototype) as LocalDatabase,
+    spoofedAdapter,
+  );
+  assert.equal(
+    isWorkspaceConnectionSqlcipherEncrypted(forgedLocalDatabase),
+    false,
+  );
+
+  withSqlcipherEnvironment(auditDatabaseKey, () => {
+    const memoryProbe = new LocalDatabase(":memory:");
+    try {
+      const attestation = memoryProbe.workspaceEncryptionAttestation();
+      assert.ok(attestation);
+      assert.equal(Object.isFrozen(attestation), true);
+      assert.equal(attestation.persistence, "memory_runtime_probe");
+      assert.equal(
+        attestation.cipherIntegrityStatus,
+        "unsupported_memory_database_file_undefined",
+      );
+      assert.equal(attestation.cipherIntegrityVerified, false);
+      assert.equal(isWorkspaceConnectionSqlcipherEncrypted(memoryProbe), false);
+    } finally {
+      memoryProbe.close();
+    }
+    assert.equal(verifySqlcipherRuntime().encrypted, true);
+    assert.doesNotThrow(() => assertBundledDatabaseEncryptionPolicy());
+  });
+  assert.deepEqual(runtimeProbeDirectories(), runtimeProbeDirectoriesBefore);
+
+  const signalPrototype = SignalDatabase.prototype as unknown as {
+    pragma(sql: string, options?: unknown): unknown;
+  };
+  const originalSignalPragma = signalPrototype.pragma;
+  signalPrototype.pragma = function (sql, options) {
+    if (sql === "cipher_integrity_check") {
+      return [{ cipher_integrity_check: "unknown integrity result" }];
+    }
+    return originalSignalPragma.call(this, sql, options);
+  };
+  const runtimeProbeDirectoriesBeforeFailure = runtimeProbeDirectories();
+  try {
+    assert.throws(
+      () =>
+        withSqlcipherEnvironment(auditDatabaseKey, () =>
+          verifySqlcipherRuntime(),
+        ),
+      /SQLCipher integrity check failed/,
+    );
+  } finally {
+    signalPrototype.pragma = originalSignalPragma;
+  }
+  assert.deepEqual(
+    runtimeProbeDirectories(),
+    runtimeProbeDirectoriesBeforeFailure,
+  );
+
+  withSqlcipherEnvironment(auditDatabaseKey, () => {
+    const trustedPath = path.join(root, "trusted-sqlcipher-capability.db");
+    const trusted = new LocalDatabase(trustedPath);
+    try {
+      assert.equal(isWorkspaceConnectionSqlcipherEncrypted(trusted), true);
+      assert.equal(
+        trusted.workspaceEncryptionAttestation()?.persistence,
+        "persistent",
+      );
+      for (const method of [
+        "exec",
+        "prepare",
+        "status",
+        "workspaceEncryptionAttestation",
+      ] as const) {
+        Object.defineProperty(trusted, method, {
+          configurable: true,
+          value() {
+            throw new Error(`shadowed ${method}`);
+          },
+        });
+        assert.equal(isWorkspaceConnectionSqlcipherEncrypted(trusted), false);
+        assert.equal(
+          delete (trusted as unknown as Record<string, unknown>)[method],
+          true,
+        );
+        assert.equal(isWorkspaceConnectionSqlcipherEncrypted(trusted), true);
+      }
+
+      const originalPrepare = LocalDatabase.prototype.prepare;
+      LocalDatabase.prototype.prepare = function (sql: string) {
+        return originalPrepare.call(this, sql);
+      };
+      try {
+        assert.equal(isWorkspaceConnectionSqlcipherEncrypted(trusted), false);
+      } finally {
+        LocalDatabase.prototype.prepare = originalPrepare;
+      }
+      assert.equal(isWorkspaceConnectionSqlcipherEncrypted(trusted), true);
+    } finally {
+      trusted.close();
+    }
+
+    const redirectedNodeDatabase = new DatabaseSync(":memory:");
+    class RedirectedLocalDatabase extends LocalDatabase {
+      override exec(sql: string) {
+        redirectedNodeDatabase.exec(sql);
+      }
+
+      override prepare(sql: string) {
+        return redirectedNodeDatabase.prepare(sql) as unknown as ReturnType<
+          LocalDatabase["prepare"]
+        >;
+      }
+    }
+    const redirected = new RedirectedLocalDatabase(
+      path.join(root, "redirected-subclass-sqlcipher.db"),
+    );
+    try {
+      assert.equal(isWorkspaceConnectionSqlcipherEncrypted(redirected), false);
+    } finally {
+      redirected.close();
+      redirectedNodeDatabase.close();
+    }
+  });
+}
+
+async function auditV8PlaintextProfileEvidenceEdges() {
+  const statusPath = path.join(root, "migration-v8-status-only-gate.db");
+  const statusOnly = new WorkspaceDatabase(statusPath, {
+    migrations: PRE_V8_MIGRATIONS,
+  });
+  const statusProfileId = "00000000-0000-4000-8000-000000000190";
+  statusOnly
+    .prepare(
+      `INSERT INTO model_profiles
+        (id, name, provider, model, base_url, credential_ref,
+         credential_status, is_default, enabled)
+       VALUES (?, 'Status-only evidence', 'openai', 'gpt-status', NULL, NULL,
+               'configured', 0, 0)`,
+    )
+    .run(statusProfileId);
+  assert.throws(
+    () =>
+      MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION.apply(statusOnly, {
+        jsonTextChecks: true,
+        fts5: true,
+        sqlcipherEncrypted: true,
+      }),
+    /inconsistent SQLCipher connection capability/,
+  );
+  assert.equal(
+    statusOnly
+      .prepare("PRAGMA table_info(model_profiles)")
+      .all()
+      .some((row) => row.name === "credential_origin"),
+    false,
+  );
+  assert.equal(
+    statusOnly
+      .prepare("SELECT credential_status FROM model_profiles WHERE id = ?")
+      .get(statusProfileId)?.credential_status,
+    "configured",
+  );
+  statusOnly.close();
+  assert.throws(
+    () =>
+      new WorkspaceDatabase(statusPath, {
+        migrations: FULL_MIGRATIONS,
+      }),
+    /npm run migrate:aletheia:sqlcipher --prefix backend/,
+  );
+  const unchangedStatus = new WorkspaceDatabase(statusPath, {
+    migrations: PRE_V8_MIGRATIONS,
+  });
+  assert.deepEqual(
+    {
+      ...unchangedStatus
+        .prepare(
+          `SELECT credential_ref, credential_status
+             FROM model_profiles WHERE id = ?`,
+        )
+        .get(statusProfileId),
+    },
+    { credential_ref: null, credential_status: "configured" },
+  );
+  unchangedStatus.close();
+
+  const originPath = path.join(root, "migration-v8-partial-origin-gate.db");
+  const partialOrigin = new WorkspaceDatabase(originPath, {
+    migrations: PRE_V8_MIGRATIONS,
+  });
+  const originProfileId = "00000000-0000-4000-8000-000000000191";
+  partialOrigin
+    .prepare(
+      `INSERT INTO model_profiles
+        (id, name, provider, model, base_url, credential_ref,
+         credential_status, is_default, enabled)
+       VALUES (?, 'Partial origin evidence', 'openai', 'gpt-origin', NULL, NULL,
+               'not_configured', 0, 0)`,
+    )
+    .run(originProfileId);
+  partialOrigin.exec(
+    "ALTER TABLE model_profiles ADD COLUMN credential_origin TEXT",
+  );
+  const originMarker = "https://legacy-origin-sensitive.example";
+  partialOrigin
+    .prepare("UPDATE model_profiles SET credential_origin = ? WHERE id = ?")
+    .run(originMarker, originProfileId);
+  partialOrigin.close();
+  assert.throws(
+    () =>
+      new WorkspaceDatabase(originPath, {
+        migrations: FULL_MIGRATIONS,
+      }),
+    /npm run migrate:aletheia:sqlcipher --prefix backend/,
+  );
+  const unchangedOrigin = new WorkspaceDatabase(originPath, {
+    migrations: PRE_V8_MIGRATIONS,
+  });
+  assert.equal(
+    unchangedOrigin
+      .prepare("SELECT credential_origin FROM model_profiles WHERE id = ?")
+      .get(originProfileId)?.credential_origin,
+    originMarker,
+  );
+  unchangedOrigin.close();
+
+  const unsafeBasePath = path.join(
+    root,
+    "migration-v8-unsafe-base-url-gate.db",
+  );
+  const unsafeBase = new WorkspaceDatabase(unsafeBasePath, {
+    migrations: PRE_V8_MIGRATIONS,
+  });
+  const unsafeBaseProfileId = "00000000-0000-4000-8000-000000000192";
+  const unsafeBaseMarker =
+    "https://legacy-user:legacy-password@api.example.com/v1?raw=1";
+  unsafeBase
+    .prepare(
+      `INSERT INTO model_profiles
+        (id, name, provider, model, base_url, credential_ref,
+         credential_status, is_default, enabled)
+       VALUES (?, 'Unsafe endpoint evidence', 'openai', 'gpt-base', ?, NULL,
+               'not_configured', 0, 0)`,
+    )
+    .run(unsafeBaseProfileId, unsafeBaseMarker);
+  unsafeBase.close();
+  assert.throws(
+    () =>
+      new WorkspaceDatabase(unsafeBasePath, {
+        migrations: FULL_MIGRATIONS,
+      }),
+    /npm run migrate:aletheia:sqlcipher --prefix backend/,
+  );
+  const unchangedBase = new WorkspaceDatabase(unsafeBasePath, {
+    migrations: PRE_V8_MIGRATIONS,
+  });
+  assert.equal(
+    unchangedBase
+      .prepare("SELECT base_url FROM model_profiles WHERE id = ?")
+      .get(unsafeBaseProfileId)?.base_url,
+    unsafeBaseMarker,
+  );
+  unchangedBase.close();
+}
+
+async function auditV8PlaintextRuntimeTextEvidenceGate() {
+  const databasePath = path.join(
+    root,
+    "migration-v8-runtime-text-evidence-gate.db",
+  );
+  const preV8 = new WorkspaceDatabase(databasePath, {
+    migrations: PRE_V8_MIGRATIONS,
+  });
+  const profiles = new ModelProfilesRepository(preV8);
+  const assistantProfile = insertLegacyProfile(profiles, {
+    id: "00000000-0000-4000-8000-000000000193",
+    name: "Plaintext assistant text gate",
+    provider: "openai",
+    model: "gpt-safe",
+  });
+  const workflowProfile = insertLegacyProfile(profiles, {
+    id: "00000000-0000-4000-8000-000000000194",
+    name: "Plaintext workflow text gate",
+    provider: "openai",
+    model: "gpt-safe",
+  });
+  const tabularProfile = insertLegacyProfile(profiles, {
+    id: "00000000-0000-4000-8000-000000000195",
+    name: "Plaintext tabular text gate",
+    provider: "openai",
+    model: "gpt-safe",
+  });
+  const assistantJobId = "00000000-0000-4000-8000-000000000196";
+  const workflowJobId = "00000000-0000-4000-8000-000000000197";
+  const tabularChatJobId = "00000000-0000-4000-8000-000000000198";
+  const tabularCellJobId = "00000000-0000-4000-8000-000000000199";
+  const assistant = insertAssistantSnapshotJob(
+    preV8,
+    assistantProfile.id,
+    assistantJobId,
+  );
+  const workflow = insertWorkflowSnapshotJob(
+    preV8,
+    workflowProfile.id,
+    workflowJobId,
+  );
+  const tabular = insertTabularAssociationJob(
+    preV8,
+    tabularProfile.id,
+    tabularChatJobId,
+  );
+  const tabularCell = insertTabularCellJob(
+    preV8,
+    tabular.reviewId,
+    tabularCellJobId,
+  );
+  const markers = {
+    assistantResult: JSON.stringify({ marker: "V8_ASSISTANT_RESULT_MARKER" }),
+    assistantError: JSON.stringify({ marker: "V8_ASSISTANT_ERROR_MARKER" }),
+    assistantErrorCode: "V8_ASSISTANT_ERROR_CODE_MARKER",
+    assistantMessageError: "V8_ASSISTANT_MESSAGE_ERROR_MARKER",
+    leaseOwner: "V8_LEASE_OWNER_MARKER",
+    cancellationReason: "V8_CANCELLATION_REASON_MARKER",
+    workflowJobResult: JSON.stringify({ marker: "V8_WORKFLOW_RESULT_MARKER" }),
+    workflowJobError: JSON.stringify({
+      marker: "V8_WORKFLOW_JOB_ERROR_MARKER",
+    }),
+    workflowRunError: JSON.stringify({
+      marker: "V8_WORKFLOW_RUN_ERROR_MARKER",
+    }),
+    workflowStepError: JSON.stringify({
+      marker: "V8_WORKFLOW_STEP_ERROR_MARKER",
+    }),
+    tabularJobResult: JSON.stringify({ marker: "V8_TABULAR_RESULT_MARKER" }),
+    tabularJobError: JSON.stringify({ marker: "V8_TABULAR_JOB_ERROR_MARKER" }),
+    tabularCellError: JSON.stringify({
+      marker: "V8_TABULAR_CELL_ERROR_MARKER",
+    }),
+    sentinel: "V8_RUNTIME_TEXT_SENTINEL",
+  };
+  preV8
+    .prepare(
+      `UPDATE jobs
+          SET result_json = ?, error_code = ?, error_json = ?,
+              lease_owner = ?, lease_expires_at = ?, cancellation_reason = ?
+        WHERE id = ?`,
+    )
+    .run(
+      markers.assistantResult,
+      markers.assistantErrorCode,
+      markers.assistantError,
+      markers.leaseOwner,
+      now(9),
+      markers.cancellationReason,
+      assistantJobId,
+    );
+  preV8
+    .prepare("UPDATE chat_messages SET error_code = ? WHERE id = ?")
+    .run(markers.assistantMessageError, assistant.outputId);
+  preV8
+    .prepare(
+      `UPDATE jobs
+          SET result_json = ?, error_code = ?, error_json = ?
+        WHERE id = ?`,
+    )
+    .run(
+      markers.workflowJobResult,
+      "V8_WORKFLOW_JOB_ERROR_CODE_MARKER",
+      markers.workflowJobError,
+      workflowJobId,
+    );
+  preV8
+    .prepare(
+      "UPDATE workflow_runs SET error_code = ?, error_json = ? WHERE id = ?",
+    )
+    .run(
+      "V8_WORKFLOW_RUN_ERROR_CODE_MARKER",
+      markers.workflowRunError,
+      workflow.runId,
+    );
+  preV8
+    .prepare(
+      "UPDATE workflow_step_runs SET error_code = ?, error_json = ? WHERE id = ?",
+    )
+    .run(
+      "V8_WORKFLOW_STEP_ERROR_CODE_MARKER",
+      markers.workflowStepError,
+      workflow.stepId,
+    );
+  preV8
+    .prepare(
+      `UPDATE jobs
+          SET result_json = ?, error_code = ?, error_json = ?
+        WHERE id = ?`,
+    )
+    .run(
+      markers.tabularJobResult,
+      "V8_TABULAR_JOB_ERROR_CODE_MARKER",
+      markers.tabularJobError,
+      tabularCellJobId,
+    );
+  preV8
+    .prepare(
+      "UPDATE tabular_cells SET error_code = ?, error_json = ? WHERE id = ?",
+    )
+    .run(
+      "V8_TABULAR_CELL_ERROR_CODE_MARKER",
+      markers.tabularCellError,
+      tabularCell.cellId,
+    );
+  preV8.exec("CREATE TABLE v8_runtime_text_sentinel (value TEXT NOT NULL)");
+  preV8
+    .prepare("INSERT INTO v8_runtime_text_sentinel (value) VALUES (?)")
+    .run(markers.sentinel);
+  preV8.close();
+
+  const beforeArtifacts = new Map(
+    databaseArtifactPaths(databasePath).map((artifactPath) => [
+      path.basename(artifactPath),
+      readFileSync(artifactPath),
+    ]),
+  );
+  assert.throws(
+    () =>
+      new WorkspaceDatabase(databasePath, {
+        migrations: FULL_MIGRATIONS,
+      }),
+    /npm run migrate:aletheia:sqlcipher --prefix backend/,
+  );
+  const afterArtifacts = new Map(
+    databaseArtifactPaths(databasePath).map((artifactPath) => [
+      path.basename(artifactPath),
+      readFileSync(artifactPath),
+    ]),
+  );
+  assert.deepEqual([...afterArtifacts.keys()], [...beforeArtifacts.keys()]);
+  for (const [name, before] of beforeArtifacts) {
+    assert.equal(afterArtifacts.get(name)?.equals(before), true, name);
+  }
+
+  const unchanged = new WorkspaceDatabase(databasePath, {
+    migrations: PRE_V8_MIGRATIONS,
+  });
+  assert.equal(unchanged.migration?.currentVersion, 7);
+  assert.deepEqual(
+    {
+      ...unchanged
+        .prepare(
+          `SELECT result_json, error_code, error_json, lease_owner,
+                  cancellation_reason
+             FROM jobs WHERE id = ?`,
+        )
+        .get(assistantJobId),
+    },
+    {
+      result_json: markers.assistantResult,
+      error_code: markers.assistantErrorCode,
+      error_json: markers.assistantError,
+      lease_owner: markers.leaseOwner,
+      cancellation_reason: markers.cancellationReason,
+    },
+  );
+  assert.deepEqual(
+    {
+      ...unchanged
+        .prepare(
+          "SELECT error_code, error_json FROM workflow_runs WHERE id = ?",
+        )
+        .get(workflow.runId),
+    },
+    {
+      error_code: "V8_WORKFLOW_RUN_ERROR_CODE_MARKER",
+      error_json: markers.workflowRunError,
+    },
+  );
+  assert.deepEqual(
+    {
+      ...unchanged
+        .prepare(
+          "SELECT error_code, error_json FROM tabular_cells WHERE id = ?",
+        )
+        .get(tabularCell.cellId),
+    },
+    {
+      error_code: "V8_TABULAR_CELL_ERROR_CODE_MARKER",
+      error_json: markers.tabularCellError,
+    },
+  );
+  assert.equal(
+    unchanged.prepare("SELECT value FROM v8_runtime_text_sentinel").get()
+      ?.value,
+    markers.sentinel,
+  );
+  unchanged.close();
+}
+
+async function auditV8PhysicalCredentialEncryptionGate() {
+  const databasePath = path.join(root, "migration-v8-physical-gate.db");
+  const preV8 = new WorkspaceDatabase(databasePath, {
+    migrations: PRE_V8_MIGRATIONS,
+  });
+  preV8.exec("PRAGMA secure_delete = OFF");
+  const markers = Array.from(
+    { length: 80 },
+    (_, index) =>
+      `V8_RAW_CREDENTIAL_${String(index).padStart(3, "0")}_${"x".repeat(1000)}`,
+  );
+  const insert = preV8.prepare(
+    `INSERT INTO model_profiles
+      (id, name, provider, model, credential_ref, credential_status,
+       is_default, enabled)
+     VALUES (?, ?, 'openai', 'gpt-legacy', ?, 'configured', 0, 1)`,
+  );
+  for (const [index, marker] of markers.entries()) {
+    insert.run(
+      `00000000-0000-4000-8001-${String(index + 1).padStart(12, "0")}`,
+      `Physical credential ${index}`,
+      marker,
+    );
+  }
+  const sentinel = "V8_PLAINTEXT_SENTINEL_MUST_SURVIVE";
+  preV8.exec("CREATE TABLE v8_plaintext_gate_sentinel (value TEXT NOT NULL)");
+  preV8
+    .prepare("INSERT INTO v8_plaintext_gate_sentinel (value) VALUES (?)")
+    .run(sentinel);
+  preV8.close();
+
+  const beforeBytes = readFileSync(databasePath);
+  assert.equal(beforeBytes.includes(Buffer.from(markers[42])), true);
+  assert.throws(
+    () =>
+      new WorkspaceDatabase(databasePath, {
+        migrations: FULL_MIGRATIONS,
+      }),
+    /npm run migrate:aletheia:sqlcipher --prefix backend/,
+  );
+  assert.equal(readFileSync(databasePath).equals(beforeBytes), true);
+
+  const unchanged = new WorkspaceDatabase(databasePath, {
+    migrations: PRE_V8_MIGRATIONS,
+  });
+  assert.equal(unchanged.migration?.currentVersion, 7);
+  assert.equal(
+    unchanged
+      .prepare("PRAGMA table_info(model_profiles)")
+      .all()
+      .some((row) => row.name === "credential_origin"),
+    false,
+  );
+  assert.equal(
+    unchanged
+      .prepare("SELECT credential_ref FROM model_profiles WHERE id = ?")
+      .get("00000000-0000-4000-8001-000000000043")?.credential_ref,
+    markers[42],
+  );
+  assert.equal(
+    unchanged.prepare("SELECT value FROM v8_plaintext_gate_sentinel").get()
+      ?.value,
+    sentinel,
+  );
+  unchanged.close();
+  const plaintextArtifacts = Buffer.concat(
+    databaseArtifactPaths(databasePath).map((artifactPath) =>
+      readFileSync(artifactPath),
+    ),
+  );
+  assert.equal(plaintextArtifacts.includes(Buffer.from(markers[42])), true);
+
+  migrateAuditDatabaseToSqlcipher(databasePath, "physical-gate", [
+    markers[0],
+    markers[42],
+    markers[79],
+    sentinel,
+  ]);
+  assert.throws(
+    () =>
+      withSqlcipherEnvironment(
+        randomBytes(32),
+        () =>
+          new WorkspaceDatabase(databasePath, {
+            migrations: FULL_MIGRATIONS,
+          }),
+      ),
+    /Unable to open the required SQLCipher database/,
+  );
+  assert.throws(
+    () =>
+      withSqlcipherEnvironment(
+        null,
+        () =>
+          new WorkspaceDatabase(databasePath, {
+            migrations: FULL_MIGRATIONS,
+          }),
+      ),
+    /database key/i,
+  );
+
+  const migrated = openSqlcipherWorkspaceDatabase(
+    databasePath,
+    FULL_MIGRATIONS,
+  );
+  assert.equal(migrated.migration?.currentVersion, 8);
+  assert.equal(migrated.migration?.capabilities.sqlcipherEncrypted, true);
+  assert.equal(migrated.status().encrypted, true);
+  assert.equal(
+    migrated
+      .prepare(
+        "SELECT count(*) AS count FROM model_profiles WHERE credential_ref IS NOT NULL",
+      )
+      .get()?.count,
+    0,
+  );
+  migrated.close();
+
+  const encryptedArtifacts = Buffer.concat(
+    databaseArtifactPaths(databasePath).map((artifactPath) =>
+      readFileSync(artifactPath),
+    ),
+  );
+  for (const marker of [...markers, sentinel]) {
+    assert.equal(encryptedArtifacts.includes(Buffer.from(marker)), false);
+  }
+  assert.throws(
+    () =>
+      new WorkspaceDatabase(databasePath, {
+        migrations: FULL_MIGRATIONS,
+      }),
+    /database|file is not a database/i,
+  );
+}
+
 async function auditMigrationBackfill() {
   const databasePath = path.join(root, "migration-v8.db");
   const legacy = new WorkspaceDatabase(databasePath, {
@@ -1051,10 +1904,14 @@ async function auditMigrationBackfill() {
       now(1),
     );
   legacy.close();
+  migrateAuditDatabaseToSqlcipher(databasePath, "migration-backfill", [
+    "sk-live-legacy-secret",
+  ]);
 
-  const migrated = new WorkspaceDatabase(databasePath, {
-    migrations: FULL_MIGRATIONS,
-  });
+  const migrated = openSqlcipherWorkspaceDatabase(
+    databasePath,
+    FULL_MIGRATIONS,
+  );
   const rows = migrated
     .prepare(
       `SELECT id, base_url, credential_ref, credential_origin, credential_state,
@@ -1407,10 +2264,12 @@ async function auditV8MigrationActiveWorkReconciliation() {
     status: "queued",
   });
   preV8.close();
+  migrateAuditDatabaseToSqlcipher(databasePath, "migration-active-work");
 
-  const migrated = new WorkspaceDatabase(databasePath, {
-    migrations: FULL_MIGRATIONS,
-  });
+  const migrated = openSqlcipherWorkspaceDatabase(
+    databasePath,
+    FULL_MIGRATIONS,
+  );
   const migratedProfiles = new ModelProfilesRepository(migrated);
   const interruptedJob = (id: string) =>
     ({
@@ -2266,6 +3125,7 @@ async function auditV8ChecksumStrategyBinding() {
     "temp_v8_impacted_tabular_job_ids",
     '"forcedDormantProfiles":"all profiles"',
     '"credentialImpactedProfiles":"legacy credential evidence only"',
+    '"assert_encrypted_destructive_rewrite_preflight"',
     '"ensure_structural_schema"',
     '"queue_legacy_credential_orphan_cleanup"',
     '"assert_postconditions"',
@@ -2273,6 +3133,32 @@ async function auditV8ChecksumStrategyBinding() {
     "snapshot.model_profile_id IS NOT NULL",
     "credential_ref IS NOT NULL",
     "coalesce(credential_status, 'not_configured') <> 'not_configured'",
+    "fail_before_first_v8_ddl_or_dml",
+    "aletheia-local-database-sqlcipher-connection-v1",
+    '"rawPragmaResultAloneTrusted":false',
+    '"nonLocalDatabaseAdapterTrusted":false',
+    '"exactLocalDatabasePrototypeRequired":true',
+    '"subclassTrusted":false',
+    '"probeUsesCapturedOriginalPrepare":true',
+    '"memoryRuntimeProbeEligibleForPersistentMigration":false',
+    '"keyApplied":true',
+    '"schemaReadVerified":true',
+    '"persistence":"persistent"',
+    '"cipherIntegrityStatus":"verified_clean"',
+    '"cipherIntegrityVerified":true',
+    "capability must exactly match immediate trusted same-connection re-attestation",
+    "inconsistent SQLCipher connection capability",
+    "npm run migrate:aletheia:sqlcipher --prefix backend",
+    "job.result_json IS NOT NULL",
+    "job.error_json IS NOT NULL",
+    "job.lease_owner IS NOT NULL",
+    "job.cancellation_reason IS NOT NULL",
+    "run.error_json IS NOT NULL",
+    "step.error_json IS NOT NULL",
+    "message.error_code IS NOT NULL",
+    "cell.error_json IS NOT NULL",
+    "old !== sanitizeLegacyBaseUrlForMigration(old)",
+    "credential_origin IS NOT NULL",
     "message.job_id IN (",
     "OR chat.job_id IN (",
     "review.status = 'running'",
@@ -2341,6 +3227,96 @@ async function auditV8ChecksumStrategyBinding() {
     ),
   });
   assert.notEqual(legacyCredentialPredicateMutation, checksum);
+
+  const destructiveCredentialPredicate =
+    "credential_ref IS NOT NULL\n             OR coalesce(credential_status, 'not_configured') <> 'not_configured'";
+  const destructiveCredentialPredicateCount =
+    checksumMaterial.split(destructiveCredentialPredicate).length - 1;
+  assert.ok(destructiveCredentialPredicateCount >= 2);
+  const destructiveCredentialAndMutation = workspaceMigrationChecksum({
+    ...MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION,
+    checksumMaterial: checksumMaterial.replaceAll(
+      destructiveCredentialPredicate,
+      "credential_ref IS NOT NULL\n             AND coalesce(credential_status, 'not_configured') <> 'not_configured'",
+    ),
+  });
+  assert.notEqual(destructiveCredentialAndMutation, checksum);
+
+  const cancellationEvidenceBranch = "OR job.cancellation_reason IS NOT NULL";
+  const cancellationEvidenceBranchCount =
+    checksumMaterial.split(cancellationEvidenceBranch).length - 1;
+  assert.ok(cancellationEvidenceBranchCount >= 2);
+  const deletedEvidenceBranchMutation = workspaceMigrationChecksum({
+    ...MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION,
+    checksumMaterial: checksumMaterial.replaceAll(
+      cancellationEvidenceBranch,
+      "OR 0 = 1",
+    ),
+  });
+  assert.notEqual(deletedEvidenceBranchMutation, checksum);
+
+  const gateStage = '"assert_encrypted_destructive_rewrite_preflight"';
+  const gateStageCount = checksumMaterial.split(gateStage).length - 1;
+  assert.ok(gateStageCount >= 2);
+  const skippedGateMutation = workspaceMigrationChecksum({
+    ...MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION,
+    checksumMaterial: checksumMaterial.replaceAll(
+      gateStage,
+      '"skip_encrypted_destructive_rewrite_preflight"',
+    ),
+  });
+  assert.notEqual(skippedGateMutation, checksum);
+
+  const rawPragmaPolicy = '"rawPragmaResultAloneTrusted":false';
+  const rawPragmaPolicyCount =
+    checksumMaterial.split(rawPragmaPolicy).length - 1;
+  assert.ok(rawPragmaPolicyCount >= 2);
+  const rawPragmaTrustMutation = workspaceMigrationChecksum({
+    ...MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION,
+    checksumMaterial: checksumMaterial.replaceAll(
+      rawPragmaPolicy,
+      '"rawPragmaResultAloneTrusted":true',
+    ),
+  });
+  assert.notEqual(rawPragmaTrustMutation, checksum);
+
+  const exactPrototypePolicy = '"exactLocalDatabasePrototypeRequired":true';
+  const exactPrototypePolicyCount =
+    checksumMaterial.split(exactPrototypePolicy).length - 1;
+  assert.ok(exactPrototypePolicyCount >= 2);
+  const subclassTrustMutation = workspaceMigrationChecksum({
+    ...MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION,
+    checksumMaterial: checksumMaterial.replaceAll(
+      exactPrototypePolicy,
+      '"exactLocalDatabasePrototypeRequired":false',
+    ),
+  });
+  assert.notEqual(subclassTrustMutation, checksum);
+
+  const reattestationDecision =
+    "capability must exactly match immediate trusted same-connection re-attestation";
+  const reattestationDecisionCount =
+    checksumMaterial.split(reattestationDecision).length - 1;
+  assert.ok(reattestationDecisionCount >= 2);
+  const skippedReattestationMutation = workspaceMigrationChecksum({
+    ...MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION,
+    checksumMaterial: checksumMaterial.replaceAll(
+      reattestationDecision,
+      "trust runner capability without same-connection re-attestation",
+    ),
+  });
+  assert.notEqual(skippedReattestationMutation, checksum);
+
+  const baseUrlDiffPolicy = "old !== sanitizeLegacyBaseUrlForMigration(old)";
+  assert.ok(checksumMaterial.includes(baseUrlDiffPolicy));
+  const baseUrlGateMutation = workspaceMigrationChecksum({
+    ...MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION,
+    checksumMaterial: checksumMaterial.replaceAll(
+      baseUrlDiffPolicy,
+      "base_url evidence disabled",
+    ),
+  });
+  assert.notEqual(baseUrlGateMutation, checksum);
 
   assert.equal(
     checksumMaterial.split('"normalizeTrailingDotsPattern":"\\\\.+$"').length -
@@ -2633,6 +3609,11 @@ async function main() {
   const originalEnvironment = { ...process.env };
   try {
     process.env.ALETHEIA_DATABASE_ENCRYPTION = "metadata_plaintext";
+    await auditTrustedSqlcipherConnectionCapability();
+    await auditV8PlaintextSafeStateOnlyMigration();
+    await auditV8PlaintextProfileEvidenceEdges();
+    await auditV8PlaintextRuntimeTextEvidenceGate();
+    await auditV8PhysicalCredentialEncryptionGate();
     await auditMigrationBackfill();
     await auditV8MigrationActiveWorkReconciliation();
     await auditLoopbackGate();
@@ -2650,6 +3631,7 @@ async function main() {
   } finally {
     process.env = originalEnvironment;
     rmSync(root, { recursive: true, force: true });
+    rmSync(sqlcipherBackupRoot, { recursive: true, force: true });
   }
 }
 

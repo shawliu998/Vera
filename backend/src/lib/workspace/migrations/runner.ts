@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isWorkspaceConnectionSqlcipherEncrypted } from "./encryptionPolicy";
 import type {
   AppliedWorkspaceMigration,
   WorkspaceDatabaseAdapter,
@@ -99,6 +100,7 @@ export function detectWorkspaceDatabaseCapabilities(
   return {
     jsonTextChecks: supportsJsonTextChecks(database),
     fts5: supportsFts5(database),
+    sqlcipherEncrypted: isWorkspaceConnectionSqlcipherEncrypted(database),
   };
 }
 

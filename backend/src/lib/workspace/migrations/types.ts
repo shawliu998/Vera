@@ -12,6 +12,7 @@ export interface WorkspaceDatabaseAdapter {
 export type WorkspaceDatabaseCapabilities = {
   jsonTextChecks: boolean;
   fts5: boolean;
+  sqlcipherEncrypted: boolean;
 };
 
 export type WorkspaceMigration = {

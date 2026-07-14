@@ -5,6 +5,11 @@ import type {
   WorkspaceDatabaseCapabilities,
   WorkspaceMigration,
 } from "./types";
+import {
+  isWorkspaceConnectionSqlcipherEncrypted,
+  WORKSPACE_SQLCIPHER_CONNECTION_POLICY_MATERIAL,
+} from "./encryptionPolicy";
+import { WorkspaceMigrationError } from "./runner";
 
 const MIGRATION_ISSUE_CODE =
   "workspace_migration_credential_reconfiguration_required";
@@ -103,6 +108,157 @@ const V8_LEGACY_CREDENTIAL_EVIDENCE_POLICY = JSON.stringify({
   predicateSql: V8_LEGACY_CREDENTIAL_EVIDENCE_SQL,
   queueOrphanCleanupOnlyForSafeReference: true,
   negativeStatus: "not_configured",
+});
+const V8_PLAINTEXT_DESTRUCTIVE_REWRITE_ERROR =
+  'Workspace migration v8 cannot safely rewrite legacy model/runtime data in plaintext SQLite. Stop Vera, run "npm run migrate:aletheia:sqlcipher --prefix backend" from the repository root (or use the packaged desktop offline migration), then restart with ALETHEIA_DATABASE_ENCRYPTION=sqlcipher_required.';
+const V8_SQLCIPHER_CAPABILITY_MISMATCH_ERROR =
+  "Workspace migration v8 rejected inconsistent SQLCipher connection capability and trusted same-connection attestation.";
+const V8_PROFILE_DESTRUCTIVE_EVIDENCE_SQL = `credential_ref IS NOT NULL
+             OR coalesce(credential_status, 'not_configured') <> 'not_configured'`;
+const V8_PROFILE_ENDPOINT_EVIDENCE_SELECT_SQL = `SELECT base_url
+       FROM model_profiles`;
+const V8_PROFILE_ENDPOINT_WITH_ORIGIN_EVIDENCE_SELECT_SQL = `SELECT base_url, credential_origin
+       FROM model_profiles`;
+const V8_JOB_SENSITIVE_REWRITE_EVIDENCE_SQL = `(
+               job.result_json IS NOT NULL
+               OR (
+                 job.error_code IS NOT NULL
+                 AND job.error_code <> '${MIGRATION_ISSUE_CODE}'
+               )
+               OR (
+                 job.error_json IS NOT NULL
+                 AND job.error_json <> '${MIGRATION_ERROR_JSON}'
+               )
+               OR job.lease_owner IS NOT NULL
+               OR job.cancellation_reason IS NOT NULL
+             )`;
+const V8_ASSISTANT_JOB_DESTRUCTIVE_EVIDENCE_SQL = `job.status IN ('queued', 'running')
+             AND job.type = 'assistant_generate'
+             AND ${V8_JOB_SENSITIVE_REWRITE_EVIDENCE_SQL}`;
+const V8_ASSISTANT_OUTPUT_DESTRUCTIVE_EVIDENCE_SQL = `message.status IN ('pending', 'streaming')
+             AND message.error_code IS NOT NULL
+             AND message.error_code <> '${MIGRATION_ISSUE_CODE}'`;
+const V8_WORKFLOW_RUN_DESTRUCTIVE_EVIDENCE_SQL = `snapshot.model_profile_id IS NOT NULL
+             AND run.status IN ('queued', 'waiting', 'running')
+             AND (
+               (
+                 run.error_code IS NOT NULL
+                 AND run.error_code <> '${MIGRATION_ISSUE_CODE}'
+               )
+               OR (
+                 run.error_json IS NOT NULL
+                 AND run.error_json <> '${MIGRATION_ERROR_JSON}'
+               )
+             )`;
+const V8_WORKFLOW_STEP_DESTRUCTIVE_EVIDENCE_SQL = `snapshot.model_profile_id IS NOT NULL
+             AND run.status IN ('queued', 'waiting', 'running')
+             AND step.status IN ('queued', 'waiting', 'running')
+             AND (
+               (
+                 step.error_code IS NOT NULL
+                 AND step.error_code <> '${MIGRATION_ISSUE_CODE}'
+               )
+               OR (
+                 step.error_json IS NOT NULL
+                 AND step.error_json <> '${MIGRATION_ERROR_JSON}'
+               )
+             )`;
+const V8_WORKFLOW_JOB_DESTRUCTIVE_EVIDENCE_SQL = `snapshot.model_profile_id IS NOT NULL
+             AND run.status IN ('queued', 'waiting', 'running')
+             AND job.status IN ('queued', 'running')
+             AND job.type = 'workflow_run'
+             AND ${V8_JOB_SENSITIVE_REWRITE_EVIDENCE_SQL}`;
+const V8_TABULAR_CELL_DESTRUCTIVE_EVIDENCE_SQL = `cell.status IN ('queued', 'running')
+             AND (
+               (
+                 cell.error_code IS NOT NULL
+                 AND cell.error_code <> '${MIGRATION_ISSUE_CODE}'
+               )
+               OR (
+                 cell.error_json IS NOT NULL
+                 AND cell.error_json <> '${MIGRATION_ERROR_JSON}'
+               )
+             )`;
+const V8_TABULAR_JOB_DESTRUCTIVE_EVIDENCE_SQL = `job.status IN ('queued', 'running')
+             AND job.type = 'tabular_cell'
+             AND job.resource_type = 'tabular_cell'
+             AND ${V8_JOB_SENSITIVE_REWRITE_EVIDENCE_SQL}`;
+const V8_DESTRUCTIVE_REWRITE_EVIDENCE_SQL = `SELECT CASE WHEN
+       EXISTS (
+         SELECT 1 FROM model_profiles
+          WHERE ${V8_PROFILE_DESTRUCTIVE_EVIDENCE_SQL}
+       )
+       OR EXISTS (
+         SELECT 1 FROM jobs job
+          WHERE ${V8_ASSISTANT_JOB_DESTRUCTIVE_EVIDENCE_SQL}
+       )
+       OR EXISTS (
+         SELECT 1
+           FROM assistant_generation_snapshots snapshot
+           JOIN chat_messages message ON message.id = snapshot.output_message_id
+          WHERE ${V8_ASSISTANT_OUTPUT_DESTRUCTIVE_EVIDENCE_SQL}
+       )
+       OR EXISTS (
+         SELECT 1
+          FROM workflow_execution_snapshots snapshot
+           JOIN workflow_runs run ON run.id = snapshot.workflow_run_id
+          WHERE ${V8_WORKFLOW_RUN_DESTRUCTIVE_EVIDENCE_SQL}
+       )
+       OR EXISTS (
+         SELECT 1
+           FROM workflow_execution_snapshots snapshot
+           JOIN workflow_runs run ON run.id = snapshot.workflow_run_id
+           JOIN workflow_step_runs step ON step.workflow_run_id = run.id
+          WHERE ${V8_WORKFLOW_STEP_DESTRUCTIVE_EVIDENCE_SQL}
+       )
+       OR EXISTS (
+         SELECT 1
+           FROM workflow_execution_snapshots snapshot
+           JOIN workflow_runs run ON run.id = snapshot.workflow_run_id
+           JOIN jobs job ON job.id = run.job_id
+          WHERE ${V8_WORKFLOW_JOB_DESTRUCTIVE_EVIDENCE_SQL}
+       )
+       OR EXISTS (
+         SELECT 1 FROM tabular_cells cell
+          WHERE ${V8_TABULAR_CELL_DESTRUCTIVE_EVIDENCE_SQL}
+       )
+       OR EXISTS (
+         SELECT 1 FROM jobs job
+          WHERE ${V8_TABULAR_JOB_DESTRUCTIVE_EVIDENCE_SQL}
+       )
+       THEN 1 ELSE 0 END AS destructive_evidence`;
+const V8_DESTRUCTIVE_REWRITE_POLICY = JSON.stringify({
+  connectionCapability: JSON.parse(
+    WORKSPACE_SQLCIPHER_CONNECTION_POLICY_MATERIAL,
+  ),
+  gateDecision:
+    "capability must exactly match immediate trusted same-connection re-attestation",
+  capabilityMismatch: "fail_before_first_v8_ddl_or_dml",
+  plaintextBehavior: "fail_before_first_v8_ddl_or_dml",
+  encryptedBehavior: "allow_transactional_rewrite",
+  evidenceSql: V8_DESTRUCTIVE_REWRITE_EVIDENCE_SQL,
+  branches: {
+    profile: V8_PROFILE_DESTRUCTIVE_EVIDENCE_SQL,
+    profileBaseUrl: {
+      selectSql: V8_PROFILE_ENDPOINT_EVIDENCE_SELECT_SQL,
+      comparison: "old !== sanitizeLegacyBaseUrlForMigration(old)",
+      sanitizerPolicy: JSON.parse(V8_BASE_URL_SANITIZER_POLICY),
+    },
+    partialV8CredentialOrigin: {
+      columnDetection: 'PRAGMA table_info("model_profiles")',
+      selectSql: V8_PROFILE_ENDPOINT_WITH_ORIGIN_EVIDENCE_SELECT_SQL,
+      evidence: "credential_origin IS NOT NULL",
+    },
+    jobSensitiveRewrite: V8_JOB_SENSITIVE_REWRITE_EVIDENCE_SQL,
+    assistantJob: V8_ASSISTANT_JOB_DESTRUCTIVE_EVIDENCE_SQL,
+    assistantOutput: V8_ASSISTANT_OUTPUT_DESTRUCTIVE_EVIDENCE_SQL,
+    workflowRun: V8_WORKFLOW_RUN_DESTRUCTIVE_EVIDENCE_SQL,
+    workflowStep: V8_WORKFLOW_STEP_DESTRUCTIVE_EVIDENCE_SQL,
+    workflowJob: V8_WORKFLOW_JOB_DESTRUCTIVE_EVIDENCE_SQL,
+    tabularCell: V8_TABULAR_CELL_DESTRUCTIVE_EVIDENCE_SQL,
+    tabularJob: V8_TABULAR_JOB_DESTRUCTIVE_EVIDENCE_SQL,
+  },
+  error: V8_PLAINTEXT_DESTRUCTIVE_REWRITE_ERROR,
 });
 const ADD_CREDENTIAL_ORIGIN_COLUMN_SQL = `ALTER TABLE model_profiles
          ADD COLUMN credential_origin TEXT
@@ -403,8 +559,11 @@ const V8_APPLY_POLICY = {
   errors: {
     stageOrder: "Workspace model credential migration stage order is invalid.",
     postcondition: "Workspace model credential migration postcondition failed.",
+    plaintextDestructiveRewrite: V8_PLAINTEXT_DESTRUCTIVE_REWRITE_ERROR,
+    sqlcipherCapabilityMismatch: V8_SQLCIPHER_CAPABILITY_MISMATCH_ERROR,
   },
   stageOrder: [
+    "assert_encrypted_destructive_rewrite_preflight",
     "ensure_structural_schema",
     "select_profiles_in_id_order",
     "materialize_impacted_assistant_work",
@@ -424,6 +583,7 @@ const V8_APPLY_POLICY = {
     "drop_forced_dormant_profile_temp_table",
     "assert_postconditions",
   ],
+  destructiveRewrite: JSON.parse(V8_DESTRUCTIVE_REWRITE_POLICY),
   legacyCredentialEvidence: JSON.parse(V8_LEGACY_CREDENTIAL_EVIDENCE_POLICY),
   postconditions: {
     profilesSql: V8_PROFILE_POSTCONDITION_SQL,
@@ -499,6 +659,34 @@ const V8_APPLY_PLAN = JSON.stringify({
 
 function hasTable(database: WorkspaceDatabaseAdapter, name: string) {
   return Boolean(database.prepare(SQLITE_HAS_TABLE_SQL).get(name));
+}
+
+function hasDestructiveRewriteEvidence(database: WorkspaceDatabaseAdapter) {
+  const row = database.prepare(V8_DESTRUCTIVE_REWRITE_EVIDENCE_SQL).get();
+  if (Number(row?.destructive_evidence ?? 0) === 1) return true;
+  const includesCredentialOrigin = hasColumn(
+    database,
+    "model_profiles",
+    "credential_origin",
+  );
+  const profiles = database
+    .prepare(
+      includesCredentialOrigin
+        ? V8_PROFILE_ENDPOINT_WITH_ORIGIN_EVIDENCE_SELECT_SQL
+        : V8_PROFILE_ENDPOINT_EVIDENCE_SELECT_SQL,
+    )
+    .all();
+  return profiles.some((profile) => {
+    const baseUrl = profile.base_url;
+    if (
+      baseUrl !== null &&
+      baseUrl !== undefined &&
+      baseUrl !== sanitizeLegacyBaseUrlForMigration(baseUrl)
+    ) {
+      return true;
+    }
+    return includesCredentialOrigin && profile.credential_origin != null;
+  });
 }
 
 function hasColumn(
@@ -865,7 +1053,7 @@ function reconcileImpactedTabularWork(database: WorkspaceDatabaseAdapter) {
 
 function applyModelCredentialOriginV8(
   database: WorkspaceDatabaseAdapter,
-  _capabilities: WorkspaceDatabaseCapabilities,
+  capabilities: WorkspaceDatabaseCapabilities,
 ) {
   let stageIndex = 0;
   const enterStage = (stage: (typeof V8_APPLY_POLICY.stageOrder)[number]) => {
@@ -874,6 +1062,23 @@ function applyModelCredentialOriginV8(
     }
     stageIndex += 1;
   };
+
+  enterStage("assert_encrypted_destructive_rewrite_preflight");
+  const reattestedSqlcipherEncrypted =
+    isWorkspaceConnectionSqlcipherEncrypted(database);
+  if (capabilities.sqlcipherEncrypted !== reattestedSqlcipherEncrypted) {
+    throw new WorkspaceMigrationError(
+      V8_APPLY_POLICY.errors.sqlcipherCapabilityMismatch,
+    );
+  }
+  if (
+    !reattestedSqlcipherEncrypted &&
+    hasDestructiveRewriteEvidence(database)
+  ) {
+    throw new WorkspaceMigrationError(
+      V8_APPLY_POLICY.errors.plaintextDestructiveRewrite,
+    );
+  }
 
   enterStage("ensure_structural_schema");
   ensureModelProfileColumns(database);
@@ -991,6 +1196,22 @@ export const MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION: WorkspaceMigration = {
     V8_REFERENCE_POLICY,
     V8_LEGACY_CREDENTIAL_EVIDENCE_SQL,
     V8_LEGACY_CREDENTIAL_EVIDENCE_POLICY,
+    WORKSPACE_SQLCIPHER_CONNECTION_POLICY_MATERIAL,
+    V8_PLAINTEXT_DESTRUCTIVE_REWRITE_ERROR,
+    V8_SQLCIPHER_CAPABILITY_MISMATCH_ERROR,
+    V8_PROFILE_DESTRUCTIVE_EVIDENCE_SQL,
+    V8_PROFILE_ENDPOINT_EVIDENCE_SELECT_SQL,
+    V8_PROFILE_ENDPOINT_WITH_ORIGIN_EVIDENCE_SELECT_SQL,
+    V8_JOB_SENSITIVE_REWRITE_EVIDENCE_SQL,
+    V8_ASSISTANT_JOB_DESTRUCTIVE_EVIDENCE_SQL,
+    V8_ASSISTANT_OUTPUT_DESTRUCTIVE_EVIDENCE_SQL,
+    V8_WORKFLOW_RUN_DESTRUCTIVE_EVIDENCE_SQL,
+    V8_WORKFLOW_STEP_DESTRUCTIVE_EVIDENCE_SQL,
+    V8_WORKFLOW_JOB_DESTRUCTIVE_EVIDENCE_SQL,
+    V8_TABULAR_CELL_DESTRUCTIVE_EVIDENCE_SQL,
+    V8_TABULAR_JOB_DESTRUCTIVE_EVIDENCE_SQL,
+    V8_DESTRUCTIVE_REWRITE_EVIDENCE_SQL,
+    V8_DESTRUCTIVE_REWRITE_POLICY,
     V8_MODEL_PROFILE_COLUMN_PLAN,
     V8_ORPHAN_LEDGER_SQL,
     V8_ORPHAN_LEDGER_UPSERT_SQL,

@@ -1,4 +1,6 @@
-import { chmodSync, existsSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import SignalDatabase from "@signalapp/sqlcipher";
 import { databaseEncryptionMode } from "./localEnvelopeCrypto";
@@ -13,6 +15,25 @@ type DatabaseDriver = "node:sqlite" | "signal-sqlcipher";
 export type LocalDatabaseOptions = {
   readOnly?: boolean;
 };
+
+export type LocalDatabaseEncryptionAttestation = {
+  readonly kind: "aletheia-local-database-sqlcipher-connection-v1";
+  readonly driver: "signal-sqlcipher";
+  readonly encrypted: true;
+  readonly cipherVersion: string;
+  readonly keyApplied: true;
+  readonly schemaReadVerified: true;
+  readonly persistence: "persistent" | "memory_runtime_probe";
+  readonly cipherIntegrityStatus:
+    | "verified_clean"
+    | "unsupported_memory_database_file_undefined";
+  readonly cipherIntegrityVerified: boolean;
+};
+
+export const SQLCIPHER_MEMORY_INTEGRITY_UNSUPPORTED_SENTINEL =
+  "database file is undefined";
+export const SQLCIPHER_RUNTIME_PROBE_DIRECTORY_PREFIX =
+  "aletheia-sqlcipher-runtime-probe-";
 
 function normalizeSignalParameters(parameters: unknown[]) {
   if (parameters.length === 0) return undefined;
@@ -68,7 +89,8 @@ export class LocalDatabase {
   readonly cipherVersion: string | null;
   readonly cipherProvider: string | null;
   readonly keyId: string | null;
-  private readonly database: any;
+  readonly #database: any;
+  readonly #encryptionAttestation: LocalDatabaseEncryptionAttestation | null;
 
   constructor(
     readonly databasePath: string,
@@ -79,7 +101,8 @@ export class LocalDatabase {
       this.cipherVersion = null;
       this.cipherProvider = null;
       this.keyId = null;
-      this.database = new DatabaseSync(databasePath, {
+      this.#encryptionAttestation = null;
+      this.#database = new DatabaseSync(databasePath, {
         readOnly: options.readOnly ?? false,
       });
       return;
@@ -88,10 +111,6 @@ export class LocalDatabase {
     if (options.readOnly && !existsSync(databasePath)) {
       throw new Error(`SQLCipher database does not exist: ${databasePath}`);
     }
-    const existingDatabase =
-      databasePath !== ":memory:" &&
-      existsSync(databasePath) &&
-      statSync(databasePath).size > 0;
     const key = loadLocalDatabaseKey();
     const database = new SignalDatabase(databasePath);
     try {
@@ -108,21 +127,49 @@ export class LocalDatabase {
         );
       }
       database.prepare("select count(*) as count from sqlite_master").get();
-      if (existingDatabase) {
-        const integrity = database.pragma("cipher_integrity_check");
-        if (!Array.isArray(integrity) || integrity.length !== 0) {
-          throw new Error(
-            `SQLCipher integrity check failed: ${JSON.stringify(integrity)}`,
-          );
-        }
+      const integrity = database.pragma("cipher_integrity_check");
+      const persistentIntegrityVerified =
+        Array.isArray(integrity) && integrity.length === 0;
+      const memoryIntegrityUnsupported =
+        databasePath === ":memory:" &&
+        Array.isArray(integrity) &&
+        integrity.length === 1 &&
+        integrity[0] !== null &&
+        typeof integrity[0] === "object" &&
+        Object.keys(integrity[0]).length === 1 &&
+        integrity[0].cipher_integrity_check ===
+          SQLCIPHER_MEMORY_INTEGRITY_UNSUPPORTED_SENTINEL;
+      if (!persistentIntegrityVerified && !memoryIntegrityUnsupported) {
+        throw new Error(
+          `SQLCipher integrity check failed: ${JSON.stringify(integrity)}`,
+        );
+      }
+      if (databasePath !== ":memory:" && !persistentIntegrityVerified) {
+        throw new Error(
+          `SQLCipher integrity check failed: ${JSON.stringify(integrity)}`,
+        );
       }
       if (options.readOnly) database.exec("PRAGMA query_only = ON");
-      this.database = database;
+      this.#database = database;
       this.driver = "signal-sqlcipher";
       this.cipherVersion = cipherVersion;
       this.cipherProvider =
         typeof cipherProvider === "string" ? cipherProvider : null;
       this.keyId = localDatabaseKeyId(key);
+      this.#encryptionAttestation = Object.freeze({
+        kind: "aletheia-local-database-sqlcipher-connection-v1",
+        driver: "signal-sqlcipher",
+        encrypted: true,
+        cipherVersion,
+        keyApplied: true,
+        schemaReadVerified: true,
+        persistence:
+          databasePath === ":memory:" ? "memory_runtime_probe" : "persistent",
+        cipherIntegrityStatus: persistentIntegrityVerified
+          ? "verified_clean"
+          : "unsupported_memory_database_file_undefined",
+        cipherIntegrityVerified: persistentIntegrityVerified,
+      });
       if (databasePath !== ":memory:" && existsSync(databasePath)) {
         chmodSync(databasePath, 0o600);
       }
@@ -135,15 +182,15 @@ export class LocalDatabase {
   }
 
   exec(sql: string) {
-    this.database.exec(sql);
+    this.#database.exec(sql);
   }
 
   prepare(sql: string) {
-    return new LocalStatement(this.driver, this.database.prepare(sql));
+    return new LocalStatement(this.driver, this.#database.prepare(sql));
   }
 
   close() {
-    this.database.close();
+    this.#database.close();
   }
 
   status() {
@@ -157,19 +204,43 @@ export class LocalDatabase {
         this.driver === "signal-sqlcipher" ? localDatabaseKeySource() : "none",
     };
   }
+
+  workspaceEncryptionAttestation() {
+    return this.#encryptionAttestation;
+  }
 }
 
 export function verifySqlcipherRuntime() {
-  const database = new LocalDatabase(":memory:");
+  const probeDirectory = mkdtempSync(
+    path.join(os.tmpdir(), SQLCIPHER_RUNTIME_PROBE_DIRECTORY_PREFIX),
+  );
+  chmodSync(probeDirectory, 0o700);
+  let database: LocalDatabase | null = null;
   try {
+    database = new LocalDatabase(path.join(probeDirectory, "runtime-probe.db"));
     const status = database.status();
+    const attestation = database.workspaceEncryptionAttestation();
     if (!status.encrypted || !status.cipher_version) {
       throw new Error(
         "SQLCipher runtime verification did not activate encryption.",
       );
     }
+    if (
+      !attestation ||
+      attestation.persistence !== "persistent" ||
+      attestation.cipherIntegrityStatus !== "verified_clean" ||
+      attestation.cipherIntegrityVerified !== true
+    ) {
+      throw new Error(
+        "SQLCipher runtime verification did not establish a persistent integrity-verified connection.",
+      );
+    }
     return status;
   } finally {
-    database.close();
+    try {
+      database?.close();
+    } finally {
+      rmSync(probeDirectory, { recursive: true, force: true });
+    }
   }
 }

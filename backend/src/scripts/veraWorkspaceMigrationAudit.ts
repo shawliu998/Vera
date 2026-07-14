@@ -206,6 +206,7 @@ try {
     assert.deepEqual(database.migration?.capabilities, {
       jsonTextChecks: true,
       fts5: true,
+      sqlcipherEncrypted: false,
     });
 
     const migrationRows = database
@@ -1158,6 +1159,7 @@ try {
       WORKSPACE_INTEGRITY_MIGRATION.apply(capabilityProbe, {
         jsonTextChecks: false,
         fts5: true,
+        sqlcipherEncrypted: false,
       }),
     /requires SQLite JSON1 and FTS5/i,
   );
@@ -1166,6 +1168,7 @@ try {
       WORKSPACE_RUNTIME_MIGRATION.apply(capabilityProbe, {
         jsonTextChecks: false,
         fts5: true,
+        sqlcipherEncrypted: false,
       }),
     /requires SQLite JSON1/i,
   );
@@ -1174,6 +1177,7 @@ try {
       WORKSPACE_INTEGRITY_MIGRATION.apply(capabilityProbe, {
         jsonTextChecks: true,
         fts5: false,
+        sqlcipherEncrypted: false,
       }),
     /requires SQLite JSON1 and FTS5/i,
   );
@@ -1187,6 +1191,10 @@ try {
   try {
     encryptedStatus = encryptedDatabase.status();
     assert.equal(encryptedStatus.encrypted, true);
+    assert.equal(
+      encryptedDatabase.migration?.capabilities.sqlcipherEncrypted,
+      true,
+    );
     assert.equal(encryptedDatabase.migration?.currentVersion, 6);
     assert.equal(
       encryptedDatabase
