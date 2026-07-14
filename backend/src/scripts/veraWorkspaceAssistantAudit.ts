@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -19,10 +21,12 @@ import {
   runWorkspaceMigrations,
   workspaceMigrationChecksum,
   type WorkspaceDatabaseAdapter,
+  type WorkspaceMigration,
 } from "../lib/workspace/database";
 import { WorkspaceApiError } from "../lib/workspace/errors";
 import { searchSafeFtsQuery } from "../lib/searchSafeFtsQuery";
 import { ASSISTANT_RUNTIME_MIGRATION } from "../lib/workspace/migrations/v5AssistantRuntime";
+import { WORKFLOW_RUNTIME_V6_MIGRATION } from "../lib/workspace/migrations/v6WorkflowRuntime";
 import { AssistantRetrievalRepository } from "../lib/workspace/repositories/assistantRetrieval";
 import { ChatsRepository } from "../lib/workspace/repositories/chats";
 import { ModelProfilesRepository } from "../lib/workspace/repositories/modelProfiles";
@@ -49,6 +53,20 @@ const MIGRATIONS = [
   ...WORKSPACE_MIGRATIONS.filter((migration) => migration.version < 5),
   ASSISTANT_RUNTIME_MIGRATION,
 ] as const;
+const CHECKSUM_PARITY_MIGRATIONS = [
+  ...WORKSPACE_MIGRATIONS,
+  ASSISTANT_RUNTIME_MIGRATION,
+  WORKFLOW_RUNTIME_V6_MIGRATION,
+] as const;
+const CHECKSUM_PARITY_MODULES = [
+  ["v1InitialWorkspace", "INITIAL_WORKSPACE_MIGRATION"],
+  ["v2WorkspaceIntegrity", "WORKSPACE_INTEGRITY_MIGRATION"],
+  ["v3WorkspaceRuntime", "WORKSPACE_RUNTIME_MIGRATION"],
+  ["v4ProjectOwnership", "PROJECT_OWNERSHIP_MIGRATION"],
+  ["v5AssistantRuntime", "ASSISTANT_RUNTIME_MIGRATION"],
+  ["v6WorkflowRuntime", "WORKFLOW_RUNTIME_V6_MIGRATION"],
+] as const;
+const BACKEND_ROOT = path.resolve(__dirname, "../..");
 const root = mkdtempSync(path.join(os.tmpdir(), "vera-assistant-audit-"));
 const databasePath = path.join(root, "workspace.db");
 const NOW = "2026-07-14T08:00:00.000Z";
@@ -73,6 +91,75 @@ type DocumentFixture = {
 
 function sha(value: string) {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function assertMigrationChecksumRuntimeParity() {
+  assert.deepEqual(
+    CHECKSUM_PARITY_MIGRATIONS.map((migration) => migration.version),
+    [1, 2, 3, 4, 5, 6],
+  );
+  const compiledRoot = path.join(root, "checksum-parity-commonjs");
+  const tscPath = path.join(
+    BACKEND_ROOT,
+    "node_modules",
+    "typescript",
+    "bin",
+    "tsc",
+  );
+  execFileSync(
+    process.execPath,
+    [
+      tscPath,
+      "--outDir",
+      compiledRoot,
+      "--rootDir",
+      "src",
+      "--target",
+      "ES2022",
+      "--module",
+      "CommonJS",
+      "--moduleResolution",
+      "node",
+      "--strict",
+      "--esModuleInterop",
+      "--skipLibCheck",
+      "--resolveJsonModule",
+      "--types",
+      "node",
+      "--ignoreDeprecations",
+      "5.0",
+      "src/lib/workspace/migrations/runner.ts",
+      ...CHECKSUM_PARITY_MODULES.map(
+        ([moduleName]) => `src/lib/workspace/migrations/${moduleName}.ts`,
+      ),
+    ],
+    { cwd: BACKEND_ROOT, encoding: "utf8", stdio: "pipe" },
+  );
+  const requireCompiled = createRequire(
+    path.join(compiledRoot, "checksum-parity-entry.cjs"),
+  );
+  const compiledRunner = requireCompiled(
+    path.join(compiledRoot, "lib/workspace/migrations/runner.js"),
+  ) as {
+    workspaceMigrationChecksum(migration: WorkspaceMigration): string;
+  };
+  for (const [
+    index,
+    [moduleName, exportName],
+  ] of CHECKSUM_PARITY_MODULES.entries()) {
+    const compiledModule = requireCompiled(
+      path.join(compiledRoot, `lib/workspace/migrations/${moduleName}.js`),
+    ) as Record<string, WorkspaceMigration>;
+    const compiledMigration = compiledModule[exportName];
+    const runtimeMigration = CHECKSUM_PARITY_MIGRATIONS[index];
+    assert.ok(compiledMigration, `compiled migration ${exportName} is missing`);
+    assert.equal(compiledMigration.version, runtimeMigration.version);
+    assert.equal(
+      compiledRunner.workspaceMigrationChecksum(compiledMigration),
+      workspaceMigrationChecksum(runtimeMigration),
+      `migration v${runtimeMigration.version} checksum differs between tsx/esbuild and tsc CommonJS`,
+    );
+  }
 }
 
 function expectSqlFailure(
@@ -241,57 +328,70 @@ async function withHttpServer(
 
 async function run() {
   process.env.ALETHEIA_DATABASE_ENCRYPTION = "metadata_plaintext";
+  assertMigrationChecksumRuntimeParity();
   const v5ChecksumMaterial = ASSISTANT_RUNTIME_MIGRATION.checksumMaterial;
-  assert.match(
+  assert.doesNotMatch(
     v5ChecksumMaterial,
-    /function containsSensitiveLegacyValue\(/,
-    "v5 checksum covers the recursive sensitive legacy locator classifier",
+    /function (?:containsSensitiveLegacyValue|canonicalLegacyLocator|applyAssistantRuntime)\(/,
+    "v5 checksum must not depend on runtime-specific Function.toString output",
   );
   assert.match(
     v5ChecksumMaterial,
-    /function canonicalLegacyLocator\(/,
-    "v5 checksum covers canonical legacy locator transformation logic",
+    /"orderBy":\["CASE WHEN source\.rank IS NULL THEN 1 ELSE 0 END","source\.rank ASC","source\.created_at ASC","source\.id ASC"\]/,
+    "v5 checksum includes the canonical source ordering consumed by rebuild SQL",
   );
   assert.match(
     v5ChecksumMaterial,
-    /function applyAssistantRuntime\(/,
-    "v5 checksum covers the executable migration orchestration",
+    /"allowedKeys":\["pageStart","pageEnd","section","startOffset","endOffset"\]/,
+    "v5 checksum includes canonical locator fields and bounds",
   );
   assert.match(
     v5ChecksumMaterial,
-    /Workspace assistant citation migration postcondition failed\./,
-    "v5 checksum includes the source count, ordinal, and citation metadata postcondition",
+    /"stageOrder":\["select_legacy_locators_in_id_order","count_legacy_sources","rebuild_message_sources_with_canonical_citation_order"/,
+    "v5 checksum includes the apply stage order consumed by the migration",
   );
-  assert.match(
-    v5ChecksumMaterial,
-    /for\s*\(\s*const legacy of legacyLocators\s*\)\s*\{\s*updateLocator\.run/,
-    "v5 checksum includes the legacy locator update loop",
-  );
-  const applyMutationProbe = {
+  for (const sqlFragment of [
+    "SELECT count(*) AS count FROM message_sources",
+    "count(DISTINCT citation_ordinal) <> count(*)",
+    "UPDATE message_sources SET locator_json=?,migration_issue_code=? WHERE id=?",
+  ]) {
+    assert.equal(
+      v5ChecksumMaterial.includes(sqlFragment),
+      true,
+      `v5 checksum is missing static migration material: ${sqlFragment}`,
+    );
+  }
+  const postconditionMutationProbe = {
     ...ASSISTANT_RUNTIME_MIGRATION,
     checksumMaterial: v5ChecksumMaterial.replace(
-      "Workspace assistant citation migration postcondition failed.",
-      "Workspace assistant citation migration mutation probe.",
+      "count(DISTINCT citation_ordinal) <> count(*)",
+      "count(DISTINCT citation_ordinal) < count(*)",
     ),
   };
-  const locatorMutationProbe = {
+  const locatorBoundaryMutationProbe = {
     ...ASSISTANT_RUNTIME_MIGRATION,
     checksumMaterial: v5ChecksumMaterial.replace(
-      "invalid page locator",
-      "mutated invalid page locator",
+      '"maximum":500',
+      '"maximum":499',
     ),
   };
-  assert.notEqual(applyMutationProbe.checksumMaterial, v5ChecksumMaterial);
-  assert.notEqual(locatorMutationProbe.checksumMaterial, v5ChecksumMaterial);
   assert.notEqual(
-    workspaceMigrationChecksum(applyMutationProbe),
-    workspaceMigrationChecksum(ASSISTANT_RUNTIME_MIGRATION),
-    "changing executable apply postcondition logic changes the v5 checksum",
+    postconditionMutationProbe.checksumMaterial,
+    v5ChecksumMaterial,
   );
   assert.notEqual(
-    workspaceMigrationChecksum(locatorMutationProbe),
+    locatorBoundaryMutationProbe.checksumMaterial,
+    v5ChecksumMaterial,
+  );
+  assert.notEqual(
+    workspaceMigrationChecksum(postconditionMutationProbe),
     workspaceMigrationChecksum(ASSISTANT_RUNTIME_MIGRATION),
-    "changing canonical locator logic changes the v5 checksum",
+    "changing static postcondition SQL changes the v5 checksum",
+  );
+  assert.notEqual(
+    workspaceMigrationChecksum(locatorBoundaryMutationProbe),
+    workspaceMigrationChecksum(ASSISTANT_RUNTIME_MIGRATION),
+    "changing a canonical locator boundary changes the v5 checksum",
   );
   const database = new WorkspaceDatabase(databasePath, { migrate: false });
   try {
@@ -599,7 +699,7 @@ async function run() {
       () =>
         runWorkspaceMigrations(database, [
           ...MIGRATIONS.slice(0, -1),
-          applyMutationProbe,
+          postconditionMutationProbe,
         ]),
       /checksum drift/i,
       "an applied v5 database rejects same-version executable logic drift",
@@ -2484,7 +2584,7 @@ async function run() {
     );
 
     const routeSource = readFileSync(
-      path.join(process.cwd(), "src/routes/workspaceChatsV1.ts"),
+      path.join(BACKEND_ROOT, "src/routes/workspaceChatsV1.ts"),
       "utf8",
     );
     assert.doesNotMatch(

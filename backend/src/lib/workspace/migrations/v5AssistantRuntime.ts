@@ -6,6 +6,36 @@ import type {
 
 const CREATED_AT = "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))";
 
+const LEGACY_SOURCE_MIGRATION_POLICY = {
+  preservedColumns: [
+    "id",
+    "message_id",
+    "document_id",
+    "version_id",
+    "chunk_id",
+    "quote",
+    "start_offset",
+    "end_offset",
+    "locator_json",
+    "rank",
+    "score",
+    "created_at",
+  ],
+  orderBy: [
+    "CASE WHEN source.rank IS NULL THEN 1 ELSE 0 END",
+    "source.rank ASC",
+    "source.created_at ASC",
+    "source.id ASC",
+  ],
+  filenameSnapshotExpression: "version.filename",
+  ordinalRowNumberSubtract: 1,
+  citationNumberOffset: 1,
+} as const;
+const LEGACY_LOCATOR_ISSUE_CODES = {
+  redacted: "workspace_migration_source_locator_redacted",
+  requiresReview: "workspace_migration_source_locator_requires_review",
+} as const;
+
 /*
  * v1 accidentally made a chunk unique per message. A chunk is a source, not a
  * citation occurrence: the same chunk may support multiple statements in one
@@ -45,8 +75,8 @@ CREATE TABLE message_sources_v5 (
   migration_issue_code TEXT CHECK (
     migration_issue_code IS NULL OR
     migration_issue_code IN (
-      'workspace_migration_source_locator_redacted',
-      'workspace_migration_source_locator_requires_review'
+      '${LEGACY_LOCATOR_ISSUE_CODES.redacted}',
+      '${LEGACY_LOCATOR_ISSUE_CODES.requiresReview}'
     )
   ),
   created_at TEXT NOT NULL DEFAULT ${CREATED_AT},
@@ -57,30 +87,28 @@ CREATE TABLE message_sources_v5 (
 
 WITH canonical_sources AS (
   SELECT source.*,
-         version.filename AS filename_snapshot,
+         ${LEGACY_SOURCE_MIGRATION_POLICY.filenameSnapshotExpression} AS filename_snapshot,
          row_number() OVER (
            PARTITION BY source.message_id
            ORDER BY
-             CASE WHEN source.rank IS NULL THEN 1 ELSE 0 END,
-             source.rank ASC,
-             source.created_at ASC,
-             source.id ASC
-         ) - 1 AS canonical_ordinal
+             ${LEGACY_SOURCE_MIGRATION_POLICY.orderBy.join(",\n             ")}
+         ) - ${LEGACY_SOURCE_MIGRATION_POLICY.ordinalRowNumberSubtract} AS canonical_ordinal
     FROM message_sources source
     JOIN document_versions version
       ON version.id = source.version_id
      AND version.document_id = source.document_id
 )
 INSERT INTO message_sources_v5 (
-  id, message_id, document_id, version_id, filename_snapshot, chunk_id, quote,
-  start_offset, end_offset, locator_json, rank, score,
-  citation_ordinal, citation_metadata_json, migration_issue_code, created_at
+  ${LEGACY_SOURCE_MIGRATION_POLICY.preservedColumns.join(", ")},
+  filename_snapshot, citation_ordinal, citation_metadata_json, migration_issue_code
 )
-SELECT id, message_id, document_id, version_id, filename_snapshot, chunk_id, quote,
-       start_offset, end_offset, locator_json, rank, score,
-       canonical_ordinal,
-       json_object('citationNumber', canonical_ordinal + 1),
-       NULL, created_at
+SELECT ${LEGACY_SOURCE_MIGRATION_POLICY.preservedColumns.join(", ")},
+       filename_snapshot, canonical_ordinal,
+       json_object(
+         'citationNumber',
+         canonical_ordinal + ${LEGACY_SOURCE_MIGRATION_POLICY.citationNumberOffset}
+       ),
+       NULL
   FROM canonical_sources;
 
 DROP TABLE message_sources;
@@ -521,43 +549,129 @@ WHEN EXISTS (
 END;
 `;
 
-const LEGACY_LOCATOR_POLICY =
-  "legacy-locator-v1:recursive-sensitive-data-redaction;unknown-fields-require-review;allowed=pageStart,pageEnd,section,startOffset,endOffset;strict-integer-ranges";
-const LEGACY_CITATION_ORDER_POLICY =
-  "legacy-citation-order-v1:rank-ascending;null-rank-last;created-at-ascending;id-ascending;continuous-zero-based-ordinal;citation-number=ordinal+1;immutable-filename-snapshot";
-const LOCATOR_REDACTION_CODE = "workspace_migration_source_locator_redacted";
-const LOCATOR_REVIEW_CODE =
-  "workspace_migration_source_locator_requires_review";
-const LEGACY_LOCATOR_KEYS = new Set([
-  "pageStart",
-  "pageEnd",
-  "section",
-  "startOffset",
-  "endOffset",
-]);
+const LEGACY_LOCATOR_FIELDS = {
+  pageStart: "pageStart",
+  pageEnd: "pageEnd",
+  section: "section",
+  startOffset: "startOffset",
+  endOffset: "endOffset",
+} as const;
+const LEGACY_LOCATOR_POLICY = {
+  fields: LEGACY_LOCATOR_FIELDS,
+  allowedKeys: Object.values(LEGACY_LOCATOR_FIELDS),
+  pageKeys: [LEGACY_LOCATOR_FIELDS.pageStart, LEGACY_LOCATOR_FIELDS.pageEnd],
+  pageMinimum: 1,
+  offsetMinimum: 0,
+  sectionLength: { minimum: 1, maximum: 500 },
+  issueCodes: LEGACY_LOCATOR_ISSUE_CODES,
+  normalizedKeyStrip: { source: "[^a-z0-9]", flags: "gi" },
+  sensitiveKey: {
+    suffix: "path",
+    pattern: {
+      source:
+        "(?:localpath|storagepath|filepath|secret|token|apikey|credential|password|authorization|bearer)",
+      flags: "",
+    },
+  },
+  sensitiveStrings: [
+    {
+      source:
+        "^(?:file:|[A-Za-z]:[\\\\/]|\\\\\\\\|/(?:Users|home|tmp|var|private|etc|opt|mnt|Volumes)(?:/|$))",
+      flags: "i",
+    },
+    {
+      source: "(?:api[_ -]?key|secret|password|credential)\\s*[:=]",
+      flags: "i",
+    },
+    {
+      source: "(?:https?|wss?)://[^/\\s:@]+:[^@\\s/]+@",
+      flags: "i",
+    },
+    {
+      source: "[?&](?:api[_-]?key|token|secret|credential|password)=",
+      flags: "i",
+    },
+    { source: "\\bbearer\\s+\\S+", flags: "i" },
+    { source: "\\bsk-[A-Za-z0-9_-]{20,}\\b", flags: "" },
+    {
+      source: "\\beyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\b",
+      flags: "",
+    },
+  ],
+} as const;
+const LEGACY_LOCATOR_KEYS: ReadonlySet<string> = new Set(
+  LEGACY_LOCATOR_POLICY.allowedKeys,
+);
+const NORMALIZED_KEY_STRIP_PATTERN = new RegExp(
+  LEGACY_LOCATOR_POLICY.normalizedKeyStrip.source,
+  LEGACY_LOCATOR_POLICY.normalizedKeyStrip.flags,
+);
+const SENSITIVE_KEY_PATTERN = new RegExp(
+  LEGACY_LOCATOR_POLICY.sensitiveKey.pattern.source,
+  LEGACY_LOCATOR_POLICY.sensitiveKey.pattern.flags,
+);
+const SENSITIVE_STRING_PATTERNS = LEGACY_LOCATOR_POLICY.sensitiveStrings.map(
+  ({ source, flags }) => new RegExp(source, flags),
+);
+const V5_LEGACY_LOCATOR_SELECT_SQL =
+  "SELECT id,locator_json FROM message_sources ORDER BY id";
+const V5_SOURCE_COUNT_SQL = "SELECT count(*) AS count FROM message_sources";
+const V5_SOURCE_POSTCONDITION_SQL = `SELECT message_id
+         FROM message_sources
+        GROUP BY message_id
+       HAVING min(citation_ordinal) <> 0
+           OR max(citation_ordinal) <> count(*) - 1
+           OR count(DISTINCT citation_ordinal) <> count(*)
+           OR sum(
+                CASE
+                  WHEN json_type(citation_metadata_json, '$.citationNumber') = 'integer'
+                   AND json_extract(citation_metadata_json, '$.citationNumber') = citation_ordinal + ${LEGACY_SOURCE_MIGRATION_POLICY.citationNumberOffset}
+                  THEN 0 ELSE 1
+                END
+              ) <> 0
+        LIMIT 1`;
+const V5_LOCATOR_UPDATE_SQL =
+  "UPDATE message_sources SET locator_json=?,migration_issue_code=? WHERE id=?";
+const V5_APPLY_POLICY = {
+  requiredCapability: "jsonTextChecks",
+  errors: {
+    missingCapability:
+      "Workspace assistant runtime requires SQLite JSON1 for safe metadata boundaries.",
+    sourcePostcondition:
+      "Workspace assistant citation migration postcondition failed.",
+    stageOrder: "Workspace assistant migration stage order is invalid.",
+  },
+  stageOrder: [
+    "select_legacy_locators_in_id_order",
+    "count_legacy_sources",
+    "rebuild_message_sources_with_canonical_citation_order",
+    "assert_postconditions_before_locator_backfill",
+    "backfill_canonicalized_locators_and_issue_codes",
+    "install_assistant_snapshot_schema",
+    "install_json_boundary_triggers",
+    "install_relationship_triggers",
+    "interrupt_legacy_assistant_jobs_without_snapshots",
+  ],
+  sql: {
+    selectLegacyLocators: V5_LEGACY_LOCATOR_SELECT_SQL,
+    countSources: V5_SOURCE_COUNT_SQL,
+    postcondition: V5_SOURCE_POSTCONDITION_SQL,
+    updateLocator: V5_LOCATOR_UPDATE_SQL,
+  },
+} as const;
 
 function containsSensitiveLegacyValue(value: unknown, key = ""): boolean {
-  const normalizedKey = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
+  const normalizedKey = key
+    .replace(NORMALIZED_KEY_STRIP_PATTERN, "")
+    .toLowerCase();
   if (
-    normalizedKey.endsWith("path") ||
-    /(?:localpath|storagepath|filepath|secret|token|apikey|credential|password|authorization|bearer)/.test(
-      normalizedKey,
-    )
+    normalizedKey.endsWith(LEGACY_LOCATOR_POLICY.sensitiveKey.suffix) ||
+    SENSITIVE_KEY_PATTERN.test(normalizedKey)
   ) {
     return true;
   }
   if (typeof value === "string") {
-    return (
-      /^(?:file:|[A-Za-z]:[\\/]|\\\\|\/(?:Users|home|tmp|var|private|etc|opt|mnt|Volumes)(?:\/|$))/i.test(
-        value,
-      ) ||
-      /(?:api[_ -]?key|secret|password|credential)\s*[:=]/i.test(value) ||
-      /(?:https?|wss?):\/\/[^/\s:@]+:[^@\s/]+@/i.test(value) ||
-      /[?&](?:api[_-]?key|token|secret|credential|password)=/i.test(value) ||
-      /\bbearer\s+\S+/i.test(value) ||
-      /\bsk-[A-Za-z0-9_-]{20,}\b/.test(value) ||
-      /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/.test(value)
-    );
+    return SENSITIVE_STRING_PATTERNS.some((pattern) => pattern.test(value));
   }
   if (Array.isArray(value)) {
     return value.some((item) => containsSensitiveLegacyValue(item));
@@ -589,62 +703,72 @@ function canonicalLegacyLocator(raw: unknown): {
       (key) => !LEGACY_LOCATOR_KEYS.has(key),
     );
     const canonical: Record<string, string | number> = {};
-    for (const key of ["pageStart", "pageEnd"] as const) {
+    for (const key of LEGACY_LOCATOR_POLICY.pageKeys) {
       if (source[key] === undefined) continue;
       if (
         typeof source[key] !== "number" ||
         !Number.isSafeInteger(source[key]) ||
-        source[key] <= 0
+        source[key] < LEGACY_LOCATOR_POLICY.pageMinimum
       ) {
         throw new Error("invalid page locator");
       }
       canonical[key] = source[key];
     }
-    if (source.pageEnd !== undefined && source.pageStart === undefined) {
+    const pageStart = source[LEGACY_LOCATOR_FIELDS.pageStart];
+    const pageEnd = source[LEGACY_LOCATOR_FIELDS.pageEnd];
+    if (pageEnd !== undefined && pageStart === undefined) {
       throw new Error("pageEnd requires pageStart");
     }
     if (
-      typeof source.pageStart === "number" &&
-      typeof source.pageEnd === "number" &&
-      source.pageEnd < source.pageStart
+      typeof pageStart === "number" &&
+      typeof pageEnd === "number" &&
+      pageEnd < pageStart
     ) {
       throw new Error("invalid page range");
     }
-    if (source.section !== undefined) {
+    if (source[LEGACY_LOCATOR_FIELDS.section] !== undefined) {
+      const section = source[LEGACY_LOCATOR_FIELDS.section];
       if (
-        typeof source.section !== "string" ||
-        source.section.length < 1 ||
-        source.section.length > 500
+        typeof section !== "string" ||
+        section.length < LEGACY_LOCATOR_POLICY.sectionLength.minimum ||
+        section.length > LEGACY_LOCATOR_POLICY.sectionLength.maximum
       ) {
         throw new Error("invalid section");
       }
-      canonical.section = source.section;
+      canonical[LEGACY_LOCATOR_FIELDS.section] = section;
     }
-    const hasStartOffset = source.startOffset !== undefined;
-    const hasEndOffset = source.endOffset !== undefined;
+    const startOffset = source[LEGACY_LOCATOR_FIELDS.startOffset];
+    const endOffset = source[LEGACY_LOCATOR_FIELDS.endOffset];
+    const hasStartOffset = startOffset !== undefined;
+    const hasEndOffset = endOffset !== undefined;
     if (hasStartOffset !== hasEndOffset) {
       throw new Error("locator offsets must be paired");
     }
     if (hasStartOffset && hasEndOffset) {
       if (
-        typeof source.startOffset !== "number" ||
-        !Number.isSafeInteger(source.startOffset) ||
-        source.startOffset < 0 ||
-        typeof source.endOffset !== "number" ||
-        !Number.isSafeInteger(source.endOffset) ||
-        source.endOffset < source.startOffset
+        typeof startOffset !== "number" ||
+        !Number.isSafeInteger(startOffset) ||
+        startOffset < LEGACY_LOCATOR_POLICY.offsetMinimum ||
+        typeof endOffset !== "number" ||
+        !Number.isSafeInteger(endOffset) ||
+        endOffset < startOffset
       ) {
         throw new Error("invalid locator offsets");
       }
-      canonical.startOffset = source.startOffset;
-      canonical.endOffset = source.endOffset;
+      canonical[LEGACY_LOCATOR_FIELDS.startOffset] = startOffset;
+      canonical[LEGACY_LOCATOR_FIELDS.endOffset] = endOffset;
     }
     return {
       json: JSON.stringify(canonical),
-      issueCode: hasUnknownFields ? LOCATOR_REVIEW_CODE : null,
+      issueCode: hasUnknownFields
+        ? LEGACY_LOCATOR_POLICY.issueCodes.requiresReview
+        : null,
     };
   } catch {
-    return { json: "{}", issueCode: LOCATOR_REDACTION_CODE };
+    return {
+      json: "{}",
+      issueCode: LEGACY_LOCATOR_POLICY.issueCodes.redacted,
+    };
   }
 }
 
@@ -652,59 +776,52 @@ function applyAssistantRuntime(
   database: WorkspaceDatabaseAdapter,
   capabilities: WorkspaceDatabaseCapabilities,
 ) {
-  if (!capabilities.jsonTextChecks) {
-    throw new Error(
-      "Workspace assistant runtime requires SQLite JSON1 for safe metadata boundaries.",
-    );
+  let stageIndex = 0;
+  const enterStage = (stage: (typeof V5_APPLY_POLICY.stageOrder)[number]) => {
+    if (V5_APPLY_POLICY.stageOrder[stageIndex] !== stage) {
+      throw new Error(V5_APPLY_POLICY.errors.stageOrder);
+    }
+    stageIndex += 1;
+  };
+  if (!capabilities[V5_APPLY_POLICY.requiredCapability]) {
+    throw new Error(V5_APPLY_POLICY.errors.missingCapability);
   }
+  enterStage("select_legacy_locators_in_id_order");
   const legacyLocators = database
-    .prepare("SELECT id,locator_json FROM message_sources ORDER BY id")
+    .prepare(V5_APPLY_POLICY.sql.selectLegacyLocators)
     .all()
     .map((row) => ({
       id: String(row.id),
       locator: canonicalLegacyLocator(row.locator_json),
     }));
+  enterStage("count_legacy_sources");
   const legacySourceCount = Number(
-    database.prepare("SELECT count(*) AS count FROM message_sources").get()
-      ?.count ?? 0,
+    database.prepare(V5_APPLY_POLICY.sql.countSources).get()?.count ?? 0,
   );
+  enterStage("rebuild_message_sources_with_canonical_citation_order");
   database.exec(MESSAGE_SOURCES_V5_SQL);
+  enterStage("assert_postconditions_before_locator_backfill");
   const sourcePostcondition = database
-    .prepare(
-      `SELECT message_id
-         FROM message_sources
-        GROUP BY message_id
-       HAVING min(citation_ordinal) <> 0
-           OR max(citation_ordinal) <> count(*) - 1
-           OR count(DISTINCT citation_ordinal) <> count(*)
-           OR sum(
-                CASE
-                  WHEN json_type(citation_metadata_json, '$.citationNumber') = 'integer'
-                   AND json_extract(citation_metadata_json, '$.citationNumber') = citation_ordinal + 1
-                  THEN 0 ELSE 1
-                END
-              ) <> 0
-        LIMIT 1`,
-    )
+    .prepare(V5_APPLY_POLICY.sql.postcondition)
     .get();
   const migratedSourceCount = Number(
-    database.prepare("SELECT count(*) AS count FROM message_sources").get()
-      ?.count ?? 0,
+    database.prepare(V5_APPLY_POLICY.sql.countSources).get()?.count ?? 0,
   );
   if (migratedSourceCount !== legacySourceCount || sourcePostcondition) {
-    throw new Error(
-      "Workspace assistant citation migration postcondition failed.",
-    );
+    throw new Error(V5_APPLY_POLICY.errors.sourcePostcondition);
   }
-  const updateLocator = database.prepare(
-    "UPDATE message_sources SET locator_json=?,migration_issue_code=? WHERE id=?",
-  );
+  enterStage("backfill_canonicalized_locators_and_issue_codes");
+  const updateLocator = database.prepare(V5_APPLY_POLICY.sql.updateLocator);
   for (const legacy of legacyLocators) {
     updateLocator.run(legacy.locator.json, legacy.locator.issueCode, legacy.id);
   }
+  enterStage("install_assistant_snapshot_schema");
   database.exec(ASSISTANT_SCHEMA_SQL);
+  enterStage("install_json_boundary_triggers");
   database.exec(JSON_BOUNDARY_TRIGGER_SQL);
+  enterStage("install_relationship_triggers");
   database.exec(RELATIONSHIP_TRIGGER_SQL);
+  enterStage("interrupt_legacy_assistant_jobs_without_snapshots");
   database.exec(LEGACY_ASSISTANT_JOB_RECOVERY_SQL);
 }
 
@@ -713,18 +830,19 @@ export const ASSISTANT_RUNTIME_MIGRATION: WorkspaceMigration = {
   name: "assistant_runtime_snapshots_and_citations",
   checksumMaterial: [
     "workspace-migration-v5",
-    "message-source-constraint-correction-with-canonical-locator-migration",
-    LEGACY_LOCATOR_POLICY,
-    LEGACY_CITATION_ORDER_POLICY,
+    JSON.stringify(LEGACY_SOURCE_MIGRATION_POLICY),
+    JSON.stringify(LEGACY_LOCATOR_POLICY),
+    JSON.stringify(V5_APPLY_POLICY),
     MESSAGE_SOURCES_V5_SQL,
     ASSISTANT_SCHEMA_SQL,
     LEGACY_ASSISTANT_JOB_RECOVERY_SQL,
     SOURCE_METADATA_INVALID_SQL,
     JSON_BOUNDARY_TRIGGER_SQL,
     RELATIONSHIP_TRIGGER_SQL,
-    containsSensitiveLegacyValue.toString(),
-    canonicalLegacyLocator.toString(),
-    applyAssistantRuntime.toString(),
+    V5_LEGACY_LOCATOR_SELECT_SQL,
+    V5_SOURCE_COUNT_SQL,
+    V5_SOURCE_POSTCONDITION_SQL,
+    V5_LOCATOR_UPDATE_SQL,
   ].join("\n-- checksum boundary --\n"),
   apply: applyAssistantRuntime,
 };
