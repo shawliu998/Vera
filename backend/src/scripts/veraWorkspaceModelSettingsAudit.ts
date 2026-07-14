@@ -178,6 +178,34 @@ function databaseArtifactPaths(databasePath: string) {
     .map((name) => path.join(directory, name));
 }
 
+function readDatabaseArtifacts(databasePath: string) {
+  return new Map(
+    databaseArtifactPaths(databasePath).map((artifactPath) => [
+      artifactPath,
+      readFileSync(artifactPath),
+    ]),
+  );
+}
+
+function assertDatabaseArtifactsEqual(
+  databasePath: string,
+  expected: ReadonlyMap<string, Buffer>,
+) {
+  const actual = readDatabaseArtifacts(databasePath);
+  assert.deepEqual(
+    [...actual.keys()].sort(),
+    [...expected.keys()].sort(),
+    "database artifact set changed after rejected migration",
+  );
+  for (const [artifactPath, expectedBytes] of expected) {
+    assert.equal(
+      actual.get(artifactPath)?.equals(expectedBytes),
+      true,
+      `database artifact changed after rejected migration: ${artifactPath}`,
+    );
+  }
+}
+
 class AuditCredentialStore implements CredentialStorePort {
   readonly serviceName = "ai.aletheia.workspace-model-profile-credentials";
   readonly accountPrefix = "vera-model-profile-account:";
@@ -1290,6 +1318,252 @@ async function auditV8PlaintextProfileEvidenceEdges() {
     unsafeBaseMarker,
   );
   unchangedBase.close();
+}
+
+function assertUnrecordedV8SchemaMarkersFailClosed(databasePath: string) {
+  const beforeArtifacts = readDatabaseArtifacts(databasePath);
+  assert.throws(
+    () =>
+      new WorkspaceDatabase(databasePath, {
+        migrations: FULL_MIGRATIONS,
+      }),
+    /v8 markers exist without a recorded v8 migration/,
+  );
+  assertDatabaseArtifactsEqual(databasePath, beforeArtifacts);
+  const inspection = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    assert.equal(
+      inspection
+        .prepare(
+          "SELECT max(version) AS version FROM workspace_schema_migrations",
+        )
+        .get()?.version,
+      7,
+    );
+  } finally {
+    inspection.close();
+  }
+}
+
+async function auditV8UnrecordedSchemaMarkersFailClosed() {
+  const v8ColumnNames = [
+    "credential_origin",
+    "credential_state",
+    "migration_issue_code",
+    "execution_revision",
+  ] as const;
+  const weakColumnCases = [
+    ["credential_origin", "TEXT", "00000000-0000-4000-8000-00000000018a"],
+    ["credential_state", "TEXT", "00000000-0000-4000-8000-00000000018b"],
+    ["migration_issue_code", "TEXT", "00000000-0000-4000-8000-00000000018c"],
+    ["execution_revision", "INTEGER", "00000000-0000-4000-8000-00000000018d"],
+  ] as const;
+  for (const [columnName, columnType, profileId] of weakColumnCases) {
+    const weakColumnPath = path.join(
+      root,
+      `migration-v8-unrecorded-weak-${columnName}.db`,
+    );
+    const weakColumn = new WorkspaceDatabase(weakColumnPath, {
+      migrations: PRE_V8_MIGRATIONS,
+    });
+    weakColumn
+      .prepare(
+        `INSERT INTO model_profiles
+          (id, name, provider, model, base_url, credential_ref,
+           credential_status, is_default, enabled)
+         VALUES (?, ?, 'openai', ?, NULL, NULL, 'not_configured', 0, 0)`,
+      )
+      .run(profileId, `Weak ${columnName}`, `gpt-weak-${columnName}`);
+    weakColumn.exec(
+      `ALTER TABLE model_profiles ADD COLUMN ${columnName} ${columnType}`,
+    );
+    weakColumn.close();
+    assertUnrecordedV8SchemaMarkersFailClosed(weakColumnPath);
+    const weakColumnInspection = new DatabaseSync(weakColumnPath, {
+      readOnly: true,
+    });
+    try {
+      const columns = weakColumnInspection
+        .prepare('PRAGMA table_info("model_profiles")')
+        .all() as Array<Record<string, unknown>>;
+      assert.deepEqual(
+        columns
+          .filter((column) =>
+            v8ColumnNames.includes(
+              String(column.name) as (typeof v8ColumnNames)[number],
+            ),
+          )
+          .map((column) => ({
+            name: String(column.name),
+            notNull: Number(column.notnull),
+          })),
+        [{ name: columnName, notNull: 0 }],
+      );
+      assert.equal(
+        weakColumnInspection
+          .prepare(
+            `SELECT ${columnName} AS marker_value FROM model_profiles WHERE id = ?`,
+          )
+          .get(profileId)?.marker_value,
+        null,
+      );
+    } finally {
+      weakColumnInspection.close();
+    }
+  }
+
+  const weakLedgerPath = path.join(
+    root,
+    "migration-v8-unrecorded-weak-ledger.db",
+  );
+  const weakLedger = new WorkspaceDatabase(weakLedgerPath, {
+    migrations: PRE_V8_MIGRATIONS,
+  });
+  weakLedger.exec(`
+    CREATE TABLE model_profile_credential_orphan_cleanups (
+      reference TEXT PRIMARY KEY,
+      profile_id TEXT,
+      provider TEXT,
+      canonical_origin TEXT,
+      reason TEXT,
+      attempt_count INTEGER,
+      last_error TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+    CREATE INDEX idx_model_profile_credential_orphan_cleanups_updated
+      ON model_profile_credential_orphan_cleanups(updated_at, reference);
+  `);
+  weakLedger.close();
+  assertUnrecordedV8SchemaMarkersFailClosed(weakLedgerPath);
+  const weakLedgerInspection = new DatabaseSync(weakLedgerPath, {
+    readOnly: true,
+  });
+  try {
+    const ledgerSql = String(
+      weakLedgerInspection
+        .prepare(
+          `SELECT sql FROM sqlite_schema
+            WHERE type = 'table'
+              AND name = 'model_profile_credential_orphan_cleanups'`,
+        )
+        .get()?.sql,
+    );
+    assert.equal(ledgerSql.includes("attempt_count >= 0"), false);
+    assert.ok(
+      weakLedgerInspection
+        .prepare(
+          `SELECT 1 FROM sqlite_schema
+            WHERE type = 'index'
+              AND name = 'idx_model_profile_credential_orphan_cleanups_updated'`,
+        )
+        .get(),
+    );
+  } finally {
+    weakLedgerInspection.close();
+  }
+
+  const indexOnlyPath = path.join(
+    root,
+    "migration-v8-unrecorded-index-only.db",
+  );
+  const indexOnly = new WorkspaceDatabase(indexOnlyPath, {
+    migrations: PRE_V8_MIGRATIONS,
+  });
+  indexOnly.exec(`
+    CREATE TABLE v8_orphan_index_name_collision (
+      updated_at TEXT,
+      reference TEXT
+    );
+    CREATE INDEX idx_model_profile_credential_orphan_cleanups_updated
+      ON v8_orphan_index_name_collision(updated_at, reference);
+  `);
+  indexOnly.close();
+  assertUnrecordedV8SchemaMarkersFailClosed(indexOnlyPath);
+  const indexOnlyInspection = new DatabaseSync(indexOnlyPath, {
+    readOnly: true,
+  });
+  try {
+    assert.equal(
+      indexOnlyInspection
+        .prepare(
+          `SELECT 1 FROM sqlite_schema
+            WHERE type = 'table'
+              AND name = 'model_profile_credential_orphan_cleanups'`,
+        )
+        .get(),
+      undefined,
+    );
+    assert.ok(
+      indexOnlyInspection
+        .prepare(
+          `SELECT 1 FROM sqlite_schema
+            WHERE type = 'index'
+              AND name = 'idx_model_profile_credential_orphan_cleanups_updated'`,
+        )
+        .get(),
+    );
+  } finally {
+    indexOnlyInspection.close();
+  }
+
+  const completeSchemaPath = path.join(
+    root,
+    "migration-v8-unrecorded-complete-schema.db",
+  );
+  const completeSchema = new WorkspaceDatabase(completeSchemaPath, {
+    migrations: FULL_MIGRATIONS,
+  });
+  completeSchema
+    .prepare("DELETE FROM workspace_schema_migrations WHERE version = 8")
+    .run();
+  completeSchema.close();
+  assertUnrecordedV8SchemaMarkersFailClosed(completeSchemaPath);
+  const completeSchemaInspection = new DatabaseSync(completeSchemaPath, {
+    readOnly: true,
+  });
+  try {
+    assert.deepEqual(
+      completeSchemaInspection
+        .prepare('PRAGMA table_info("model_profiles")')
+        .all()
+        .map((column) => String(column.name))
+        .filter((name) =>
+          [
+            "credential_origin",
+            "credential_state",
+            "migration_issue_code",
+            "execution_revision",
+          ].includes(name),
+        ),
+      [
+        "credential_origin",
+        "credential_state",
+        "migration_issue_code",
+        "execution_revision",
+      ],
+    );
+    assert.ok(
+      completeSchemaInspection
+        .prepare(
+          `SELECT 1 FROM sqlite_schema
+            WHERE type = 'table'
+              AND name = 'model_profile_credential_orphan_cleanups'`,
+        )
+        .get(),
+    );
+    assert.ok(
+      completeSchemaInspection
+        .prepare(
+          `SELECT 1 FROM sqlite_schema
+            WHERE type = 'index'
+              AND name = 'idx_model_profile_credential_orphan_cleanups_updated'`,
+        )
+        .get(),
+    );
+  } finally {
+    completeSchemaInspection.close();
+  }
 }
 
 async function auditV8PlaintextRuntimeTextEvidenceGate() {
@@ -3109,6 +3383,7 @@ async function auditV8ChecksumStrategyBinding() {
     '"forcedDormantProfiles":"all profiles"',
     '"credentialImpactedProfiles":"legacy credential evidence only"',
     '"assert_encrypted_destructive_rewrite_preflight"',
+    '"assert_no_unrecorded_v8_schema_markers"',
     '"ensure_structural_schema"',
     '"queue_legacy_credential_orphan_cleanup"',
     '"assert_postconditions"',
@@ -3132,6 +3407,12 @@ async function auditV8ChecksumStrategyBinding() {
     "capability must exactly match immediate trusted same-connection re-attestation",
     "inconsistent SQLCipher connection capability",
     "npm run migrate:aletheia:sqlcipher --prefix backend",
+    "v8 markers exist without a recorded v8 migration",
+    '"modelProfileColumns":["credential_origin","credential_state","migration_issue_code","execution_revision"]',
+    '"orphanLedgerTable":"model_profile_credential_orphan_cleanups"',
+    '"orphanLedgerIndex":"idx_model_profile_credential_orphan_cleanups_updated"',
+    "any marker present without a recorded v8 migration fails before the first v8 DDL or DML statement",
+    '"repair":"fail_closed_no_silent_schema_repair"',
     "job.result_json IS NOT NULL",
     "job.error_json IS NOT NULL",
     "job.lease_owner IS NOT NULL",
@@ -3249,6 +3530,19 @@ async function auditV8ChecksumStrategyBinding() {
     ),
   });
   assert.notEqual(skippedGateMutation, checksum);
+
+  const schemaMarkerStage = '"assert_no_unrecorded_v8_schema_markers"';
+  const schemaMarkerStageCount =
+    checksumMaterial.split(schemaMarkerStage).length - 1;
+  assert.ok(schemaMarkerStageCount >= 2);
+  const skippedSchemaMarkerMutation = workspaceMigrationChecksum({
+    ...MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION,
+    checksumMaterial: checksumMaterial.replaceAll(
+      schemaMarkerStage,
+      '"skip_unrecorded_v8_schema_marker_check"',
+    ),
+  });
+  assert.notEqual(skippedSchemaMarkerMutation, checksum);
 
   const rawPragmaPolicy = '"rawPragmaResultAloneTrusted":false';
   const rawPragmaPolicyCount =
@@ -3595,6 +3889,7 @@ async function main() {
     await auditTrustedSqlcipherConnectionCapability();
     await auditV8PlaintextSafeStateOnlyMigration();
     await auditV8PlaintextProfileEvidenceEdges();
+    await auditV8UnrecordedSchemaMarkersFailClosed();
     await auditV8PlaintextRuntimeTextEvidenceGate();
     await auditV8PhysicalCredentialEncryptionGate();
     await auditMigrationBackfill();

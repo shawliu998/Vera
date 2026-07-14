@@ -36,6 +36,28 @@ const ORPHAN_REASON_CHECK = `reason IN (
 const SQLITE_HAS_TABLE_SQL = `SELECT 1 AS present
            FROM sqlite_schema
           WHERE type = 'table' AND name = ?`;
+const SQLITE_HAS_INDEX_SQL = `SELECT 1 AS present
+           FROM sqlite_schema
+          WHERE type = 'index' AND name = ?`;
+const V8_MODEL_PROFILE_COLUMNS = [
+  "credential_origin",
+  "credential_state",
+  "migration_issue_code",
+  "execution_revision",
+] as const;
+const V8_ORPHAN_LEDGER_TABLE = "model_profile_credential_orphan_cleanups";
+const V8_ORPHAN_LEDGER_INDEX =
+  "idx_model_profile_credential_orphan_cleanups_updated";
+const V8_UNRECORDED_SCHEMA_MARKER_ERROR =
+  "Workspace schema v8 markers exist without a recorded v8 migration; restore from backup or rebuild the model credential v8 migration atomically.";
+const V8_UNRECORDED_SCHEMA_MARKER_POLICY = JSON.stringify({
+  modelProfileColumns: V8_MODEL_PROFILE_COLUMNS,
+  orphanLedgerTable: V8_ORPHAN_LEDGER_TABLE,
+  orphanLedgerIndex: V8_ORPHAN_LEDGER_INDEX,
+  decision:
+    "any marker present without a recorded v8 migration fails before the first v8 DDL or DML statement",
+  repair: "fail_closed_no_silent_schema_repair",
+});
 const LEGACY_REFERENCE_PATTERN_SOURCE =
   "^keychain:\\/\\/vera\\/model-profile\\/([0-9a-f-]{36})(?:\\/([a-z0-9]{16,128}))?$";
 const LEGACY_REFERENCE_PATTERN_FLAGS = "i";
@@ -293,7 +315,7 @@ const V8_MODEL_PROFILE_COLUMN_PLAN = JSON.stringify({
   ],
 });
 const V8_ORPHAN_LEDGER_SQL = `
-CREATE TABLE IF NOT EXISTS model_profile_credential_orphan_cleanups (
+CREATE TABLE IF NOT EXISTS ${V8_ORPHAN_LEDGER_TABLE} (
   reference TEXT PRIMARY KEY,
   profile_id TEXT,
   provider TEXT
@@ -308,10 +330,10 @@ CREATE TABLE IF NOT EXISTS model_profile_credential_orphan_cleanups (
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_model_profile_credential_orphan_cleanups_updated
-  ON model_profile_credential_orphan_cleanups(updated_at, reference);
+CREATE INDEX IF NOT EXISTS ${V8_ORPHAN_LEDGER_INDEX}
+  ON ${V8_ORPHAN_LEDGER_TABLE}(updated_at, reference);
 `;
-const V8_ORPHAN_LEDGER_UPSERT_SQL = `INSERT INTO model_profile_credential_orphan_cleanups
+const V8_ORPHAN_LEDGER_UPSERT_SQL = `INSERT INTO ${V8_ORPHAN_LEDGER_TABLE}
          (reference, profile_id, provider, canonical_origin, reason, attempt_count,
           last_error, created_at, updated_at)
        VALUES (?, ?, ?, NULL, ?, 0, NULL,
@@ -561,9 +583,11 @@ const V8_APPLY_POLICY = {
     postcondition: "Workspace model credential migration postcondition failed.",
     plaintextDestructiveRewrite: V8_PLAINTEXT_DESTRUCTIVE_REWRITE_ERROR,
     sqlcipherCapabilityMismatch: V8_SQLCIPHER_CAPABILITY_MISMATCH_ERROR,
+    unrecordedSchemaMarkers: V8_UNRECORDED_SCHEMA_MARKER_ERROR,
   },
   stageOrder: [
     "assert_encrypted_destructive_rewrite_preflight",
+    "assert_no_unrecorded_v8_schema_markers",
     "ensure_structural_schema",
     "select_profiles_in_id_order",
     "materialize_impacted_assistant_work",
@@ -584,6 +608,7 @@ const V8_APPLY_POLICY = {
     "assert_postconditions",
   ],
   destructiveRewrite: JSON.parse(V8_DESTRUCTIVE_REWRITE_POLICY),
+  unrecordedSchemaMarkers: JSON.parse(V8_UNRECORDED_SCHEMA_MARKER_POLICY),
   legacyCredentialEvidence: JSON.parse(V8_LEGACY_CREDENTIAL_EVIDENCE_POLICY),
   postconditions: {
     profilesSql: V8_PROFILE_POSTCONDITION_SQL,
@@ -661,6 +686,10 @@ function hasTable(database: WorkspaceDatabaseAdapter, name: string) {
   return Boolean(database.prepare(SQLITE_HAS_TABLE_SQL).get(name));
 }
 
+function hasIndex(database: WorkspaceDatabaseAdapter, name: string) {
+  return Boolean(database.prepare(SQLITE_HAS_INDEX_SQL).get(name));
+}
+
 function hasDestructiveRewriteEvidence(database: WorkspaceDatabaseAdapter) {
   const row = database.prepare(V8_DESTRUCTIVE_REWRITE_EVIDENCE_SQL).get();
   if (Number(row?.destructive_evidence ?? 0) === 1) return true;
@@ -699,6 +728,23 @@ function hasColumn(
     .prepare(`PRAGMA table_info("${table}")`)
     .all()
     .some((row) => String(row.name) === column);
+}
+
+function assertNoUnrecordedV8SchemaMarkers(database: WorkspaceDatabaseAdapter) {
+  const markers = V8_MODEL_PROFILE_COLUMNS.filter((column) =>
+    hasColumn(database, "model_profiles", column),
+  ).map((column) => `model_profiles.${column}`);
+  if (hasTable(database, V8_ORPHAN_LEDGER_TABLE)) {
+    markers.push(`table:${V8_ORPHAN_LEDGER_TABLE}`);
+  }
+  if (hasIndex(database, V8_ORPHAN_LEDGER_INDEX)) {
+    markers.push(`index:${V8_ORPHAN_LEDGER_INDEX}`);
+  }
+  if (markers.length > 0) {
+    throw new WorkspaceMigrationError(
+      `${V8_UNRECORDED_SCHEMA_MARKER_ERROR} Found: ${markers.join(", ")}.`,
+    );
+  }
 }
 
 function normalizedHost(hostname: string) {
@@ -1080,6 +1126,9 @@ function applyModelCredentialOriginV8(
     );
   }
 
+  enterStage("assert_no_unrecorded_v8_schema_markers");
+  assertNoUnrecordedV8SchemaMarkers(database);
+
   enterStage("ensure_structural_schema");
   ensureModelProfileColumns(database);
   ensureOrphanCleanupLedger(database);
@@ -1181,6 +1230,9 @@ export const MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION: WorkspaceMigration = {
     MIGRATION_ISSUE_CHECK,
     ORPHAN_REASON_CHECK,
     SQLITE_HAS_TABLE_SQL,
+    SQLITE_HAS_INDEX_SQL,
+    V8_UNRECORDED_SCHEMA_MARKER_ERROR,
+    V8_UNRECORDED_SCHEMA_MARKER_POLICY,
     LEGACY_REFERENCE_PATTERN_SOURCE,
     LEGACY_REFERENCE_PATTERN_FLAGS,
     String(SAFE_BASE_URL_MAX_LENGTH),
