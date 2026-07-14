@@ -14,11 +14,7 @@ import type {
   WorkspaceV1RuntimePort,
 } from "../../routes/workspaceV1";
 import { LocalWorkspaceBlobStore } from "./localWorkspaceBlobStore";
-import {
-  WorkspaceDatabase,
-  WORKSPACE_MIGRATIONS,
-  runWorkspaceMigrations,
-} from "./database";
+import { WorkspaceDatabase } from "./database";
 import { InMemoryDownloadCapabilityStore } from "./downloadCapabilities";
 import { WorkspaceApiError } from "./errors";
 import { WorkspaceJobPump } from "./jobs/pump";
@@ -335,7 +331,7 @@ export class WorkspaceRuntime implements WorkspaceV1RuntimePort {
       );
     this.startMigrations = () => {
       if (dependencies.runMigrations) dependencies.runMigrations(this.database);
-      else runWorkspaceMigrations(this.database, WORKSPACE_MIGRATIONS);
+      else this.database.runMigrations();
     };
     this.startupRecovery =
       dependencies.startupRecovery ??

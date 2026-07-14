@@ -44,14 +44,17 @@ export class WorkspaceDatabase {
       this.migration =
         options.migrate === false || options.readOnly
           ? null
-          : runWorkspaceMigrations(
-              this.database,
-              options.migrations ?? WORKSPACE_MIGRATIONS,
-            );
+          : this.runMigrations(options.migrations ?? WORKSPACE_MIGRATIONS);
     } catch (error) {
       this.database.close();
       throw error;
     }
+  }
+
+  runMigrations(
+    migrations: readonly WorkspaceMigration[] = WORKSPACE_MIGRATIONS,
+  ) {
+    return runWorkspaceMigrations(this.database, migrations);
   }
 
   exec(sql: string) {

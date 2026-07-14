@@ -1210,6 +1210,38 @@ try {
     "SQLite format 3\0",
   );
 
+  const encryptedManualPath = path.join(root, "workspace-encrypted-manual.db");
+  const encryptedManualDatabase = new WorkspaceDatabase(encryptedManualPath, {
+    migrate: false,
+  });
+  let encryptedManualRun: ReturnType<WorkspaceDatabase["runMigrations"]>;
+  try {
+    assert.equal(
+      encryptedManualDatabase.migration,
+      null,
+      "migrate:false defers schema work until the trusted database entrypoint is called",
+    );
+    encryptedManualRun = encryptedManualDatabase.runMigrations();
+    assert.equal(
+      encryptedManualRun.capabilities.sqlcipherEncrypted,
+      true,
+      "the wrapper-owned migration entrypoint preserves exact SQLCipher attestation",
+    );
+    assert.equal(encryptedManualRun.currentVersion, 6);
+    assert.equal(
+      encryptedManualDatabase
+        .prepare("SELECT count(*) AS count FROM workspace_schema_migrations")
+        .get()?.count,
+      6,
+    );
+  } finally {
+    encryptedManualDatabase.close();
+  }
+  assert.notEqual(
+    readFileSync(encryptedManualPath).subarray(0, 16).toString("utf8"),
+    "SQLite format 3\0",
+  );
+
   console.log(
     JSON.stringify(
       {

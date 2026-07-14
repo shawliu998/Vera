@@ -410,6 +410,16 @@ async function run() {
   );
   assert.match(
     runtimeSource,
+    /else this\.database\.runMigrations\(\);/,
+    "the default startup path reruns migrations through the trusted WorkspaceDatabase entrypoint",
+  );
+  assert.doesNotMatch(
+    runtimeSource,
+    /runWorkspaceMigrations\(this\.database,\s*WORKSPACE_MIGRATIONS\)/,
+    "runtime must not pass the outer WorkspaceDatabase wrapper directly to the raw migration runner",
+  );
+  assert.match(
+    runtimeSource,
     /this\.startupRecovery\.recover\(\);[\s\S]*?await this\.pump\.start\(\);/,
     "recovery completes before workers start",
   );
