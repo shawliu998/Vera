@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import JSZip from "jszip";
+import { searchSafeFtsQuery } from "../searchSafeFtsQuery";
 import { LocalDatabase } from "./localDatabase";
 import { DurableAgentQueue } from "./durableAgentExecutor";
 import {
@@ -634,15 +635,6 @@ function quotePreview(text: unknown) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 360);
-}
-
-function safeFtsQuery(value: string) {
-  const tokens = value.match(/[\p{L}\p{N}]+/gu) ?? [];
-  if (tokens.length === 0) return null;
-  return tokens
-    .slice(0, 12)
-    .map((token) => `"${token.replace(/"/g, '""')}"`)
-    .join(" AND ");
 }
 
 function boundedSearchSnippet(value: unknown, query: string, max = 240) {
@@ -1760,7 +1752,7 @@ export class LocalAletheiaRepository implements AletheiaRepository {
       });
     }
 
-    const ftsQuery = safeFtsQuery(query);
+    const ftsQuery = searchSafeFtsQuery(query);
     if (ftsQuery) {
       const chunkRows = this.db
         .prepare(
@@ -7605,7 +7597,7 @@ export class LocalAletheiaRepository implements AletheiaRepository {
     const matter = this.loadOwnedMatter(ctx, matterId);
     if (!matter) return null;
     const focus = input.focus.trim().slice(0, 500);
-    const ftsQuery = safeFtsQuery(focus);
+    const ftsQuery = searchSafeFtsQuery(focus);
     if (!focus || !ftsQuery) {
       throw new LitigationValidationError(
         "Litigation retrieval diagnostics require a searchable focus.",
@@ -9881,7 +9873,7 @@ export class LocalAletheiaRepository implements AletheiaRepository {
   }
 
   private searchKeywordRows(matterId: string, query: string, limit: number) {
-    const ftsQuery = safeFtsQuery(query);
+    const ftsQuery = searchSafeFtsQuery(query);
     if (!ftsQuery) return [];
     return this.db
       .prepare(
