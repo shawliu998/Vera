@@ -59,6 +59,11 @@ const RELATIONS = {
     columns: ["review_id", "document_id"],
     introducedIn: 2,
   },
+  tabularReviews: {
+    table: "tabular_reviews",
+    columns: ["id", "status"],
+    introducedIn: 1,
+  },
   tabularCells: {
     table: "tabular_cells",
     columns: ["document_id"],
@@ -189,6 +194,7 @@ function inspectDeletionSchema(
     version,
     RELATIONS.tabularReviewDocuments,
   );
+  inspectRelation(database, version, RELATIONS.tabularReviews);
   const hasTabularCells = inspectRelation(
     database,
     version,
@@ -325,8 +331,11 @@ export function assertNoDurableDocumentHistory(
     references.push(
       `SELECT 'tabular_review_document' AS reference_kind
          WHERE EXISTS (
-           SELECT 1 FROM tabular_review_documents review_document
+           SELECT 1
+             FROM tabular_review_documents review_document
+             JOIN tabular_reviews review ON review.id = review_document.review_id
             WHERE review_document.document_id IN (SELECT id FROM target_documents)
+              AND review.status IN ('complete', 'failed', 'archived')
          )`,
     );
   }
@@ -336,6 +345,7 @@ export function assertNoDurableDocumentHistory(
          WHERE EXISTS (
            SELECT 1 FROM tabular_cells cell
             WHERE cell.document_id IN (SELECT id FROM target_documents)
+              AND cell.status IN ('complete', 'failed')
          )`,
     );
   }

@@ -506,6 +506,43 @@ function run() {
       );
     assertHistoryBlocksBoth(database, blobs, documents, projects, review);
 
+    const failedReview = createScenario(
+      database,
+      projectsRepository,
+      records,
+      blobs,
+      "Failed tabular review",
+    );
+    const failedReviewId = randomUUID();
+    database
+      .prepare(
+        `INSERT INTO tabular_reviews
+          (id, project_id, title, status, document_ids_json,
+           columns_config_json, created_at, updated_at)
+         VALUES (?, ?, 'Failed review', 'failed', ?, '[]', ?, ?)`,
+      )
+      .run(
+        failedReviewId,
+        failedReview.projectId,
+        JSON.stringify([failedReview.documentId]),
+        NOW,
+        NOW,
+      );
+    database
+      .prepare(
+        `INSERT INTO tabular_review_documents
+          (review_id, document_id, ordinal, created_at)
+         VALUES (?, ?, 0, ?)`,
+      )
+      .run(failedReviewId, failedReview.documentId, NOW);
+    assertHistoryBlocksBoth(
+      database,
+      blobs,
+      documents,
+      projects,
+      failedReview,
+    );
+
     const tabularSource = createScenario(
       database,
       projectsRepository,
