@@ -3,6 +3,7 @@ declare module "*.css";
 interface AletheiaDesktopInfo {
   appVersion: string;
   backendUrl: string;
+  workspaceApiUrl: string;
   frontendUrl: string;
   dataDir: string;
   logsDir: string;

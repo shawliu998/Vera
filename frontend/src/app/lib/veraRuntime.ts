@@ -3,12 +3,10 @@ const DEFAULT_VERA_API_BASE = `http://127.0.0.1:3001${VERA_API_PATH}`;
 const CONFIGURED_VERA_API_BASE =
   process.env.NEXT_PUBLIC_VERA_API_BASE_URL ?? DEFAULT_VERA_API_BASE;
 
-interface VeraDesktopBridge {
-  getInfo(): Promise<{ workspaceApiUrl: string }>;
-  getAuthToken(): Promise<string>;
-}
-
-type VeraWindow = Window & { veraDesktop?: unknown };
+type VeraDesktopBridge = Pick<
+  NonNullable<Window["aletheiaDesktop"]>,
+  "getInfo" | "getAuthToken"
+>;
 
 export type VeraQueryValue =
   | string
@@ -30,12 +28,9 @@ export class VeraRuntimeConfigurationError extends Error {
 let desktopApiBasePromise: Promise<string> | null = null;
 let desktopAuthTokenPromise: Promise<string> | null = null;
 
-function currentWindow(): VeraWindow | null {
-  return typeof window === "undefined" ? null : (window as VeraWindow);
-}
-
 function desktopBridge(): VeraDesktopBridge | null {
-  const candidate = currentWindow()?.veraDesktop;
+  const candidate =
+    typeof window === "undefined" ? undefined : window.aletheiaDesktop;
   if (candidate === undefined) return null;
   if (
     typeof candidate !== "object" ||
@@ -62,7 +57,11 @@ function isLoopbackHostname(hostname: string): boolean {
 }
 
 export function normalizeVeraApiBase(value: string): string {
-  if (typeof value !== "string" || value.trim() !== value || value.length > 2048) {
+  if (
+    typeof value !== "string" ||
+    value.trim() !== value ||
+    value.length > 2048
+  ) {
     throw new VeraRuntimeConfigurationError("The Vera API base is invalid.");
   }
 
@@ -99,20 +98,18 @@ export async function getVeraApiBase(): Promise<string> {
   const bridge = desktopBridge();
   if (!bridge) return getConfiguredVeraApiBase();
 
-  desktopApiBasePromise ??= bridge
-    .getInfo()
-    .then((info) => {
-      if (
-        !info ||
-        typeof info !== "object" ||
-        typeof info.workspaceApiUrl !== "string"
-      ) {
-        throw new VeraRuntimeConfigurationError(
-          "The Vera desktop runtime information is invalid.",
-        );
-      }
-      return normalizeVeraApiBase(info.workspaceApiUrl);
-    });
+  desktopApiBasePromise ??= bridge.getInfo().then((info) => {
+    if (
+      !info ||
+      typeof info !== "object" ||
+      typeof info.workspaceApiUrl !== "string"
+    ) {
+      throw new VeraRuntimeConfigurationError(
+        "The Vera desktop runtime information is invalid.",
+      );
+    }
+    return normalizeVeraApiBase(info.workspaceApiUrl);
+  });
   const pending = desktopApiBasePromise;
   try {
     return await pending;

@@ -327,7 +327,7 @@ test("document mutations use scoped multipart routes and accept only safe local 
     configurable: true,
     writable: true,
     value: {
-      veraDesktop: {
+      aletheiaDesktop: {
         async getInfo() {
           return { workspaceApiUrl: "http://127.0.0.1:43123/api/v1" };
         },

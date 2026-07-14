@@ -35,7 +35,7 @@ const otherId = "22222222-2222-4222-8222-222222222222";
 const validToken = "vdt_1234567890abcdefghijklmnopqrstuvwxyz";
 
 type TestWindow = {
-  veraDesktop?: {
+  aletheiaDesktop?: {
     getInfo(): Promise<{ workspaceApiUrl: string }>;
     getAuthToken(): Promise<string>;
   };
@@ -93,11 +93,14 @@ test("Vera runtime accepts only the canonical loopback API boundary", async () =
     "http://127.0.0.1:43123/api/v1?token=secret",
     "http://127.0.0.1:43123/api/v1#fragment",
   ]) {
-    assert.throws(() => normalizeVeraApiBase(unsafe), VeraRuntimeConfigurationError);
+    assert.throws(
+      () => normalizeVeraApiBase(unsafe),
+      VeraRuntimeConfigurationError,
+    );
   }
 
   const restoreWindow = setTestWindow({
-    veraDesktop: {
+    aletheiaDesktop: {
       async getInfo() {
         return { workspaceApiUrl: "https://attacker.example/api/v1" };
       },
@@ -152,7 +155,7 @@ test("desktop bearer stays in memory, is cached, and cannot be overridden", asyn
   let tokenCalls = 0;
   let infoCalls = 0;
   const restoreShortWindow = setTestWindow({
-    veraDesktop: {
+    aletheiaDesktop: {
       async getInfo() {
         return { workspaceApiUrl: "http://127.0.0.1:43123/api/v1" };
       },
@@ -172,7 +175,7 @@ test("desktop bearer stays in memory, is cached, and cannot be overridden", asyn
   }
 
   const restoreWhitespaceWindow = setTestWindow({
-    veraDesktop: {
+    aletheiaDesktop: {
       async getInfo() {
         return { workspaceApiUrl: "http://127.0.0.1:43123/api/v1" };
       },
@@ -192,7 +195,7 @@ test("desktop bearer stays in memory, is cached, and cannot be overridden", asyn
   }
 
   const restoreWindow = setTestWindow({
-    veraDesktop: {
+    aletheiaDesktop: {
       async getInfo() {
         infoCalls += 1;
         return { workspaceApiUrl: "http://127.0.0.1:43123/api/v1" };
@@ -235,7 +238,10 @@ test("desktop bearer stays in memory, is cached, and cannot be overridden", asyn
       }),
       { ok: true },
     );
-    assert.equal(await veraApiRequest<void>("/void", { method: "POST" }), undefined);
+    assert.equal(
+      await veraApiRequest<void>("/void", { method: "POST" }),
+      undefined,
+    );
     const downloaded = await downloadVeraCapability({
       url: "/api/v1/downloads/1234567890abcdef",
       document_id: id,
@@ -252,7 +258,11 @@ test("desktop bearer stays in memory, is cached, and cannot be overridden", asyn
     for (const call of calls) {
       const headers = new Headers(call.init?.headers);
       assert.equal(headers.get("authorization"), `Bearer ${validToken}`);
-      assert.equal(call.url.includes(validToken), false, "token never enters a URL");
+      assert.equal(
+        call.url.includes(validToken),
+        false,
+        "token never enters a URL",
+      );
       assert.equal(call.init?.cache, "no-store");
       assert.equal(call.init?.credentials, "omit");
       assert.equal(call.init?.redirect, "error");
@@ -260,7 +270,10 @@ test("desktop bearer stays in memory, is cached, and cannot be overridden", asyn
     }
     assert.equal(calls[0].url, "http://127.0.0.1:43123/api/v1/projects");
     assert.equal(calls[0].init?.signal, abortController.signal);
-    assert.equal(calls[0].init?.body, JSON.stringify({ name: "Local project" }));
+    assert.equal(
+      calls[0].init?.body,
+      JSON.stringify({ name: "Local project" }),
+    );
     assert.equal(
       calls[2].url,
       "http://127.0.0.1:43123/api/v1/downloads/1234567890abcdef",
@@ -382,20 +395,17 @@ test("typed document APIs follow the project/catalog routes and binary display c
     assert.equal(calls[0].url.searchParams.get("folder_id"), otherId);
     assert.equal(calls[0].url.searchParams.get("status"), "ready");
     assert.equal(calls[0].url.searchParams.get("limit"), "25");
-    assert.equal(
-      calls[1].url.pathname,
-      `/api/v1/projects/${id}/documents`,
-    );
+    assert.equal(calls[1].url.pathname, `/api/v1/projects/${id}/documents`);
     assert.equal(calls[1].url.searchParams.get("limit"), "10");
     assert.equal(calls[2].init?.method, "POST");
     assert.equal(calls[3].init?.method, "PATCH");
-    assert.equal(calls[3].init?.body, JSON.stringify({ filename: "renamed.pdf" }));
+    assert.equal(
+      calls[3].init?.body,
+      JSON.stringify({ filename: "renamed.pdf" }),
+    );
     assert.equal(calls[4].init?.method, "PATCH");
     assert.equal(calls[4].init?.body, JSON.stringify({ folder_id: null }));
-    assert.equal(
-      calls[5].url.pathname,
-      `/api/v1/documents/${otherId}/display`,
-    );
+    assert.equal(calls[5].url.pathname, `/api/v1/documents/${otherId}/display`);
     assert.equal(calls[5].url.searchParams.get("version_id"), id);
     assert.equal(
       new Headers(calls[5].init?.headers).get("accept"),
@@ -449,7 +459,9 @@ test("locked Mike SSE is UTF-8 chunk-safe and validates every exact event", asyn
     events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") +
     "data: [DONE]\n\n";
   const encoded = new TextEncoder().encode(body);
-  const emojiStart = new TextEncoder().encode(body.slice(0, body.indexOf("🧭"))).length;
+  const emojiStart = new TextEncoder().encode(
+    body.slice(0, body.indexOf("🧭")),
+  ).length;
   const parsed = await collect(
     parseVeraSseStream(
       utf8Stream([
@@ -522,7 +534,7 @@ test("SSE fails closed on legacy, malformed, unterminated, and post-DONE data", 
     'data: {"type":"content_delta","text":"missing done"}\n\n',
     "event: content\ndata: {}\n\ndata: [DONE]\n\n",
     "data: not-json\n\ndata: [DONE]\n\n",
-    "data: [DONE]\n\ndata: {\"type\":\"content_done\"}\n\n",
+    'data: [DONE]\n\ndata: {"type":"content_done"}\n\n',
     "data:[DONE]\n\n",
   ]) {
     await assert.rejects(

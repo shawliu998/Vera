@@ -1949,6 +1949,7 @@ function registerIpc() {
     return {
       appVersion: app.getVersion(),
       backendUrl: BACKEND_URL,
+      workspaceApiUrl: `${BACKEND_URL.replace(/\/$/, "")}/api/v1`,
       frontendUrl: FRONTEND_URL,
       dataDir: localDataDir(),
       logsDir: app.getPath("logs"),
