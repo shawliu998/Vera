@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,16 +13,186 @@ import type {
 } from "../lib/workspace/blobStore";
 import { WorkspaceDatabase } from "../lib/workspace/database";
 import { WorkspaceApiError } from "../lib/workspace/errors";
-import { WORKSPACE_MIGRATIONS } from "../lib/workspace/migrations";
+import {
+  WORKSPACE_MIGRATIONS,
+  type WorkspaceMigration,
+} from "../lib/workspace/migrations";
+import { ASSISTANT_RUNTIME_MIGRATION } from "../lib/workspace/migrations/v5AssistantRuntime";
+import { WORKFLOW_RUNTIME_V6_MIGRATION } from "../lib/workspace/migrations/v6WorkflowRuntime";
+import { TABULAR_MIKE_SEMANTICS_V7_MIGRATION } from "../lib/workspace/migrations/v7TabularMikeSemantics";
+import { MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION } from "../lib/workspace/migrations/v8ModelCredentialOrigin";
 import { WorkspaceBlobRecordsRepository } from "../lib/workspace/repositories/blobRecords";
 import { WorkspaceDocumentsRepository } from "../lib/workspace/repositories/documents";
 import { ProjectsRepository } from "../lib/workspace/repositories/projects";
 import { WorkspaceDocumentsService } from "../lib/workspace/services/documents";
 import { ProjectsService } from "../lib/workspace/services/projects";
+import { TABULAR_CONTRACT_V7_MANIFEST } from "../lib/workspace/tabularContractV7";
+import { validateTabularPersistenceV7 } from "../lib/workspace/tabularPersistenceV7";
 
 const NOW = "2026-07-14T12:00:00.000Z";
+
+function buildCandidateMigrations() {
+  const byVersion = new Map<number, WorkspaceMigration>();
+  for (const migration of [
+    ...WORKSPACE_MIGRATIONS,
+    ASSISTANT_RUNTIME_MIGRATION,
+    WORKFLOW_RUNTIME_V6_MIGRATION,
+  ]) {
+    if (migration.version >= 1 && migration.version <= 6) {
+      byVersion.set(migration.version, migration);
+    }
+  }
+  const prefix = [1, 2, 3, 4, 5, 6].map((version) => {
+    const migration = byVersion.get(version);
+    assert.ok(migration, `missing migration v${version} from deletion audit`);
+    return migration;
+  });
+  return [
+    ...prefix,
+    TABULAR_MIKE_SEMANTICS_V7_MIGRATION,
+    MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION,
+  ] as const;
+}
+
+const CANDIDATE_MIGRATIONS = buildCandidateMigrations();
+const PRE_V7_MIGRATIONS = CANDIDATE_MIGRATIONS.filter(
+  (migration) => migration.version < 7,
+);
+
 function locatorKey(locator: WorkspaceBlobLocator) {
   return JSON.stringify(locator);
+}
+
+function auditNulRecoveryProjectPurge(root: string) {
+  const environmentKeys = [
+    "ALETHEIA_DATABASE_ENCRYPTION",
+    "ALETHEIA_DATABASE_KEY_SOURCE",
+    "ALETHEIA_DATABASE_KEY_BASE64",
+  ] as const;
+  const previousEnvironment = new Map(
+    environmentKeys.map((key) => [key, process.env[key]]),
+  );
+  process.env.ALETHEIA_DATABASE_ENCRYPTION = "sqlcipher_required";
+  process.env.ALETHEIA_DATABASE_KEY_SOURCE = "env";
+  process.env.ALETHEIA_DATABASE_KEY_BASE64 = randomBytes(32).toString("base64");
+
+  const databasePath = path.join(root, "nul-recovery-project-purge.sqlite");
+  const ownedProjectId = randomUUID();
+  const ownedReviewId = randomUUID();
+  const otherProjectId = randomUUID();
+  const otherReviewId = randomUUID();
+  let database: WorkspaceDatabase | null = null;
+  try {
+    database = new WorkspaceDatabase(databasePath, {
+      migrations: PRE_V7_MIGRATIONS,
+    });
+    assert.equal(database.migration?.currentVersion, 6);
+    const preV7Projects = new ProjectsRepository(database);
+    preV7Projects.create({
+      id: ownedProjectId,
+      name: "Owned NUL recovery project",
+      description: null,
+      cmNumber: null,
+      practice: null,
+      now: NOW,
+    });
+    preV7Projects.create({
+      id: otherProjectId,
+      name: "Other NUL recovery project",
+      description: null,
+      cmNumber: null,
+      practice: null,
+      now: NOW,
+    });
+    const insertReview = database.prepare(
+      `INSERT INTO tabular_reviews
+        (id, project_id, title, status, document_ids_json,
+         columns_config_json, created_at, updated_at)
+       VALUES (?, ?, ?, 'draft', '[]', '[]', ?, ?)`,
+    );
+    insertReview.run(
+      ownedReviewId,
+      ownedProjectId,
+      "Owned\0snapshot",
+      NOW,
+      NOW,
+    );
+    insertReview.run(
+      otherReviewId,
+      otherProjectId,
+      "Other\0snapshot",
+      NOW,
+      NOW,
+    );
+    database.close();
+    database = null;
+
+    database = new WorkspaceDatabase(databasePath, {
+      migrations: CANDIDATE_MIGRATIONS,
+    });
+    assert.equal(database.migration?.currentVersion, 8);
+    const recoveryTable = TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.table;
+    assert.deepEqual(
+      database
+        .prepare(`SELECT review_id FROM ${recoveryTable} ORDER BY review_id`)
+        .all()
+        .map((row) => String(row.review_id)),
+      [ownedReviewId, otherReviewId].sort(),
+    );
+
+    const projectsRepository = new ProjectsRepository(database);
+    const projects = new ProjectsService(
+      projectsRepository,
+      new AuditBlobStore(),
+      {
+        resources: {
+          cancelQueued() {
+            throw new Error("NUL recovery purge fixture has no active jobs.");
+          },
+          requestAbortRunning() {
+            throw new Error("NUL recovery purge fixture has no active jobs.");
+          },
+        },
+        cleanupRecorder: { record() {} },
+        clock: () => new Date(NOW),
+      },
+    );
+    projects.permanentlyDelete(ownedProjectId, "Owned NUL recovery project");
+
+    assert.equal(projectsRepository.get(ownedProjectId), null);
+    assert.equal(
+      database
+        .prepare("SELECT id FROM tabular_reviews WHERE id = ?")
+        .get(ownedReviewId),
+      undefined,
+    );
+    assert.equal(
+      database
+        .prepare(`SELECT review_id FROM ${recoveryTable} WHERE review_id = ?`)
+        .get(ownedReviewId),
+      undefined,
+    );
+    assert.ok(projectsRepository.get(otherProjectId));
+    assert.ok(
+      database
+        .prepare("SELECT id FROM tabular_reviews WHERE id = ?")
+        .get(otherReviewId),
+    );
+    assert.ok(
+      database
+        .prepare(`SELECT review_id FROM ${recoveryTable} WHERE review_id = ?`)
+        .get(otherReviewId),
+    );
+    validateTabularPersistenceV7(database);
+    assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
+  } finally {
+    database?.close();
+    for (const key of environmentKeys) {
+      const previous = previousEnvironment.get(key);
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    }
+  }
 }
 
 class AuditBlobStore implements BlobStore {
@@ -109,10 +279,7 @@ type Scenario = Readonly<{
   versionId: string;
 }>;
 
-function createProject(
-  repository: ProjectsRepository,
-  name: string,
-) {
+function createProject(repository: ProjectsRepository, name: string) {
   return repository.create({
     id: randomUUID(),
     name,
@@ -292,9 +459,7 @@ function databaseSnapshot(database: WorkspaceDatabase) {
       )
       .all(),
     jobs: database
-      .prepare(
-        `SELECT id, status, cancel_requested_at FROM jobs ORDER BY id`,
-      )
+      .prepare(`SELECT id, status, cancel_requested_at FROM jobs ORDER BY id`)
       .all(),
     counts: {
       messageSources: count("message_sources"),
@@ -348,13 +513,11 @@ function run() {
   const root = mkdtempSync(path.join(os.tmpdir(), "vera-deletion-history-"));
   let database: WorkspaceDatabase | null = null;
   try {
+    auditNulRecoveryProjectPurge(root);
     database = new WorkspaceDatabase(path.join(root, "workspace.sqlite"), {
-      migrations: WORKSPACE_MIGRATIONS,
+      migrations: CANDIDATE_MIGRATIONS,
     });
-    assert.equal(
-      database.migration?.currentVersion,
-      WORKSPACE_MIGRATIONS.at(-1)?.version,
-    );
+    assert.equal(database.migration?.currentVersion, 8);
     const blobs = new AuditBlobStore();
     const projectsRepository = new ProjectsRepository(database);
     const records = new WorkspaceBlobRecordsRepository(database);
@@ -453,7 +616,13 @@ function run() {
            columns_config_json, created_at, updated_at)
          VALUES (?, ?, 'Completed review', 'complete', ?, '[]', ?, ?)`,
       )
-      .run(reviewId, review.projectId, JSON.stringify([review.documentId]), NOW, NOW);
+      .run(
+        reviewId,
+        review.projectId,
+        JSON.stringify([review.documentId]),
+        NOW,
+        NOW,
+      );
     database
       .prepare(
         `INSERT INTO tabular_review_documents
@@ -521,13 +690,7 @@ function run() {
          VALUES (?, ?, 0, ?)`,
       )
       .run(failedReviewId, failedReview.documentId, NOW);
-    assertHistoryBlocksBoth(
-      database,
-      blobs,
-      documents,
-      projects,
-      failedReview,
-    );
+    assertHistoryBlocksBoth(database, blobs, documents, projects, failedReview);
 
     const assistant = createScenario(
       database,
@@ -587,14 +750,7 @@ function run() {
            model_profile_id, current_version_only, retrieval_limit, created_at)
          VALUES (?, ?, ?, ?, ?, 1, 10, ?)`,
       )
-      .run(
-        assistantJobId,
-        assistantChatId,
-        promptId,
-        outputId,
-        profileId,
-        NOW,
-      );
+      .run(assistantJobId, assistantChatId, promptId, outputId, profileId, NOW);
     database
       .prepare(
         `INSERT INTO assistant_generation_documents
@@ -668,7 +824,10 @@ function run() {
     );
     const plainDeleted = documents.deleteDocument(plainDocument.documentId);
     assert.equal(plainDeleted.documentId, plainDocument.documentId);
-    assert.equal(documentsRepository.getDocument(plainDocument.documentId), null);
+    assert.equal(
+      documentsRepository.getDocument(plainDocument.documentId),
+      null,
+    );
 
     const plainFolder = createScenario(
       database,
@@ -747,14 +906,19 @@ function run() {
     assert.ok(documentsRepository.getDocument(raced.documentId));
     assert.equal(blobs.staged.size, 0);
     assert.equal(
-      records.listForDocument(raced.documentId).every((record) => record.state === "stored"),
+      records
+        .listForDocument(raced.documentId)
+        .every((record) => record.state === "stored"),
       true,
     );
 
     assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
-    assert.equal(database.prepare("PRAGMA integrity_check").get()?.integrity_check, "ok");
+    assert.equal(
+      database.prepare("PRAGMA integrity_check").get()?.integrity_check,
+      "ok",
+    );
     console.log(
-      "Vera deletion-history audit passed: exact durable citations, attachments, assistant snapshots, tabular memberships/cells, active workflow fencing, pre-stage zero-change rejection, transaction race rollback, plain deletion, and project ownership-boundary purge verified.",
+      "Vera deletion-history candidate v1-v8 audit passed: exact durable citations, attachments, assistant snapshots, tabular memberships/cells, NUL recovery review/project lifecycle, active workflow fencing, pre-stage zero-change rejection, transaction race rollback, plain deletion, and project ownership-boundary purge verified.",
     );
   } finally {
     try {

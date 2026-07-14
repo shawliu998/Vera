@@ -124,6 +124,10 @@ export const TABULAR_CONTRACT_V7_MANIFEST = {
       update: "tabular_v7_nul_recovery_snapshots_lock_update",
       delete: "tabular_v7_nul_recovery_snapshots_lock_delete",
     },
+    lifecycleTriggers: {
+      reviewDeletePurge:
+        "tabular_v7_nul_recovery_snapshots_purge_review_delete",
+    },
     liveWriteTriggers: {
       reviewTitleInsert: "tabular_reviews_title_mike_insert",
       reviewTitleUpdate: "tabular_reviews_title_mike_update",

@@ -74,6 +74,8 @@ const V7_NUL_RECOVERY_LOCK_UPDATE_TRIGGER =
   TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.lockTriggers.update;
 const V7_NUL_RECOVERY_LOCK_DELETE_TRIGGER =
   TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.lockTriggers.delete;
+const V7_NUL_RECOVERY_REVIEW_DELETE_PURGE_TRIGGER =
+  TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.lifecycleTriggers.reviewDeletePurge;
 const V7_REVIEW_TITLE_INSERT_TRIGGER =
   TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.liveWriteTriggers.reviewTitleInsert;
 const V7_REVIEW_TITLE_UPDATE_TRIGGER =
@@ -459,6 +461,16 @@ const V7_CITATIONS_TRIGGER_REQUIRED_SQL = [
 const V7_NUL_RECOVERY_LOCK_REQUIRED_SQL = [
   "tabular v7 NUL recovery snapshots are immutable",
 ] as const;
+const V7_NUL_RECOVERY_DELETE_LOCK_REQUIRED_SQL = [
+  ...V7_NUL_RECOVERY_LOCK_REQUIRED_SQL,
+  "FROM tabular_reviews",
+  "id = old.review_id",
+] as const;
+const V7_NUL_RECOVERY_PURGE_REQUIRED_SQL = [
+  "AFTER DELETE ON tabular_reviews",
+  `DELETE FROM ${V7_NUL_RECOVERY_TABLE}`,
+  "review_id = old.id",
+] as const;
 const V7_TEXT_TRIGGER_REQUIRED_SQL = [
   "NUL code points",
   "too long or blank",
@@ -560,7 +572,12 @@ const V7_SCHEMA_MARKERS = [
   {
     kind: "trigger",
     name: V7_NUL_RECOVERY_LOCK_DELETE_TRIGGER,
-    requiredSql: V7_NUL_RECOVERY_LOCK_REQUIRED_SQL,
+    requiredSql: V7_NUL_RECOVERY_DELETE_LOCK_REQUIRED_SQL,
+  },
+  {
+    kind: "trigger",
+    name: V7_NUL_RECOVERY_REVIEW_DELETE_PURGE_TRIGGER,
+    requiredSql: V7_NUL_RECOVERY_PURGE_REQUIRED_SQL,
   },
   {
     kind: "trigger",
@@ -1022,7 +1039,7 @@ const V7_REPAIR_POLICY_CHECKSUM_MATERIAL = {
     collisionPolicy: "distinct_original_same_canonical_fail_closed",
     canonicalization: "value.replaceAll('\\u0000','\\uFFFD')",
     history:
-      "one immutable row per affected review with original and canonical review/column text",
+      "one immutable row per affected live review with original and canonical review/column text; review deletion purges its owned snapshot",
   },
 } as const;
 const V7_VALIDATOR_BINDING = {
@@ -1053,6 +1070,7 @@ export const V7_APPLY_POLICY = {
     "install_nul_recovery_schema",
     "record_nul_recovery_snapshots_and_canonicalize",
     "lock_nul_recovery_snapshots",
+    "install_nul_recovery_delete_lifecycle",
     "install_tabular_mike_semantics_sql",
     "install_v7_live_write_guards",
     "assert_schema_markers_and_trigger_contracts",
@@ -1106,6 +1124,11 @@ export const V7_APPLY_POLICY = {
     },
     lock_nul_recovery_snapshots: {
       sql: "V7_NUL_RECOVERY_LOCK_SQL",
+    },
+    install_nul_recovery_delete_lifecycle: {
+      sql: "V7_NUL_RECOVERY_DELETE_LIFECYCLE_SQL",
+      policy:
+        "owned snapshots reject direct deletion; deleting the owning review purges its snapshot after the review row is gone",
     },
     install_tabular_mike_semantics_sql: {
       sql: "TABULAR_MIKE_SEMANTICS_V7_SQL",
@@ -1188,8 +1211,19 @@ BEFORE UPDATE ON ${V7_NUL_RECOVERY_TABLE} BEGIN
 END;
 
 CREATE TRIGGER ${V7_NUL_RECOVERY_LOCK_DELETE_TRIGGER}
-BEFORE DELETE ON ${V7_NUL_RECOVERY_TABLE} BEGIN
+BEFORE DELETE ON ${V7_NUL_RECOVERY_TABLE}
+WHEN EXISTS (
+  SELECT 1 FROM tabular_reviews WHERE id = old.review_id
+)
+BEGIN
   SELECT RAISE(ABORT, 'tabular v7 NUL recovery snapshots are immutable');
+END;
+`;
+
+const V7_NUL_RECOVERY_DELETE_LIFECYCLE_SQL = `
+CREATE TRIGGER ${V7_NUL_RECOVERY_REVIEW_DELETE_PURGE_TRIGGER}
+AFTER DELETE ON tabular_reviews BEGIN
+  DELETE FROM ${V7_NUL_RECOVERY_TABLE} WHERE review_id = old.id;
 END;
 `;
 
@@ -2443,6 +2477,10 @@ function lockNulRecoverySnapshots(database: WorkspaceDatabaseAdapter) {
   database.exec(V7_NUL_RECOVERY_LOCK_SQL);
 }
 
+function installNulRecoveryDeleteLifecycle(database: WorkspaceDatabaseAdapter) {
+  database.exec(V7_NUL_RECOVERY_DELETE_LIFECYCLE_SQL);
+}
+
 function installLiveWriteGuards(database: WorkspaceDatabaseAdapter) {
   database.exec(V7_LIVE_TEXT_GUARD_SQL);
 }
@@ -2551,6 +2589,8 @@ function applyTabularMikeSemanticsV7(
   recordNulRecoverySnapshotsAndCanonicalize(database, plan);
   stages.enterStage("lock_nul_recovery_snapshots");
   lockNulRecoverySnapshots(database);
+  stages.enterStage("install_nul_recovery_delete_lifecycle");
+  installNulRecoveryDeleteLifecycle(database);
   stages.enterStage("install_tabular_mike_semantics_sql");
   database.exec(TABULAR_MIKE_SEMANTICS_V7_SQL);
   stages.enterStage("install_v7_live_write_guards");
@@ -2593,6 +2633,7 @@ export const TABULAR_MIKE_SEMANTICS_V7_MIGRATION: WorkspaceMigration = {
     WORKSPACE_SQLCIPHER_CONNECTION_POLICY_MATERIAL,
     V7_NUL_RECOVERY_SCHEMA_SQL,
     V7_NUL_RECOVERY_LOCK_SQL,
+    V7_NUL_RECOVERY_DELETE_LIFECYCLE_SQL,
     V7_LIVE_TEXT_GUARD_SQL,
     TABULAR_MIKE_SEMANTICS_V7_SQL,
   ].join("\n-- checksum boundary --\n"),

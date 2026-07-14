@@ -1540,6 +1540,46 @@ function recreateNulRecoveryUpdateLock(db: WorkspaceDatabase) {
   `);
 }
 
+function recreateNulRecoveryReviewDeletePurge(db: WorkspaceDatabase) {
+  const table = TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.table;
+  db.exec(`
+    CREATE TRIGGER ${TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.lifecycleTriggers.reviewDeletePurge}
+    AFTER DELETE ON tabular_reviews BEGIN
+      DELETE FROM ${table} WHERE review_id = old.id;
+    END;
+  `);
+}
+
+function assertNulRecoveryReviewDeletePurge(
+  db: WorkspaceDatabase,
+  reviewId: string,
+) {
+  const table = TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.table;
+  assert.ok(
+    db
+      .prepare(`SELECT review_id FROM ${table} WHERE review_id = ?`)
+      .get(reviewId),
+  );
+  assert.equal(
+    Number(
+      db.prepare("DELETE FROM tabular_reviews WHERE id = ?").run(reviewId)
+        .changes,
+    ),
+    1,
+  );
+  assert.equal(
+    db.prepare("SELECT id FROM tabular_reviews WHERE id = ?").get(reviewId),
+    undefined,
+  );
+  assert.equal(
+    db
+      .prepare(`SELECT review_id FROM ${table} WHERE review_id = ?`)
+      .get(reviewId),
+    undefined,
+  );
+  validateTabularPersistenceV7(db);
+}
+
 async function auditNulRecoveryAndEncryptionGate() {
   const databasePath = path.join(root, "nul-recovery.sqlite");
   const seed = seedNulRecoveryDatabase(databasePath);
@@ -1690,6 +1730,7 @@ async function auditNulRecoveryAndEncryptionGate() {
       migrated.prepare(statement[0]).run(statement[1], statement[2]),
     );
   }
+  assertNulRecoveryReviewDeletePurge(migrated, seed.reviewId);
   migrated.close();
   assertDatabaseArtifactsDoNotContain(databasePath, [
     "NUL_UNIQUE_MARKER_REVIEW",
@@ -1725,6 +1766,16 @@ async function auditNulRecoveryValidatorMutationAndRollback() {
   );
   const migrated = openSqlcipherWorkspaceDatabase(mutationPath);
   const table = TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.table;
+  migrated
+    .prepare(
+      `DROP TRIGGER ${TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.lifecycleTriggers.reviewDeletePurge}`,
+    )
+    .run();
+  assert.throws(
+    () => validateTabularPersistenceV7(migrated),
+    /review deletion lifecycle is incomplete/,
+  );
+  recreateNulRecoveryReviewDeletePurge(migrated);
   migrated
     .prepare(
       `DROP TRIGGER ${TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.lockTriggers.update}`,

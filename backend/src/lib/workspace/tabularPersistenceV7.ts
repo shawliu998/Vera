@@ -43,6 +43,8 @@ const V7_NUL_RECOVERY_TABLE = TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.table;
 const V7_NUL_RECOVERY_LOCK_TRIGGERS = Object.values(
   TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.lockTriggers,
 );
+const V7_NUL_RECOVERY_REVIEW_DELETE_PURGE_TRIGGER =
+  TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.lifecycleTriggers.reviewDeletePurge;
 
 export { TabularSourceRefSchema } from "./tabularContractV7";
 export type TabularSourceRef = z.infer<typeof TabularSourceRefSchema>;
@@ -575,6 +577,31 @@ function assertNulRecoverySnapshotLocks(database: WorkspaceDatabaseAdapter) {
     ) {
       throw new Error("Tabular v7 NUL recovery snapshot locks are incomplete.");
     }
+  }
+  const deleteLockSql = triggerSql(
+    database,
+    TABULAR_CONTRACT_V7_MANIFEST.nulRecovery.lockTriggers.delete,
+  );
+  if (
+    !deleteLockSql?.includes("FROM tabular_reviews") ||
+    !deleteLockSql.includes("id = old.review_id")
+  ) {
+    throw new Error(
+      "Tabular v7 NUL recovery snapshot delete ownership lock is incomplete.",
+    );
+  }
+  const purgeSql = triggerSql(
+    database,
+    V7_NUL_RECOVERY_REVIEW_DELETE_PURGE_TRIGGER,
+  );
+  if (
+    !purgeSql?.includes("AFTER DELETE ON tabular_reviews") ||
+    !purgeSql.includes(`DELETE FROM ${V7_NUL_RECOVERY_TABLE}`) ||
+    !purgeSql.includes("review_id = old.id")
+  ) {
+    throw new Error(
+      "Tabular v7 NUL recovery review deletion lifecycle is incomplete.",
+    );
   }
 }
 
