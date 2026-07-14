@@ -1,11 +1,22 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  unlinkSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { migratePlaintextDatabaseToSqlcipher } from "../lib/aletheia/sqlcipherMigration";
 import {
   INITIAL_WORKSPACE_MIGRATION,
+  MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION,
   PROJECT_OWNERSHIP_MIGRATION,
+  TABULAR_MIKE_SEMANTICS_V7_MIGRATION,
   WORKSPACE_INTEGRITY_MIGRATION,
   WORKSPACE_MIGRATIONS,
   WORKSPACE_RUNTIME_MIGRATION,
@@ -24,19 +35,26 @@ const originalEnvironment = { ...process.env };
 const root = mkdtempSync(
   path.join(os.tmpdir(), "vera-workspace-migration-audit-"),
 );
+const sqlcipherBackupRoot = mkdtempSync(
+  path.join(os.tmpdir(), "vera-workspace-migration-audit-backup-"),
+);
+const auditDatabaseKey = randomBytes(32);
 
-// The production registry is intentionally frozen at v6 for this integration
-// milestone. v7/v8 stay dormant and are never implicitly tested as defaults.
 const CORE_V4 = [
   INITIAL_WORKSPACE_MIGRATION,
   WORKSPACE_INTEGRITY_MIGRATION,
   WORKSPACE_RUNTIME_MIGRATION,
   PROJECT_OWNERSHIP_MIGRATION,
 ] as const;
-const DEFAULT_V1_TO_V6 = [
+const LEGACY_V1_TO_V6 = [
   ...CORE_V4,
   ASSISTANT_RUNTIME_MIGRATION,
   WORKFLOW_RUNTIME_V6_MIGRATION,
+] as const;
+const DEFAULT_V1_TO_V8 = [
+  ...LEGACY_V1_TO_V6,
+  TABULAR_MIKE_SEMANTICS_V7_MIGRATION,
+  MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION,
 ] as const;
 
 function schemaNames(
@@ -68,6 +86,98 @@ function columnNames(database: WorkspaceDatabase, table: string) {
     .prepare(`PRAGMA table_info("${table}")`)
     .all()
     .map((row) => String(row.name));
+}
+
+function databaseArtifactPaths(databasePath: string) {
+  const directory = path.dirname(databasePath);
+  const baseName = path.basename(databasePath);
+  return readdirSync(directory)
+    .filter(
+      (name) =>
+        name === baseName ||
+        name === `${baseName}-wal` ||
+        name === `${baseName}-shm` ||
+        name === `${baseName}-journal`,
+    )
+    .map((name) => path.join(directory, name));
+}
+
+function readDatabaseArtifacts(databasePath: string) {
+  return new Map(
+    databaseArtifactPaths(databasePath).map((artifactPath) => [
+      artifactPath,
+      readFileSync(artifactPath),
+    ]),
+  );
+}
+
+function assertDatabaseArtifactsEqual(
+  databasePath: string,
+  expected: ReadonlyMap<string, Buffer>,
+) {
+  const actual = readDatabaseArtifacts(databasePath);
+  assert.deepEqual([...actual.keys()].sort(), [...expected.keys()].sort());
+  for (const [artifactPath, expectedBytes] of expected) {
+    assert.equal(actual.get(artifactPath)?.equals(expectedBytes), true);
+  }
+}
+
+function assertNoPhysicalMarker(databasePath: string, marker: string) {
+  for (const artifactPath of databaseArtifactPaths(databasePath)) {
+    assert.equal(
+      readFileSync(artifactPath).includes(Buffer.from(marker)),
+      false,
+      `database artifact leaked marker: ${artifactPath}`,
+    );
+  }
+}
+
+function migrateAuditDatabaseToSqlcipher(
+  databasePath: string,
+  fixtureName: string,
+  expectedPlaintextMarker: string,
+) {
+  const backupDir = path.join(sqlcipherBackupRoot, fixtureName);
+  mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+  const migrated = migratePlaintextDatabaseToSqlcipher({
+    dataDir: path.dirname(databasePath),
+    databasePath,
+    backupDir,
+    apply: true,
+  });
+  assert.equal(migrated.status, "migrated");
+  assert.ok(migrated.backup_path);
+  const backupPath = String(migrated.backup_path);
+  assert.equal(
+    readFileSync(backupPath).includes(Buffer.from(expectedPlaintextMarker)),
+    true,
+  );
+  unlinkSync(backupPath);
+  assert.equal(existsSync(backupPath), false);
+}
+
+function assertMigrationRecords(
+  database: WorkspaceDatabase,
+  migrations: readonly WorkspaceMigration[],
+) {
+  assert.deepEqual(
+    database
+      .prepare(
+        `SELECT version, name, checksum
+           FROM workspace_schema_migrations ORDER BY version`,
+      )
+      .all()
+      .map((row) => ({
+        version: Number(row.version),
+        name: String(row.name),
+        checksum: String(row.checksum),
+      })),
+    migrations.map((migration) => ({
+      version: migration.version,
+      name: migration.name,
+      checksum: workspaceMigrationChecksum(migration),
+    })),
+  );
 }
 
 function createUnmigratedDatabase(fileName: string) {
@@ -169,6 +279,182 @@ function seedV1UpgradeFixture(database: WorkspaceDatabase) {
   `);
 }
 
+const RUNTIME_VALID_IDS = {
+  project: "10000000-0000-4000-8000-000000000001",
+  document: "10000000-0000-4000-8000-000000000002",
+  version: "10000000-0000-4000-8000-000000000003",
+  chunk: "10000000-0000-4000-8000-000000000004",
+  review: "10000000-0000-4000-8000-000000000005",
+  column: "10000000-0000-4000-8000-000000000006",
+  cell: "10000000-0000-4000-8000-000000000007",
+  completeJob: "10000000-0000-4000-8000-000000000008",
+  failedJob: "10000000-0000-4000-8000-000000000009",
+} as const;
+type RuntimeValidIds = {
+  [Key in keyof typeof RUNTIME_VALID_IDS]: string;
+};
+const OPAQUE_TABULAR_IDS: RuntimeValidIds = {
+  ...RUNTIME_VALID_IDS,
+  review: "opaque-runtime-review",
+  column: "opaque-runtime-column",
+  cell: "opaque-runtime-cell",
+};
+const RUNTIME_VALID_NOW = "2026-07-14T12:00:00.000Z";
+const TABULAR_REGENERATION_REQUIRED_ERROR = JSON.stringify({
+  code: "workspace_migration_tabular_regeneration_required",
+  message:
+    "Tabular cell generation must be explicitly regenerated after workspace schema v7 migration.",
+  retryable: false,
+  details: null,
+});
+
+function seedRuntimeValidPrefixFixture(
+  database: WorkspaceDatabase,
+  ids: RuntimeValidIds = RUNTIME_VALID_IDS,
+) {
+  const documentText = "runtime valid matrix evidence";
+  const documentIdsJson = JSON.stringify([ids.document]);
+  const columnsConfigJson = JSON.stringify([
+    {
+      index: 0,
+      name: "Summary",
+      prompt: "Summarize",
+      format: "text",
+      tags: [],
+    },
+  ]);
+  database
+    .prepare("INSERT INTO projects (id, name) VALUES (?, ?)")
+    .run(ids.project, "Runtime-valid project");
+  database
+    .prepare(
+      `INSERT INTO documents
+        (id, project_id, title, filename, mime_type, size_bytes,
+         parse_status)
+       VALUES (?, ?, ?, ?, 'text/plain', ?, 'ready')`,
+    )
+    .run(
+      ids.document,
+      ids.project,
+      "Runtime-valid document",
+      "runtime-valid.txt",
+      documentText.length,
+    );
+  database
+    .prepare(
+      `INSERT INTO document_versions
+        (id, document_id, version_number, filename, mime_type, size_bytes,
+         content_sha256, storage_key)
+       VALUES (?, ?, 1, 'runtime-valid.txt', 'text/plain', ?, ?, ?)`,
+    )
+    .run(
+      ids.version,
+      ids.document,
+      documentText.length,
+      "a".repeat(64),
+      "runtime-valid-original-object",
+    );
+  database
+    .prepare("UPDATE documents SET current_version_id = ? WHERE id = ?")
+    .run(ids.version, ids.document);
+  database
+    .prepare(
+      `INSERT INTO document_chunks
+        (id, document_id, version_id, ordinal, text, start_offset, end_offset,
+         content_sha256)
+       VALUES (?, ?, ?, 0, ?, 0, ?, ?)`,
+    )
+    .run(
+      ids.chunk,
+      ids.document,
+      ids.version,
+      documentText,
+      documentText.length,
+      "b".repeat(64),
+    );
+  database
+    .prepare(
+      `INSERT INTO tabular_reviews
+        (id, project_id, title, status, document_ids_json,
+         columns_config_json)
+       VALUES (?, ?, 'Runtime-valid review', 'complete', ?, ?)`,
+    )
+    .run(ids.review, ids.project, documentIdsJson, columnsConfigJson);
+  if (
+    database
+      .prepare(
+        `SELECT 1 FROM sqlite_schema
+          WHERE type = 'table' AND name = 'tabular_review_documents'`,
+      )
+      .get()
+  ) {
+    database
+      .prepare(
+        `INSERT INTO tabular_review_documents
+          (review_id, document_id, ordinal)
+         VALUES (?, ?, 0)`,
+      )
+      .run(ids.review, ids.document);
+  }
+  database
+    .prepare(
+      `INSERT INTO tabular_review_columns
+        (id, review_id, key, title, output_type, prompt, ordinal)
+       VALUES (?, ?, 'summary', 'Summary', 'text', 'Summarize', 0)`,
+    )
+    .run(ids.column, ids.review);
+  database
+    .prepare(
+      `INSERT INTO jobs
+        (id, type, status, resource_type, resource_id, retryable,
+         payload_json, result_json, error_json, error_code, scheduled_at,
+         started_at, completed_at)
+       VALUES (?, 'tabular_cell', 'complete', 'tabular_cell', ?, 1,
+               '{}', '{}', NULL, NULL, ?, ?, ?)`,
+    )
+    .run(
+      ids.completeJob,
+      ids.cell,
+      RUNTIME_VALID_NOW,
+      RUNTIME_VALID_NOW,
+      RUNTIME_VALID_NOW,
+    );
+  database
+    .prepare(
+      `INSERT INTO jobs
+        (id, type, status, resource_type, resource_id, retryable,
+         payload_json, result_json, error_json, error_code, scheduled_at,
+         started_at, completed_at)
+       VALUES (?, 'tabular_cell', 'failed', 'tabular_cell', ?, 0,
+               '{}', NULL, ?,
+               'workspace_migration_tabular_regeneration_required', ?, ?, ?)`,
+    )
+    .run(
+      ids.failedJob,
+      ids.cell,
+      TABULAR_REGENERATION_REQUIRED_ERROR,
+      RUNTIME_VALID_NOW,
+      RUNTIME_VALID_NOW,
+      RUNTIME_VALID_NOW,
+    );
+  database
+    .prepare(
+      `INSERT INTO tabular_cells
+        (id, review_id, document_id, column_id, output_type, content,
+         citations_json, status, job_id, completed_at)
+       VALUES (?, ?, ?, ?, 'text', ?, '[]', 'complete', ?, ?)`,
+    )
+    .run(
+      ids.cell,
+      ids.review,
+      ids.document,
+      ids.column,
+      JSON.stringify({ summary: "Runtime-valid answer" }),
+      ids.completeJob,
+      RUNTIME_VALID_NOW,
+    );
+}
+
 function assertThrowsSql(
   database: WorkspaceDatabase,
   sql: string,
@@ -177,21 +463,79 @@ function assertThrowsSql(
   assert.throws(() => database.prepare(sql).run(...parameters));
 }
 
+function errorChainMatches(error: unknown, pattern: RegExp) {
+  const messages: string[] = [];
+  let current: unknown = error;
+  while (current) {
+    messages.push(current instanceof Error ? current.message : String(current));
+    current =
+      typeof current === "object" && current !== null && "cause" in current
+        ? current.cause
+        : null;
+  }
+  return pattern.test(messages.join(" | "));
+}
+
+function assertNoV7SchemaMarkers(database: WorkspaceDatabase) {
+  assert.equal(
+    database
+      .prepare(
+        "SELECT max(version) AS version FROM workspace_schema_migrations",
+      )
+      .get()?.version,
+    6,
+  );
+  assert.equal(
+    columnNames(database, "tabular_review_columns").includes("format"),
+    false,
+  );
+  assert.equal(
+    schemaNames(database, "table").has("tabular_v7_nul_recovery_snapshots"),
+    false,
+  );
+  assert.equal(
+    schemaNames(database, "trigger").has("tabular_cells_content_mike_insert"),
+    false,
+  );
+}
+
+function assertEncryptedV7SchemaOnlyFailure(
+  databasePath: string,
+  expectedCause: RegExp,
+) {
+  const beforeArtifacts = readDatabaseArtifacts(databasePath);
+  assert.throws(
+    () => new WorkspaceDatabase(databasePath),
+    (error) => errorChainMatches(error, expectedCause),
+  );
+  assertDatabaseArtifactsEqual(databasePath, beforeArtifacts);
+  const inspection = new WorkspaceDatabase(databasePath, {
+    migrations: LEGACY_V1_TO_V6,
+  });
+  try {
+    assertNoV7SchemaMarkers(inspection);
+  } finally {
+    inspection.close();
+  }
+}
+
 try {
   process.env.ALETHEIA_DATABASE_ENCRYPTION = "metadata_plaintext";
   assert.deepEqual(
     WORKSPACE_MIGRATIONS.map((migration) => migration.version),
-    [1, 2, 3, 4, 5, 6],
-    "the default registry remains a contiguous v1-v6 prefix",
+    [1, 2, 3, 4, 5, 6, 7, 8],
+    "the default registry is a contiguous v1-v8 chain",
   );
-  assert.deepEqual(WORKSPACE_MIGRATIONS, DEFAULT_V1_TO_V6);
+  assert.deepEqual(WORKSPACE_MIGRATIONS, DEFAULT_V1_TO_V8);
 
   const upgradePath = path.join(root, "upgrade.db");
   const v1Database = createUnmigratedDatabase("upgrade.db");
   seedV1UpgradeFixture(v1Database);
   v1Database.close();
 
-  const database = new WorkspaceDatabase(upgradePath);
+  const database = new WorkspaceDatabase(upgradePath, {
+    migrations: LEGACY_V1_TO_V6,
+  });
   try {
     assert.equal(database.migration?.currentVersion, 6);
     assert.deepEqual(
@@ -878,7 +1222,7 @@ try {
       "ok",
     );
 
-    const rerun = runWorkspaceMigrations(database, WORKSPACE_MIGRATIONS);
+    const rerun = runWorkspaceMigrations(database, LEGACY_V1_TO_V6);
     assert.equal(rerun.currentVersion, 6);
     assert.deepEqual(rerun.applied, []);
 
@@ -903,6 +1247,24 @@ try {
   } finally {
     database.close();
   }
+  const legacyV6Artifacts = readDatabaseArtifacts(upgradePath);
+  assert.throws(
+    () => new WorkspaceDatabase(upgradePath),
+    (error) =>
+      errorChainMatches(
+        error,
+        /workspace schema v7|migrate:aletheia:sqlcipher --prefix backend/i,
+      ),
+  );
+  assertDatabaseArtifactsEqual(upgradePath, legacyV6Artifacts);
+  const legacyV6Inspection = new WorkspaceDatabase(upgradePath, {
+    migrate: false,
+  });
+  try {
+    assertNoV7SchemaMarkers(legacyV6Inspection);
+  } finally {
+    legacyV6Inspection.close();
+  }
 
   const v2UpgradePath = path.join(root, "v2-upgrade.db");
   const v2UpgradeBootstrap = createUnmigratedDatabase("v2-upgrade.db");
@@ -911,7 +1273,9 @@ try {
     WORKSPACE_INTEGRITY_MIGRATION,
   ]);
   v2UpgradeBootstrap.close();
-  const v2Upgrade = new WorkspaceDatabase(v2UpgradePath);
+  const v2Upgrade = new WorkspaceDatabase(v2UpgradePath, {
+    migrations: LEGACY_V1_TO_V6,
+  });
   try {
     assert.equal(v2Upgrade.migration?.currentVersion, 6);
     assert.deepEqual(
@@ -974,7 +1338,9 @@ try {
   );
   v3HistoricalBootstrap.close();
 
-  const v3HistoricalUpgrade = new WorkspaceDatabase(v3HistoricalPath);
+  const v3HistoricalUpgrade = new WorkspaceDatabase(v3HistoricalPath, {
+    migrations: LEGACY_V1_TO_V6,
+  });
   try {
     assert.equal(v3HistoricalUpgrade.migration?.currentVersion, 6);
     assert.deepEqual(
@@ -1020,18 +1386,158 @@ try {
     v3HistoricalUpgrade.close();
   }
 
+  for (const prefixVersion of [1, 2, 3, 6] as const) {
+    const fileName = `runtime-valid-v${prefixVersion}.db`;
+    const databasePath = path.join(root, fileName);
+    const bootstrap = createUnmigratedDatabase(fileName);
+    runWorkspaceMigrations(bootstrap, DEFAULT_V1_TO_V8.slice(0, prefixVersion));
+    seedRuntimeValidPrefixFixture(bootstrap);
+    bootstrap.close();
+
+    const upgraded = new WorkspaceDatabase(databasePath);
+    try {
+      assert.equal(upgraded.migration?.currentVersion, 8);
+      assert.deepEqual(
+        upgraded.migration?.applied.map((record) => record.version),
+        Array.from(
+          { length: 8 - prefixVersion },
+          (_, index) => prefixVersion + index + 1,
+        ),
+      );
+      assert.equal(
+        upgraded
+          .prepare("SELECT payload FROM aletheia_phase1_sentinel WHERE id = 1")
+          .get()?.payload,
+        "legacy-data-must-survive",
+      );
+      assert.equal(
+        upgraded
+          .prepare(
+            `SELECT count(*) AS count
+               FROM tabular_reviews review
+               JOIN tabular_review_documents membership
+                 ON membership.review_id = review.id
+               JOIN tabular_review_columns column_row
+                 ON column_row.review_id = review.id
+               JOIN tabular_cells cell
+                 ON cell.review_id = review.id
+                AND cell.document_id = membership.document_id
+                AND cell.column_id = column_row.id
+              WHERE review.id = ?`,
+          )
+          .get(RUNTIME_VALID_IDS.review)?.count,
+        1,
+      );
+      assert.deepEqual(
+        upgraded
+          .prepare(
+            `SELECT id, status, payload_json, result_json, error_code,
+                    error_json
+               FROM jobs
+              WHERE id IN (?, ?)
+              ORDER BY id`,
+          )
+          .all(RUNTIME_VALID_IDS.completeJob, RUNTIME_VALID_IDS.failedJob)
+          .map((row) => ({ ...row })),
+        [
+          {
+            id: RUNTIME_VALID_IDS.completeJob,
+            status: "complete",
+            payload_json: "{}",
+            result_json: "{}",
+            error_code: null,
+            error_json: null,
+          },
+          {
+            id: RUNTIME_VALID_IDS.failedJob,
+            status: "failed",
+            payload_json: "{}",
+            result_json: null,
+            error_code: "workspace_migration_tabular_regeneration_required",
+            error_json: TABULAR_REGENERATION_REQUIRED_ERROR,
+          },
+        ],
+      );
+      assert.deepEqual(upgraded.migration?.capabilities, {
+        jsonTextChecks: true,
+        fts5: true,
+        sqlcipherEncrypted: false,
+      });
+      assertMigrationRecords(upgraded, DEFAULT_V1_TO_V8);
+      const rerun = upgraded.runMigrations();
+      assert.equal(rerun.currentVersion, 8);
+      assert.deepEqual(rerun.applied, []);
+      if (prefixVersion === 6) {
+        const driftedV8: WorkspaceMigration = {
+          ...MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION,
+          checksumMaterial: `${MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION.checksumMaterial}\n-- unauthorized drift`,
+        };
+        assert.throws(
+          () =>
+            upgraded.runMigrations([
+              ...DEFAULT_V1_TO_V8.slice(0, 7),
+              driftedV8,
+            ]),
+          /checksum drift/i,
+        );
+        assertMigrationRecords(upgraded, DEFAULT_V1_TO_V8);
+      }
+    } finally {
+      upgraded.close();
+    }
+    const reopened = new WorkspaceDatabase(databasePath);
+    try {
+      assert.equal(reopened.migration?.currentVersion, 8);
+      assert.deepEqual(reopened.migration?.applied, []);
+      assertMigrationRecords(reopened, DEFAULT_V1_TO_V8);
+      assert.equal(
+        reopened
+          .prepare("SELECT payload FROM aletheia_phase1_sentinel WHERE id = 1")
+          .get()?.payload,
+        "legacy-data-must-survive",
+      );
+    } finally {
+      reopened.close();
+    }
+  }
+
   const newInstall = createUnmigratedDatabase("new-install.db");
   try {
     const migration = runWorkspaceMigrations(newInstall, WORKSPACE_MIGRATIONS);
-    assert.equal(migration.currentVersion, 6);
+    assert.equal(migration.currentVersion, 8);
     assert.deepEqual(
       migration.applied.map((record) => record.version),
-      [1, 2, 3, 4, 5, 6],
+      [1, 2, 3, 4, 5, 6, 7, 8],
     );
     assert.ok(schemaNames(newInstall, "table").has("workspace_blob_records"));
     assert.ok(
       schemaNames(newInstall, "table").has("workspace_blob_cleanup_intents"),
     );
+    assert.ok(
+      schemaNames(newInstall, "table").has("tabular_v7_nul_recovery_snapshots"),
+    );
+    assert.ok(
+      schemaNames(newInstall, "table").has(
+        "model_profile_credential_orphan_cleanups",
+      ),
+    );
+    assert.deepEqual(
+      columnNames(newInstall, "model_profiles").filter((column) =>
+        [
+          "credential_origin",
+          "credential_state",
+          "migration_issue_code",
+          "execution_revision",
+        ].includes(column),
+      ),
+      [
+        "credential_origin",
+        "credential_state",
+        "migration_issue_code",
+        "execution_revision",
+      ],
+    );
+    assertMigrationRecords(newInstall, DEFAULT_V1_TO_V8);
   } finally {
     newInstall.close();
   }
@@ -1123,7 +1629,7 @@ try {
       )
       .run();
     assert.throws(
-      () => runWorkspaceMigrations(malformedUpgrade, WORKSPACE_MIGRATIONS),
+      () => runWorkspaceMigrations(malformedUpgrade, LEGACY_V1_TO_V6),
       /failed and was rolled back/i,
     );
     assert.equal(
@@ -1182,9 +1688,146 @@ try {
     /requires SQLite JSON1 and FTS5/i,
   );
 
+  const plaintextGatePath = path.join(root, "plaintext-destructive-gate.db");
+  const plaintextGateBootstrap = createUnmigratedDatabase(
+    "plaintext-destructive-gate.db",
+  );
+  runWorkspaceMigrations(plaintextGateBootstrap, LEGACY_V1_TO_V6);
+  seedRuntimeValidPrefixFixture(plaintextGateBootstrap);
+  plaintextGateBootstrap.exec("PRAGMA secure_delete = OFF");
+  const plaintextMarker = `V7_DEFAULT_REGISTRY_RAW_SECRET_${"q".repeat(1400)}`;
+  plaintextGateBootstrap
+    .prepare(
+      `UPDATE jobs
+          SET payload_json = ?,
+              error_code = 'raw_legacy_error',
+              error_json = ?
+        WHERE id = ?`,
+    )
+    .run(
+      JSON.stringify({ api_key: plaintextMarker }),
+      JSON.stringify({
+        code: "raw_legacy_error",
+        message: plaintextMarker,
+        retryable: false,
+        details: { api_key: plaintextMarker },
+      }),
+      RUNTIME_VALID_IDS.failedJob,
+    );
+  plaintextGateBootstrap.close();
+  assert.equal(
+    readFileSync(plaintextGatePath).includes(Buffer.from(plaintextMarker)),
+    true,
+  );
+  const plaintextGateArtifacts = readDatabaseArtifacts(plaintextGatePath);
+  assert.throws(
+    () => new WorkspaceDatabase(plaintextGatePath),
+    (error) =>
+      errorChainMatches(error, /migrate:aletheia:sqlcipher --prefix backend/),
+  );
+  assertDatabaseArtifactsEqual(plaintextGatePath, plaintextGateArtifacts);
+  const plaintextGateUnchanged = new WorkspaceDatabase(plaintextGatePath, {
+    migrations: LEGACY_V1_TO_V6,
+  });
+  try {
+    assert.equal(plaintextGateUnchanged.migration?.currentVersion, 6);
+    assert.equal(
+      plaintextGateUnchanged
+        .prepare("SELECT payload_json FROM jobs WHERE id = ?")
+        .get(RUNTIME_VALID_IDS.failedJob)?.payload_json,
+      JSON.stringify({ api_key: plaintextMarker }),
+    );
+    assert.equal(
+      plaintextGateUnchanged
+        .prepare("SELECT payload FROM aletheia_phase1_sentinel WHERE id = 1")
+        .get()?.payload,
+      "legacy-data-must-survive",
+    );
+  } finally {
+    plaintextGateUnchanged.close();
+  }
+
   process.env.ALETHEIA_DATABASE_ENCRYPTION = "sqlcipher_required";
   process.env.ALETHEIA_DATABASE_KEY_SOURCE = "env";
-  process.env.ALETHEIA_DATABASE_KEY_BASE64 = randomBytes(32).toString("base64");
+  process.env.ALETHEIA_DATABASE_KEY_BASE64 =
+    auditDatabaseKey.toString("base64");
+  migrateAuditDatabaseToSqlcipher(
+    plaintextGatePath,
+    "plaintext-destructive-gate",
+    plaintextMarker,
+  );
+  const encryptedGateUpgrade = new WorkspaceDatabase(plaintextGatePath);
+  try {
+    assert.equal(encryptedGateUpgrade.migration?.currentVersion, 8);
+    assert.equal(
+      encryptedGateUpgrade.migration?.capabilities.sqlcipherEncrypted,
+      true,
+    );
+    assert.equal(
+      encryptedGateUpgrade
+        .prepare(
+          `SELECT payload_json, error_code, error_json
+             FROM jobs WHERE id = ?`,
+        )
+        .get(RUNTIME_VALID_IDS.failedJob)?.payload_json,
+      "{}",
+    );
+    assert.equal(
+      encryptedGateUpgrade
+        .prepare("SELECT error_code FROM jobs WHERE id = ?")
+        .get(RUNTIME_VALID_IDS.failedJob)?.error_code,
+      "workspace_migration_tabular_regeneration_required",
+    );
+    assert.equal(
+      encryptedGateUpgrade
+        .prepare("SELECT error_json FROM jobs WHERE id = ?")
+        .get(RUNTIME_VALID_IDS.failedJob)?.error_json,
+      TABULAR_REGENERATION_REQUIRED_ERROR,
+    );
+    assert.equal(
+      encryptedGateUpgrade
+        .prepare("SELECT payload FROM aletheia_phase1_sentinel WHERE id = 1")
+        .get()?.payload,
+      "legacy-data-must-survive",
+    );
+    assertMigrationRecords(encryptedGateUpgrade, DEFAULT_V1_TO_V8);
+  } finally {
+    encryptedGateUpgrade.close();
+  }
+  assertNoPhysicalMarker(plaintextGatePath, plaintextMarker);
+
+  const encryptedMissingMatrixPath = path.join(
+    root,
+    "encrypted-v6-missing-matrix.db",
+  );
+  const encryptedMissingMatrix = new WorkspaceDatabase(
+    encryptedMissingMatrixPath,
+    { migrations: LEGACY_V1_TO_V6 },
+  );
+  seedRuntimeValidPrefixFixture(encryptedMissingMatrix);
+  encryptedMissingMatrix
+    .prepare("DELETE FROM tabular_cells WHERE id = ?")
+    .run(RUNTIME_VALID_IDS.cell);
+  encryptedMissingMatrix.close();
+  assertEncryptedV7SchemaOnlyFailure(
+    encryptedMissingMatrixPath,
+    /incomplete tabular matrix/i,
+  );
+
+  const encryptedOpaqueIdsPath = path.join(
+    root,
+    "encrypted-v6-opaque-tabular-ids.db",
+  );
+  const encryptedOpaqueIds = new WorkspaceDatabase(encryptedOpaqueIdsPath, {
+    migrations: LEGACY_V1_TO_V6,
+  });
+  seedRuntimeValidPrefixFixture(encryptedOpaqueIds, OPAQUE_TABULAR_IDS);
+  encryptedOpaqueIds.close();
+  assertEncryptedV7SchemaOnlyFailure(
+    encryptedOpaqueIdsPath,
+    /Invalid persisted tabular (review|column|cell)/,
+  );
+
   const encryptedPath = path.join(root, "workspace-encrypted.db");
   const encryptedDatabase = new WorkspaceDatabase(encryptedPath);
   let encryptedStatus: ReturnType<WorkspaceDatabase["status"]>;
@@ -1195,12 +1838,12 @@ try {
       encryptedDatabase.migration?.capabilities.sqlcipherEncrypted,
       true,
     );
-    assert.equal(encryptedDatabase.migration?.currentVersion, 6);
+    assert.equal(encryptedDatabase.migration?.currentVersion, 8);
     assert.equal(
       encryptedDatabase
         .prepare("SELECT count(*) AS count FROM workspace_schema_migrations")
         .get()?.count,
-      6,
+      8,
     );
   } finally {
     encryptedDatabase.close();
@@ -1227,12 +1870,12 @@ try {
       true,
       "the wrapper-owned migration entrypoint preserves exact SQLCipher attestation",
     );
-    assert.equal(encryptedManualRun.currentVersion, 6);
+    assert.equal(encryptedManualRun.currentVersion, 8);
     assert.equal(
       encryptedManualDatabase
         .prepare("SELECT count(*) AS count FROM workspace_schema_migrations")
         .get()?.count,
-      6,
+      8,
     );
   } finally {
     encryptedManualDatabase.close();
@@ -1246,12 +1889,13 @@ try {
     JSON.stringify(
       {
         ok: true,
-        suite: "vera-workspace-migration-audit-v6",
-        current_version: 6,
+        suite: "vera-workspace-migration-audit-v8",
+        current_version: 8,
         encrypted_driver: encryptedStatus!.encrypted,
         checks: [
-          "v1 upgrade and clean v6 install",
-          "v2 to v6 cleanup-ledger, assistant, and workflow upgrade",
+          "legacy opaque and incomplete-matrix fixtures remain explicit v1-v6",
+          "runtime-valid v1, v2, v3, and v6 prefixes upgrade through default v8",
+          "clean default v8 install",
           "ordered SHA-256 checksums and idempotent rerun",
           "failed migration DDL and record roll back atomically",
           "legacy Aletheia sentinel table and row preserved",
@@ -1268,6 +1912,10 @@ try {
           "tabular document JSON normalized and backfilled",
           "cross-project, ownership, cycle, type, and cell triggers",
           "SQLite and SQLCipher integrity checks",
+          "plaintext destructive migration fails byte-exact before SQLCipher",
+          "offline SQLCipher migration enables trusted default v7-v8 rewrite",
+          "encrypted v6 missing matrix fails transactionally before v7 markers",
+          "encrypted v6 opaque tabular IDs fail the frozen validator transactionally",
         ],
       },
       null,
@@ -1277,4 +1925,5 @@ try {
 } finally {
   process.env = originalEnvironment;
   rmSync(root, { recursive: true, force: true });
+  rmSync(sqlcipherBackupRoot, { recursive: true, force: true });
 }
