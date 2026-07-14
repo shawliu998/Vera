@@ -112,6 +112,18 @@ test("all shell files identify their exact locked Mike source", () => {
     }
 });
 
+test("the pages route group activates the Vera shell without cloud providers", () => {
+    const source = current("src/app/(pages)/layout.tsx");
+    assert.match(source, new RegExp(LOCKED_MIKE_SHA));
+    assert.match(source, /frontend\/src\/app\/\(pages\)\/layout\.tsx/);
+    assert.match(source, /import \{ VeraShell \} from "@\/app\/components\/vera-shell"/);
+    assert.match(source, /return <VeraShell>\{children\}<\/VeraShell>/);
+    assert.doesNotMatch(
+        source,
+        /AuthProvider|AuthContext|ChatHistory|UserProfile|Mfa|login|account|cloud/i,
+    );
+});
+
 test("Mike chrome contexts are byte-equivalent after provenance comments", () => {
     assert.equal(
         withoutPortHeader(current("src/app/contexts/PageChromeContext.tsx")),
@@ -177,13 +189,7 @@ test("AppSidebar keeps Mike DOM and classes while removing cloud-only blocks", (
     ]);
 
     const navigation = navArray(source);
-    assert.deepEqual(quotedFields(navigation, "href"), [
-        "/assistant",
-        "/projects",
-        "/tabular-reviews",
-        "/workflows",
-        "/settings",
-    ]);
+    assert.deepEqual(quotedFields(navigation, "href"), ["/projects"]);
     assert.deepEqual(quotedFields(navigation, "labelKey"), [
         "nav.assistant",
         "nav.projects",
@@ -192,6 +198,10 @@ test("AppSidebar keeps Mike DOM and classes while removing cloud-only blocks", (
         "nav.settings",
     ]);
     assert.match(source, /t\(labelKey\)/);
+    assert.match(source, /const isAvailable = href !== null/);
+    assert.match(source, /disabled=\{!isAvailable\}/);
+    assert.match(source, /aria-disabled=\{!isAvailable \|\| undefined\}/);
+    assert.match(source, /!isAvailable[\s\S]*text-gray-400/);
     assert.match(source, /aria-current=\{isActive \? "page" : undefined\}/);
     assert.match(source, /hidden[\s\S]*cloud-bound|cloud-bound[\s\S]*hidden/);
     assert.match(source, /className="mt-4 flex-1 min-h-0 flex flex-col gap-4"/);
@@ -220,11 +230,11 @@ test("site logo retains Mike typography and sizing with only local Vera branding
     }
     assert.match(source, /<VeraMark/);
     assert.match(source, /t\("common\.appName"\)/);
-    assert.match(source, /const landingHref = "\/assistant"/);
+    assert.match(source, /const landingHref = "\/projects"/);
     assert.doesNotMatch(source, /mikeoss|MikeIcon|>Mike</i);
 });
 
-test("shell remains dormant and uses only translated UI labels", () => {
+test("shell uses only translated UI labels and exposes no legacy routes", () => {
     const source = [
         current("src/app/components/vera-shell/VeraShell.tsx"),
         current("src/app/components/vera-shell/VeraSidebar.tsx"),
@@ -236,4 +246,8 @@ test("shell remains dormant and uses only translated UI labels", () => {
     assert.doesNotMatch(source, /router\.(?:replace|push)\("\/"\)/);
     assert.doesNotMatch(source, /redirect\(/);
     assert.doesNotMatch(source, /\/aletheia/);
+    assert.doesNotMatch(
+        source,
+        /"\/(?:assistant|tabular-reviews|workflows|settings)"/,
+    );
 });

@@ -18,18 +18,18 @@ import { VeraSiteLogo } from "@/app/components/vera-shell/VeraSiteLogo";
 
 const NAV_ITEMS = [
     {
-        href: "/assistant",
+        href: null,
         labelKey: "nav.assistant",
         icon: MessageSquare,
     },
     { href: "/projects", labelKey: "nav.projects", icon: FolderOpen },
     {
-        href: "/tabular-reviews",
+        href: null,
         labelKey: "nav.tabular",
         icon: Table2,
     },
-    { href: "/workflows", labelKey: "nav.workflows", icon: Library },
-    { href: "/settings", labelKey: "nav.settings", icon: Settings },
+    { href: null, labelKey: "nav.workflows", icon: Library },
+    { href: null, labelKey: "nav.settings", icon: Settings },
 ] as const;
 
 interface VeraSidebarProps {
@@ -110,29 +110,43 @@ export function VeraSidebar({ isOpen, onToggle }: VeraSidebarProps) {
 
                 {/* Nav items */}
                 {NAV_ITEMS.map(({ href, labelKey, icon: Icon }) => {
-                    // Vera local patch: nested routes need an active marker
-                    // because cloud-backed recent-project/history rows are absent.
+                    // Vera local patch: only the service-backed Projects and
+                    // Documents surface is interactive in this milestone.
+                    // Keeping future Mike modules visible-but-disabled avoids
+                    // inventing links before their local composition lands.
+                    const isAvailable = href !== null;
                     const isActive =
-                        pathname === href || pathname.startsWith(href + "/");
+                        isAvailable &&
+                        (pathname === href || pathname.startsWith(href + "/"));
                     const label = t(labelKey);
                     return (
-                        <div key={href} className="py-0.5 px-2.5">
+                        <div key={labelKey} className="py-0.5 px-2.5">
                             <button
                                 type="button"
-                                onClick={() => router.push(href)}
-                                title={!isOpen ? label : ""}
+                                onClick={
+                                    isAvailable
+                                        ? () => router.push(href)
+                                        : undefined
+                                }
+                                disabled={!isAvailable}
+                                aria-disabled={!isAvailable || undefined}
+                                title={!isOpen || !isAvailable ? label : ""}
                                 aria-current={isActive ? "page" : undefined}
                                 className={cn(
                                     "w-full h-9 flex items-center gap-3 px-2.5 py-2 rounded-md transition-colors text-left",
                                     isActive
                                         ? "bg-gray-200/60 text-gray-900"
-                                        : "text-gray-700 hover:bg-gray-100",
+                                        : isAvailable
+                                          ? "text-gray-700 hover:bg-gray-100"
+                                          : "cursor-not-allowed text-gray-400 opacity-60",
                                     !isOpen ? "hidden md:flex" : "flex",
                                 )}
                             >
                                 <Icon
                                     className={`h-4 w-4 flex-shrink-0 ${
-                                        isActive
+                                        !isAvailable
+                                            ? "text-gray-400"
+                                            : isActive
                                             ? "text-gray-900"
                                             : "text-black"
                                     }`}

@@ -23,7 +23,7 @@ export function VeraSiteLogo({
 }: VeraSiteLogoProps) {
     const { t } = useI18n();
     // Vera local patch: the desktop brand always returns to the local product.
-    const landingHref = "/assistant";
+    const landingHref = "/projects";
     const sizeClasses = {
         sm: "text-xl",
         md: "text-2xl",
