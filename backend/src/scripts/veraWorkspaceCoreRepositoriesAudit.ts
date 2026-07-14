@@ -128,6 +128,28 @@ try {
     "CREATE TABLE aletheia_core_sentinel (id INTEGER PRIMARY KEY, value TEXT NOT NULL); INSERT INTO aletheia_core_sentinel VALUES (1,'preserve');",
   );
 
+  assert.throws(
+    () =>
+      modelService.create({
+        name: "Enabled profile rejected",
+        provider: "openai_compatible",
+        model: "audit-model",
+        baseUrl: "http://localhost:11434/v1",
+        enabled: true,
+      }),
+    /enabled profiles must remain dormant/,
+  );
+  assert.throws(
+    () =>
+      modelService.create({
+        name: "Default profile rejected",
+        provider: "openai_compatible",
+        model: "audit-model",
+        baseUrl: "http://localhost:11434/v1",
+        isDefault: true,
+      }),
+    /selecting a default profile is disabled/,
+  );
   const profile = modelService.create({
     name: "Audit profile",
     provider: "openai_compatible",
@@ -139,12 +161,13 @@ try {
       structuredOutput: true,
       vision: false,
     },
-    enabled: true,
-    isDefault: true,
+    enabled: false,
+    isDefault: false,
   });
-  assert.equal(profile.isDefault, true);
-  assert.equal(profile.capabilities.streaming, true);
-  assert.equal(profile.capabilities.structuredOutput, true);
+  assert.equal(profile.isDefault, false);
+  assert.equal(profile.enabled, false);
+  assert.equal(profile.capabilities.streaming, false);
+  assert.equal(profile.capabilities.structuredOutput, false);
   assert.equal("credentialRef" in profile, false);
   assert.equal("secret" in profile, false);
   assert.equal(
@@ -153,7 +176,7 @@ try {
         "SELECT count(*) AS count FROM model_profiles WHERE is_default=1",
       )
       .get()?.count,
-    1,
+    0,
   );
   const lockedModelService = new ModelProfilesService(profiles, {}, now);
   assert.throws(
@@ -176,6 +199,7 @@ try {
       ),
     /Credential locator/,
   );
+  profiles.update(profile.id, { enabled: true, now: now().toISOString() });
 
   const project = projectService.create({ name: "Audit project" });
   const otherProject = projectService.create({ name: "Other project" });
@@ -349,19 +373,16 @@ try {
   );
   assert.throws(
     () => settingsService.update({ defaultModelProfileId: profile.id }),
-    /enabled/,
+    /default model selection is unavailable/,
   );
-  const enabledProfile = modelService.enable(profile.id);
   settingsService.update({
-    defaultModelProfileId: enabledProfile.id,
+    defaultModelProfileId: null,
     defaultProjectId: activeProject.id,
     theme: "dark",
   });
   assert.equal(settingsService.get().theme, "dark");
-  assert.equal(profiles.require(enabledProfile.id).isDefault, true);
   settingsService.update({ defaultModelProfileId: null });
-  assert.equal(profiles.require(enabledProfile.id).isDefault, false);
-  settingsService.update({ defaultModelProfileId: enabledProfile.id });
+  assert.equal(profiles.require(profile.id).isDefault, false);
 
   database.close();
   const restarted = new WorkspaceDatabase(databasePath);

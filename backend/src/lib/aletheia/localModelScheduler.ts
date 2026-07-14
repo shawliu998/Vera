@@ -2,6 +2,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
+import {
+  BoundedResponseBodyError,
+  readBoundedResponseBody,
+} from "../network/readBoundedResponseBody";
 
 export type LocalModelAdapter = "ollama" | "openai-compatible";
 export type LocalModelLifecycleState =
@@ -356,39 +360,20 @@ async function readBoundedBody(
   response: Response,
   maxBytes: number,
 ): Promise<string> {
-  if (!response.body) return "";
-  const contentLength = Number(response.headers.get("content-length") ?? "0");
-  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-    await response.body.cancel();
-    throw new LocalModelSchedulerError(
-      "Local model response exceeded the configured limit.",
-      "LOCAL_MODEL_ERROR",
-    );
-  }
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel();
-        throw new LocalModelSchedulerError(
-          "Local model response exceeded the configured limit.",
-          "LOCAL_MODEL_ERROR",
-        );
-      }
-      chunks.push(value);
+    return await readBoundedResponseBody(response, maxBytes);
+  } catch (error) {
+    if (
+      error instanceof BoundedResponseBodyError &&
+      (error.reason === "content_length" || error.reason === "limit_exceeded")
+    ) {
+      throw new LocalModelSchedulerError(
+        "Local model response exceeded the configured limit.",
+        "LOCAL_MODEL_ERROR",
+      );
     }
-  } finally {
-    reader.releaseLock();
+    throw error;
   }
-  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString(
-    "utf8",
-  );
 }
 
 function parseJsonObject(text: string): Record<string, unknown> {

@@ -6,7 +6,9 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const {
+  SECURITY_MAX_BUFFER_BYTES,
   SECURITY_PATH,
+  SECURITY_TIMEOUT_MS,
   ensureMacOsKeychainKey,
   isMacOsKeychainItemNotFound,
   strict32ByteBase64,
@@ -58,15 +60,21 @@ function runProvisioning(options) {
 }
 
 function assertNoOverwrite(calls) {
-  const addCall = calls.find(
-    (call) => call.args[0] === "add-generic-password",
-  );
+  const addCall = calls.find((call) => call.args[0] === "add-generic-password");
   if (!addCall) return;
   assert.equal(
     addCall.args.includes("-U"),
     false,
     "Provisioning must never use overwrite mode.",
   );
+}
+
+function assertSharedSecurityOptions(options, stdinMode) {
+  assert.equal(options.encoding, "utf8");
+  assert.equal(options.timeout, SECURITY_TIMEOUT_MS);
+  assert.equal(options.maxBuffer, SECURITY_MAX_BUFFER_BYTES);
+  assert.equal(options.shell, false);
+  assert.deepEqual(options.stdio, [stdinMode, "pipe", "pipe"]);
 }
 
 function auditMissingCreatesNewKey() {
@@ -80,13 +88,23 @@ function auditMissingCreatesNewKey() {
         status: 44,
         stderr: `security: SecKeychainSearchCopyNext: ${"The specified item could not be found in the keychain."}\n`,
       }),
+      assert({ options }) {
+        assertSharedSecurityOptions(options, "ignore");
+      },
     },
     {
-      args: ["add-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w", encoded],
+      args: ["add-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"],
+      assert({ options }) {
+        assertSharedSecurityOptions(options, "pipe");
+        assert.equal(options.input, `${encoded}\n`);
+      },
     },
     {
       args: ["find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"],
       stdout: `${encoded}\n`,
+      assert({ options }) {
+        assertSharedSecurityOptions(options, "ignore");
+      },
     },
   ]);
   runProvisioning({
@@ -106,6 +124,9 @@ function auditValidExistingReused() {
     {
       args: ["find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"],
       stdout: `${encoded}\n`,
+      assert({ options }) {
+        assertSharedSecurityOptions(options, "ignore");
+      },
     },
   ]);
   runProvisioning({
@@ -129,6 +150,9 @@ function auditPermissionDeniedFailsClosed() {
         status: 128,
         stderr: "security: User interaction is not allowed.\n",
       }),
+      assert({ options }) {
+        assertSharedSecurityOptions(options, "ignore");
+      },
     },
   ]);
   assert.throws(
@@ -151,6 +175,9 @@ function auditTimeoutFailsClosed() {
         signal: "SIGTERM",
         message: "spawnSync /usr/bin/security ETIMEDOUT",
       }),
+      assert({ options }) {
+        assertSharedSecurityOptions(options, "ignore");
+      },
     },
   ]);
   assert.throws(
@@ -168,6 +195,9 @@ function auditUnexpectedCommandErrorFailsClosed() {
         status: 1,
         stderr: "security: command failed\n",
       }),
+      assert({ options }) {
+        assertSharedSecurityOptions(options, "ignore");
+      },
     },
   ]);
   assert.throws(
@@ -183,6 +213,9 @@ function auditInvalidExistingFailsClosed() {
     {
       args: ["find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"],
       stdout: `${invalid}\n`,
+      assert({ options }) {
+        assertSharedSecurityOptions(options, "ignore");
+      },
     },
   ]);
   assert.equal(strict32ByteBase64(invalid), false);
@@ -207,13 +240,23 @@ function auditVerifyFailureFailsClosed() {
       error: securityError({
         message: "security: SecKeychainSearchCopyNext: errSecItemNotFound",
       }),
+      assert({ options }) {
+        assertSharedSecurityOptions(options, "ignore");
+      },
     },
     {
-      args: ["add-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w", encoded],
+      args: ["add-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"],
+      assert({ options }) {
+        assertSharedSecurityOptions(options, "pipe");
+        assert.equal(options.input, `${encoded}\n`);
+      },
     },
     {
       args: ["find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"],
       stdout: `${other}\n`,
+      assert({ options }) {
+        assertSharedSecurityOptions(options, "ignore");
+      },
     },
   ]);
   assert.throws(

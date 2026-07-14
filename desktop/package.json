@@ -20,6 +20,7 @@
     "test:product-rename": "node scripts/productRenameAudit.js",
     "test:audit-anchor-config": "node scripts/auditAnchorConfigAudit.js",
     "test:keychain-provisioning": "node scripts/macOsKeychainProvisioningAudit.js",
+    "test:keychain-credential-store": "node scripts/macOsKeychainCredentialStoreAudit.js",
     "test:original-document-save": "node scripts/originalDocumentSaveAudit.js",
     "signing:preflight": "node scripts/releaseSigningPreflight.js",
     "signing:verify": "node scripts/verifyMacRelease.js",
