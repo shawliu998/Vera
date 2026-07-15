@@ -57,6 +57,7 @@ import type {
 import { ModelProfilesService } from "../lib/workspace/services/modelProfiles";
 import {
   buildStoredCredentialReference,
+  CREDENTIAL_STORE_OPERATION_MODE,
   CredentialStoreCollisionError,
   type CredentialDeletionInput,
   type CredentialResolutionInput,
@@ -211,6 +212,7 @@ function assertDatabaseArtifactsEqual(
 }
 
 class AuditCredentialStore implements CredentialStorePort {
+  readonly [CREDENTIAL_STORE_OPERATION_MODE] = "synchronous" as const;
   readonly serviceName = "ai.aletheia.workspace-model-profile-credentials";
   readonly accountPrefix = "vera-model-profile-account:";
   storeCalls = 0;
@@ -233,6 +235,10 @@ class AuditCredentialStore implements CredentialStorePort {
       >;
     } = { nextLocator: 1, byAccount: new Map() },
   ) {}
+
+  isAvailable() {
+    return true;
+  }
 
   private account(input: CredentialResolutionInput) {
     const parsed = parseStoredCredentialReference(
@@ -690,8 +696,10 @@ function toCapabilitiesWire(
 ): WorkspaceCapabilitiesWire {
   return {
     schema_version: value.schemaVersion,
+    settings_available: value.runtimeWired && value.credentialWriteEnabled,
     local_only: true,
     loopback_http_allowed: value.loopbackHttpAllowed,
+    supported_providers: [],
     credential_write_enabled: value.credentialWriteEnabled,
     secret_readback_supported: false,
     runtime_wired: value.runtimeWired,
@@ -737,9 +745,17 @@ function toModelWire(
       normalized_base_url: value.endpointBinding.normalizedBaseUrl,
       canonical_origin: value.endpointBinding.canonicalOrigin,
       execution_revision: value.endpointBinding.executionRevision,
+      connection_revision: value.endpointBinding.executionRevision,
       profile_updated_at: value.endpointBinding.profileUpdatedAt,
     },
     availability: value.availability,
+    connection_test: {
+      status: "untested",
+      error_code: null,
+      retryable: false,
+      latency_ms: null,
+      tested_at: null,
+    },
     requires_credential: value.requiresCredential,
   };
 }
@@ -774,6 +790,17 @@ function createRuntimePort(
     },
     updateModel(_context, id, input) {
       modelService.update(id, input);
+      return toModelWire(modelService.getView(id));
+    },
+    putCredential(_context, id, input) {
+      modelService.configureCredential(id, input);
+      return toModelWire(modelService.getView(id));
+    },
+    deleteCredential(_context, id) {
+      modelService.clearCredential(id);
+      return toModelWire(modelService.getView(id));
+    },
+    testModel(_context, id) {
       return toModelWire(modelService.getView(id));
     },
     enableModel(_context, id) {
@@ -873,7 +900,7 @@ async function auditRouteWireAndSecretScan() {
   );
   await withServer(app, async (baseUrl) => {
     const statusResponse = await fetch(
-      `${baseUrl}/workspace-model-settings/status`,
+      `${baseUrl}/workspace-model-settings/settings/status`,
     );
     assert.equal(statusResponse.status, 200);
     const statusText = await statusResponse.text();
@@ -885,7 +912,7 @@ async function auditRouteWireAndSecretScan() {
       store.lastAccount ?? "",
       "keychain://vera/model-profile/",
     ]);
-    assert.equal(statusJson.capabilities.credential_write_enabled, false);
+    assert.equal(statusJson.capabilities.credential_write_enabled, true);
     assert.equal(statusJson.capabilities.runtime_wired, false);
     assert.deepEqual(statusJson.models[0]?.capabilities, {
       streaming: false,
@@ -895,7 +922,7 @@ async function auditRouteWireAndSecretScan() {
     });
     assert.equal(statusJson.models[0]?.availability.status, "disabled");
     const modelResponse = await fetch(
-      `${baseUrl}/workspace-model-settings/models/${profile.id}`,
+      `${baseUrl}/workspace-model-settings/model-profiles/${profile.id}`,
     );
     assert.equal(modelResponse.status, 200);
     const modelText = await modelResponse.text();
@@ -919,23 +946,28 @@ async function auditRouteWireAndSecretScan() {
       configured.credential.canonicalOrigin,
     );
     const credentialPut = await fetch(
-      `${baseUrl}/workspace-model-settings/models/${profile.id}/credential`,
+      `${baseUrl}/workspace-model-settings/model-profiles/${profile.id}/credential`,
       {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ secret: "ignored" }),
       },
     );
-    assert.equal(credentialPut.status, 404);
+    assert.equal(credentialPut.status, 200);
+    assertNoSensitiveText(
+      "credential mutation body",
+      await credentialPut.text(),
+      ["ignored", store.lastReference ?? "", "keychain://vera/model-profile/"],
+    );
     const credentialDelete = await fetch(
-      `${baseUrl}/workspace-model-settings/models/${profile.id}/credential`,
+      `${baseUrl}/workspace-model-settings/model-profiles/${profile.id}/credential`,
       {
         method: "DELETE",
       },
     );
-    assert.equal(credentialDelete.status, 404);
+    assert.equal(credentialDelete.status, 200);
     const enableResponse = await fetch(
-      `${baseUrl}/workspace-model-settings/models/${profile.id}/enable`,
+      `${baseUrl}/workspace-model-settings/model-profiles/${profile.id}/enable`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -944,7 +976,7 @@ async function auditRouteWireAndSecretScan() {
     );
     assert.equal(enableResponse.status, 409);
     const defaultResponse = await fetch(
-      `${baseUrl}/workspace-model-settings/models/${profile.id}/default`,
+      `${baseUrl}/workspace-model-settings/model-profiles/${profile.id}/default`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -3752,7 +3784,7 @@ async function auditDormantLifecycleCrudGuards() {
   );
   await withServer(app, async (baseUrl) => {
     const patchResponse = await fetch(
-      `${baseUrl}/workspace-model-settings/models/${profile.id}`,
+      `${baseUrl}/workspace-model-settings/model-profiles/${profile.id}`,
       {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -3761,17 +3793,17 @@ async function auditDormantLifecycleCrudGuards() {
     );
     assert.equal(patchResponse.status, 409);
     const disablePatchResponse = await fetch(
-      `${baseUrl}/workspace-model-settings/models/${profile.id}`,
+      `${baseUrl}/workspace-model-settings/model-profiles/${profile.id}`,
       {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ enabled: false }),
       },
     );
-    assert.equal(disablePatchResponse.status, 200);
+    assert.equal(disablePatchResponse.status, 400);
     forceEnableProfileFixture(profiles, profile.id, 7);
     const disablePostResponse = await fetch(
-      `${baseUrl}/workspace-model-settings/models/${profile.id}/disable`,
+      `${baseUrl}/workspace-model-settings/model-profiles/${profile.id}/disable`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -3780,7 +3812,7 @@ async function auditDormantLifecycleCrudGuards() {
     );
     assert.equal(disablePostResponse.status, 200);
     const deleteResponse = await fetch(
-      `${baseUrl}/workspace-model-settings/models/${profile.id}`,
+      `${baseUrl}/workspace-model-settings/model-profiles/${profile.id}`,
       {
         method: "DELETE",
       },
@@ -4069,6 +4101,7 @@ async function auditCompiledMigrationGraphParity() {
     "src/lib/workspace/migrations/v7TabularMikeSemantics.ts",
     "src/lib/workspace/migrations/v8ModelCredentialOrigin.ts",
     "src/lib/workspace/migrations/v9ModelConnectionReadiness.ts",
+    "src/lib/workspace/migrations/v10AssistantDurableEvents.ts",
   ];
   const relativeParityConfigPath = path.relative(backendRoot, parityConfigPath);
   assert.ok(
@@ -4139,6 +4172,7 @@ const migrations = [
   require(${JSON.stringify(path.join(outDir, "lib/workspace/migrations/v7TabularMikeSemantics.js"))}).TABULAR_MIKE_SEMANTICS_V7_MIGRATION,
   require(${JSON.stringify(path.join(outDir, "lib/workspace/migrations/v8ModelCredentialOrigin.js"))}).MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION,
   require(${JSON.stringify(path.join(outDir, "lib/workspace/migrations/v9ModelConnectionReadiness.js"))}).MODEL_CONNECTION_READINESS_V9_MIGRATION,
+  require(${JSON.stringify(path.join(outDir, "lib/workspace/migrations/v10AssistantDurableEvents.js"))}).ASSISTANT_DURABLE_EVENTS_V10_MIGRATION,
 ];
 const database = new WorkspaceDatabase(
   ${JSON.stringify(compiledRuntimeDatabasePath)},
@@ -4195,7 +4229,7 @@ try {
       checksumMaterial: migration.checksumMaterial,
     }));
     assert.deepEqual(compiledGraph.migrations, currentChecksums);
-    assert.equal(compiledGraph.runtime.currentVersion, 9);
+    assert.equal(compiledGraph.runtime.currentVersion, 10);
     assert.deepEqual(
       compiledGraph.runtime.appliedVersions,
       WORKSPACE_MIGRATIONS.map((migration) => migration.version),

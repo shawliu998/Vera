@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/app/i18n";
 
 type ModalSize = "sm" | "md" | "lg" | "xl";
 type ModalAction = Omit<
@@ -55,6 +56,7 @@ export function Modal({
     secondaryAction,
     cancelAction,
 }: ModalProps) {
+    const { t } = useI18n();
     const hasHeader = breadcrumbs?.length || title || icon;
     const hasFooter =
         footerInfo ||
@@ -64,7 +66,7 @@ export function Modal({
         cancelAction;
     const resolvedCancelAction =
         cancelAction === undefined && primaryAction
-            ? { label: "Cancel", onClick: onClose }
+            ? { label: t("common.actions.cancel"), onClick: onClose }
             : cancelAction;
 
     if (!open) return null;
@@ -119,7 +121,7 @@ export function Modal({
                         <button
                             onClick={onClose}
                             className="shrink-0 text-gray-400 transition-colors hover:text-gray-600"
-                            aria-label="Close"
+                            aria-label={t("common.actions.close")}
                         >
                             <X className="h-4 w-4" />
                         </button>

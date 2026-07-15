@@ -10,9 +10,19 @@ import { VeraWorkflowEditor } from "@/app/components/workflows/VeraWorkflowEdito
 
 export default function VeraWorkflowPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ workflowId: string }>;
+  searchParams: Promise<{ project_id?: string | string[] }>;
 }) {
   const { workflowId } = use(params);
-  return <VeraWorkflowEditor workflowId={workflowId} />;
+  const query = use(searchParams);
+  const initialProjectId =
+    typeof query.project_id === "string" ? query.project_id : null;
+  return (
+    <VeraWorkflowEditor
+      workflowId={workflowId}
+      initialProjectId={initialProjectId}
+    />
+  );
 }

@@ -10,6 +10,7 @@ import type {
 } from "./types";
 
 export * from "./types";
+export * from "./hardenedGenericTransport";
 export {
   AnthropicMessagesProvider,
   DeepSeekProvider,

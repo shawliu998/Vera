@@ -29,10 +29,22 @@ echo "==> Checking macOS signing mode"
   VERA_RELEASE_SIGNING="${RELEASE_SIGNING}" npm run signing:preflight
 )
 
+echo "==> Verifying Vera P0 backend source gates"
+(
+  cd "${ROOT_DIR}/backend"
+  npm run test:workspace:p0-client
+)
+
 echo "==> Building backend"
 (
   cd "${ROOT_DIR}/backend"
   npm run build
+)
+
+echo "==> Verifying Vera P0 frontend source gates"
+(
+  cd "${ROOT_DIR}/frontend"
+  npm run test:p0-client
 )
 
 echo "==> Building frontend for desktop API ${API_BASE}"
@@ -45,6 +57,7 @@ echo "==> Building frontend for desktop API ${API_BASE}"
   export NEXT_PUBLIC_ALETHEIA_PRIVATE_AUTH_TOKEN=""
   export NEXT_TELEMETRY_DISABLED="1"
   npm run build
+  npm run test:desktop-csp-runtime
 )
 
 echo "==> Preparing traced frontend runtime"
@@ -67,6 +80,8 @@ echo "==> Installing desktop packager dependencies"
 echo "==> Packaging Vera desktop app"
 (
   cd "${ROOT_DIR}/desktop"
+  echo "==> Verifying Vera desktop source gates"
+  npm run test:p0-source
   echo "==> Verifying SQLCipher in the Electron utility runtime"
   npm run test:sqlcipher-runtime
   echo "==> Verifying desktop package hygiene"
@@ -107,6 +122,9 @@ echo "==> Verifying packaged startup, migration, and interrupted restore recover
   ALETHEIA_DESKTOP_FRONTEND_PORT=44960 \
   ALETHEIA_DESKTOP_BACKEND_PORT=44961 \
     npm run test:packaged-app
+  ALETHEIA_DESKTOP_FRONTEND_PORT=45160 \
+  ALETHEIA_DESKTOP_BACKEND_PORT=45161 \
+    npm run test:packaged-workspace-e2e
   ALETHEIA_DESKTOP_FRONTEND_PORT=44960 \
   ALETHEIA_DESKTOP_BACKEND_PORT=44961 \
     npm run test:packaged-backup

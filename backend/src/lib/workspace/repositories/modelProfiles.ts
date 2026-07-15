@@ -80,6 +80,15 @@ function capabilities(raw: unknown): Caps {
   }
 }
 
+function sameCapabilities(left: Caps, right: Caps) {
+  return (
+    left.streaming === right.streaming &&
+    left.toolCalling === right.toolCalling &&
+    left.structuredOutput === right.structuredOutput &&
+    left.vision === right.vision
+  );
+}
+
 function nullableString(value: unknown) {
   return value == null ? null : String(value);
 }
@@ -574,6 +583,8 @@ export class ModelProfilesRepository {
       ((input.provider !== undefined && input.provider !== current.provider) ||
         (input.model !== undefined && input.model !== current.model) ||
         (input.baseUrl !== undefined && input.baseUrl !== current.baseUrl) ||
+        (input.capabilities !== undefined &&
+          !sameCapabilities(input.capabilities, current.capabilities)) ||
         (input.credentialRef !== undefined &&
           this.credentialReferenceIdentity(nextCredentialRef) !==
             this.credentialReferenceIdentity(current.credentialRef)) ||
@@ -598,6 +609,8 @@ export class ModelProfilesRepository {
       (input.provider !== undefined && input.provider !== current.provider) ||
       (input.model !== undefined && input.model !== current.model) ||
       (input.baseUrl !== undefined && input.baseUrl !== current.baseUrl) ||
+      (input.capabilities !== undefined &&
+        !sameCapabilities(input.capabilities, current.capabilities)) ||
       (input.credentialRef !== undefined &&
         nextCredentialRef !== current.credentialRef) ||
       (input.credentialOrigin !== undefined &&

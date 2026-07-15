@@ -87,6 +87,21 @@ function seed(database: WorkspaceDatabase) {
       now,
       now,
     );
+  if (
+    database
+      .prepare(
+        "SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name='model_profile_connection_tests'",
+      )
+      .get()
+  ) {
+    database
+      .prepare(
+        `INSERT INTO model_profile_connection_tests
+          (profile_id,connection_revision,status,error_code,retryable,latency_ms,tested_at)
+         VALUES (?,0,'passed',NULL,0,1,?)`,
+      )
+      .run(MODEL, now);
+  }
   for (const [id, name] of [
     [PROJECT, "Audit Project"],
     [OTHER_PROJECT, "Other Project"],
@@ -202,8 +217,8 @@ async function auditRouter(
         input_binding: {},
       }),
     });
-    assert.equal(run.status, 404);
-    assert.equal(WORKSPACE_WORKFLOW_EXECUTION_CAPABILITY.enabled, false);
+    assert.equal(run.status, 503);
+    assert.equal(WORKSPACE_WORKFLOW_EXECUTION_CAPABILITY.enabled, true);
     const unsafe = await fetch(base, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -800,36 +815,39 @@ async function run() {
       idempotencyKey: "workflow-audit-skill-only",
       inputBinding: {},
     });
+    assert.equal(mikeAssistant.steps.length, 0);
+    assert.match(
+      skillOnlyRun.snapshot.steps[0]?.id ?? "",
+      /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    assert.deepEqual(skillOnlyRun.snapshot.steps, [
+      {
+        id: skillOnlyRun.snapshot.steps[0]?.id,
+        kind: "prompt",
+        title: "Workflow instructions",
+        prompt: "Apply the updated assistant review rubric.",
+      },
+    ]);
     await runtime.handle(
       createClaimedContext(jobsRepository, skillOnlyRun.detail.run.jobId!),
     );
     assert.equal(
       workflows.getRun(skillOnlyRun.detail.run.id).run.status,
-      "failed",
+      "complete",
     );
-    assert.equal(
-      workflows.getRun(skillOnlyRun.detail.run.id).run.error?.code,
-      "workflow_step_unsupported",
-    );
+    assert.equal(workflows.getRun(skillOnlyRun.detail.run.id).run.error, null);
     assert.equal(
       jobsRepository.getJob(skillOnlyRun.detail.run.jobId!)?.status,
-      "failed",
+      "complete",
     );
 
-    const tabularOnlyRun = workflows.prepareRun(mikeTabular.id, {
-      idempotencyKey: "workflow-audit-tabular-only",
-      inputBinding: {},
-    });
-    await runtime.handle(
-      createClaimedContext(jobsRepository, tabularOnlyRun.detail.run.jobId!),
-    );
-    assert.equal(
-      workflows.getRun(tabularOnlyRun.detail.run.id).run.status,
-      "failed",
-    );
-    assert.equal(
-      workflows.getRun(tabularOnlyRun.detail.run.id).run.error?.code,
-      "workflow_step_unsupported",
+    expectWorkspaceError(
+      () =>
+        workflows.prepareRun(mikeTabular.id, {
+          idempotencyKey: "workflow-audit-tabular-only",
+          inputBinding: {},
+        }),
+      412,
     );
 
     const cancelledWorkflow = createWorkflow(workflows, "Cancelled Run");

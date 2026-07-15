@@ -5,6 +5,9 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 
+const AUTH_TOKEN =
+  "vera-sqlcipher-runtime-audit-token-00000000000000000000000000000000";
+
 function freePort() {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -28,8 +31,7 @@ async function waitForJson(url, timeoutMs) {
     try {
       const response = await fetch(url, {
         headers: {
-          "x-aletheia-user-id": "electron-sqlcipher-auditor",
-          "x-aletheia-user-email": "electron-auditor@aletheia.local",
+          Authorization: `Bearer ${AUTH_TOKEN}`,
         },
       });
       if (response.ok) return response.json();
@@ -55,6 +57,7 @@ async function main() {
     path.join(os.tmpdir(), "aletheia-electron-sqlcipher-"),
   );
   const port = await freePort();
+  const applicationKey = crypto.randomBytes(32).toString("base64");
   const key = crypto.randomBytes(32).toString("base64");
   const child = utilityProcess.fork(backendEntry, [], {
     cwd: backendDir,
@@ -68,17 +71,22 @@ async function main() {
       FRONTEND_URL: `http://127.0.0.1:${port + 1}`,
       DOWNLOAD_SIGNING_SECRET:
         "electron-sqlcipher-audit-download-secret-0123456789abcdef",
-      ALETHEIA_AUTH_MODE: "single_user",
+      ALETHEIA_AUTH_MODE: "private_token",
+      ALETHEIA_PRIVATE_AUTH_TOKEN: AUTH_TOKEN,
+      ALETHEIA_LOCAL_USER_ID: "electron-sqlcipher-auditor",
+      ALETHEIA_LOCAL_USER_EMAIL: "electron-auditor@vera.local",
       ALETHEIA_DATA_DIR: dataDir,
       ALETHEIA_DEMO_SEED_ENABLED: "false",
-      ALETHEIA_APPLICATION_ENCRYPTION: "disabled",
+      ALETHEIA_APPLICATION_ENCRYPTION: "required",
+      ALETHEIA_MASTER_KEY_SOURCE: "env",
+      ALETHEIA_MASTER_KEY_BASE64: applicationKey,
       ALETHEIA_DATABASE_ENCRYPTION: "sqlcipher_required",
       ALETHEIA_DATABASE_KEY_SOURCE: "env",
       ALETHEIA_DATABASE_KEY_BASE64: key,
       ALETHEIA_SEMANTIC_INDEX_ENABLED: "false",
       ALETHEIA_SEMANTIC_INDEX_DRIVER: "disabled",
     },
-    serviceName: "Aletheia SQLCipher runtime audit",
+    serviceName: "Vera SQLCipher runtime audit",
     stdio: "pipe",
   });
   let stderr = "";
@@ -111,7 +119,7 @@ async function main() {
       `${JSON.stringify(
         {
           ok: true,
-          suite: "aletheia-electron-sqlcipher-runtime-v1",
+          suite: "vera-electron-sqlcipher-runtime-v1",
           electron: process.versions.electron,
           node: process.versions.node,
           modules: process.versions.modules,

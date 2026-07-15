@@ -2,6 +2,8 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
+const SMOKE_APPLICATION_KEY = Buffer.alloc(32, 0x56).toString("base64");
+
 function npmCommand() {
   return process.platform === "win32" ? "npm.cmd" : "npm";
 }
@@ -47,6 +49,10 @@ export default async function globalSetup() {
     PORT: String(backendPort),
     FRONTEND_URL: frontendUrl,
     ALETHEIA_AUTH_MODE: "single_user",
+    VERA_WORKSPACE_ALLOW_SINGLE_USER_DEV: "true",
+    ALETHEIA_APPLICATION_ENCRYPTION: "required",
+    ALETHEIA_MASTER_KEY_SOURCE: "env",
+    ALETHEIA_MASTER_KEY_BASE64: SMOKE_APPLICATION_KEY,
     ALETHEIA_DATA_DIR: dataDir,
     ALETHEIA_LOCAL_USER_ID: "local-user",
     ALETHEIA_LOCAL_USER_EMAIL: "local@aletheia.internal",

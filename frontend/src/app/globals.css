@@ -139,6 +139,32 @@
     }
 }
 
+/* Vera Settings applies only the server-persisted theme. The selectors below
+   extend Mike's glass shell without introducing a renderer-side preference
+   cache. */
+.dark body .bg-gray-50\/80 {
+    background-color: rgb(15 17 21 / 0.96) !important;
+}
+
+.dark #vera-sidebar {
+    border-color: rgb(255 255 255 / 0.1) !important;
+    background-color: rgb(24 27 32 / 0.82) !important;
+    color: rgb(229 231 235);
+    box-shadow: none !important;
+}
+
+.dark #vera-sidebar :is(.text-black, .text-gray-900, .text-gray-700) {
+    color: rgb(229 231 235) !important;
+}
+
+.dark #vera-sidebar :is(.hover\:bg-gray-100:hover, .bg-gray-200\/60) {
+    background-color: rgb(255 255 255 / 0.1) !important;
+}
+
+.vera-settings-shell {
+    color: var(--foreground);
+}
+
 /* Aletheia local-client appearance preferences. */
 .aletheia-shell {
     --aletheia-document-scale: 1;

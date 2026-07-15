@@ -8,6 +8,7 @@ import {
   WorkspaceDatabase,
 } from "../lib/workspace/database";
 import {
+  ASSISTANT_DURABLE_EVENTS_V10_MIGRATION,
   MODEL_CONNECTION_READINESS_V9_MIGRATION,
   WORKSPACE_MIGRATIONS,
   type WorkspaceDatabaseAdapter,
@@ -18,7 +19,7 @@ import { MODEL_CONNECTION_TEST_ERROR_CODES } from "../lib/workspace/modelConnect
 const root = mkdtempSync(
   path.join(os.tmpdir(), "vera-model-readiness-v9-audit-"),
 );
-const V8_MIGRATIONS = WORKSPACE_MIGRATIONS.slice(0, -1);
+const V8_MIGRATIONS = WORKSPACE_MIGRATIONS.slice(0, 8);
 const enabledProfileId = "00000000-0000-4000-8000-000000000901";
 const disabledProfileId = "00000000-0000-4000-8000-000000000902";
 const projectId = "00000000-0000-4000-8000-000000000903";
@@ -188,10 +189,10 @@ function auditUpgradeAndConnectionRevisionSemantics() {
 
   const upgraded = new WorkspaceDatabase(databasePath);
   try {
-    assert.equal(upgraded.migration?.currentVersion, 9);
+    assert.equal(upgraded.migration?.currentVersion, 10);
     assert.deepEqual(
       upgraded.migration?.applied.map((entry) => entry.version),
-      [9],
+      [9, 10],
     );
     assert.equal(
       columnNames(upgraded, "model_profiles").includes("connection_revision"),
@@ -376,15 +377,18 @@ function insertConnectionResult(
 function auditNewInstallAndStrictConstraints() {
   const database = new WorkspaceDatabase(path.join(root, "new-install.db"));
   try {
-    assert.equal(database.migration?.currentVersion, 9);
+    assert.equal(database.migration?.currentVersion, 10);
     assert.deepEqual(
       database.migration?.applied.map((entry) => entry.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9],
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
     );
-    assert.equal(WORKSPACE_MIGRATIONS.at(-1)?.version, 9);
+    assert.equal(
+      WORKSPACE_MIGRATIONS.at(8),
+      MODEL_CONNECTION_READINESS_V9_MIGRATION,
+    );
     assert.equal(
       WORKSPACE_MIGRATIONS.at(-1),
-      MODEL_CONNECTION_READINESS_V9_MIGRATION,
+      ASSISTANT_DURABLE_EVENTS_V10_MIGRATION,
     );
     insertProfile(database, {
       id: disabledProfileId,
@@ -715,7 +719,7 @@ try {
   process.env.ALETHEIA_DATABASE_ENCRYPTION = "metadata_plaintext";
   assert.deepEqual(
     WORKSPACE_MIGRATIONS.map((migration) => migration.version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
   );
   assert.deepEqual(
     V8_MIGRATIONS.map((migration) => migration.version),

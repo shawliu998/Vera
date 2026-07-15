@@ -13,6 +13,7 @@ import type {
 import { WorkspaceDatabase } from "../lib/workspace/database";
 import { WorkspaceBlobRecordsRepository } from "../lib/workspace/repositories/blobRecords";
 import { ChatsRepository } from "../lib/workspace/repositories/chats";
+import { ModelConnectionTestsRepository } from "../lib/workspace/repositories/modelConnectionTests";
 import { ModelProfilesRepository } from "../lib/workspace/repositories/modelProfiles";
 import { ProjectsRepository } from "../lib/workspace/repositories/projects";
 import { SettingsRepository } from "../lib/workspace/repositories/settings";
@@ -100,6 +101,7 @@ try {
   const blobs = new AuditBlobStore();
   const projects = new ProjectsRepository(database);
   const profiles = new ModelProfilesRepository(database);
+  const connectionTests = new ModelConnectionTestsRepository(database);
   const settings = new SettingsRepository(database);
   const chats = new ChatsRepository(database);
   const blobRecords = new WorkspaceBlobRecordsRepository(database);
@@ -199,6 +201,17 @@ try {
       ),
     /Credential locator/,
   );
+  const readiness = connectionTests.storeIfCurrent({
+    profileId: profile.id,
+    expectedConnectionRevision:
+      profiles.requireStored(profile.id).connectionRevision,
+    status: "passed",
+    errorCode: null,
+    retryable: false,
+    latencyMs: 1,
+    testedAt: now().toISOString(),
+  });
+  assert.equal(readiness.stored, true);
   profiles.update(profile.id, { enabled: true, now: now().toISOString() });
 
   const project = projectService.create({ name: "Audit project" });

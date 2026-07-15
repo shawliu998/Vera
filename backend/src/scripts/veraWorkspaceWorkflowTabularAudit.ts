@@ -192,6 +192,13 @@ function seed(database: WorkspaceDatabase) {
       clock().toISOString(),
       clock().toISOString(),
     );
+  database
+    .prepare(
+      `INSERT INTO model_profile_connection_tests
+        (profile_id,connection_revision,status,error_code,retryable,latency_ms,tested_at)
+       VALUES (?,0,'passed',NULL,0,1,?)`,
+    )
+    .run(MODEL, clock().toISOString());
   const insertProject = database.prepare(
     `INSERT INTO projects
       (id, name, default_model_profile_id, status, created_at, updated_at)
@@ -465,7 +472,7 @@ async function main() {
           idempotencyKey: "workflow-tabular-audit-empty-tabular",
         }),
       412,
-      /no executable/,
+      /Tabular review runtime/,
     );
     database.exec("PRAGMA ignore_check_constraints = ON");
     database
@@ -555,8 +562,8 @@ async function main() {
           modelProfileId: MODEL,
           idempotencyKey: "workflow-tabular-audit-cumulative-rejected",
         }),
-      409,
-      /execution limits/,
+      412,
+      /Tabular review runtime/,
     );
 
     const nonRunningPortRun = workflows.startRun(workflow.id, {

@@ -496,8 +496,12 @@ function auditStrictInputsRowsAndNormalization() {
 }
 
 function auditPreV9Fallback() {
+  const readinessMigrationIndex = WORKSPACE_MIGRATIONS.findIndex(
+    (migration) => migration.version === 9,
+  );
+  assert.ok(readinessMigrationIndex > 0);
   const database = new WorkspaceDatabase(path.join(root, "pre-v9.db"), {
-    migrations: WORKSPACE_MIGRATIONS.slice(0, -1),
+    migrations: WORKSPACE_MIGRATIONS.slice(0, readinessMigrationIndex),
   });
   try {
     const profiles = new ModelProfilesRepository(database);

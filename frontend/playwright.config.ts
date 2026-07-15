@@ -7,6 +7,7 @@ const frontendPort = Number(
 const backendPort = Number(process.env.ALETHEIA_UI_SMOKE_BACKEND_PORT ?? 3411);
 const frontendUrl = `http://127.0.0.1:${frontendPort}`;
 const backendUrl = `http://127.0.0.1:${backendPort}`;
+const smokeApplicationKey = Buffer.alloc(32, 0x56).toString("base64");
 const repoRoot = path.resolve(__dirname, "..");
 const smokeDistDir = ".next-ui-smoke";
 const dataDir =
@@ -48,6 +49,10 @@ export default defineConfig({
         PORT: String(backendPort),
         FRONTEND_URL: frontendUrl,
         ALETHEIA_AUTH_MODE: "single_user",
+        VERA_WORKSPACE_ALLOW_SINGLE_USER_DEV: "true",
+        ALETHEIA_APPLICATION_ENCRYPTION: "required",
+        ALETHEIA_MASTER_KEY_SOURCE: "env",
+        ALETHEIA_MASTER_KEY_BASE64: smokeApplicationKey,
         ALETHEIA_DATA_DIR: dataDir,
         ALETHEIA_LOCAL_USER_ID: "local-user",
         ALETHEIA_LOCAL_USER_EMAIL: "local@aletheia.internal",

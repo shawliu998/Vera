@@ -1,37 +1,31 @@
 import type { Metadata } from "next";
 import "./globals.css";
 
+// Desktop CSP nonces are generated per request by src/proxy.ts. Next can only
+// attach those nonces to framework and hydration scripts during dynamic render.
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   metadataBase: new URL("https://vera.local"),
   title: "Vera",
-  description: "Local legal workspace.",
+  description: "Vera 本地法律工作空间。",
   icons: {
-    icon: [
-      { url: "/icon.png", type: "image/png", sizes: "1024x1024" },
-      { url: "/favicon.ico" },
-    ],
-    apple: "/apple-touch-icon.png",
+    icon: [{ url: "/vera-mark.png", type: "image/png" }],
+    apple: "/vera-mark.png",
   },
   openGraph: {
     type: "website",
     url: "https://vera.local",
     siteName: "Vera",
     title: "Vera",
-    description: "Local legal workspace.",
-    images: [
-      {
-        url: "/link-image.jpg",
-        width: 1200,
-        height: 651,
-        alt: "Vera",
-      },
-    ],
+    description: "Vera 本地法律工作空间。",
+    images: [{ url: "/vera-mark.png", width: 208, height: 208, alt: "Vera" }],
   },
   twitter: {
-    card: "summary_large_image",
+    card: "summary",
     title: "Vera",
-    description: "Local legal workspace.",
-    images: ["/link-image.jpg"],
+    description: "Vera 本地法律工作空间。",
+    images: ["/vera-mark.png"],
   },
 };
 

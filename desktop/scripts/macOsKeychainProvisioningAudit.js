@@ -2,10 +2,12 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const {
+  deleteGenericPassword,
   SECURITY_MAX_BUFFER_BYTES,
   SECURITY_PATH,
   SECURITY_TIMEOUT_MS,
@@ -69,6 +71,10 @@ function assertNoOverwrite(calls) {
   );
 }
 
+function promptedPasswordInput(secret) {
+  return `${secret}\n${secret}\n`;
+}
+
 function assertSharedSecurityOptions(options, stdinMode) {
   assert.equal(options.encoding, "utf8");
   assert.equal(options.timeout, SECURITY_TIMEOUT_MS);
@@ -96,7 +102,7 @@ function auditMissingCreatesNewKey() {
       args: ["add-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"],
       assert({ options }) {
         assertSharedSecurityOptions(options, "pipe");
-        assert.equal(options.input, `${encoded}\n`);
+        assert.equal(options.input, promptedPasswordInput(encoded));
       },
     },
     {
@@ -248,7 +254,7 @@ function auditVerifyFailureFailsClosed() {
       args: ["add-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"],
       assert({ options }) {
         assertSharedSecurityOptions(options, "pipe");
-        assert.equal(options.input, `${encoded}\n`);
+        assert.equal(options.input, promptedPasswordInput(encoded));
       },
     },
     {
@@ -295,18 +301,79 @@ function auditNotFoundClassifier() {
   );
 }
 
+function auditRealFreshKeyProvisioning() {
+  if (process.platform !== "darwin") return "skipped";
+  const suffix = crypto.randomBytes(12).toString("hex");
+  const service = `ai.vera.key-provisioning-audit.${suffix}`;
+  const account = `vera-key-${suffix}`;
+  const generated = crypto.randomBytes(32);
+  const encoded = generated.toString("base64");
+  let provisioned = false;
+  try {
+    ensureMacOsKeychainKey({
+      service,
+      account,
+      label: "fresh install audit",
+      productName: PRODUCT_NAME,
+      platform: "darwin",
+      randomBytesImpl: () => generated,
+    });
+    provisioned = true;
+    const directRead = String(
+      execFileSync(
+        SECURITY_PATH,
+        ["find-generic-password", "-s", service, "-a", account, "-w"],
+        {
+          encoding: "utf8",
+          timeout: SECURITY_TIMEOUT_MS,
+          maxBuffer: SECURITY_MAX_BUFFER_BYTES,
+          stdio: ["ignore", "pipe", "pipe"],
+          shell: false,
+        },
+      ),
+    ).replace(/\r?\n$/, "");
+    assert.equal(directRead, encoded);
+    ensureMacOsKeychainKey({
+      service,
+      account,
+      label: "fresh install audit",
+      productName: PRODUCT_NAME,
+      platform: "darwin",
+      randomBytesImpl() {
+        throw new Error("A verified existing key must be reused.");
+      },
+    });
+  } finally {
+    const deleted = deleteGenericPassword({ service, account });
+    if (provisioned) assert.equal(deleted, true);
+  }
+  return "passed";
+}
+
 function auditStaticIntegration() {
   const main = fs.readFileSync(path.join(__dirname, "..", "main.js"), "utf8");
   const packageJson = JSON.parse(
     fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"),
   );
-  assert.match(main, /require\("\.\/macOsKeychain"\)/);
+  assert.match(
+    main,
+    /desktopUtilityModulePath\("macOsKeychain\.js"\)/,
+    "the packaged host must load Keychain code from the real external utility directory",
+  );
   assert.match(main, /productName: PRODUCT_NAME/);
   assert.equal(
     packageJson.scripts["test:keychain-provisioning"],
     "node scripts/macOsKeychainProvisioningAudit.js",
   );
-  assert.equal(packageJson.build.files.includes("macOsKeychain.js"), true);
+  assert.equal(packageJson.build.files.includes("macOsKeychain.js"), false);
+  assert.equal(
+    packageJson.build.extraResources.some(
+      (entry) =>
+        entry.from === "macOsKeychain.js" &&
+        entry.to === "aletheia/desktop/macOsKeychain.js",
+    ),
+    true,
+  );
 }
 
 auditMissingCreatesNewKey();
@@ -317,6 +384,7 @@ auditUnexpectedCommandErrorFailsClosed();
 auditInvalidExistingFailsClosed();
 auditVerifyFailureFailsClosed();
 auditNotFoundClassifier();
+const realFreshProvisioning = auditRealFreshKeyProvisioning();
 auditStaticIntegration();
 
 console.log(
@@ -329,8 +397,9 @@ console.log(
         "valid existing 32-byte base64 key is reused",
         "permission denial, timeout, and command errors fail closed",
         "invalid existing key material fails closed without replacement",
-        "post-create verification mismatch fails closed without overwrite",
-        "static desktop wiring and package inclusion stay intact",
+      "post-create verification mismatch fails closed without overwrite",
+      `real fresh base64 key create/direct-read/reuse/delete round trip: ${realFreshProvisioning}`,
+      "static desktop wiring and package inclusion stay intact",
       ],
     },
     null,

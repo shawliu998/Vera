@@ -17,6 +17,15 @@ export type CredentialStorageInput = CredentialResolutionInput & {
   secret: string;
 };
 
+/**
+ * Credential stores cross a process boundary in the desktop build.  The
+ * explicit mode prevents a caller from discovering an asynchronous store only
+ * after it has already started a write.
+ */
+export const CREDENTIAL_STORE_OPERATION_MODE = Symbol(
+  "vera.workspace.credential-store.operation-mode",
+);
+
 export class CredentialStoreCollisionError extends Error {
   readonly code = "CREDENTIAL_STORE_COLLISION";
 
@@ -32,10 +41,13 @@ const OPAQUE_CREDENTIAL_REFERENCE =
   /^keychain:\/\/vera\/model-profile\/([0-9a-f-]{36})\/([a-z0-9]{16,128})$/i;
 
 export interface CredentialResolverPort {
-  resolve(input: CredentialResolutionInput): string;
+  resolve(input: CredentialResolutionInput): string | Promise<string>;
 }
 
 export interface CredentialStorePort extends CredentialResolverPort {
+  readonly [CREDENTIAL_STORE_OPERATION_MODE]: "synchronous" | "asynchronous";
+  /** A synchronous snapshot. Async stores must report true only after a successful probe. */
+  isAvailable(): boolean;
   /**
    * Creates the exact preallocated locator without replacement. Implementations
    * must throw CredentialStoreCollisionError only when collision-before-write
@@ -43,9 +55,23 @@ export interface CredentialStorePort extends CredentialResolverPort {
    * the item. A successful return attests that the exact reference and binding
    * were stored.
    */
-  store(input: CredentialStorageInput): void;
+  store(input: CredentialStorageInput): void | Promise<void>;
   /** The binding is required to reconstruct an origin-bound account after restart. */
+  delete(input: CredentialDeletionInput): void | Promise<void>;
+}
+
+export interface SynchronousCredentialStorePort extends CredentialStorePort {
+  readonly [CREDENTIAL_STORE_OPERATION_MODE]: "synchronous";
+  resolve(input: CredentialResolutionInput): string;
+  store(input: CredentialStorageInput): void;
   delete(input: CredentialDeletionInput): void;
+}
+
+export interface AsynchronousCredentialStorePort extends CredentialStorePort {
+  readonly [CREDENTIAL_STORE_OPERATION_MODE]: "asynchronous";
+  resolve(input: CredentialResolutionInput): Promise<string>;
+  store(input: CredentialStorageInput): Promise<void>;
+  delete(input: CredentialDeletionInput): Promise<void>;
 }
 
 export function buildStoredCredentialReference(

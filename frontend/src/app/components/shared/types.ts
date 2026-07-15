@@ -88,6 +88,11 @@ export interface EditAnnotation {
 }
 
 export type AssistantEvent =
+  | {
+      type: "status";
+      status: "queued" | "running" | "retrying";
+      isStreaming?: boolean;
+    }
   | { type: "reasoning"; text: string; isStreaming?: boolean }
   | { type: "error"; message: string }
   | {
@@ -113,10 +118,21 @@ export type AssistantEvent =
       isStreaming?: boolean;
     }
   | {
+      type: "doc_read_start";
+      filename: string;
+      isStreaming?: boolean;
+    }
+  | {
       type: "doc_find";
       filename: string;
       query: string;
       total_matches: number;
+      isStreaming?: boolean;
+    }
+  | {
+      type: "doc_find_start";
+      filename: string;
+      query: string;
       isStreaming?: boolean;
     }
   | {
@@ -255,6 +271,8 @@ export type CaseCitationQuote = {
 };
 
 export interface Message {
+  /** Durable local message identity returned by the Vera workspace. */
+  id?: string;
   role: "user" | "assistant";
   content: string;
   files?: { filename: string; document_id?: string }[];
@@ -263,6 +281,19 @@ export interface Message {
   annotations?: CitationAnnotation[];
   citationStatus?: "started" | "partial" | "final";
   events?: AssistantEvent[];
+  generation?: {
+    jobId: string;
+    status:
+      | "queued"
+      | "running"
+      | "complete"
+      | "failed"
+      | "cancelled"
+      | "interrupted";
+    retryable: boolean;
+    cancelRequested: boolean;
+    terminal: boolean;
+  };
   /** Set when streaming failed; rendered as a red error block. */
   error?: string;
 }

@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import { Loader2, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/app/i18n";
 
 type ConfirmStatus = "idle" | "loading" | "complete";
 
@@ -25,36 +26,43 @@ export function ConfirmPopup({
     open,
     title,
     message,
-    confirmLabel = "Confirm",
+    confirmLabel,
     confirmStatus = "idle",
-    cancelLabel = "Cancel",
+    cancelLabel,
     cancelDisabled = false,
     onConfirm,
     onCancel,
     confirmDisabled = false,
     className,
 }: ConfirmPopupProps) {
+    const { t } = useI18n();
     if (!open) return null;
+    const resolvedConfirmText = confirmLabel ?? t("common.actions.confirm");
+    const resolvedCancelLabel = cancelLabel ?? t("common.actions.cancel");
     const confirmBusy = confirmStatus === "loading";
     const resolvedConfirmDisabled = confirmDisabled || confirmStatus !== "idle";
     const normalizedConfirmLabel =
-        typeof confirmLabel === "string" ? confirmLabel : "Confirm";
-    const isDeleteAction = normalizedConfirmLabel.toLowerCase() === "delete";
+        typeof resolvedConfirmText === "string"
+            ? resolvedConfirmText
+            : t("common.actions.confirm");
+    const isDeleteAction =
+        normalizedConfirmLabel === t("common.actions.delete") ||
+        normalizedConfirmLabel.toLowerCase() === "delete";
     const resolvedConfirmLabel =
         confirmStatus === "loading" ? (
             <span className="inline-flex h-full items-center gap-1.5">
                 <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
-                {progressiveLabel(normalizedConfirmLabel)}
+                {resolvedConfirmText}
             </span>
         ) : confirmStatus === "complete" ? (
-            completedLabel(normalizedConfirmLabel)
+            resolvedConfirmText
         ) : isDeleteAction ? (
             <span className="inline-flex h-full items-center gap-1.5">
                 <Trash2 className="h-3 w-3 shrink-0" />
-                {confirmLabel}
+                {resolvedConfirmText}
             </span>
         ) : (
-            confirmLabel
+            resolvedConfirmText
         );
 
     return createPortal(
@@ -84,7 +92,7 @@ export function ConfirmPopup({
                         disabled={cancelDisabled}
                         className="px-3 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:text-gray-950 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-gray-700"
                     >
-                        {cancelLabel}
+                        {resolvedCancelLabel}
                     </button>
                     <button
                         type="button"
@@ -105,16 +113,4 @@ export function ConfirmPopup({
         </div>,
         document.body,
     );
-}
-
-function progressiveLabel(label: string) {
-    const lower = label.toLowerCase();
-    if (lower.endsWith("e")) return `${label.slice(0, -1)}ing...`;
-    return `${label}ing...`;
-}
-
-function completedLabel(label: string) {
-    const lower = label.toLowerCase();
-    if (lower.endsWith("e")) return `${label}d`;
-    return `${label}ed`;
 }

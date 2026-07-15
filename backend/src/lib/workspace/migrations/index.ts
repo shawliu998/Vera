@@ -7,6 +7,7 @@ import { WORKFLOW_RUNTIME_V6_MIGRATION } from "./v6WorkflowRuntime";
 import { TABULAR_MIKE_SEMANTICS_V7_MIGRATION } from "./v7TabularMikeSemantics";
 import { MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION } from "./v8ModelCredentialOrigin";
 import { MODEL_CONNECTION_READINESS_V9_MIGRATION } from "./v9ModelConnectionReadiness";
+import { ASSISTANT_DURABLE_EVENTS_V10_MIGRATION } from "./v10AssistantDurableEvents";
 
 export {
   detectWorkspaceDatabaseCapabilities,
@@ -31,6 +32,7 @@ export { WORKFLOW_RUNTIME_V6_MIGRATION } from "./v6WorkflowRuntime";
 export { TABULAR_MIKE_SEMANTICS_V7_MIGRATION } from "./v7TabularMikeSemantics";
 export { MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION } from "./v8ModelCredentialOrigin";
 export { MODEL_CONNECTION_READINESS_V9_MIGRATION } from "./v9ModelConnectionReadiness";
+export { ASSISTANT_DURABLE_EVENTS_V10_MIGRATION } from "./v10AssistantDurableEvents";
 
 export const WORKSPACE_MIGRATIONS = [
   INITIAL_WORKSPACE_MIGRATION,
@@ -42,4 +44,5 @@ export const WORKSPACE_MIGRATIONS = [
   TABULAR_MIKE_SEMANTICS_V7_MIGRATION,
   MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION,
   MODEL_CONNECTION_READINESS_V9_MIGRATION,
+  ASSISTANT_DURABLE_EVENTS_V10_MIGRATION,
 ] as const;

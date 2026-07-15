@@ -21,7 +21,7 @@ const frontendPort = Number(
 const backendPort = Number(
   process.env.ALETHEIA_DESKTOP_BACKEND_PORT ?? 43761,
 );
-const frontendUrl = `http://127.0.0.1:${frontendPort}/projects`;
+const frontendUrl = `http://127.0.0.1:${frontendPort}/assistant`;
 const backendBaseUrl = `http://127.0.0.1:${backendPort}`;
 const backendHealthUrl = `${backendBaseUrl}/health`;
 
@@ -79,9 +79,9 @@ async function main() {
   const launchApp = (exitAfterRestoreSwap) =>
     electron.launch({
       executablePath,
-      args: [`--user-data-dir=${userDataDir}`],
       env: {
         ...process.env,
+        VERA_DESKTOP_PROFILE_DIR: userDataDir,
         ALETHEIA_DEMO_SEED_ENABLED: "false",
         ALETHEIA_REQUIRE_ENCRYPTED_VOLUME: "false",
         ALETHEIA_APPLICATION_ENCRYPTION: "required",
@@ -188,7 +188,13 @@ async function main() {
     assert.ok(inspected.checks.every((check) => check.ok));
 
     const info = await page.evaluate(() => window.aletheiaDesktop.getInfo());
-    const postBackupMarker = path.join(info.dataDir, "post-backup-marker.txt");
+    assert.equal("dataDir" in info, false);
+    assert.equal("logsDir" in info, false);
+    const postBackupMarker = path.join(
+      userDataDir,
+      "aletheia-data",
+      "post-backup-marker.txt",
+    );
     fs.writeFileSync(postBackupMarker, "must disappear after restore\n", {
       mode: 0o600,
     });

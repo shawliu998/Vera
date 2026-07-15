@@ -42,9 +42,22 @@ import {
   type WorkspaceV1RuntimePort,
 } from "./routes/workspaceV1";
 import {
+  createWorkspaceWorkflowRunsV1Router,
   createWorkspaceWorkflowsV1Router,
   type WorkspaceWorkflowsV1Port,
 } from "./routes/workspaceWorkflowsV1";
+import {
+  createWorkspaceChatsV1Router,
+  type WorkspaceChatsV1Port,
+} from "./routes/workspaceChatsV1";
+import {
+  createWorkspaceSettingsV1Router,
+  type WorkspaceModelSettingsRuntimePort,
+} from "./routes/workspaceSettingsV1";
+import {
+  createWorkspaceTabularV1Router,
+  type WorkspaceTabularV1RuntimePort,
+} from "./routes/workspaceTabularV1";
 import {
   createWorkspaceRuntime,
   type WorkspaceRuntimeHealth,
@@ -69,6 +82,11 @@ type Closable = {
 
 export interface VeraWorkspaceRuntime extends WorkspaceV1RuntimePort {
   readonly workflowCrud: WorkspaceWorkflowsV1Port;
+  readonly modelSettings: WorkspaceModelSettingsRuntimePort;
+  readonly chats: WorkspaceChatsV1Port;
+  readonly tabular: WorkspaceTabularV1RuntimePort;
+  assistantGenerationAvailable(): boolean;
+  tabularGenerationAvailable(): boolean;
   start(): Promise<void>;
   stop(): Promise<void>;
   health(): WorkspaceRuntimeHealth;
@@ -185,6 +203,50 @@ function makeLimiter(options: {
   });
 }
 
+/** A single local probe budget. It deliberately ignores all forwarded headers. */
+function makeModelProbeLimiter(options: { windowMs: number; max: number }) {
+  let windowStartedAt = 0;
+  let attempts = 0;
+  return (request: Request, response: Response, next: NextFunction) => {
+    if (request.method !== "POST") {
+      next();
+      return;
+    }
+    const now = Date.now();
+    if (windowStartedAt === 0 || now - windowStartedAt >= options.windowMs) {
+      windowStartedAt = now;
+      attempts = 0;
+    }
+    attempts += 1;
+    response.setHeader(
+      "RateLimit-Policy",
+      `${options.max};w=${Math.ceil(options.windowMs / 1000)}`,
+    );
+    response.setHeader("RateLimit-Limit", String(options.max));
+    response.setHeader(
+      "RateLimit-Remaining",
+      String(Math.max(0, options.max - attempts)),
+    );
+    if (attempts > options.max) {
+      const retryAfterSeconds = Math.max(
+        1,
+        Math.ceil((windowStartedAt + options.windowMs - now) / 1000),
+      );
+      response.setHeader("Retry-After", String(retryAfterSeconds));
+      response
+        .status(429)
+        .json(
+          errorEnvelope(
+            "RATE_LIMITED",
+            "Too many model connection tests. Please try again later.",
+          ),
+        );
+      return;
+    }
+    next();
+  };
+}
+
 function auditMutationGuard(
   shouldBlock: () => boolean,
 ): (request: Request, response: Response, next: NextFunction) => void {
@@ -263,6 +325,10 @@ export function createVeraApplication(
     max: envInt(env, "RATE_LIMIT_EXTERNAL_SOURCE_MAX", 20),
     message:
       "Too many external-source retrieval requests. Please try again later.",
+  });
+  const modelProbeLimiter = makeModelProbeLimiter({
+    windowMs: minutes(envInt(env, "RATE_LIMIT_MODEL_PROBE_WINDOW_MINUTES", 1)),
+    max: envInt(env, "RATE_LIMIT_MODEL_PROBE_MAX", 8),
   });
 
   app.disable("x-powered-by");
@@ -361,9 +427,32 @@ export function createVeraApplication(
   workspaceApi.use(createWorkspaceAuthMiddleware(env));
   workspaceApi.use(mutationGuard);
   workspaceApi.use(applyWorkspaceUploadLimit);
+  workspaceApi.use("/model-profiles/:id/test", modelProbeLimiter);
+  workspaceApi.use(
+    createWorkspaceSettingsV1Router({ runtime: options.runtime.modelSettings }),
+  );
+  workspaceApi.use(
+    createWorkspaceChatsV1Router(options.runtime.chats, {
+      capabilities: {
+        generation: options.runtime.assistantGenerationAvailable(),
+      },
+    }),
+  );
+  workspaceApi.use(
+    createWorkspaceTabularV1Router(options.runtime.tabular, {
+      requireAuthentication: true,
+      capabilities: {
+        generation: options.runtime.tabularGenerationAvailable(),
+        chat: false,
+      },
+    }),
+  );
   workspaceApi.use(
     "/workflows",
     createWorkspaceWorkflowsV1Router(options.runtime.workflowCrud),
+  );
+  workspaceApi.use(
+    createWorkspaceWorkflowRunsV1Router(options.runtime.workflowCrud),
   );
   workspaceApi.use(
     createWorkspaceV1Router(options.runtime, { requireAuthentication: true }),
@@ -383,7 +472,11 @@ export function createVeraApplication(
           workspace: {
             started: workspace.started,
             draining,
-            pump: { documentParse: workspace.worker.documentParse },
+            pump: {
+              documentParse: workspace.worker.documentParse,
+              assistantGenerate: workspace.worker.assistantGenerate,
+              tabularCell: workspace.worker.tabularCell,
+            },
           },
           audit: {
             enabled: audit.enabled,
@@ -399,7 +492,11 @@ export function createVeraApplication(
           workspace: {
             started: false,
             draining: isDraining(),
-            pump: { documentParse: false },
+            pump: {
+              documentParse: false,
+              assistantGenerate: false,
+              tabularCell: false,
+            },
           },
           audit: { enabled: false, healthy: false, protectionActive: false },
         },

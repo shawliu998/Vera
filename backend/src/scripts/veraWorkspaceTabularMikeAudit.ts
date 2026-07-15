@@ -3426,6 +3426,7 @@ async function auditRouteModule() {
       body: JSON.stringify({
         title: "Route review",
         project_id: ids.project,
+        model_profile_id: ids.model,
         document_ids: [ids.docA],
         columns_config: routeColumns,
       }),
@@ -3578,12 +3579,38 @@ async function auditRouteModule() {
       updateCallsBeforeBadNulPatch,
     );
 
+    const modelPatch = await requestJson(
+      baseUrl,
+      `/tabular-review/${ids.review}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ model_profile_id: ids.model }),
+      },
+    );
+    assert.equal(modelPatch.response.status, 200);
+    assert.equal(
+      (modelPatch.body as { input?: { model_profile_id?: string } }).input
+        ?.model_profile_id,
+      ids.model,
+    );
+
     const capabilities = await requestJson(
       baseUrl,
       "/tabular-review/capabilities",
     );
     assert.equal(capabilities.response.status, 200);
     assert.deepEqual(capabilities.body, { generation: false, chat: false });
+
+    const cancel = await requestJson(
+      baseUrl,
+      `/tabular-review/${ids.review}/cancel-cell`,
+      {
+        method: "POST",
+        body: JSON.stringify({ document_id: ids.docA, column_index: 0 }),
+      },
+    );
+    assert.equal(cancel.response.status, 200);
+    assert.equal(calls.includes("cancel"), true);
 
     const retry = await requestJson(
       baseUrl,
@@ -3683,7 +3710,7 @@ async function auditRouteModule() {
         body: JSON.stringify({ document_id: ids.docA, column_index: 0 }),
       },
     );
-    assert.equal(retry.response.status, 200);
+    assert.equal(retry.response.status, 202);
     assert.ok(calls.some((call) => call.startsWith("retry:")));
 
     const generate = await fetch(

@@ -782,42 +782,84 @@ export class TabularRepository {
       jobId: string;
       nextAttempt: number;
       now: string;
+      allowedStatuses?: TabularCellStatus[];
     },
     enqueueJob: () => { id: string },
   ) {
-    return this.transaction(() => {
-      const cell = this.requireCell(input.cellId);
-      if (cell.status !== "empty" && cell.status !== "failed") {
-        throw new WorkspaceApiError(
-          409,
-          "CONFLICT",
-          "Tabular cell cannot be queued.",
-        );
-      }
-      const job = enqueueJob();
-      if (job.id !== input.jobId) {
-        throw new WorkspaceApiError(
-          500,
-          "INTERNAL_ERROR",
-          "Tabular job state mismatch.",
-        );
-      }
-      this.database
-        .prepare(
-          `UPDATE tabular_cells
-           SET status = 'queued', job_id = ?, attempt = ?, value_json = NULL,
-               content = NULL, citations_json = '[]', error_json = NULL,
-               error_code = NULL, completed_at = NULL, updated_at = ?
-           WHERE id = ?`,
-        )
-        .run(input.jobId, input.nextAttempt, input.now, input.cellId);
-      this.database
-        .prepare(
-          "UPDATE tabular_reviews SET status = 'running', updated_at = ? WHERE id = ?",
-        )
-        .run(input.now, cell.reviewId);
-      return this.requireCell(input.cellId);
-    });
+    return this.transaction(() =>
+      this.queueCellInTransaction(input, enqueueJob),
+    );
+  }
+
+  private queueCellInTransaction(
+    input: {
+      cellId: string;
+      jobId: string;
+      nextAttempt: number;
+      now: string;
+      allowedStatuses?: TabularCellStatus[];
+    },
+    enqueueJob: () => { id: string },
+  ) {
+    const cell = this.requireCell(input.cellId);
+    const allowed = input.allowedStatuses ?? ["empty", "failed"];
+    if (!allowed.includes(cell.status)) {
+      throw new WorkspaceApiError(
+        409,
+        "CONFLICT",
+        "Tabular cell cannot be queued.",
+      );
+    }
+    if (
+      !Number.isSafeInteger(input.nextAttempt) ||
+      input.nextAttempt <= cell.attempt
+    ) {
+      throw new WorkspaceApiError(
+        409,
+        "CONFLICT",
+        "Tabular cell generation is stale.",
+      );
+    }
+    const job = enqueueJob();
+    if (job.id !== input.jobId) {
+      throw new WorkspaceApiError(
+        500,
+        "INTERNAL_ERROR",
+        "Tabular job state mismatch.",
+      );
+    }
+    this.database
+      .prepare(
+        `UPDATE tabular_cells
+         SET status = 'queued', job_id = ?, attempt = ?, value_json = NULL,
+             content = NULL, citations_json = '[]', error_json = NULL,
+             error_code = NULL, completed_at = NULL, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(input.jobId, input.nextAttempt, input.now, input.cellId);
+    this.database
+      .prepare(
+        "UPDATE tabular_reviews SET status = 'running', updated_at = ? WHERE id = ?",
+      )
+      .run(input.now, cell.reviewId);
+    return this.requireCell(input.cellId);
+  }
+
+  queueCells(
+    inputs: Array<{
+      cellId: string;
+      jobId: string;
+      nextAttempt: number;
+      now: string;
+      allowedStatuses?: TabularCellStatus[];
+      enqueueJob: () => { id: string };
+    }>,
+  ) {
+    return this.transaction(() =>
+      inputs.map(({ enqueueJob, ...input }) =>
+        this.queueCellInTransaction(input, enqueueJob),
+      ),
+    );
   }
 
   getCell(id: string): TabularCellRecord | null {
@@ -955,6 +997,7 @@ export class TabularRepository {
     cellId: string,
     value: TabularCellContent,
     sourceRefs: TabularSourceRef[],
+    jobResult: unknown,
     now: string,
     assertJob: () => { id: string },
     finishJob: (result: unknown) => { id: string },
@@ -1002,10 +1045,7 @@ export class TabularRepository {
           cellId,
         );
       this.refreshStatus(cell.reviewId, now);
-      const finished = finishJob({
-        content,
-        sourceCount: sourceRefs.length,
-      });
+      const finished = finishJob(jobResult);
       if (finished.id !== cell.jobId) {
         throw new WorkspaceApiError(
           500,
@@ -1135,6 +1175,213 @@ export class TabularRepository {
         )
         .run(now, reviewId);
       return this.requireDetail(reviewId);
+    });
+  }
+
+  cancelCell(
+    input: {
+      reviewId: string;
+      cellId: string;
+      now: string;
+      reason: string;
+    },
+    cancelJob: (jobId: string) => void,
+  ) {
+    return this.transaction(() => {
+      const review = this.require(input.reviewId);
+      if (review.status === "archived") {
+        throw new WorkspaceApiError(
+          409,
+          "CONFLICT",
+          "Archived tabular cells cannot be cancelled.",
+        );
+      }
+      const cell = this.requireCell(input.cellId);
+      if (cell.reviewId !== input.reviewId) {
+        throw new WorkspaceApiError(
+          404,
+          "NOT_FOUND",
+          "Tabular cell not found.",
+        );
+      }
+      if (cell.status !== "queued" && cell.status !== "running") {
+        throw new WorkspaceApiError(
+          409,
+          "CONFLICT",
+          "Tabular cell is not running.",
+        );
+      }
+      if (!cell.jobId) {
+        throw new WorkspaceApiError(
+          500,
+          "INTERNAL_ERROR",
+          "Tabular cell job is unavailable.",
+        );
+      }
+      cancelJob(cell.jobId);
+      this.database
+        .prepare(
+          `UPDATE tabular_cells
+              SET status = 'cancelled', value_json = NULL, content = NULL,
+                  citations_json = '[]', error_json = NULL, error_code = NULL,
+                  completed_at = ?, updated_at = ?
+            WHERE id = ?`,
+        )
+        .run(input.now, input.now, input.cellId);
+      this.refreshStatus(input.reviewId, input.now);
+      return this.requireCell(input.cellId);
+    });
+  }
+
+  clearCells(
+    reviewId: string,
+    documentIds: readonly string[],
+    now: string,
+    cancelJobs: (jobIds: string[]) => void,
+  ) {
+    return this.transaction(() => {
+      const detail = this.requireDetail(reviewId);
+      if (detail.review.status === "archived") {
+        throw new WorkspaceApiError(
+          409,
+          "CONFLICT",
+          "Archived tabular cells cannot be cleared.",
+        );
+      }
+      const requested = new Set(documentIds);
+      if (
+        requested.size === 0 ||
+        requested.size !== documentIds.length ||
+        [...requested].some(
+          (documentId) => !detail.review.documentIds.includes(documentId),
+        )
+      ) {
+        throw new WorkspaceApiError(
+          400,
+          "VALIDATION_ERROR",
+          "Clear-cell document ids are invalid.",
+        );
+      }
+      const selected = detail.cells.filter((cell) =>
+        requested.has(cell.documentId),
+      );
+      const activeJobIds = selected
+        .filter(
+          (cell) =>
+            (cell.status === "queued" || cell.status === "running") &&
+            cell.jobId,
+        )
+        .map((cell) => cell.jobId!);
+      cancelJobs(activeJobIds);
+      const placeholders = documentIds.map(() => "?").join(",");
+      this.database
+        .prepare(
+          `UPDATE tabular_cells
+              SET status = 'empty', value_json = NULL, content = NULL,
+                  citations_json = '[]', error_json = NULL, error_code = NULL,
+                  job_id = NULL, attempt = 0, completed_at = NULL,
+                  updated_at = ?
+            WHERE review_id = ?
+              AND document_id IN (${placeholders})`,
+        )
+        .run(now, reviewId, ...documentIds);
+      const active = this.database
+        .prepare(
+          `SELECT 1 AS present
+             FROM tabular_cells
+            WHERE review_id = ? AND status IN ('queued','running')
+            LIMIT 1`,
+        )
+        .get(reviewId);
+      this.database
+        .prepare(
+          "UPDATE tabular_reviews SET status = ?, updated_at = ? WHERE id = ?",
+        )
+        .run(active ? "running" : "ready", now, reviewId);
+      return this.requireDetail(reviewId);
+    });
+  }
+
+  /**
+   * Repairs only cell projections after the shared job pump has durably
+   * recovered stale claims. The job row remains the source of truth.
+   */
+  reconcileGenerationJobs(now: string) {
+    return this.transaction(() => {
+      const rows = this.database
+        .prepare(
+          `SELECT cell.id AS cell_id, cell.review_id, cell.status AS cell_status,
+                  job.status AS job_status, job.error_code, job.retryable
+             FROM tabular_cells cell
+             LEFT JOIN jobs job ON job.id = cell.job_id
+            WHERE cell.status IN ('queued','running')`,
+        )
+        .all();
+      const reviewIds = new Set<string>();
+      let repaired = 0;
+      for (const row of rows) {
+        const cellId = String(row.cell_id);
+        const reviewId = String(row.review_id);
+        const jobStatus = row.job_status == null ? null : String(row.job_status);
+        if (jobStatus === "queued" || jobStatus === "running") {
+          if (row.cell_status !== jobStatus) {
+            this.database
+              .prepare(
+                "UPDATE tabular_cells SET status = ?, updated_at = ? WHERE id = ?",
+              )
+              .run(jobStatus, now, cellId);
+            reviewIds.add(reviewId);
+            repaired += 1;
+          }
+          continue;
+        }
+        if (jobStatus === "cancelled") {
+          this.database
+            .prepare(
+              `UPDATE tabular_cells
+                  SET status = 'cancelled', value_json = NULL, content = NULL,
+                      citations_json = '[]', error_json = NULL,
+                      error_code = NULL, completed_at = ?, updated_at = ?
+                WHERE id = ?`,
+            )
+            .run(now, now, cellId);
+        } else {
+          const retryable =
+            (jobStatus === "failed" || jobStatus === "interrupted") &&
+            Number(row.retryable) === 1;
+          const code =
+            jobStatus === "interrupted"
+              ? "tabular_generation_interrupted"
+              : jobStatus === "failed" &&
+                  typeof row.error_code === "string" &&
+                  /^(?:tabular|workspace_job)_[a-z0-9_]{1,106}$/.test(
+                    row.error_code,
+                  )
+                ? row.error_code
+                : "tabular_job_state_inconsistent";
+          const error: StructuredError = {
+            code,
+            message: retryable
+              ? "Tabular generation was interrupted and can be retried."
+              : "Tabular generation job ended inconsistently.",
+            retryable,
+            details: null,
+          };
+          this.database
+            .prepare(
+              `UPDATE tabular_cells
+                  SET status = 'failed', value_json = NULL, content = NULL,
+                      citations_json = '[]', error_json = ?, error_code = ?,
+                      completed_at = ?, updated_at = ?
+                WHERE id = ?`,
+            )
+            .run(serialize(error), error.code, now, now, cellId);
+        }
+        reviewIds.add(reviewId);
+        repaired += 1;
+      }
+      for (const reviewId of reviewIds) this.refreshStatus(reviewId, now);
+      return { inspected: rows.length, repaired };
     });
   }
 
@@ -1458,17 +1705,17 @@ export class TabularRepository {
       rows.map((row) => [row.status as TabularCellStatus, Number(row.count)]),
     );
     const active =
-      (counts.get("empty") ?? 0) +
-      (counts.get("queued") ?? 0) +
-      (counts.get("running") ?? 0);
+      (counts.get("queued") ?? 0) + (counts.get("running") ?? 0);
     const status =
       active > 0
         ? "running"
         : (counts.get("failed") ?? 0) > 0
           ? "failed"
-          : (counts.get("cancelled") ?? 0) > 0
-            ? "cancelled"
-            : "complete";
+          : (counts.get("empty") ?? 0) > 0
+            ? "ready"
+            : (counts.get("cancelled") ?? 0) > 0
+              ? "cancelled"
+              : "complete";
     this.database
       .prepare(
         "UPDATE tabular_reviews SET status = ?, updated_at = ? WHERE id = ?",

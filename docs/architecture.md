@@ -1,5 +1,133 @@
 # Architecture
 
+## Current P0 Workspace architecture
+
+The primary Vera product is a single-user macOS desktop client built from the
+Mike product/UI framework at the pinned commit
+`e32daad5a4c64a5561e04c53ee12411e3c5e7238`. Mike defines the user-facing
+Assistant, Projects, Workflows, and Tabular Review semantics. Vera owns the
+local desktop, persistence, credential, recovery, and security boundaries.
+Mike UI use is authorised; the port retains its pinned provenance,
+attribution, and `AGPL-3.0-only` licence obligations.
+
+Assistant, Projects, Workflows, and Tabular Review are the four core product
+workspaces. Settings is the fifth first-level surface and acts as the local
+desktop control plane.
+
+```text
+Vera.app (Electron main process)
+  |- sandboxed Next.js renderer on 127.0.0.1
+  |    |- Assistant
+  |    |- Projects (generic local containers)
+  |    |- Tabular Review
+  |    |- Workflows
+  |    `- Settings
+  |- Express composition root on 127.0.0.1
+  |    |- /api/v1 Workspace auth + strict wire adapters
+  |    |- repositories/services over one Workspace database
+  |    `- one shared durable job pump
+  |         |- document_parse
+  |         |- assistant_generate
+  |         |- workflow_run
+  |         `- tabular_cell
+  |- isolated credential-worker utility process
+  |    `- private MessagePort -> macOS Keychain
+  `- controlled native backup/restore/log/diagnostic operations
+
+Local persistence
+  |- SQLCipher Workspace metadata (migrations v1-v10)
+  |- AES-256-GCM encrypted originals, extracted content, and exports
+  |- FTS5 project/document retrieval
+  |- authenticated encrypted backups and restore journal
+  `- owner-only rotated/redacted desktop and model-call logs
+```
+
+There is one frontend, one backend composition root, one Workspace database,
+and one shared `WorkspaceJobPump`. Assistant, Workflow, Tabular, and parser work
+use different typed handlers and durable records but do not create parallel
+servers, databases, queues, or hidden fallback runtimes. The pump uses bounded
+concurrency, leases/fences, cancellation, restart reconciliation, and terminal
+state persistence.
+
+`Project` is the general-purpose ownership and context boundary. A Project can
+own folders, documents and versions, chats/messages, and Tabular Reviews/cells,
+and it scopes runs of reusable global workflow definitions. Project ownership
+checks are enforced in the repository/service layer; UI tabs do not create
+separate storage silos.
+
+The canonical new product API is mounted once at `/api/v1` by
+`backend/src/veraApplication.ts`:
+
+- `projects`, folders, documents, versions, parsing, preview/download
+  capabilities;
+- chats, messages, durable Assistant jobs/events and generation controls;
+- model settings/profiles, Keychain credential mutation, connection tests,
+  enable/default actions;
+- workflows, strict Assistant definitions, workflow runs/steps, cancel/retry;
+- Tabular Reviews, documents/columns/cells, generation, cancel/retry/clear, and
+  CSV/XLSX export.
+
+The renderer resolves the Workspace base URL and a per-launch random bearer
+token from the trusted preload bridge. The backend binds only to `127.0.0.1`
+and authenticates a fixed local principal. The token is not persisted or
+embedded in the Next.js build. The Electron renderer is sandboxed and isolated;
+navigation, new windows, browser permissions, CSP connections, and native IPC
+are explicitly constrained.
+
+Model-provider secrets do not enter normal database rows. The renderer can
+submit a replacement secret but cannot read one back. The backend sends
+credential operations across a private MessagePort to an isolated utility
+process, which binds each item to the model profile, provider, and canonical
+origin in the macOS Keychain. Provider adapters perform the only credential
+resolution and external network calls.
+
+Legacy `/aletheia/*` routes and repositories remain mounted for compatibility
+and regression. They are outside the P0 main navigation and do not replace the
+Workspace `/api/v1` product path.
+
+## Packaged P0 acceptance
+
+The architecture was verified end to end on 2026-07-15 by one fresh
+`./scripts/package-desktop-mac.sh` run that exited `0`. Package hygiene,
+SQLCipher, legacy migration, packaged startup and port release, the Workspace
+cross-restart E2E, backup bridge, and restore fail-closed gates passed. The E2E
+exercised the shared persistent architecture with a generic Project, two parsed
+documents, Assistant citations, a Workflow, a 2×2 Tabular Review, and a second
+launch over the same encrypted workspace.
+
+The final packaged security rerun exercised the actual executable. A launch
+with application encryption `disabled` and a separate launch with database
+encryption `metadata_plaintext` each exited `1` before either local service
+bound its port. For invalid pending-restore states, the working desktop log
+contained `startup_failed` but no `renderer_window_creating` event; therefore
+the renderer boundary was never crossed before recovery validation failed.
+
+```text
+relative app:      desktop/dist/mac-arm64/Vera.app
+absolute app:      /Users/a1-6/Documents/new agent/desktop/dist/mac-arm64/Vera.app
+relative DMG:      desktop/dist/Vera-1.0.1-arm64.dmg
+absolute DMG:      /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-arm64.dmg
+relative ZIP:      desktop/dist/Vera-1.0.1-arm64.zip
+absolute ZIP:      /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-arm64.zip
+relative manifest: desktop/dist/Vera-1.0.1-SHA256SUMS.txt
+absolute manifest: /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-SHA256SUMS.txt
+```
+
+```text
+69a2ee56379a7cf6cb7fe441685fb59c846e77512928704955e774f3d8d42dd7  Vera-1.0.1-arm64.dmg
+47fcd64f214bf9b28e6982953043c76dba68ff0f2a933107ff6ec07eb704e648  Vera-1.0.1-arm64.zip
+```
+
+This proves the local packaged-client boundary described above. It does not
+change the release boundary: `signed=false`, `notarized=false`, and
+`distribution=local-only`.
+
+## Legacy civil-litigation architecture
+
+The following architecture describes the earlier Aletheia/Vera litigation
+domain. It is retained as historical and compatibility documentation; its
+“active domain” language is not the current P0 desktop product boundary.
+
 Vera is a local-first civil-litigation workspace. Architecturally, a reusable
 Kernel provides document, model, storage, permission, review, and audit
 foundations, while V1 exposes only the Civil Litigation domain.

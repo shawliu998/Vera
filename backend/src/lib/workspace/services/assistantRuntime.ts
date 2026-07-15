@@ -184,6 +184,8 @@ export interface AssistantModelPort {
     systemPrompt: string;
     messages: readonly AssistantModelMessage[];
     tools: readonly AssistantToolDefinition[];
+    documents: AssistantGenerationSnapshot["documents"];
+    evidence: readonly AssistantRetrievalChunk[];
     signal: AbortSignal;
     onTextDelta(delta: string): Promise<void>;
     onReasoningDelta(delta: string): Promise<void>;
@@ -216,11 +218,7 @@ export interface AssistantToolPort {
   }>;
 }
 
-/**
- * Events are best-effort and non-authoritative. A same-database outbox is
- * required before delivery may affect the chat/job transaction or be called
- * durable.
- */
+/** Optional live fan-out after the same-database durable outbox accepts data. */
 export interface AssistantBestEffortEventPort {
   publish(jobId: string, event: MikeAssistantStreamEvent): Promise<void>;
 }
@@ -359,8 +357,14 @@ CORE RULES:
 - Use only the registered tools listed below. Never attempt shell, Python, network, MCP, CourtListener, cloud storage, dynamic tools, or multi-agent delegation.
 - Read each relevant document/version at most once per response. After a read/fetch tool returns document text, use that result or find_in_document for targeted checks.
 - Chat-local labels such as "doc-0" are internal. Use them only in tool arguments and citation data; refer to documents by filename in prose.
-- Cite exact document passages for evidence-backed claims. Do not invent citations.
 - Do not use emojis.
+
+DOCUMENT CITATIONS (Mike-compatible local protocol):
+- Put sequential markers [1], [2], and so on exactly where cited claims appear.
+- At the very end, append <CITATIONS> followed by a JSON array and </CITATIONS>.
+- Each entry must be {"ref":1,"doc_id":"doc-0","quotes":[{"page":1,"quote":"exact verbatim text"}]}.
+- Use exactly one short verbatim quote per marker in local mode. Refs must be contiguous in first-appearance order and doc_id must be an advertised chat-local label.
+- Omit the entire <CITATIONS> block when there are no citations. Never show doc-N labels elsewhere in the answer.
 
 REGISTERED LOCAL TOOLS:
 ${input.tools.map((tool) => `- ${tool.name}: ${tool.description}`).join("\n")}`;
@@ -638,6 +642,23 @@ export class AssistantRuntimeService {
     let partialContent = "";
     let completedMessageId: string;
     try {
+      this.chats.beginGenerationAttempt({
+        snapshot,
+        claim: initialClaim,
+        claims: this.claims,
+        now: this.now(),
+      });
+      const persistEvent = (event: MikeAssistantStreamEvent) => {
+        const parsed = MikeAssistantStreamEventSchema.parse(event);
+        this.chats.appendGenerationEvent({
+          snapshot,
+          claim: initialClaim,
+          claims: this.claims,
+          event: parsed,
+          now: this.now(),
+        });
+        queuedEvents.push(parsed);
+      };
       this.chats.assertGenerationDocumentsCurrent(input.jobId);
       if (!this.options.tools) {
         throw new WorkspaceApiError(
@@ -713,6 +734,8 @@ export class AssistantRuntimeService {
             systemPrompt,
             messages,
             tools,
+            documents: snapshot.documents,
+            evidence: [...evidenceByChunk.values()],
             signal: input.signal,
             onTextDelta: async (delta) => {
               throwIfAborted(input.signal);
@@ -735,13 +758,13 @@ export class AssistantRuntimeService {
               }
               const nextPartial = partialContent + delta;
               assertMikeSafePayload(nextPartial);
-              partialContent = nextPartial;
-              queuedEvents.push(
+              persistEvent(
                 MikeAssistantStreamEventSchema.parse({
                   type: "content_delta",
                   text: delta,
                 }),
               );
+              partialContent = nextPartial;
             },
             onReasoningDelta: async (delta) => {
               throwIfAborted(input.signal);
@@ -762,7 +785,7 @@ export class AssistantRuntimeService {
               }
               assertMikeSafePayload(delta);
               roundReasoningOpen = true;
-              queuedEvents.push(
+              persistEvent(
                 MikeAssistantStreamEventSchema.parse({
                   type: "reasoning_delta",
                   text: delta,
@@ -773,7 +796,7 @@ export class AssistantRuntimeService {
               throwIfAborted(input.signal);
               if (!roundReasoningOpen) return;
               roundReasoningOpen = false;
-              queuedEvents.push(
+              persistEvent(
                 MikeAssistantStreamEventSchema.parse({
                   type: "reasoning_block_end",
                 }),
@@ -784,7 +807,7 @@ export class AssistantRuntimeService {
         throwIfAborted(input.signal);
         this.assertClaim(snapshot, input);
         if (roundReasoningOpen) {
-          queuedEvents.push(
+          persistEvent(
             MikeAssistantStreamEventSchema.parse({
               type: "reasoning_block_end",
             }),
@@ -809,13 +832,13 @@ export class AssistantRuntimeService {
           }
           const nextPartial = partialContent + turn.content;
           assertMikeSafePayload(nextPartial);
-          partialContent = nextPartial;
-          queuedEvents.push(
+          persistEvent(
             MikeAssistantStreamEventSchema.parse({
               type: "content_delta",
               text: turn.content,
             }),
           );
+          partialContent = nextPartial;
         }
         if (
           fullText.length + turn.content.length >
@@ -885,7 +908,7 @@ export class AssistantRuntimeService {
           }
           throwIfAborted(input.signal);
           this.assertClaim(snapshot, input);
-          queuedEvents.push(
+          persistEvent(
             MikeAssistantStreamEventSchema.parse({
               type: "tool_call_start",
               name: call.name,
@@ -928,7 +951,7 @@ export class AssistantRuntimeService {
               );
             }
             assertMikeSafePayload(parsed);
-            queuedEvents.push(parsed);
+            persistEvent(parsed);
           }
           const sourceContext = validateSourceContext(
             executed.sourceContext,
@@ -992,6 +1015,44 @@ export class AssistantRuntimeService {
         isAbort(error, input.signal) ||
         error instanceof WorkspaceJobLeaseLostError
       ) {
+        if (isAbort(error, input.signal)) {
+          try {
+            const cancelled = this.chats.commitGenerationCancellation({
+              snapshot,
+              claim: { ...initialClaim, at: this.now() },
+              claims: this.claims,
+              content: partialContent,
+              now: this.now(),
+            });
+            if (cancelled) {
+              const terminal = MikeAssistantStreamEventSchema.parse({
+                type: "error",
+                code: "assistant_cancelled",
+                message: "Assistant generation was cancelled.",
+              });
+              queuedEvents.push(terminal);
+              if (this.options.events) {
+                try {
+                  for (const event of queuedEvents) {
+                    await this.options.events.publish(input.jobId, event);
+                  }
+                } catch {
+                  this.options.onEventFailure?.({
+                    code: "assistant_event_publish_failed",
+                  });
+                }
+              }
+              return {
+                messageId: snapshot.outputMessageId,
+                status: "cancelled" as const,
+              };
+            }
+          } catch (cancellationError) {
+            if (!(cancellationError instanceof WorkspaceJobLeaseLostError)) {
+              throw cancellationError;
+            }
+          }
+        }
         throw error;
       }
       const failure = safeModelFailure(error);
@@ -1003,19 +1064,18 @@ export class AssistantRuntimeService {
         content: partialContent,
         now: this.now(),
       });
+      queuedEvents.push(
+        MikeAssistantStreamEventSchema.parse({
+          type: "error",
+          code: failure.code,
+          message: failure.message,
+        }),
+      );
       if (this.options.events) {
         try {
           for (const event of queuedEvents) {
             await this.options.events.publish(input.jobId, event);
           }
-          await this.options.events.publish(
-            input.jobId,
-            MikeAssistantStreamEventSchema.parse({
-              type: "error",
-              code: failure.code,
-              message: failure.message,
-            }),
-          );
         } catch {
           this.options.onEventFailure?.({
             code: "assistant_event_publish_failed",

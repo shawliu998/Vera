@@ -17,8 +17,9 @@ import {
     GLASS_DROPDOWN,
     GLASS_MENU_ITEM,
 } from "@/app/components/shared/HeaderFilterDropdown";
+import { useI18n } from "@/app/i18n";
 
-export const CLOSE_ROW_ACTIONS_EVENT = "aletheia:close-row-actions";
+export const CLOSE_ROW_ACTIONS_EVENT = "vera:close-row-actions";
 
 export function closeRowActionMenus() {
     document.dispatchEvent(new Event(CLOSE_ROW_ACTIONS_EVENT));
@@ -55,11 +56,12 @@ export function RowActionMenuItems({
     deleteDisabled = false,
     onRename,
     onUpdateCmNumber,
-    newSubfolderLabel = "New subfolder",
-    renameLabel = "Rename",
-    deleteLabel = "Delete",
+    newSubfolderLabel,
+    renameLabel,
+    deleteLabel,
     onClose,
 }: Props & { onClose: () => void }) {
+    const { t } = useI18n();
     return (
         <>
             {onNewSubfolder && (
@@ -68,7 +70,7 @@ export function RowActionMenuItems({
                     className={`flex items-center gap-2 w-full px-3 py-2 text-xs text-left text-gray-600 ${GLASS_MENU_ITEM}`}
                 >
                     <FolderPlus className="h-3.5 w-3.5 shrink-0" />
-                    {newSubfolderLabel}
+                    {newSubfolderLabel ?? t("common.actions.newSubfolder")}
                 </button>
             )}
             {onRename && (
@@ -77,7 +79,7 @@ export function RowActionMenuItems({
                     className={`flex items-center gap-2 w-full px-3 py-2 text-xs text-gray-600 ${GLASS_MENU_ITEM}`}
                 >
                     <Pencil className="h-3.5 w-3.5" />
-                    {renameLabel}
+                    {renameLabel ?? t("common.actions.rename")}
                 </button>
             )}
             {onUpdateCmNumber && (
@@ -86,7 +88,7 @@ export function RowActionMenuItems({
                     className={`flex items-center gap-2 w-full px-3 py-2 text-xs text-gray-600 ${GLASS_MENU_ITEM}`}
                 >
                     <Hash className="h-3.5 w-3.5" />
-                    Edit CM No.
+                    {t("common.actions.updateCmNumber")}
                 </button>
             )}
             {onDownload && (
@@ -95,7 +97,7 @@ export function RowActionMenuItems({
                     className={`flex items-center gap-2 w-full px-3 py-2 text-xs text-gray-600 ${GLASS_MENU_ITEM}`}
                 >
                     <Download className="h-3.5 w-3.5" />
-                    Download
+                    {t("common.actions.download")}
                 </button>
             )}
             {onShowAllVersions && (
@@ -104,7 +106,7 @@ export function RowActionMenuItems({
                     className={`flex items-center gap-2 w-full px-3 py-2 text-xs text-left text-gray-600 ${GLASS_MENU_ITEM}`}
                 >
                     <History className="h-3.5 w-3.5 shrink-0" />
-                    Show all versions
+                    {t("common.actions.showAllVersions")}
                 </button>
             )}
             {onUploadNewVersion && (
@@ -113,7 +115,7 @@ export function RowActionMenuItems({
                     className={`flex items-center gap-2 w-full px-3 py-2 text-xs text-left text-gray-600 ${GLASS_MENU_ITEM}`}
                 >
                     <Upload className="h-3.5 w-3.5 shrink-0" />
-                    Upload new version
+                    {t("common.actions.uploadNewVersion")}
                 </button>
             )}
             {onRemoveFromFolder && (
@@ -122,7 +124,7 @@ export function RowActionMenuItems({
                     className={`flex items-center gap-2 w-full px-3 py-2 text-xs text-left text-gray-600 ${GLASS_MENU_ITEM}`}
                 >
                     <FolderMinus className="h-3.5 w-3.5 shrink-0" />
-                    Remove from subfolder
+                    {t("common.actions.removeFromFolder")}
                 </button>
             )}
             {onUnhide && (
@@ -131,7 +133,7 @@ export function RowActionMenuItems({
                     className={`flex items-center gap-2 w-full px-3 py-2 text-xs text-gray-600 ${GLASS_MENU_ITEM}`}
                 >
                     <Eye className="h-3.5 w-3.5" />
-                    Unhide
+                    {t("common.actions.unhide")}
                 </button>
             )}
             {onHide && (
@@ -140,7 +142,7 @@ export function RowActionMenuItems({
                     className={`flex items-center gap-2 w-full px-3 py-2 text-xs text-gray-600 ${GLASS_MENU_ITEM}`}
                 >
                     <EyeOff className="h-3.5 w-3.5" />
-                    Hide
+                    {t("common.actions.hide")}
                 </button>
             )}
             {onDelete && (
@@ -158,7 +160,7 @@ export function RowActionMenuItems({
                     }`}
                 >
                     <Trash2 className="h-3.5 w-3.5" />
-                    {deleteLabel}
+                    {deleteLabel ?? t("common.actions.delete")}
                 </button>
             )}
         </>
@@ -166,6 +168,7 @@ export function RowActionMenuItems({
 }
 
 export function RowActions(props: Props) {
+    const { t } = useI18n();
     const [open, setOpen] = useState(false);
     const [coords, setCoords] = useState({ top: 0, right: 0 });
     const btnRef = useRef<HTMLButtonElement>(null);
@@ -214,6 +217,7 @@ export function RowActions(props: Props) {
                 ref={btnRef}
                 onClick={handleToggle}
                 className="flex items-center justify-center w-6 h-6 rounded text-gray-700 hover:text-gray-900 hover:bg-gray-100 transition-colors leading-none"
+                aria-label={t("common.actions.rowActions")}
             >
                 <span className="tracking-widest text-xs">···</span>
             </button>

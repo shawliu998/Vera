@@ -33,6 +33,7 @@ const TabularUpdate = z
     columns_config: z.array(MikeColumnConfigSchema).max(100).optional(),
     document_ids: z.array(Id).max(1_000).optional(),
     project_id: Id.nullable().optional(),
+    model_profile_id: Id.nullable().optional(),
     shared_with: z.array(z.string().email()).max(0).optional(),
   })
   .strict();
@@ -46,8 +47,25 @@ const RegenerateCell = z
   })
   .strict();
 const CellMutation = z
-  .object({ cell_id: Id.optional(), reason: z.string().max(1_000).optional() })
-  .strict();
+  .object({
+    cell_id: Id.optional(),
+    document_id: Id.optional(),
+    column_index: z.number().int().nonnegative().optional(),
+    reason: z.string().max(1_000).optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const byCell = value.cell_id !== undefined;
+    const byCoordinates =
+      value.document_id !== undefined && value.column_index !== undefined;
+    if (byCell === byCoordinates) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Provide either cell_id or document_id with column_index, but not both.",
+      });
+    }
+  });
 const ChatRequest = z
   .object({
     messages: z
@@ -71,6 +89,7 @@ export type WorkspaceTabularContext = { principalId: string };
 export type WorkspaceTabularStreamSink = {
   write(event: MikeSseEvent): void;
   done(): void;
+  closed?(): boolean;
 };
 export type WorkspaceTabularDownload = {
   filename: string;
@@ -118,7 +137,12 @@ export interface WorkspaceTabularV1RuntimePort {
   cancelTabularCell(
     context: WorkspaceTabularContext,
     reviewId: string,
-    input: { cell_id?: string; reason?: string },
+    input: {
+      cell_id?: string;
+      document_id?: string;
+      column_index?: number;
+      reason?: string;
+    },
   ): Promise<unknown>;
   listTabularChats?(
     context: WorkspaceTabularContext,
@@ -291,6 +315,9 @@ function streamSink(response: Response): WorkspaceTabularStreamSink {
     done() {
       start();
       response.write(mikeSseDone());
+    },
+    closed() {
+      return response.destroyed || response.writableEnded;
     },
   };
 }
@@ -482,8 +509,10 @@ export function createWorkspaceTabularV1Router(
           idParam(request, "reviewId"),
           sink,
         );
-        sink.done();
-        response.end();
+        if (!sink.closed?.()) {
+          sink.done();
+          response.end();
+        }
       }),
     );
 
@@ -497,6 +526,7 @@ export function createWorkspaceTabularV1Router(
             idParam(request, "reviewId"),
             RegenerateCell.parse(request.body),
           ),
+          202,
         );
       }),
     );

@@ -11,6 +11,8 @@ import {
     useI18n,
     type SupportedLocale,
 } from "@/app/i18n";
+import { VeraSettingsProvider } from "@/app/contexts/VeraSettingsContext";
+import { ChatHistoryProvider } from "@/app/contexts/ChatHistoryContext";
 import { VeraSidebar } from "@/app/components/vera-shell/VeraSidebar";
 
 const SIDEBAR_STORAGE_KEY = "veraSidebarOpen";
@@ -143,7 +145,11 @@ function VeraShellLayout({ children }: { children: React.ReactNode }) {
 export function VeraShell({ children, initialLocale }: VeraShellProps) {
     return (
         <I18nProvider initialLocale={initialLocale}>
-            <VeraShellLayout>{children}</VeraShellLayout>
+            <VeraSettingsProvider>
+                <ChatHistoryProvider>
+                    <VeraShellLayout>{children}</VeraShellLayout>
+                </ChatHistoryProvider>
+            </VeraSettingsProvider>
         </I18nProvider>
     );
 }

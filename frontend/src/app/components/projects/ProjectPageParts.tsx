@@ -3,7 +3,8 @@
 // Direct port of Mike e32daad5a4c64a5561e04c53ee12411e3c5e7238:
 // frontend/src/app/components/projects/ProjectPageParts.tsx
 import type { CSSProperties, ReactNode } from "react";
-import { Loader2, MessageSquare, Table2 } from "lucide-react";
+import { Library, Loader2, MessageSquare, Table2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { PageHeader } from "@/app/components/vera-shell/PageHeader";
 import { FileTypeIcon } from "@/app/components/shared/FileTypeIcon";
 import { VersionChip } from "@/app/components/shared/VersionChip";
@@ -13,7 +14,11 @@ import type {
     VeraProjectWire,
 } from "@/app/lib/veraWireTypes";
 
-export type ProjectWorkspaceSection = "documents" | "assistant" | "reviews";
+export type ProjectWorkspaceSection =
+    | "documents"
+    | "assistant"
+    | "workflows"
+    | "reviews";
 
 export const DOC_NAME_COL_W =
     "w-[292px] sm:w-[332px] md:w-[392px] lg:w-[452px] xl:w-[532px] 2xl:w-[592px] shrink-0";
@@ -126,8 +131,7 @@ export function ProjectPageHeader({
     onSearchChange: (search: string) => void;
 }) {
     const { t } = useI18n();
-    const unavailable = t("errors.unsupported");
-
+    const router = useRouter();
     return (
         <PageHeader
             loading={loading}
@@ -158,16 +162,31 @@ export function ProjectPageHeader({
                 {
                     actions: [
                         {
-                            disabled: true,
                             icon: <MessageSquare className="h-4 w-4" />,
                             label: <span className="hidden sm:inline">{t("assistant.newChat")}</span>,
-                            tooltip: unavailable,
+                            onClick: () => {
+                                if (project) {
+                                    router.push(`/projects/${project.id}/assistant`);
+                                }
+                            },
                         },
                         {
-                            disabled: true,
+                            icon: <Library className="h-4 w-4" />,
+                            label: <span className="hidden sm:inline">{t("workflows.title")}</span>,
+                            onClick: () => {
+                                if (project) {
+                                    router.push(`/projects/${project.id}/workflows`);
+                                }
+                            },
+                        },
+                        {
                             icon: <Table2 className="h-4 w-4" />,
-                            label: <span className="hidden sm:inline">{t("tabular.create")}</span>,
-                            tooltip: unavailable,
+                            label: <span className="hidden sm:inline">{t("tabular.title")}</span>,
+                            onClick: () => {
+                                if (project) {
+                                    router.push(`/projects/${project.id}/tabular-reviews`);
+                                }
+                            },
                         },
                     ],
                 },

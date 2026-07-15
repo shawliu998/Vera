@@ -74,7 +74,7 @@ export interface ModelProvider {
   ): AsyncIterable<ModelEvent>;
 }
 
-/** Sync today; Promise-compatible so the desktop credential worker can replace it. */
+/** Supports both in-process test resolvers and the asynchronous desktop worker. */
 export type ModelProviderCredentialResolver = {
   resolve(input: CredentialResolutionInput): string | Promise<string>;
 };

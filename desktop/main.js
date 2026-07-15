@@ -3,8 +3,10 @@ const {
   BrowserWindow,
   dialog,
   ipcMain,
+  MessageChannelMain,
   Menu,
   Notification,
+  session,
   shell,
   utilityProcess,
 } = require("electron");
@@ -12,8 +14,23 @@ const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const net = require("node:net");
+const os = require("node:os");
 const path = require("node:path");
-const { ensureMacOsKeychainKey } = require("./macOsKeychain");
+
+function resourceRoot() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "aletheia")
+    : path.resolve(__dirname, "..");
+}
+
+function desktopUtilityModulePath(filename) {
+  if (!app.isPackaged) return path.join(__dirname, filename);
+  return path.join(resourceRoot(), "desktop", filename);
+}
+
+const { ensureMacOsKeychainKey } = require(
+  desktopUtilityModulePath("macOsKeychain.js"),
+);
 const {
   AUDIT_ANCHOR_ENV_KEYS,
   disabledAuditAnchorConfiguration,
@@ -33,6 +50,12 @@ const {
   validateOriginalDocumentBytes,
   writeOwnerOnlyFileAtomically,
 } = require("./originalDocumentSave");
+const { buildRedactedDiagnosticBundle } = require("./diagnosticBundle");
+const {
+  createRotatingDesktopLogger,
+  redactText,
+} = require("./desktopLogger");
+const { resolveDesktopEncryptionPolicy } = require("./encryptionPolicy");
 
 const PRODUCT_NAME = "Vera";
 const LEGACY_USER_DATA_DIRECTORY_NAME = "aletheia-desktop";
@@ -40,11 +63,34 @@ const LEGACY_USER_DATA_DIRECTORY_NAME = "aletheia-desktop";
 app.setName(PRODUCT_NAME);
 // Keep existing local cases, encryption keys, and runtime state reachable after
 // the packaged display name changes. Explicit test/dev overrides stay isolated.
-if (!app.commandLine.hasSwitch("user-data-dir")) {
-  app.setPath(
-    "userData",
-    path.join(app.getPath("appData"), LEGACY_USER_DATA_DIRECTORY_NAME),
-  );
+const explicitUserDataDirectory = (
+  process.env.VERA_DESKTOP_PROFILE_DIR ?? ""
+).trim();
+if (
+  explicitUserDataDirectory &&
+  !path.isAbsolute(explicitUserDataDirectory)
+) {
+  throw new Error("VERA_DESKTOP_PROFILE_DIR requires an absolute directory path.");
+}
+const desktopUserDataDirectory = explicitUserDataDirectory
+  ? path.resolve(explicitUserDataDirectory)
+  : path.join(app.getPath("appData"), LEGACY_USER_DATA_DIRECTORY_NAME);
+fs.mkdirSync(desktopUserDataDirectory, { recursive: true, mode: 0o700 });
+const desktopUserDataInfo = fs.lstatSync(desktopUserDataDirectory);
+if (
+  desktopUserDataInfo.isSymbolicLink() ||
+  !desktopUserDataInfo.isDirectory()
+) {
+  throw new Error("Vera user data must be a real directory.");
+}
+// Bind every local-state path explicitly before requestSingleInstanceLock() so
+// packaged audits, alternate profiles, and their singleton locks are isolated.
+app.setPath("userData", desktopUserDataDirectory);
+app.setPath("sessionData", desktopUserDataDirectory);
+if (explicitUserDataDirectory) {
+  const isolatedLogDirectory = path.join(desktopUserDataDirectory, "logs");
+  fs.mkdirSync(isolatedLogDirectory, { recursive: true, mode: 0o700 });
+  app.setAppLogsPath(isolatedLogDirectory);
 }
 
 const BACKEND_PORT = Number(process.env.ALETHEIA_DESKTOP_BACKEND_PORT ?? 43761);
@@ -54,16 +100,27 @@ const FRONTEND_PORT = Number(
 const HOST = "127.0.0.1";
 const BACKEND_URL = `http://${HOST}:${BACKEND_PORT}`;
 const FRONTEND_URL = `http://${HOST}:${FRONTEND_PORT}`;
-const WORKSPACE_PATH = "/projects";
+const WORKSPACE_PATH = "/assistant";
 const DESKTOP_SESSION_TOKEN = crypto.randomBytes(32).toString("base64url");
 const DESKTOP_DOWNLOAD_SIGNING_SECRET = crypto.randomBytes(32).toString("hex");
 const PENDING_RESTORE_SCHEMA = "aletheia-pending-restore-v1";
+const CREDENTIAL_PORT_BOOTSTRAP = "vera-credential-port-v1";
+const CREDENTIAL_PORT_READY = "vera-credential-port-ready-v1";
 const APPLICATION_KEYCHAIN_SERVICE =
   "com.aletheia.desktop.application-encryption";
 const APPLICATION_KEYCHAIN_ACCOUNT = "aletheia-local-master-key";
 const DATABASE_KEYCHAIN_SERVICE = "com.aletheia.desktop.database-encryption";
 const DATABASE_KEYCHAIN_ACCOUNT = "aletheia-local-database-key";
 let verifiedBackupSelection = null;
+const singleInstanceLockAcquired = app.requestSingleInstanceLock();
+if (!singleInstanceLockAcquired) {
+  if (explicitUserDataDirectory) {
+    process.stderr.write(
+      "[vera-profile-bootstrap] isolated profile singleton lock unavailable\n",
+    );
+  }
+  app.exit(0);
+}
 
 // Child processes receive an explicit local-runtime environment. In
 // particular, they must not inherit credentials, proxy configuration,
@@ -133,6 +190,9 @@ const BACKEND_LOCAL_CONFIG_ENV_KEYS = [
   "ALETHEIA_LOCAL_MODEL_AUTOSTART",
   "ALETHEIA_LOCAL_MODEL_EXECUTABLE_ALLOWLIST",
   "ALETHEIA_LOCAL_MODEL_ENV_ALLOWLIST",
+  // Test/development only. The backend still restricts this to exact
+  // loopback hosts and keeps public HTTPS as the default Generic policy.
+  "ALETHEIA_MODEL_PROVIDER_ALLOW_LOOPBACK_HTTP",
   "ALETHEIA_VOICE_PYTHON_PATH",
   "ALETHEIA_VOICE_STT_MODEL_PATH",
   "ALETHEIA_VOICE_TTS_MODEL_PATH",
@@ -153,10 +213,46 @@ const BACKEND_LOCAL_CONFIG_ENV_KEYS = [
 
 let mainWindow = null;
 const children = new Set();
+const serviceChildren = new Map();
+const credentialPortReadyChildren = new WeakSet();
+const SERVICE_STOP_ORDER = ["frontend", "backend", "credential worker"];
 let restartingServices = null;
 let changingAuditAnchor = null;
 let servicesReady = false;
+let serviceShutdownExpected = false;
+let serviceStopPromise = null;
+let handlingUnexpectedServiceFailure = null;
+let quitAfterServiceStop = false;
+let quitShutdownStarted = false;
 const activeNotifications = new Map();
+let desktopLogger = null;
+let activeEncryptionPolicy = null;
+
+function desktopLog(level, component, event, detail = null) {
+  try {
+    desktopLogger ??= createRotatingDesktopLogger({
+      directory: path.join(app.getPath("logs"), "vera"),
+    });
+    const record = desktopLogger.write(level, component, event, detail);
+    if (!app.isPackaged) {
+      const output = JSON.stringify(record);
+      if (level === "error") console.error(output);
+      else if (level === "warn") console.warn(output);
+      else console.log(output);
+    }
+  } catch {
+    if (!app.isPackaged) console.error("[vera-logger] unavailable");
+  }
+}
+
+function exitAfterIsolatedProfileFailure(error, event) {
+  const detail =
+    redactText(error instanceof Error ? error.message : String(error)) ||
+    "isolated profile bootstrap failed";
+  desktopLog("error", "desktop", event, { error });
+  process.stderr.write(`[vera-profile-bootstrap] ${event}: ${detail}\n`);
+  app.exit(1);
+}
 
 function selectedProcessEnvironment(keys) {
   return keys.reduce((environment, key) => {
@@ -172,6 +268,14 @@ function localDataDir() {
 
 function pendingRestorePath() {
   return path.join(app.getPath("userData"), "pending-restore.json");
+}
+
+function canonicalLocalDataTarget() {
+  const target = path.resolve(localDataDir());
+  // The target can legitimately be absent after an interrupted rename. Resolve
+  // only its existing parent so macOS /var -> /private/var aliases compare
+  // exactly without following a malicious terminal target symlink.
+  return path.join(fs.realpathSync(path.dirname(target)), path.basename(target));
 }
 
 function syncDirectory(directory) {
@@ -194,17 +298,21 @@ function reconcilePendingRestore() {
   if (!fs.existsSync(recordPath)) return false;
   const info = fs.lstatSync(recordPath);
   if (info.isSymbolicLink() || !info.isFile() || (info.mode & 0o077) !== 0) {
-    throw new Error("The pending restore record is unsafe; startup is blocked.");
+    throw new Error(
+      "The pending restore record is unsafe; startup is blocked.",
+    );
   }
   let record;
   try {
     record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
   } catch {
-    throw new Error("The pending restore record is invalid; startup is blocked.");
+    throw new Error(
+      "The pending restore record is invalid; startup is blocked.",
+    );
   }
   const target = path.resolve(String(record?.target || ""));
   const rollback = path.resolve(String(record?.rollback || ""));
-  const expectedTarget = path.resolve(localDataDir());
+  const expectedTarget = canonicalLocalDataTarget();
   const parent = path.dirname(expectedTarget);
   if (
     record?.schema !== PENDING_RESTORE_SCHEMA ||
@@ -212,7 +320,9 @@ function reconcilePendingRestore() {
     path.dirname(rollback) !== parent ||
     !path.basename(rollback).startsWith(".aletheia-restore-rollback-")
   ) {
-    throw new Error("The pending restore paths are invalid; startup is blocked.");
+    throw new Error(
+      "The pending restore paths are invalid; startup is blocked.",
+    );
   }
   const targetInfo = fs.existsSync(target) ? fs.lstatSync(target) : null;
   const rollbackInfo = fs.existsSync(rollback) ? fs.lstatSync(rollback) : null;
@@ -220,13 +330,17 @@ function reconcilePendingRestore() {
     targetInfo &&
     (targetInfo.isSymbolicLink() || !targetInfo.isDirectory())
   ) {
-    throw new Error("The restored workspace path is unsafe; startup is blocked.");
+    throw new Error(
+      "The restored workspace path is unsafe; startup is blocked.",
+    );
   }
   if (
     rollbackInfo &&
     (rollbackInfo.isSymbolicLink() || !rollbackInfo.isDirectory())
   ) {
-    throw new Error("The rollback workspace path is unsafe; startup is blocked.");
+    throw new Error(
+      "The rollback workspace path is unsafe; startup is blocked.",
+    );
   }
   if (!rollbackInfo) {
     if (!targetInfo) {
@@ -242,7 +356,7 @@ function reconcilePendingRestore() {
   fs.chmodSync(target, 0o700);
   syncDirectory(parent);
   clearPendingRestoreRecord();
-  console.warn("[desktop] recovered the prior workspace after an interrupted restore");
+  desktopLog("warn", "desktop", "restore_rollback_recovered");
   return true;
 }
 
@@ -276,15 +390,16 @@ function encryptedVolumeAttested() {
   }
 }
 
-function applicationEncryptionEnvironment() {
-  const mode = process.env.ALETHEIA_APPLICATION_ENCRYPTION ?? "required";
+function desktopEncryptionPolicy() {
+  return resolveDesktopEncryptionPolicy({
+    packaged: app.isPackaged,
+    environment: process.env,
+  });
+}
+
+function applicationEncryptionEnvironment(mode) {
   if (mode === "disabled") {
     return { ALETHEIA_APPLICATION_ENCRYPTION: "disabled" };
-  }
-  if (mode !== "required") {
-    throw new Error(
-      "ALETHEIA_APPLICATION_ENCRYPTION must be disabled or required.",
-    );
   }
   if (process.env.ALETHEIA_MASTER_KEY_BASE64) {
     return {
@@ -369,17 +484,9 @@ function derivedBackupKeyBase64() {
   return encoded;
 }
 
-function databaseEncryptionEnvironment() {
-  const mode =
-    process.env.ALETHEIA_DATABASE_ENCRYPTION ??
-    (app.isPackaged ? "sqlcipher_required" : "metadata_plaintext");
+function databaseEncryptionEnvironment(mode) {
   if (mode === "metadata_plaintext") {
     return { ALETHEIA_DATABASE_ENCRYPTION: "metadata_plaintext" };
-  }
-  if (mode !== "sqlcipher_required") {
-    throw new Error(
-      "ALETHEIA_DATABASE_ENCRYPTION must be metadata_plaintext or sqlcipher_required.",
-    );
   }
   const configuredSource =
     process.env.ALETHEIA_DATABASE_KEY_SOURCE?.trim().toLowerCase();
@@ -438,15 +545,9 @@ function databaseEncryptionEnvironment() {
   };
 }
 
-function resourceRoot() {
-  return app.isPackaged
-    ? path.join(process.resourcesPath, "aletheia")
-    : path.resolve(__dirname, "..");
-}
-
 function loadingHtml(message) {
   return `<!doctype html>
-<html>
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <title>${PRODUCT_NAME}</title>
@@ -508,6 +609,7 @@ function loadingHtml(message) {
 }
 
 function createWindow() {
+  desktopLog("info", "desktop", "renderer_window_creating");
   mainWindow = new BrowserWindow({
     width: 1320,
     height: 900,
@@ -545,12 +647,60 @@ function createWindow() {
   });
   mainWindow.loadURL(
     `data:text/html;charset=utf-8,${encodeURIComponent(
-      loadingHtml("Opening local workspace..."),
+      loadingHtml("正在打开本地工作区…"),
     )}`,
   );
   mainWindow.once("closed", () => {
     mainWindow = null;
   });
+}
+
+function configureDesktopSessionSecurity() {
+  const desktopSession = session.defaultSession;
+  desktopSession.setPermissionCheckHandler(() => false);
+  desktopSession.setPermissionRequestHandler(
+    (_webContents, _permission, callback) => callback(false),
+  );
+  desktopSession.webRequest.onHeadersReceived(
+    { urls: [`${FRONTEND_URL}/*`] },
+    (details, callback) => {
+      const responseHeaders = { ...(details.responseHeaders ?? {}) };
+      if (details.resourceType === "mainFrame") {
+        const contentSecurityPolicy = Object.entries(responseHeaders)
+          .filter(([name]) => name.toLowerCase() === "content-security-policy")
+          .flatMap(([, values]) => values)
+          .join("; ");
+        const requiredPolicy = [
+          "default-src 'self'",
+          "base-uri 'none'",
+          "object-src 'none'",
+          "frame-ancestors 'none'",
+          "script-src 'self'",
+          "'strict-dynamic'",
+          `connect-src 'self' ${BACKEND_URL}`,
+        ];
+        const hasNonce = /'nonce-[A-Za-z0-9+/_=-]+'/u.test(
+          contentSecurityPolicy,
+        );
+        if (
+          !hasNonce ||
+          requiredPolicy.some(
+            (directive) => !contentSecurityPolicy.includes(directive),
+          ) ||
+          contentSecurityPolicy.includes("'unsafe-eval'")
+        ) {
+          callback({ cancel: true });
+          return;
+        }
+      }
+      responseHeaders["Permissions-Policy"] = [
+        "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=()",
+      ];
+      responseHeaders["Referrer-Policy"] = ["no-referrer"];
+      responseHeaders["X-Content-Type-Options"] = ["nosniff"];
+      callback({ responseHeaders });
+    },
+  );
 }
 
 function wait(ms) {
@@ -591,6 +741,9 @@ function assertPortFree(port) {
 }
 
 function forkUtility(label, modulePath, args, options) {
+  if (serviceChildren.has(label)) {
+    throw new Error(`${label} is already running.`);
+  }
   const child = utilityProcess.fork(modulePath, args, {
     cwd: options.cwd,
     env: {
@@ -600,20 +753,131 @@ function forkUtility(label, modulePath, args, options) {
     serviceName: `${PRODUCT_NAME} ${label}`,
     stdio: "pipe",
   });
+  desktopLog("info", label, "service_fork_requested", {
+    pid_available: Boolean(child.pid),
+  });
+  child.once("spawn", () => {
+    desktopLog("info", label, "service_spawned");
+  });
+  child.on("message", (event) => {
+    const data =
+      event && typeof event === "object" && "data" in event
+        ? event.data
+        : event;
+    if (
+      data &&
+      typeof data === "object" &&
+      !Array.isArray(data) &&
+      Object.keys(data).length === 1 &&
+      data.type === CREDENTIAL_PORT_READY
+    ) {
+      if (!credentialPortReadyChildren.has(child)) {
+        credentialPortReadyChildren.add(child);
+        desktopLog("info", label, "credential_port_ready");
+      }
+    }
+  });
   children.add(child);
+  serviceChildren.set(label, child);
   child.stdout?.on("data", (chunk) =>
-    console.log(`[${label}] ${chunk.toString().trimEnd()}`),
+    desktopLog("info", label, "service_output", { bytes: chunk.length }),
   );
   child.stderr?.on("data", (chunk) =>
-    console.error(`[${label}] ${chunk.toString().trimEnd()}`),
+    desktopLog("warn", label, "service_error_output", {
+      bytes: chunk.length,
+    }),
   );
   child.once("exit", (code) => {
     children.delete(child);
+    const wasCurrentService = serviceChildren.get(label) === child;
+    if (wasCurrentService) serviceChildren.delete(label);
     if (code !== 0) {
-      console.error(`[${label}] exited with code=${code}`);
+      desktopLog("error", label, "service_exit", { code });
+    }
+    if (
+      wasCurrentService &&
+      servicesReady &&
+      !serviceShutdownExpected &&
+      !quitAfterServiceStop
+    ) {
+      servicesReady = false;
+      void handleUnexpectedServiceExit(label, code);
     }
   });
   return child;
+}
+
+async function waitForCredentialPortReady(child, label, timeoutMs = 15_000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (credentialPortReadyChildren.has(child)) return;
+    if (!children.has(child)) {
+      throw new Error(`${label} exited before credential-port readiness.`);
+    }
+    await wait(25);
+  }
+  child.kill();
+  const error = new Error(
+    `${label} did not become ready for its credential port.`,
+  );
+  error.code =
+    label === "credential worker"
+      ? "CREDENTIAL_WORKER_PORT_READY_TIMEOUT"
+      : "BACKEND_CREDENTIAL_PORT_READY_TIMEOUT";
+  throw error;
+}
+
+function waitForUtilitySpawn(child, label, timeoutMs = 15_000) {
+  if (child.pid) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      child.off("spawn", onSpawn);
+      child.off("exit", onExit);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onSpawn = () => finish();
+    const onExit = (code) =>
+      finish(new Error(`${label} exited before startup with code=${code}.`));
+    const timeout = setTimeout(() => {
+      child.kill();
+      const error = new Error(`${label} did not start in time.`);
+      error.code =
+        label === "credential worker"
+          ? "CREDENTIAL_WORKER_SPAWN_TIMEOUT"
+          : "LOCAL_SERVICE_SPAWN_TIMEOUT";
+      finish(error);
+    }, timeoutMs);
+    child.once("spawn", onSpawn);
+    child.once("exit", onExit);
+    // pid can become available between the initial check and listener setup.
+    // Recheck after both listeners are installed so a fast spawn cannot be
+    // mistaken for a startup timeout.
+    if (child.pid) finish();
+  });
+}
+
+async function connectCredentialWorkerToBackend(credentialWorker, backend) {
+  await Promise.all([
+    waitForUtilitySpawn(credentialWorker, "credential worker"),
+    waitForUtilitySpawn(backend, "backend"),
+    waitForCredentialPortReady(credentialWorker, "credential worker"),
+    waitForCredentialPortReady(backend, "backend"),
+  ]);
+  const { port1, port2 } = new MessageChannelMain();
+  try {
+    credentialWorker.postMessage({ type: CREDENTIAL_PORT_BOOTSTRAP }, [port1]);
+    backend.postMessage({ type: CREDENTIAL_PORT_BOOTSTRAP }, [port2]);
+    desktopLog("info", "desktop", "credential_port_transferred");
+  } catch (error) {
+    port1.close();
+    port2.close();
+    throw error;
+  }
 }
 
 function runUtilityOnce(label, modulePath, options) {
@@ -644,13 +908,19 @@ function runUtilityOnce(label, modulePath, options) {
       clearTimeout(timeout);
       children.delete(child);
       if (code === 0) {
-        if (stdout.trim()) console.log(`[${label}] ${stdout.trim()}`);
+        desktopLog("info", label, "utility_complete", {
+          output_bytes: Buffer.byteLength(stdout),
+        });
         resolve(stdout.trim());
         return;
       }
+      desktopLog("error", label, "utility_failed", {
+        code,
+        error_output_bytes: Buffer.byteLength(stderr),
+      });
       reject(
         new Error(
-          `${label} failed with code ${code}.${stderr.trim() ? ` ${stderr.trim()}` : ""}`,
+          `${label} failed with code ${code}.${stderr.trim() ? " See the local Vera logs for details." : ""}`,
         ),
       );
     });
@@ -732,6 +1002,7 @@ async function migrateLegacyDesktopWorkspace(
       timeoutMs: 180_000,
       env: {
         ALETHEIA_DATA_DIR: dataDir,
+        ALETHEIA_MODEL_CALL_LOG_DIR: path.join(app.getPath("logs"), "vera"),
         ALETHEIA_DESKTOP_MIGRATION_BACKUP_DIR: backupDir,
         ...applicationEncryption,
         ...databaseEncryption,
@@ -799,7 +1070,15 @@ function prepareFrontendModules(root) {
   return target;
 }
 
+function assertDesktopIsNotQuitting() {
+  if (quitShutdownStarted || quitAfterServiceStop) {
+    throw new Error(`${PRODUCT_NAME} is shutting down.`);
+  }
+}
+
 async function startServices() {
+  assertDesktopIsNotQuitting();
+  desktopLog("info", "desktop", "services_starting");
   const requireEncryptedVolume =
     process.env.ALETHEIA_REQUIRE_ENCRYPTED_VOLUME ?? "false";
   const volumeAttested = encryptedVolumeAttested();
@@ -808,8 +1087,14 @@ async function startServices() {
       `Encrypted storage is required. Enable FileVault or provide an approved encrypted-volume attestation before opening ${PRODUCT_NAME}.`,
     );
   }
-  const applicationEncryption = applicationEncryptionEnvironment();
-  const databaseEncryption = databaseEncryptionEnvironment();
+  const encryptionPolicy = desktopEncryptionPolicy();
+  const applicationEncryption = applicationEncryptionEnvironment(
+    encryptionPolicy.applicationEncryption,
+  );
+  const databaseEncryption = databaseEncryptionEnvironment(
+    encryptionPolicy.databaseEncryption,
+  );
+  activeEncryptionPolicy = encryptionPolicy;
   await assertPortFree(BACKEND_PORT);
   await assertPortFree(FRONTEND_PORT);
 
@@ -827,114 +1112,232 @@ async function startServices() {
   );
 
   const backendDir = path.join(root, "backend");
-  forkUtility("backend", path.join(backendDir, "dist", "index.js"), [], {
-    cwd: backendDir,
-    env: {
-      ...selectedProcessEnvironment(BACKEND_LOCAL_CONFIG_ENV_KEYS),
-      ...auditAnchorEnvironment(),
-      NODE_ENV: "production",
-      PORT: String(BACKEND_PORT),
-      ALETHEIA_BACKEND_HOST: HOST,
-      FRONTEND_URL,
-      DOWNLOAD_SIGNING_SECRET: DESKTOP_DOWNLOAD_SIGNING_SECRET,
-      ALETHEIA_AUTH_MODE: "private_token",
-      ALETHEIA_PRIVATE_AUTH_TOKEN: DESKTOP_SESSION_TOKEN,
-      ALETHEIA_DATA_DIR: dataDir,
-      ...applicationEncryption,
-      ...databaseEncryption,
-      ALETHEIA_REQUIRE_ENCRYPTED_VOLUME: requireEncryptedVolume,
-      ALETHEIA_ENCRYPTED_VOLUME_ATTESTED: String(volumeAttested),
-      ALETHEIA_LOCAL_USER_ID:
-        process.env.ALETHEIA_LOCAL_USER_ID ?? "desktop-local-user",
-      ALETHEIA_LOCAL_USER_EMAIL:
-        process.env.ALETHEIA_LOCAL_USER_EMAIL ?? "desktop@aletheia.local",
-      ALETHEIA_MULTI_PRINCIPAL_ENABLED: "false",
-      ALETHEIA_RETRIEVAL_MODE: "keyword",
-      ALETHEIA_SEMANTIC_INDEX_ENABLED: "false",
-      ALETHEIA_SEMANTIC_INDEX_DRIVER: "disabled",
-      ALETHEIA_SEMANTIC_INDEX_DIR: path.join(
-        dataDir,
-        "index",
-        "semantic-local",
-      ),
-      ALETHEIA_OCR_BINARY: path.join(root, "native", "aletheia-ocr"),
-      ALETHEIA_OCR_ENABLED: "true",
-      TRUST_PROXY_HOPS: "0",
-      ALETHEIA_DEMO_SEED_ENABLED:
-        process.env.ALETHEIA_DEMO_SEED_ENABLED ?? "false",
-      ALETHEIA_DEMO_SEED_MODE: process.env.ALETHEIA_DEMO_SEED_MODE ?? "empty",
-    },
+  const credentialWorkerPath = desktopUtilityModulePath("credentialWorker.js");
+  desktopLog("info", "credential worker", "entry_resolved", {
+    exists: fs.existsSync(credentialWorkerPath),
+    external_resource: credentialWorkerPath.includes(
+      `${path.sep}aletheia${path.sep}desktop${path.sep}`,
+    ),
   });
+  if (!fs.existsSync(credentialWorkerPath)) {
+    throw new Error("The packaged credential worker is unavailable.");
+  }
+  const credentialWorker = forkUtility(
+    "credential worker",
+    credentialWorkerPath,
+    [],
+    {
+      // A packaged __dirname points inside app.asar and is not a real OS
+      // working directory. The utility entry is an ordinary extraResource;
+      // use its real parent directory for the process cwd as well.
+      cwd: path.dirname(credentialWorkerPath),
+      env: {},
+    },
+  );
+  await Promise.all([
+    waitForUtilitySpawn(credentialWorker, "credential worker"),
+    waitForCredentialPortReady(credentialWorker, "credential worker"),
+  ]);
+  assertDesktopIsNotQuitting();
+  const backend = forkUtility(
+    "backend",
+    path.join(backendDir, "dist", "index.js"),
+    [],
+    {
+      cwd: backendDir,
+      env: {
+        ...selectedProcessEnvironment(BACKEND_LOCAL_CONFIG_ENV_KEYS),
+        ...auditAnchorEnvironment(),
+        NODE_ENV: "production",
+        PORT: String(BACKEND_PORT),
+        ALETHEIA_BACKEND_HOST: HOST,
+        FRONTEND_URL,
+        DOWNLOAD_SIGNING_SECRET: DESKTOP_DOWNLOAD_SIGNING_SECRET,
+        ALETHEIA_AUTH_MODE: "private_token",
+        ALETHEIA_PRIVATE_AUTH_TOKEN: DESKTOP_SESSION_TOKEN,
+        ALETHEIA_DATA_DIR: dataDir,
+        ALETHEIA_MODEL_CALL_LOG_DIR: path.join(app.getPath("logs"), "vera"),
+        ...applicationEncryption,
+        ...databaseEncryption,
+        ALETHEIA_REQUIRE_ENCRYPTED_VOLUME: requireEncryptedVolume,
+        ALETHEIA_ENCRYPTED_VOLUME_ATTESTED: String(volumeAttested),
+        ALETHEIA_LOCAL_USER_ID:
+          process.env.ALETHEIA_LOCAL_USER_ID ?? "desktop-local-user",
+        ALETHEIA_LOCAL_USER_EMAIL:
+          process.env.ALETHEIA_LOCAL_USER_EMAIL ?? "desktop@aletheia.local",
+        ALETHEIA_MULTI_PRINCIPAL_ENABLED: "false",
+        ALETHEIA_RETRIEVAL_MODE: "keyword",
+        ALETHEIA_SEMANTIC_INDEX_ENABLED: "false",
+        ALETHEIA_SEMANTIC_INDEX_DRIVER: "disabled",
+        ALETHEIA_SEMANTIC_INDEX_DIR: path.join(
+          dataDir,
+          "index",
+          "semantic-local",
+        ),
+        ALETHEIA_OCR_BINARY: path.join(root, "native", "aletheia-ocr"),
+        ALETHEIA_OCR_ENABLED: "true",
+        TRUST_PROXY_HOPS: "0",
+        ALETHEIA_DEMO_SEED_ENABLED:
+          process.env.ALETHEIA_DEMO_SEED_ENABLED ?? "false",
+        ALETHEIA_DEMO_SEED_MODE: process.env.ALETHEIA_DEMO_SEED_MODE ?? "empty",
+        VERA_DESKTOP_CREDENTIAL_PORT_REQUIRED: "true",
+      },
+    },
+  );
+  await connectCredentialWorkerToBackend(credentialWorker, backend);
   await waitForHttp(`${BACKEND_URL}/health`, 45_000);
+  assertDesktopIsNotQuitting();
 
   const frontendDir = path.join(root, "frontend");
   const frontendModulesDir = prepareFrontendModules(root);
-  forkUtility("frontend", path.join(frontendDir, "server.js"), [], {
-    cwd: frontendDir,
-    env: {
-      NODE_ENV: "production",
-      NODE_PATH: frontendModulesDir,
-      ALETHEIA_FRONTEND_MODULES_DIR: frontendModulesDir,
-      NEXT_TELEMETRY_DISABLED: "1",
-      PORT: String(FRONTEND_PORT),
-      HOSTNAME: HOST,
-      NEXT_PUBLIC_API_BASE_URL: BACKEND_URL,
-      NEXT_PUBLIC_ALETHEIA_LOCAL_CLIENT: "true",
-      NEXT_PUBLIC_ALETHEIA_LOCAL_USER_ID:
-        process.env.NEXT_PUBLIC_ALETHEIA_LOCAL_USER_ID ??
-        process.env.ALETHEIA_LOCAL_USER_ID ??
-        "desktop-local-user",
-      NEXT_PUBLIC_ALETHEIA_LOCAL_USER_EMAIL:
-        process.env.NEXT_PUBLIC_ALETHEIA_LOCAL_USER_EMAIL ??
-        process.env.ALETHEIA_LOCAL_USER_EMAIL ??
-        "desktop@aletheia.local",
+  const frontend = forkUtility(
+    "frontend",
+    path.join(frontendDir, "server.js"),
+    [],
+    {
+      cwd: frontendDir,
+      env: {
+        NODE_ENV: "production",
+        NODE_PATH: frontendModulesDir,
+        ALETHEIA_FRONTEND_MODULES_DIR: frontendModulesDir,
+        NEXT_TELEMETRY_DISABLED: "1",
+        PORT: String(FRONTEND_PORT),
+        HOSTNAME: HOST,
+        NEXT_PUBLIC_API_BASE_URL: BACKEND_URL,
+        NEXT_PUBLIC_ALETHEIA_LOCAL_CLIENT: "true",
+        VERA_DESKTOP_CSP: "true",
+        VERA_DESKTOP_BACKEND_ORIGIN: BACKEND_URL,
+        NEXT_PUBLIC_ALETHEIA_LOCAL_USER_ID:
+          process.env.NEXT_PUBLIC_ALETHEIA_LOCAL_USER_ID ??
+          process.env.ALETHEIA_LOCAL_USER_ID ??
+          "desktop-local-user",
+        NEXT_PUBLIC_ALETHEIA_LOCAL_USER_EMAIL:
+          process.env.NEXT_PUBLIC_ALETHEIA_LOCAL_USER_EMAIL ??
+          process.env.ALETHEIA_LOCAL_USER_EMAIL ??
+          "desktop@aletheia.local",
+      },
     },
-  });
+  );
   await waitForHttp(`${FRONTEND_URL}${WORKSPACE_PATH}`, 45_000);
+  assertDesktopIsNotQuitting();
+  for (const [label, child] of [
+    ["credential worker", credentialWorker],
+    ["backend", backend],
+    ["frontend", frontend],
+  ]) {
+    if (serviceChildren.get(label) !== child || !children.has(child)) {
+      throw new Error(`${label} exited before local services became ready.`);
+    }
+  }
   servicesReady = true;
+  desktopLog("info", "desktop", "services_ready");
 }
 
-function stopServices() {
-  servicesReady = false;
-  for (const child of children) {
-    child.kill();
+async function stopTrackedChild(child, deadline) {
+  if (!children.has(child)) return;
+  child.kill();
+  const gracefulDeadline = Math.min(deadline, Date.now() + 7_000);
+  while (children.has(child) && Date.now() < gracefulDeadline) {
+    await wait(100);
+  }
+  if (!children.has(child) || !child.pid) return;
+  try {
+    process.kill(child.pid, "SIGKILL");
+  } catch (error) {
+    if (error.code !== "ESRCH") throw error;
+  }
+  const forcedDeadline = Math.min(deadline, Date.now() + 5_000);
+  while (children.has(child) && Date.now() < forcedDeadline) {
+    await wait(100);
   }
 }
 
 async function stopServicesAndWait(timeoutMs = 20_000) {
-  const running = [...children];
-  stopServices();
-  const deadline = Date.now() + timeoutMs;
-  while (
-    running.some((child) => children.has(child)) &&
-    Date.now() < deadline
-  ) {
-    await wait(100);
-  }
-  const remaining = running.filter((child) => children.has(child));
-  for (const child of remaining) {
-    if (!child.pid) continue;
-    try {
-      process.kill(child.pid, "SIGKILL");
-    } catch (error) {
-      if (error.code !== "ESRCH") throw error;
+  if (serviceStopPromise) return serviceStopPromise;
+  serviceStopPromise = (async () => {
+    desktopLog("info", "desktop", "services_stopping");
+    servicesReady = false;
+    serviceShutdownExpected = true;
+    const deadline = Date.now() + timeoutMs;
+    const stopped = new Set();
+    for (const label of SERVICE_STOP_ORDER) {
+      const child = serviceChildren.get(label);
+      if (!child) continue;
+      stopped.add(child);
+      await stopTrackedChild(child, deadline);
     }
-  }
-  const killDeadline = Date.now() + 5_000;
-  while (
-    remaining.some((child) => children.has(child)) &&
-    Date.now() < killDeadline
-  ) {
-    await wait(100);
-  }
-  if (remaining.some((child) => children.has(child))) {
-    throw new Error("Local services did not stop cleanly for backup");
-  }
+    for (const child of [...children]) {
+      if (stopped.has(child)) continue;
+      await stopTrackedChild(child, deadline);
+    }
+    if (children.size > 0) {
+      throw new Error("Local services did not stop cleanly.");
+    }
+    desktopLog("info", "desktop", "services_stopped");
+  })().finally(() => {
+    serviceShutdownExpected = false;
+    serviceStopPromise = null;
+  });
+  return serviceStopPromise;
 }
 
 function safeBackupFilename() {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   return `${PRODUCT_NAME} Backup ${timestamp}.aletheia-backup`;
+}
+
+function safeDiagnosticFilename() {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `${PRODUCT_NAME} Diagnostics ${timestamp}.vera-diagnostics.json`;
+}
+
+async function exportRedactedDiagnosticBundle() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    throw new Error(`The ${PRODUCT_NAME} window is unavailable`);
+  }
+  const selection = await dialog.showSaveDialog(mainWindow, {
+    title: "导出脱敏诊断包",
+    defaultPath: path.join(app.getPath("documents"), safeDiagnosticFilename()),
+    buttonLabel: "导出诊断包",
+    filters: [
+      {
+        name: `${PRODUCT_NAME} 脱敏诊断包`,
+        extensions: ["json"],
+      },
+    ],
+    properties: ["showOverwriteConfirmation", "createDirectory"],
+  });
+  if (selection.canceled || !selection.filePath) {
+    return { saved: false, canceled: true };
+  }
+  const destination = selection.filePath.endsWith(".json")
+    ? selection.filePath
+    : `${selection.filePath}.json`;
+  const bundle = buildRedactedDiagnosticBundle({
+    now: new Date(),
+    appVersion: app.getVersion(),
+    packaged: app.isPackaged,
+    platform: process.platform,
+    arch: process.arch,
+    osRelease: os.release(),
+    versions: process.versions,
+    runningServices: [...serviceChildren.keys()],
+    servicesReady,
+    encryptedVolumeAttested: encryptedVolumeAttested(),
+    genericLoopbackHttpEnabled:
+      process.env.ALETHEIA_MODEL_PROVIDER_ALLOW_LOOPBACK_HTTP === "true",
+    dataDir: localDataDir(),
+    logsDir: app.getPath("logs"),
+  });
+  const bytes = Buffer.from(`${JSON.stringify(bundle, null, 2)}\n`, "utf8");
+  writeOwnerOnlyFileAtomically(destination, bytes);
+  return {
+    saved: true,
+    canceled: false,
+    bytes: bytes.byteLength,
+    sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
+    createdAt: bundle.created_at,
+  };
 }
 
 function parseBackupUtilityResult(output, expectedAction) {
@@ -974,11 +1377,14 @@ async function createEncryptedBackup() {
     throw new Error(`The ${PRODUCT_NAME} window is unavailable`);
   }
   const selection = await dialog.showSaveDialog(mainWindow, {
-    title: "Create encrypted workspace backup",
+    title: "创建加密工作区备份",
     defaultPath: path.join(app.getPath("documents"), safeBackupFilename()),
-    buttonLabel: "Create Backup",
+    buttonLabel: "创建备份",
     filters: [
-      { name: `${PRODUCT_NAME} Encrypted Backup`, extensions: ["aletheia-backup"] },
+      {
+        name: `${PRODUCT_NAME} 加密备份`,
+        extensions: ["aletheia-backup"],
+      },
     ],
     properties: ["showOverwriteConfirmation", "createDirectory"],
   });
@@ -1063,10 +1469,13 @@ async function inspectEncryptedBackup() {
     throw new Error(`The ${PRODUCT_NAME} window is unavailable`);
   }
   const selection = await dialog.showOpenDialog(mainWindow, {
-    title: "Check encrypted workspace backup",
-    buttonLabel: "Check Backup",
+    title: "检查加密工作区备份",
+    buttonLabel: "检查备份",
     filters: [
-      { name: `${PRODUCT_NAME} Encrypted Backup`, extensions: ["aletheia-backup"] },
+      {
+        name: `${PRODUCT_NAME} 加密备份`,
+        extensions: ["aletheia-backup"],
+      },
     ],
     properties: ["openFile"],
   });
@@ -1108,22 +1517,22 @@ async function inspectEncryptedBackup() {
         {
           id: "authentication",
           ok: true,
-          detail: "Encrypted envelope authenticated.",
+          detail: "加密封装已通过身份验证。",
         },
         {
           id: "archive",
           ok: true,
-          detail: "Archive paths and entry types are safe.",
+          detail: "归档路径和条目类型安全。",
         },
         {
           id: "manifest",
           ok: true,
-          detail: "File sizes and SHA-256 hashes match.",
+          detail: "文件大小与 SHA-256 校验值一致。",
         },
         {
           id: "workspace",
           ok: true,
-          detail: "Required database and workspace directories are present.",
+          detail: "所需数据库和工作区目录完整。",
         },
       ],
     };
@@ -1233,11 +1642,10 @@ async function restoreEncryptedBackup() {
   }
   const confirmation = await dialog.showMessageBox(mainWindow, {
     type: "warning",
-    title: `Restore ${PRODUCT_NAME} workspace`,
-    message: "Replace the current local workspace?",
-    detail:
-      `${PRODUCT_NAME} will stop local services, verify the backup again, and replace current data. If the restored services do not start, the current workspace will be put back automatically.`,
-    buttons: ["Cancel", "Restore Workspace"],
+    title: `恢复 ${PRODUCT_NAME} 工作区`,
+    message: "替换当前本地工作区？",
+    detail: `${PRODUCT_NAME} 将停止本地服务、再次验证备份并替换当前数据。如果恢复后的服务无法启动，当前工作区会自动还原。`,
+    buttons: ["取消", "恢复工作区"],
     defaultId: 0,
     cancelId: 0,
     noLink: true,
@@ -1383,7 +1791,9 @@ function showNativeNotification(input) {
       href.includes("\\") ||
       href.includes("\0"))
   ) {
-    throw new Error(`Notification destination must stay inside ${PRODUCT_NAME}`);
+    throw new Error(
+      `Notification destination must stay inside ${PRODUCT_NAME}`,
+    );
   }
 
   const previous = activeNotifications.get(tag);
@@ -1533,7 +1943,8 @@ async function saveOriginalMatterDocument(input) {
     let detail = `Original document access failed (${response.status})`;
     try {
       const parsed = JSON.parse(body);
-      if (typeof parsed.detail === "string" && parsed.detail) detail = parsed.detail;
+      if (typeof parsed.detail === "string" && parsed.detail)
+        detail = parsed.detail;
     } catch {
       // Keep the bounded status message for a non-JSON backend response.
     }
@@ -1719,7 +2130,7 @@ async function applyAuditAnchorConfiguration(nextConfig) {
       writeAuditAnchorConfigAtomically(userDataDir, nextConfig);
       await startServices();
       if (mainWindow && !mainWindow.isDestroyed()) {
-        await mainWindow.loadURL(`${FRONTEND_URL}/aletheia/settings`);
+        await mainWindow.loadURL(`${FRONTEND_URL}/settings`);
       }
       return getAuditAnchorConfiguration();
     } catch (error) {
@@ -1729,10 +2140,11 @@ async function applyAuditAnchorConfiguration(nextConfig) {
         restoreAuditAnchorConfigAtomically(userDataDir, previous);
         await startServices();
         if (mainWindow && !mainWindow.isDestroyed()) {
-          await mainWindow.loadURL(`${FRONTEND_URL}/aletheia/settings`);
+          await mainWindow.loadURL(`${FRONTEND_URL}/settings`);
         }
       } catch (reason) {
-        rollbackError = reason instanceof Error ? reason.message : String(reason);
+        rollbackError =
+          reason instanceof Error ? reason.message : String(reason);
       }
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(
@@ -1749,7 +2161,9 @@ async function applyAuditAnchorConfiguration(nextConfig) {
 
 async function configureAuditAnchor() {
   if (hasExternallyManagedAnchorEnvironment()) {
-    throw new Error("Audit anchoring is managed by the launch environment and is read-only here.");
+    throw new Error(
+      "Audit anchoring is managed by the launch environment and is read-only here.",
+    );
   }
   const selection = await dialog.showOpenDialog(mainWindow, {
     title: "Choose external audit anchor location",
@@ -1797,7 +2211,9 @@ async function configureAuditAnchor() {
 
 async function disableAuditAnchor() {
   if (hasExternallyManagedAnchorEnvironment()) {
-    throw new Error("Audit anchoring is managed by the launch environment and is read-only here.");
+    throw new Error(
+      "Audit anchoring is managed by the launch environment and is read-only here.",
+    );
   }
   const current = getAuditAnchorConfiguration();
   if (!current.enabled) {
@@ -1806,7 +2222,8 @@ async function disableAuditAnchor() {
   const confirmation = await dialog.showMessageBox(mainWindow, {
     type: "warning",
     title: "Disable external audit anchoring?",
-    message: "Vera will stop writing new audit anchors and restart local services.",
+    message:
+      "Vera will stop writing new audit anchors and restart local services.",
     detail:
       "Existing keys and signed journal entries will be preserved for verification and later re-enablement.",
     buttons: ["Cancel", "Disable and restart"],
@@ -1857,14 +2274,14 @@ function installApplicationMenu() {
         ]
       : []),
     {
-      label: "File",
+      label: "文件",
       submenu: [
         {
-          label: "Open Data Folder",
+          label: "打开数据文件夹",
           click: () => void openLocalDirectory("data"),
         },
         {
-          label: "Open Logs Folder",
+          label: "打开日志文件夹",
           click: () => void openLocalDirectory("logs"),
         },
         ...(process.platform === "darwin"
@@ -1873,7 +2290,7 @@ function installApplicationMenu() {
       ],
     },
     {
-      label: "Edit",
+      label: "编辑",
       submenu: [
         { role: "undo" },
         { role: "redo" },
@@ -1885,7 +2302,7 @@ function installApplicationMenu() {
       ],
     },
     {
-      label: "View",
+      label: "显示",
       submenu: [
         { role: "reload" },
         { role: "toggleDevTools", visible: !app.isPackaged },
@@ -1898,7 +2315,7 @@ function installApplicationMenu() {
       ],
     },
     {
-      label: "Window",
+      label: "窗口",
       submenu: [
         { role: "minimize" },
         { role: "zoom" },
@@ -1908,14 +2325,14 @@ function installApplicationMenu() {
       ],
     },
     {
-      label: "Help",
+      label: "帮助",
       submenu: [
         {
-          label: "Restart Local Services",
+          label: "重新启动本地服务",
           click: () => void restartServices(),
         },
         {
-          label: "Open Logs Folder",
+          label: "打开日志文件夹",
           click: () => void openLocalDirectory("logs"),
         },
       ],
@@ -1934,19 +2351,17 @@ function registerIpc() {
 
   ipcMain.handle("aletheia:get-info", (event) => {
     assertTrustedSender(event);
+    const encryptionPolicy =
+      activeEncryptionPolicy ?? desktopEncryptionPolicy();
     return {
       appVersion: app.getVersion(),
       backendUrl: BACKEND_URL,
       workspaceApiUrl: `${BACKEND_URL.replace(/\/$/, "")}/api/v1`,
       frontendUrl: FRONTEND_URL,
-      dataDir: localDataDir(),
-      logsDir: app.getPath("logs"),
       localClient: true,
       encryptedVolumeAttested: encryptedVolumeAttested(),
-      applicationEncryption: "required",
-      databaseEncryption: app.isPackaged
-        ? "sqlcipher_required"
-        : "metadata_plaintext",
+      applicationEncryption: encryptionPolicy.applicationEncryption,
+      databaseEncryption: encryptionPolicy.databaseEncryption,
     };
   });
 
@@ -1963,6 +2378,11 @@ function registerIpc() {
   ipcMain.handle("aletheia:open-logs-directory", async (event) => {
     assertTrustedSender(event);
     return openLocalDirectory("logs");
+  });
+
+  ipcMain.handle("aletheia:export-diagnostics", async (event) => {
+    assertTrustedSender(event);
+    return exportRedactedDiagnosticBundle();
   });
 
   ipcMain.handle("aletheia:restart-local-services", async (event) => {
@@ -2005,10 +2425,13 @@ function registerIpc() {
     return saveLitigationArtifactDownload(input);
   });
 
-  ipcMain.handle("aletheia:save-original-matter-document", async (event, input) => {
-    assertTrustedSender(event);
-    return saveOriginalMatterDocument(input);
-  });
+  ipcMain.handle(
+    "aletheia:save-original-matter-document",
+    async (event, input) => {
+      assertTrustedSender(event);
+      return saveOriginalMatterDocument(input);
+    },
+  );
 
   ipcMain.handle("aletheia:notification-support", (event) => {
     assertTrustedSender(event);
@@ -2031,26 +2454,95 @@ function registerIpc() {
   });
 }
 
-async function boot() {
-  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
-  try {
-    if (!servicesReady) reconcilePendingRestore();
-    if (!servicesReady) await startServices();
-    await mainWindow.loadURL(`${FRONTEND_URL}${WORKSPACE_PATH}`);
-  } catch (error) {
-    console.error("[desktop] startup failed", error);
-    stopServices();
-    const detail = error instanceof Error ? error.message : String(error);
+async function handleUnexpectedServiceExit(label, code) {
+  if (
+    handlingUnexpectedServiceFailure ||
+    serviceShutdownExpected ||
+    quitShutdownStarted ||
+    quitAfterServiceStop
+  ) {
+    return handlingUnexpectedServiceFailure;
+  }
+  handlingUnexpectedServiceFailure = (async () => {
+    desktopLog("error", "desktop", "required_service_stopped", {
+      service: label,
+      code,
+    });
+    await stopServicesAndWait().catch((error) => {
+      desktopLog("error", "desktop", "service_cleanup_failed", { error });
+    });
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      app.quit();
+      return;
+    }
+    await mainWindow
+      .loadURL(
+        `data:text/html;charset=utf-8,${encodeURIComponent(
+          loadingHtml("必要的本地服务已停止，Vera 已安全关闭其余服务。"),
+        )}`,
+      )
+      .catch(() => undefined);
     const result = await dialog.showMessageBox(mainWindow, {
       type: "error",
-      title: `${PRODUCT_NAME} could not start`,
-      message: "The local workspace services did not start.",
-      detail,
-      buttons: ["Try Again", "Open Logs", "Quit"],
+      title: `${PRODUCT_NAME} 本地服务已停止`,
+      message: "必要的本地工作区服务意外停止。",
+      detail: `${label} 已退出（代码 ${code ?? "未知"}）。本地数据仍保留在此设备上。`,
+      buttons: ["重新启动服务", "打开日志", "退出"],
       defaultId: 0,
       cancelId: 2,
       noLink: true,
     });
+    if (result.response === 0) {
+      await boot();
+      return;
+    }
+    if (result.response === 1) {
+      await openLocalDirectory("logs");
+      await boot();
+      return;
+    }
+    app.quit();
+  })().finally(() => {
+    handlingUnexpectedServiceFailure = null;
+  });
+  return handlingUnexpectedServiceFailure;
+}
+
+async function boot() {
+  try {
+    if (!servicesReady) reconcilePendingRestore();
+    if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+    if (!servicesReady) await startServices();
+    await mainWindow.loadURL(`${FRONTEND_URL}${WORKSPACE_PATH}`);
+  } catch (error) {
+    desktopLog("error", "desktop", "startup_failed", { error });
+    await stopServicesAndWait().catch((stopError) => {
+      desktopLog("error", "desktop", "startup_cleanup_failed", {
+        error: stopError,
+      });
+    });
+    if (quitShutdownStarted || quitAfterServiceStop) return;
+    if (explicitUserDataDirectory) {
+      exitAfterIsolatedProfileFailure(error, "startup_failed");
+      return;
+    }
+    const detail =
+      redactText(error instanceof Error ? error.message : String(error)) ||
+      "本地运行时报告了已脱敏的启动错误。";
+    const errorDialogOptions = {
+      type: "error",
+      title: `${PRODUCT_NAME} 无法启动`,
+      message: "本地工作区服务未能启动。",
+      detail,
+      buttons: ["重试", "打开日志", "退出"],
+      defaultId: 0,
+      cancelId: 2,
+      noLink: true,
+    };
+    const result =
+      mainWindow && !mainWindow.isDestroyed()
+        ? await dialog.showMessageBox(mainWindow, errorDialogOptions)
+        : await dialog.showMessageBox(errorDialogOptions);
     if (result.response === 0) return boot();
     if (result.response === 1) {
       await openLocalDirectory("logs");
@@ -2060,16 +2552,59 @@ async function boot() {
   }
 }
 
-app.whenReady().then(() => {
-  registerIpc();
-  installApplicationMenu();
-  return boot();
-});
+if (singleInstanceLockAcquired) {
+  app.on("second-instance", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      void boot();
+      return;
+    }
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
 
-app.on("before-quit", stopServices);
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
-app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) void boot();
-});
+  app
+    .whenReady()
+    .then(() => {
+      configureDesktopSessionSecurity();
+      registerIpc();
+      installApplicationMenu();
+      return boot();
+    })
+    .catch((error) => {
+      if (explicitUserDataDirectory) {
+        exitAfterIsolatedProfileFailure(error, "bootstrap_failed");
+        return;
+      }
+      desktopLog("error", "desktop", "bootstrap_failed", { error });
+      const detail =
+        redactText(error instanceof Error ? error.message : String(error)) ||
+        "本地运行时报告了已脱敏的启动错误。";
+      dialog.showErrorBox(
+        `${PRODUCT_NAME} 无法启动`,
+        `本地客户端初始化失败。\n\n${detail}`,
+      );
+      app.exit(1);
+    });
+
+  app.on("before-quit", (event) => {
+    if (quitAfterServiceStop) return;
+    event.preventDefault();
+    if (quitShutdownStarted) return;
+    quitShutdownStarted = true;
+    void stopServicesAndWait()
+      .catch((error) => {
+        desktopLog("error", "desktop", "shutdown_cleanup_failed", { error });
+      })
+      .finally(() => {
+        quitAfterServiceStop = true;
+        app.quit();
+      });
+  });
+  app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") app.quit();
+  });
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) void boot();
+  });
+}

@@ -440,6 +440,14 @@ export class WorkspaceJobsService {
     return job;
   }
 
+  /**
+   * Used only after a feature service has atomically persisted its own
+   * cancelled state together with the Jobs transition.
+   */
+  abortActiveJob(id: string): boolean {
+    return this.options.abortRegistry?.abort(id) ?? false;
+  }
+
   recoverRunningJobs(at?: string) {
     return this.repository.recoverRunningJobs(
       assertTimestamp(at ?? this.now(), "at"),

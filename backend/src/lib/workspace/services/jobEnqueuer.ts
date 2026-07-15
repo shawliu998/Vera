@@ -49,12 +49,16 @@ export type WorkspaceJobPortEvent =
   | { type: "cancel"; at: string; reason: string };
 
 export interface JobEnqueuer {
-  enqueueInCurrentTransaction(input: EnqueueWorkspaceJobInput): WorkspaceJobSnapshot;
+  enqueueInCurrentTransaction(
+    input: EnqueueWorkspaceJobInput,
+  ): WorkspaceJobSnapshot;
   get(id: string): WorkspaceJobSnapshot | null;
   transitionInCurrentTransaction(
     id: string,
     event: WorkspaceJobPortEvent,
   ): WorkspaceJobSnapshot;
+  /** Abort a currently executing handler after its durable state transition commits. */
+  abortActive?(id: string): boolean;
 }
 
 function toSnapshot(job: {
@@ -103,6 +107,10 @@ export class WorkspaceJobEnqueuerAdapter implements JobEnqueuer {
   ): WorkspaceJobSnapshot {
     const job = this.jobs.transitionJobInCurrentTransaction(id, event);
     return toSnapshot(job);
+  }
+
+  abortActive(id: string): boolean {
+    return this.jobs.abortActiveJob(id);
   }
 }
 

@@ -1603,7 +1603,9 @@ export function AletheiaSettings() {
           <SettingRow label="Data directory">
             <div className="flex items-center gap-2">
               <code className="block min-w-0 flex-1 truncate rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
-                {desktopInfo?.dataDir ?? "Desktop bridge unavailable"}
+                {desktopInfo
+                  ? "Managed by Vera desktop"
+                  : "Desktop bridge unavailable"}
               </code>
               <Button
                 disabled={!desktopBridge}
@@ -2204,7 +2206,9 @@ export function AletheiaSettings() {
           <SettingRow label="Logs">
             <div className="flex items-center gap-2">
               <code className="block min-w-0 flex-1 truncate rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
-                {desktopInfo?.logsDir ?? "Desktop bridge unavailable"}
+                {desktopInfo
+                  ? "Managed by Vera desktop"
+                  : "Desktop bridge unavailable"}
               </code>
               <Button
                 disabled={!desktopBridge}

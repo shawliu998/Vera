@@ -285,22 +285,91 @@ function assertStepSemantics(type: Workflow["type"], steps: WorkflowStep[]) {
       "Assistant workflows cannot contain tabular-column steps.",
     );
   }
+  if (type === "tabular" && steps.some((step) => step.kind === "output")) {
+    throw new WorkspaceApiError(
+      400,
+      "VALIDATION_ERROR",
+      "Tabular workflows cannot contain Assistant output steps.",
+    );
+  }
+  const stepIds = new Set<string>();
+  for (const step of steps) {
+    if (!step.id) continue;
+    if (stepIds.has(step.id)) {
+      throw new WorkspaceApiError(
+        400,
+        "VALIDATION_ERROR",
+        "Workflow step identifiers must be unique.",
+      );
+    }
+    stepIds.add(step.id);
+  }
+  const outputs = steps
+    .map((step, ordinal) => ({ step, ordinal }))
+    .filter(({ step }) => step.kind === "output");
+  if (outputs.length > 1) {
+    throw new WorkspaceApiError(
+      400,
+      "VALIDATION_ERROR",
+      "Assistant workflows can contain at most one output step.",
+    );
+  }
+  const output = outputs[0];
+  if (output && output.ordinal !== steps.length - 1) {
+    throw new WorkspaceApiError(
+      400,
+      "VALIDATION_ERROR",
+      "The output step must be the final workflow step.",
+    );
+  }
+  if (
+    output &&
+    !steps.slice(0, output.ordinal).some((step) => step.kind === "prompt")
+  ) {
+    throw new WorkspaceApiError(
+      400,
+      "VALIDATION_ERROR",
+      "The output step requires an earlier prompt step.",
+    );
+  }
 }
 
-function modelCallCount(workflow: Workflow) {
-  const stepCalls = workflow.steps.filter(
-    (step) => step.kind === "prompt" || step.kind === "tabular_column",
-  ).length;
-  if (workflow.type === "assistant") return Math.max(1, stepCalls);
-  return workflow.columns.length + stepCalls;
+function stableSyntheticStepUuid(workflowId: string, label: string) {
+  const hex = createHash("sha256")
+    .update(`vera-workflow-step-v1:${workflowId}:${label}`)
+    .digest("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+function materializedExecutionSteps(workflow: Workflow): WorkflowStep[] {
+  if (workflow.type !== "assistant") return workflow.steps;
+  if (workflow.steps.length > 0) return workflow.steps;
+  const prompt = workflow.skillMarkdown.trim();
+  return prompt
+    ? [
+        {
+          id: stableSyntheticStepUuid(workflow.id, "materialized-skill"),
+          kind: "prompt",
+          title: "Workflow instructions",
+          prompt,
+        },
+      ]
+    : [];
+}
+
+function modelCallCount(steps: readonly WorkflowStep[]) {
+  return steps.filter((step) => step.kind === "prompt").length;
 }
 
 function assertExecutableWorkflow(workflow: Workflow) {
-  const executable =
-    workflow.type === "assistant"
-      ? workflow.skillMarkdown.trim().length > 0 || workflow.steps.length > 0
-      : workflow.columns.length > 0 || workflow.steps.length > 0;
-  if (!executable) {
+  if (workflow.type === "tabular") {
+    throw new WorkspaceApiError(
+      412,
+      "PRECONDITION_FAILED",
+      "Tabular workflows must run through the Tabular review runtime.",
+    );
+  }
+  if (materializedExecutionSteps(workflow).length === 0) {
     throw new WorkspaceApiError(
       412,
       "PRECONDITION_FAILED",
@@ -422,6 +491,104 @@ export class WorkflowsService {
 
   get(id: string) {
     return this.repository.require(id);
+  }
+
+  /**
+   * Client definition read boundary. Explicit legacy steps receive stable
+   * deterministic UUIDs that the next definition PUT persists. A Mike
+   * skill-only workflow receives a virtual prompt until that intentional save.
+   */
+  getAssistantDefinition(id: string) {
+    const existing = this.repository.require(id);
+    if (existing.type !== "assistant") {
+      throw new WorkspaceApiError(
+        409,
+        "CONFLICT",
+        "Only Assistant workflows have client step definitions.",
+      );
+    }
+    if (existing.isBuiltin) {
+      throw new WorkspaceApiError(
+        403,
+        "FORBIDDEN",
+        "System workflows are immutable; create a local copy to edit steps.",
+      );
+    }
+    if (existing.steps.length === 0) {
+      return {
+        ...existing,
+        steps: materializedExecutionSteps(existing),
+      };
+    }
+    const used = new Set<string>();
+    let changed = false;
+    const steps = existing.steps.map((step, ordinal) => {
+      const id = step.id;
+      if (id && !used.has(id)) {
+        used.add(id);
+        return step;
+      }
+      let suffix = 0;
+      let generated = stableSyntheticStepUuid(
+        existing.id,
+        `legacy-${ordinal}-${suffix}`,
+      );
+      while (used.has(generated)) {
+        suffix += 1;
+        generated = stableSyntheticStepUuid(
+          existing.id,
+          `legacy-${ordinal}-${suffix}`,
+        );
+      }
+      used.add(generated);
+      changed = true;
+      return { ...step, id: generated };
+    });
+    if (!changed) return existing;
+    // GET remains read-only. The deterministic IDs survive restarts and are
+    // persisted by the next full definition PUT from the client.
+    return { ...existing, steps };
+  }
+
+  updateAssistantDefinition(
+    id: string,
+    input: {
+      projectId: string | null;
+      title: string;
+      description: string | null;
+      steps: WorkflowStep[];
+    },
+  ) {
+    const existing = this.repository.require(id);
+    if (existing.type !== "assistant") {
+      throw new WorkspaceApiError(
+        409,
+        "CONFLICT",
+        "Only Assistant workflows have client step definitions.",
+      );
+    }
+    if (existing.isBuiltin) {
+      throw new WorkspaceApiError(
+        403,
+        "FORBIDDEN",
+        "System workflows are immutable; create a local copy to edit steps.",
+      );
+    }
+    if (input.steps.some((step) => !step.id)) {
+      throw new WorkspaceApiError(
+        400,
+        "VALIDATION_ERROR",
+        "Client-authored workflow steps require stable identifiers.",
+      );
+    }
+    return this.update(id, {
+      ...input,
+      ...(existing.steps.length === 0 &&
+      existing.skillMarkdown.trim() &&
+      input.steps.length > 0
+        ? { skillMarkdown: "" }
+        : {}),
+    });
   }
 
   resolveMikeWorkflowId(id: string) {
@@ -656,8 +823,18 @@ export class WorkflowsService {
     return this.repository.requireRunDetail(id);
   }
 
+  reconcileTerminalJobs() {
+    return this.repository.reconcileTerminalJobRuns(this.now());
+  }
+
   getExecutionSnapshot(runId: string) {
     return this.repository.requireExecutionSnapshot(runId);
+  }
+
+  requireExecutionSnapshotReady(runId: string) {
+    const snapshot = this.repository.requireExecutionSnapshot(runId);
+    this.repository.requireExecutionModelProfileSnapshot(snapshot);
+    return snapshot;
   }
 
   startRun(
@@ -686,6 +863,7 @@ export class WorkflowsService {
       throw new WorkspaceApiError(409, "CONFLICT", "Workflow is not active.");
     }
     assertExecutableWorkflow(workflow);
+    const executionSteps = materializedExecutionSteps(workflow);
     const defaults = this.repository.workspaceDefaults();
     if (
       workflow.projectId !== null &&
@@ -706,8 +884,25 @@ export class WorkflowsService {
     const project = projectId
       ? this.repository.requireActiveProject(projectId)
       : null;
+    const configuredStepProfiles = [
+      ...new Set(
+        executionSteps.flatMap((step) =>
+          step.kind === "prompt" && step.modelProfileId
+            ? [step.modelProfileId]
+            : [],
+        ),
+      ),
+    ];
+    if (configuredStepProfiles.length > 1) {
+      throw new WorkspaceApiError(
+        409,
+        "CONFLICT",
+        "All prompt steps must use the same immutable run model profile.",
+      );
+    }
     const modelProfileId =
       request.modelProfileId ??
+      configuredStepProfiles[0] ??
       project?.defaultModelProfileId ??
       defaults.defaultModelProfileId;
     if (!modelProfileId) {
@@ -718,6 +913,19 @@ export class WorkflowsService {
       );
     }
     this.repository.requireEnabledModelProfile(modelProfileId);
+    const mismatchedStep = executionSteps.find(
+      (step) =>
+        step.kind === "prompt" &&
+        step.modelProfileId !== undefined &&
+        step.modelProfileId !== modelProfileId,
+    );
+    if (mismatchedStep) {
+      throw new WorkspaceApiError(
+        409,
+        "CONFLICT",
+        "A prompt step model profile must match the immutable run model profile.",
+      );
+    }
     const modelProfile = this.repository.executionModelProfile(modelProfileId);
     const maxSteps = requirePositiveLimit(
       limits.maxSteps,
@@ -732,8 +940,8 @@ export class WorkflowsService {
       "maxModelCalls",
     );
     if (
-      workflow.steps.length > maxSteps ||
-      modelCallCount(workflow) > maxModelCalls
+      executionSteps.length > maxSteps ||
+      modelCallCount(executionSteps) > maxModelCalls
     ) {
       throw new WorkspaceApiError(
         409,
@@ -761,9 +969,11 @@ export class WorkflowsService {
         jurisdictions: workflow.jurisdictions,
         metadata: workflow.metadata,
         modelProfile,
+        materializedSkillStep:
+          workflow.type === "assistant" && workflow.steps.length === 0,
         execution: { maxSteps, maxModelCalls },
       },
-      steps: workflow.steps,
+      steps: executionSteps,
       skillMarkdown: snapshotSkillMarkdown(workflow),
       columns: workflow.type === "tabular" ? workflow.columns : [],
       inputBinding,
@@ -798,7 +1008,7 @@ export class WorkflowsService {
         inputBinding,
         retryOfRunId: null,
       }),
-      steps: workflow.steps.map((step, ordinal) => ({
+      steps: executionSteps.map((step, ordinal) => ({
         id: this.idFactory(),
         ordinal,
         attempt: 1,
@@ -837,7 +1047,7 @@ export class WorkflowsService {
           // path, whose workflow_run job key remains intentionally null.
           idempotencyKey: request.idempotencyKey,
           payload,
-          maxAttempts: 1,
+          maxAttempts: MAX_WORKFLOW_STEP_ATTEMPTS,
           now,
         }),
     );
@@ -880,12 +1090,29 @@ export class WorkflowsService {
     const parentSnapshot = this.repository.requireExecutionSnapshot(
       parent.run.id,
     );
+    this.repository.requireExecutionModelProfileSnapshot(parentSnapshot);
     const { maxSteps, maxModelCalls } = snapshotExecutionLimits(parentSnapshot);
     if (parentSnapshot.steps.length > maxSteps) {
       throw new WorkspaceApiError(
         409,
         "CONFLICT",
         "Workflow snapshot exceeds its recorded execution limit.",
+      );
+    }
+    if (
+      parentSnapshot.steps.some((step) => step.kind === "tabular_column") ||
+      parentSnapshot.steps.some(
+        (step) =>
+          step.kind === "prompt" &&
+          step.modelProfileId !== undefined &&
+          step.modelProfileId !== parentSnapshot.modelProfileId,
+      ) ||
+      modelCallCount(parentSnapshot.steps) > maxModelCalls
+    ) {
+      throw new WorkspaceApiError(
+        409,
+        "CONFLICT",
+        "Workflow snapshot is not eligible for Assistant retry execution.",
       );
     }
     if (!parentSnapshot.modelProfileId) {
@@ -962,7 +1189,7 @@ export class WorkflowsService {
           resourceId: nextRunId,
           idempotencyKey: idempotencyKey.trim(),
           payload,
-          maxAttempts: 1,
+          maxAttempts: MAX_WORKFLOW_STEP_ATTEMPTS,
           now,
         }),
     );
@@ -1148,13 +1375,18 @@ export class WorkflowsService {
       );
     }
     const now = this.now();
-    return this.repository.cancelRun(runId, now, () =>
+    const cancelled = this.repository.cancelRun(runId, now, () =>
       this.jobs.transitionInCurrentTransaction(job.id, {
         type: "cancel",
         at: now,
         reason: "Workflow run cancelled by user.",
       }),
     );
+    // The workflow and Jobs terminal states are committed together above;
+    // only then interrupt the in-flight provider request through the shared
+    // Jobs AbortRegistry. Queued jobs simply have no registered controller.
+    this.jobs.abortActive?.(job.id);
+    return cancelled;
   }
 
   completeRun(runId: string, output: unknown) {

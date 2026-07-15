@@ -16,7 +16,13 @@ import {
   type TabularReviewDetail,
   type TabularSourceRef,
 } from "../repositories/tabular";
+import { ModelProfilesRepository } from "../repositories/modelProfiles";
 import type { StructuredError } from "../types";
+import {
+  tabularCellIdempotencyKey,
+  tabularCellJobPayload,
+  tabularReviewRevisionSha256,
+} from "../tabularGenerationContract";
 import {
   legacyOutputTypeForFormat,
   formatForLegacyOutputType,
@@ -30,9 +36,12 @@ import {
   type TabularColumnFormat,
 } from "./tabularCompatibility";
 import type { JobEnqueuer } from "./jobEnqueuer";
+import type { AuthoritativeExtractedTextReader } from "./authoritativeExtractedText";
 
 export const MAX_TABULAR_MATRIX_CELLS = 10_000;
 export const MAX_TABULAR_CELL_ATTEMPTS = 3;
+export const MAX_TABULAR_GENERATIONS_PER_CELL = 100;
+export const MAX_TABULAR_DOCUMENT_TEXT_BYTES = 4 * 1024 * 1024;
 export const TABULAR_GENERATION_DISABLED_MESSAGE =
   "Tabular generation requires a document-level authoritative extracted-text runtime.";
 
@@ -129,11 +138,14 @@ const UpdateTabularDraftMatrixSchema = z
 
 const sensitiveToken =
   /(?:bearer\s+)[a-z0-9._~+\/-]+|\b(?:sk|key)-[a-z0-9_-]{8,}\b/gi;
+const sensitiveAssignment =
+  /\b(?:api[_-]?key|secret|password|credential)\s*[:=]\s*\S+/gi;
 const localPath = /(?:\/[Uu]sers\/|\/home\/|[A-Za-z]:\\)[^\s"']+/g;
 
 function redactText(value: string) {
   return value
     .replace(sensitiveToken, "[redacted]")
+    .replace(sensitiveAssignment, "[redacted]")
     .replace(localPath, "[redacted-path]");
 }
 
@@ -308,6 +320,10 @@ export class TabularService {
     private readonly jobs: JobEnqueuer,
     private readonly clock: () => Date = () => new Date(),
     private readonly idFactory: () => string = randomUUID,
+    private readonly generation?: {
+      snapshots: AuthoritativeExtractedTextReader;
+      profiles: ModelProfilesRepository;
+    },
   ) {}
 
   private now() {
@@ -352,6 +368,17 @@ export class TabularService {
         "CONFLICT",
         "Every review document must belong to the selected project.",
       );
+    }
+    if (projectId) this.repository.requireActiveProject(projectId);
+    if (input.workflowId) {
+      this.repository.requireActiveTabularWorkflow(input.workflowId);
+    }
+    if (input.modelProfileId) {
+      if (this.generation) {
+        this.generation.profiles.requireEnabled(input.modelProfileId);
+      } else {
+        this.repository.requireEnabledModelProfile(input.modelProfileId);
+      }
     }
     const now = this.now();
     const cells = input.documentIds.flatMap((documentId) =>
@@ -405,6 +432,7 @@ export class TabularService {
         "Every review document must belong to the selected project.",
       );
     }
+    if (projectId) this.repository.requireActiveProject(projectId);
     const now = this.now();
     return this.repository.replaceDraftMatrix({
       id,
@@ -436,12 +464,19 @@ export class TabularService {
       );
     }
     const existing = this.repository.require(id);
-    if (existing.status === "running" && input.status !== undefined) {
+    if (existing.status === "running") {
       throw new WorkspaceApiError(
         409,
         "CONFLICT",
-        "A running review cannot change status.",
+        "A running review cannot be updated.",
       );
+    }
+    if (input.modelProfileId) {
+      if (this.generation) {
+        this.generation.profiles.requireEnabled(input.modelProfileId);
+      } else {
+        this.repository.requireEnabledModelProfile(input.modelProfileId);
+      }
     }
     return this.repository.update(id, { ...input, now: this.now() });
   }
@@ -460,6 +495,133 @@ export class TabularService {
 
   delete(id: string) {
     this.repository.delete(id);
+  }
+
+  private generationRuntime() {
+    if (!this.generation) return failTabularGenerationDisabled();
+    return this.generation;
+  }
+
+  private generationContext(detail: TabularReviewDetail) {
+    const generation = this.generationRuntime();
+    const defaults = this.repository.workspaceDefaults();
+    const projectId = detail.review.projectId ?? defaults.defaultProjectId;
+    if (!projectId) {
+      throw new WorkspaceApiError(
+        412,
+        "PRECONDITION_FAILED",
+        "Review project is unavailable.",
+      );
+    }
+    const project = this.repository.requireActiveProject(projectId);
+    if (detail.review.workflowId) {
+      this.repository.requireActiveTabularWorkflow(detail.review.workflowId);
+    }
+    const modelProfileId =
+      detail.review.modelProfileId ??
+      project.defaultModelProfileId ??
+      defaults.defaultModelProfileId;
+    if (!modelProfileId) {
+      throw new WorkspaceApiError(
+        412,
+        "PRECONDITION_FAILED",
+        "Review model profile is unavailable.",
+      );
+    }
+    generation.profiles.requireEnabled(modelProfileId);
+    const model = generation.profiles.requireStored(modelProfileId);
+    if (!model.enabled) {
+      throw new WorkspaceApiError(
+        409,
+        "CONFLICT",
+        "Review model profile is disabled.",
+      );
+    }
+    const snapshots = generation.snapshots.currentSnapshots({
+      projectId,
+      documentIds: detail.review.documentIds,
+      maxTextBytes: MAX_TABULAR_DOCUMENT_TEXT_BYTES,
+    });
+    return {
+      generation,
+      projectId,
+      modelProfileId,
+      modelExecutionRevision: model.executionRevision,
+      snapshots: new Map(
+        snapshots.map((snapshot) => [snapshot.documentId, snapshot]),
+      ),
+      reviewRevisionSha256: tabularReviewRevisionSha256({
+        reviewId: detail.review.id,
+        projectId,
+        workflowId: detail.review.workflowId,
+        documentIds: detail.review.documentIds,
+        columns: detail.columns,
+      }),
+    };
+  }
+
+  private queueCells(
+    detail: TabularReviewDetail,
+    cells: readonly TabularCellRecord[],
+    allowedStatuses: TabularCellRecord["status"][],
+  ) {
+    if (cells.length === 0) return [];
+    const context = this.generationContext(detail);
+    const columns = new Map(
+      detail.columns.map((column) => [column.id, column]),
+    );
+    const now = this.now();
+    const requests = cells.map((cell) => {
+      const column = columns.get(cell.columnId);
+      const snapshot = context.snapshots.get(cell.documentId);
+      if (!column || !snapshot) {
+        throw new WorkspaceApiError(
+          500,
+          "INTERNAL_ERROR",
+          "Tabular generation snapshot is incomplete.",
+        );
+      }
+      const generation = cell.attempt + 1;
+      if (generation > MAX_TABULAR_GENERATIONS_PER_CELL) {
+        throw new WorkspaceApiError(
+          409,
+          "CONFLICT",
+          "Tabular cell generation limit was reached.",
+        );
+      }
+      const jobId = this.idFactory();
+      const payload = tabularCellJobPayload({
+        reviewId: detail.review.id,
+        projectId: context.projectId,
+        cellId: cell.id,
+        generationId: jobId,
+        snapshot,
+        column,
+        modelProfileId: context.modelProfileId,
+        modelExecutionRevision: context.modelExecutionRevision,
+        reviewRevisionSha256: context.reviewRevisionSha256,
+        generation,
+      });
+      return {
+        cellId: cell.id,
+        jobId,
+        nextAttempt: generation,
+        now,
+        allowedStatuses,
+        enqueueJob: () =>
+          this.jobs.enqueueInCurrentTransaction({
+            id: jobId,
+            type: "tabular_cell",
+            resourceType: "tabular_cell",
+            resourceId: cell.id,
+            idempotencyKey: tabularCellIdempotencyKey(payload),
+            payload,
+            maxAttempts: 1,
+            now,
+          }),
+      };
+    });
+    return this.repository.queueCells(requests);
   }
 
   runReview(reviewId: string): {
@@ -482,21 +644,14 @@ export class TabularService {
         "Add at least one document and one column before running a tabular review.",
       );
     }
-    const defaults = this.repository.workspaceDefaults();
-    const projectId = detail.review.projectId ?? defaults.defaultProjectId;
-    if (!projectId) {
-      throw new WorkspaceApiError(
-        412,
-        "PRECONDITION_FAILED",
-        "Review project is unavailable.",
-      );
-    }
-    const project = this.repository.requireActiveProject(projectId);
-    if (detail.review.workflowId) {
-      this.repository.requireActiveTabularWorkflow(detail.review.workflowId);
-    }
-    void project;
-    return failTabularGenerationDisabled();
+    const pending = detail.cells.filter((cell) => cell.status === "empty");
+    const skipped = detail.cells.length - pending.length;
+    this.queueCells(detail, pending, ["empty"]);
+    return {
+      review: this.repository.requireDetail(reviewId),
+      queued: pending.length,
+      skipped,
+    };
   }
 
   startCell(cellId: string) {
@@ -588,26 +743,44 @@ export class TabularService {
         "Tabular review is not retryable.",
       );
     }
-    const defaults = this.repository.workspaceDefaults();
-    const projectId = detail.review.projectId ?? defaults.defaultProjectId;
-    if (!projectId) {
+    return this.queueCells(detail, [cell], ["failed"])[0]!;
+  }
+
+  regenerateCell(cellId: string): TabularCellRecord {
+    const cell = this.repository.requireCell(cellId);
+    if (cell.status === "queued" || cell.status === "running") {
       throw new WorkspaceApiError(
-        412,
-        "PRECONDITION_FAILED",
-        "Review project is unavailable.",
+        409,
+        "CONFLICT",
+        "Tabular cell is already generating.",
       );
     }
-    const project = this.repository.requireActiveProject(projectId);
-    if (detail.review.workflowId) {
-      this.repository.requireActiveTabularWorkflow(detail.review.workflowId);
+    const detail = this.repository.requireDetail(cell.reviewId);
+    if (detail.review.status === "archived") {
+      throw new WorkspaceApiError(
+        409,
+        "CONFLICT",
+        "Archived tabular cells cannot be regenerated.",
+      );
     }
-    void project;
-    return failTabularGenerationDisabled();
+    return this.queueCells(
+      detail,
+      [cell],
+      ["empty", "complete", "failed", "cancelled"],
+    )[0]!;
   }
 
   cancelReview(reviewId: string) {
+    const activeJobIds = this.repository
+      .requireDetail(reviewId)
+      .cells.filter(
+        (cell) =>
+          (cell.status === "queued" || cell.status === "running") &&
+          cell.jobId,
+      )
+      .map((cell) => cell.jobId!);
     const now = this.now();
-    return this.repository.cancelReview(reviewId, now, (jobIds) => {
+    const detail = this.repository.cancelReview(reviewId, now, (jobIds) => {
       for (const jobId of jobIds) {
         const job = this.jobs.get(jobId);
         if (!job)
@@ -630,5 +803,70 @@ export class TabularService {
         });
       }
     });
+    for (const jobId of activeJobIds) this.jobs.abortActive?.(jobId);
+    return detail;
+  }
+
+  cancelCell(reviewId: string, cellId: string, reason?: string) {
+    const cell = this.repository.requireCell(cellId);
+    const jobId = cell.jobId;
+    const safeReason = redactText(reason?.trim() || "Tabular cell cancelled by user.").slice(
+      0,
+      1_000,
+    );
+    const now = this.now();
+    const cancelled = this.repository.cancelCell(
+      { reviewId, cellId, now, reason: safeReason },
+      (activeJobId) => {
+        const job = this.jobs.get(activeJobId);
+        if (!job || (job.status !== "queued" && job.status !== "running")) {
+          throw new WorkspaceApiError(
+            409,
+            "CONFLICT",
+            "Cell and job terminal states are inconsistent.",
+          );
+        }
+        this.jobs.transitionInCurrentTransaction(activeJobId, {
+          type: "cancel",
+          at: now,
+          reason: safeReason,
+        });
+      },
+    );
+    if (jobId) this.jobs.abortActive?.(jobId);
+    return cancelled;
+  }
+
+  clearCells(reviewId: string, documentIds: readonly string[]) {
+    const activeJobIds = this.repository
+      .requireDetail(reviewId)
+      .cells.filter(
+        (cell) =>
+          documentIds.includes(cell.documentId) &&
+          (cell.status === "queued" || cell.status === "running") &&
+          cell.jobId,
+      )
+      .map((cell) => cell.jobId!);
+    const now = this.now();
+    const detail = this.repository.clearCells(
+      reviewId,
+      documentIds,
+      now,
+      (jobIds) => {
+        for (const jobId of jobIds) {
+          this.jobs.transitionInCurrentTransaction(jobId, {
+            type: "cancel",
+            at: now,
+            reason: "Tabular cell cleared by user.",
+          });
+        }
+      },
+    );
+    for (const jobId of activeJobIds) this.jobs.abortActive?.(jobId);
+    return detail;
+  }
+
+  reconcileGenerationJobs() {
+    return this.repository.reconcileGenerationJobs(this.now());
   }
 }

@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld("aletheiaDesktop", {
   getAuthToken: () => ipcRenderer.invoke("aletheia:get-auth-token"),
   openDataDirectory: () => ipcRenderer.invoke("aletheia:open-data-directory"),
   openLogsDirectory: () => ipcRenderer.invoke("aletheia:open-logs-directory"),
+  exportDiagnosticBundle: () =>
+    ipcRenderer.invoke("aletheia:export-diagnostics"),
   restartLocalServices: () =>
     ipcRenderer.invoke("aletheia:restart-local-services"),
   getAuditAnchorConfiguration: () =>

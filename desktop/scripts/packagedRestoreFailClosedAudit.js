@@ -2,13 +2,11 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { spawn } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const {
-  _electron: electron,
-} = require("../../frontend/node_modules/playwright");
 
 const desktopDir = path.resolve(__dirname, "..");
 const appPath =
@@ -30,9 +28,9 @@ async function endpointIsOffline(url) {
 
 async function runCase(args) {
   const userDataDir = path.join(args.root, args.name);
-  const target = path.join(userDataDir, "aletheia-data");
   const recordPath = path.join(userDataDir, "pending-restore.json");
   fs.mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
+  const target = path.join(fs.realpathSync(userDataDir), "aletheia-data");
   if (args.createTarget) {
     fs.mkdirSync(target, { recursive: true, mode: 0o700 });
   }
@@ -49,13 +47,13 @@ async function runCase(args) {
   );
   fs.chmodSync(recordPath, args.mode);
 
-  let electronApp = null;
+  let child = null;
   try {
-    electronApp = await electron.launch({
-      executablePath,
-      args: [`--user-data-dir=${userDataDir}`],
+    let output = "";
+    child = spawn(executablePath, [], {
       env: {
         ...process.env,
+        VERA_DESKTOP_PROFILE_DIR: userDataDir,
         ALETHEIA_DESKTOP_FRONTEND_PORT: String(args.frontendPort),
         ALETHEIA_DESKTOP_BACKEND_PORT: String(args.backendPort),
         ALETHEIA_DEMO_SEED_ENABLED: "false",
@@ -67,10 +65,58 @@ async function runCase(args) {
         ALETHEIA_DATABASE_KEY_SOURCE: "env",
         ALETHEIA_DATABASE_KEY_BASE64: crypto.randomBytes(32).toString("base64"),
       },
-      timeout: 60_000,
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    await electronApp.firstWindow({ timeout: 30_000 });
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    const append = (chunk) => {
+      output = `${output}${chunk.toString()}`.slice(-16_384);
+    };
+    child.stdout?.on("data", append);
+    child.stderr?.on("data", append);
+    const exited = await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        child?.kill("SIGTERM");
+        reject(new Error(`${args.name}: fail-closed launch did not exit`));
+      }, 60_000);
+      child.once("error", (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+      child.once("close", (code, signal) => {
+        clearTimeout(timeout);
+        resolve({ code, signal });
+      });
+    });
+    child = null;
+    assert.deepEqual(
+      exited,
+      { code: 1, signal: null },
+      `${args.name}: invalid pending restore must terminate before local services start`,
+    );
+    assert.match(output, /\[vera-profile-bootstrap\] startup_failed:/);
+    assert.match(output, args.expectedFailure);
+    const desktopLogPath = path.join(
+      userDataDir,
+      "logs",
+      "vera",
+      "vera.log",
+    );
+    const desktopLogInfo = fs.lstatSync(desktopLogPath);
+    assert.equal(
+      desktopLogInfo.isFile() && !desktopLogInfo.isSymbolicLink(),
+      true,
+      `${args.name}: isolated desktop log must be a regular file`,
+    );
+    const desktopLog = fs.readFileSync(desktopLogPath, "utf8");
+    assert.match(
+      desktopLog,
+      /"event":"startup_failed"/,
+      `${args.name}: the working desktop logger must record the fail-closed exit`,
+    );
+    assert.doesNotMatch(
+      desktopLog,
+      /"event":"renderer_window_creating"/,
+      `${args.name}: no renderer window may be created before pending restore validation`,
+    );
     assert.equal(
       await endpointIsOffline(`http://127.0.0.1:${args.backendPort}/health`),
       true,
@@ -87,7 +133,7 @@ async function runCase(args) {
       `${args.name}: pending record must be retained`,
     );
   } finally {
-    if (electronApp) await electronApp.close().catch(() => undefined);
+    if (child && child.exitCode === null) child.kill("SIGTERM");
   }
 }
 
@@ -109,6 +155,7 @@ async function main() {
       createTarget: true,
       mode: 0o600,
       rollback: () => path.join(root, "outside-rollback"),
+      expectedFailure: /pending restore paths are invalid/i,
     });
     await runCase({
       root,
@@ -119,6 +166,7 @@ async function main() {
       mode: 0o644,
       rollback: (target) =>
         path.join(path.dirname(target), ".aletheia-restore-rollback-permissions"),
+      expectedFailure: /pending restore record is unsafe/i,
     });
     await runCase({
       root,
@@ -129,6 +177,7 @@ async function main() {
       mode: 0o600,
       rollback: (target) =>
         path.join(path.dirname(target), ".aletheia-restore-rollback-missing"),
+      expectedFailure: /Both restored and rollback workspaces are missing/i,
     });
     process.stdout.write(
       `${JSON.stringify(
@@ -140,6 +189,9 @@ async function main() {
             "permissive pending-record mode blocks startup",
             "missing target and rollback blocks startup",
             "failed recovery retains pending record",
+            "invalid restore state exits before local services start",
+            "working desktop log proves no renderer window was created",
+            "renderer-before-recovery ordering is also source-gated",
             "backend and frontend remain offline",
           ],
         },

@@ -162,11 +162,12 @@ test("layout preserves Mike state, effect, provider, and DOM ordering", () => {
         "{children}",
     ]);
     assert.match(source, /I18nProvider initialLocale=\{initialLocale\}/);
+    assert.match(source, /ChatHistoryProvider/);
     assert.match(source, /SIDEBAR_STORAGE_KEY = "veraSidebarOpen"/);
     assert.match(source, /event\.key === "Escape"/);
     assert.doesNotMatch(
         source,
-        /AuthContext|useAuth|ChatHistoryProvider|useRouter|\/login|authLoading/,
+        /AuthContext|useAuth|useRouter|\/login|authLoading/,
     );
 });
 
@@ -189,7 +190,12 @@ test("AppSidebar keeps Mike DOM and classes while removing cloud-only blocks", (
     ]);
 
     const navigation = navArray(source);
-    assert.deepEqual(quotedFields(navigation, "href"), ["/projects"]);
+    assert.deepEqual(quotedFields(navigation, "href"), [
+        "/assistant",
+        "/projects",
+        "/tabular-review",
+        "/workflows",
+    ]);
     assert.deepEqual(quotedFields(navigation, "labelKey"), [
         "nav.assistant",
         "nav.projects",
@@ -198,16 +204,22 @@ test("AppSidebar keeps Mike DOM and classes while removing cloud-only blocks", (
         "nav.settings",
     ]);
     assert.match(source, /t\(labelKey\)/);
-    assert.match(source, /const isAvailable = href !== null/);
+    assert.match(
+        source,
+        /labelKey === "nav\.settings" &&\s*settingsRuntimeAvailable\s*\? "\/settings"\s*: href/,
+    );
+    assert.match(
+        source,
+        /const isAvailable = href !== null \|\| resolvedHref !== null/,
+    );
     assert.match(source, /disabled=\{!isAvailable\}/);
     assert.match(source, /aria-disabled=\{!isAvailable \|\| undefined\}/);
     assert.match(source, /!isAvailable[\s\S]*text-gray-400/);
     assert.match(source, /aria-current=\{isActive \? "page" : undefined\}/);
-    assert.match(source, /hidden[\s\S]*cloud-bound|cloud-bound[\s\S]*hidden/);
-    assert.match(source, /className="mt-4 flex-1 min-h-0 flex flex-col gap-4"/);
+    assert.match(source, /className="mt-4 flex min-h-0 flex-1 flex-col gap-4"/);
     assert.doesNotMatch(
         source,
-        /AuthContext|useAuth|UserProfile|ChatHistory|listProjects|recentProjects|projectNames|shared_with|People|MikeIcon|mike-icon|\/aletheia/i,
+        /AuthContext|useAuth|UserProfile|listProjects|recentProjects|projectNames|shared_with|People|MikeIcon|mike-icon|\/aletheia/i,
     );
     assert.doesNotMatch(
         source,
@@ -230,11 +242,11 @@ test("site logo retains Mike typography and sizing with only local Vera branding
     }
     assert.match(source, /<VeraMark/);
     assert.match(source, /t\("common\.appName"\)/);
-    assert.match(source, /const landingHref = "\/projects"/);
+    assert.match(source, /const landingHref = "\/assistant"/);
     assert.doesNotMatch(source, /mikeoss|MikeIcon|>Mike</i);
 });
 
-test("shell uses only translated UI labels and exposes no legacy routes", () => {
+test("shell exposes the four local workspaces and capability-gated Settings", () => {
     const source = [
         current("src/app/components/vera-shell/VeraShell.tsx"),
         current("src/app/components/vera-shell/VeraSidebar.tsx"),
@@ -246,8 +258,14 @@ test("shell uses only translated UI labels and exposes no legacy routes", () => 
     assert.doesNotMatch(source, /router\.(?:replace|push)\("\/"\)/);
     assert.doesNotMatch(source, /redirect\(/);
     assert.doesNotMatch(source, /\/aletheia/);
-    assert.doesNotMatch(
+    assert.match(source, /"\/assistant"/);
+    assert.match(source, /"\/projects"/);
+    assert.match(source, /"\/tabular-review"/);
+    assert.match(source, /"\/workflows"/);
+    assert.doesNotMatch(source, /"\/tabular-reviews"/);
+    assert.equal(source.match(/"\/settings"/g)?.length, 1);
+    assert.match(
         source,
-        /"\/(?:assistant|tabular-reviews|workflows|settings)"/,
+        /labelKey === "nav\.settings" &&\s*settingsRuntimeAvailable\s*\? "\/settings"\s*: href/,
     );
 });

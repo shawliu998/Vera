@@ -376,23 +376,29 @@ export const ModelProfileSchema = z
 
 export const PromptWorkflowStepSchema = z
   .object({
+    id: WorkspaceIdSchema.optional(),
     kind: z.literal("prompt"),
     title: z.string().min(1).max(160),
     prompt: z.string().min(1).max(20_000),
+    modelProfileId: WorkspaceIdSchema.optional(),
   })
   .strict();
 
 export const DocumentContextWorkflowStepSchema = z
   .object({
+    id: WorkspaceIdSchema.optional(),
     kind: z.literal("document_context"),
     title: z.string().min(1).max(160),
     maxDocuments: z.number().int().min(1).max(100),
     maxChunksPerDocument: z.number().int().min(1).max(100),
+    queryTemplate: z.string().trim().min(1).max(2_000).optional(),
+    resultLimit: z.number().int().min(1).max(100).optional(),
   })
   .strict();
 
 const TabularColumnWorkflowStepObjectSchema = z
   .object({
+    id: WorkspaceIdSchema.optional(),
     kind: z.literal("tabular_column"),
     title: z.string().min(1).max(160),
     outputType: TabularOutputTypeSchema,
@@ -401,11 +407,21 @@ const TabularColumnWorkflowStepObjectSchema = z
   })
   .strict();
 
+export const OutputWorkflowStepSchema = z
+  .object({
+    id: WorkspaceIdSchema.optional(),
+    kind: z.literal("output"),
+    title: z.string().min(1).max(160),
+    format: z.enum(["text", "json"]),
+  })
+  .strict();
+
 export const WorkflowStepSchema = z
   .discriminatedUnion("kind", [
     PromptWorkflowStepSchema,
     DocumentContextWorkflowStepSchema,
     TabularColumnWorkflowStepObjectSchema,
+    OutputWorkflowStepSchema,
   ])
   .superRefine((value, context) => {
     if (value.kind !== "tabular_column") return;

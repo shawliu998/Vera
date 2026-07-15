@@ -12,11 +12,14 @@ const DUPLICATE_ITEM_STATUS = 45;
 const WORKSPACE_MODEL_CREDENTIAL_SERVICE =
   "ai.aletheia.workspace-model-profile-credentials";
 const WORKSPACE_MODEL_CREDENTIAL_ACCOUNT_PREFIX = "vera-model-profile-account";
+const KEYCHAIN_SECRET_ENVELOPE_PREFIX = "vera-keychain-secret-v1:";
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const LOCATOR_ID_PATTERN = /^[a-z0-9]{16,128}$/;
 const WORKSPACE_MODEL_CREDENTIAL_REFERENCE_PATTERN =
   /^keychain:\/\/vera\/model-profile\/([0-9a-f-]{36})\/([a-z0-9]{16,128})$/i;
+const SECURITY_INTERACTIVE_TOKEN_PATTERN =
+  /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,511}$/;
 
 function securityExecOptions(overrides = {}) {
   return {
@@ -104,6 +107,36 @@ function stripSingleTrailingNewline(value) {
   return value;
 }
 
+function encodeKeychainSecretEnvelope(secret) {
+  const bytes = Buffer.from(secret, "utf8");
+  const digest = crypto.createHash("sha256").update(bytes).digest("hex");
+  return `${KEYCHAIN_SECRET_ENVELOPE_PREFIX}${digest}:${bytes.toString("base64")}`;
+}
+
+function decodeKeychainSecretEnvelope(value) {
+  if (!value.startsWith(KEYCHAIN_SECRET_ENVELOPE_PREFIX)) return value;
+  const encoded = value.slice(KEYCHAIN_SECRET_ENVELOPE_PREFIX.length);
+  const match = encoded.match(/^([0-9a-f]{64}):([A-Za-z0-9+/]*={0,2})$/);
+  if (!match) throw genericKeychainFailure("decode");
+  const bytes = Buffer.from(match[2], "base64");
+  if (bytes.toString("base64") !== match[2]) {
+    throw genericKeychainFailure("decode");
+  }
+  const expectedDigest = Buffer.from(match[1], "hex");
+  const actualDigest = crypto.createHash("sha256").update(bytes).digest();
+  if (
+    expectedDigest.length !== actualDigest.length ||
+    !crypto.timingSafeEqual(expectedDigest, actualDigest)
+  ) {
+    throw genericKeychainFailure("decode");
+  }
+  const decoded = bytes.toString("utf8");
+  if (!Buffer.from(decoded, "utf8").equals(bytes)) {
+    throw genericKeychainFailure("decode");
+  }
+  return decoded;
+}
+
 function runSecurityCommand(args, options = {}) {
   return stripSingleTrailingNewline(
     String(
@@ -121,12 +154,16 @@ function runSecurityCommand(args, options = {}) {
 
 function findGenericPassword({ service, account, execFileSyncImpl }) {
   try {
+    const storedValue = runSecurityCommand(
+      ["find-generic-password", "-s", service, "-a", account, "-w"],
+      { execFileSyncImpl },
+    );
     return {
       state: "found",
-      value: runSecurityCommand(
-        ["find-generic-password", "-s", service, "-a", account, "-w"],
-        { execFileSyncImpl },
-      ),
+      value:
+        service === WORKSPACE_MODEL_CREDENTIAL_SERVICE
+          ? decodeKeychainSecretEnvelope(storedValue)
+          : storedValue,
     };
   } catch (error) {
     if (isMacOsKeychainItemNotFound(error)) return { state: "missing" };
@@ -151,15 +188,43 @@ function writeGenericPassword({
   secret,
   execFileSyncImpl = execFileSync,
 }) {
-  if (typeof secret !== "string" || /[\r\n]/.test(secret)) {
+  if (
+    typeof secret !== "string" ||
+    /[\r\n]/.test(secret)
+  ) {
     throw genericKeychainFailure("write");
   }
   try {
+    if (service === WORKSPACE_MODEL_CREDENTIAL_SERVICE) {
+      if (
+        !SECURITY_INTERACTIVE_TOKEN_PATTERN.test(service) ||
+        typeof account !== "string" ||
+        !SECURITY_INTERACTIVE_TOKEN_PATTERN.test(account)
+      ) {
+        throw genericKeychainFailure("write");
+      }
+      // The prompted `-w` form truncates long password input at 128
+      // characters. The model-only envelope can exceed that, so send exact
+      // UTF-8 bytes as hex through `security -i` stdin. The deterministic
+      // service/account tokens are validated above and no secret enters argv.
+      const storedSecret = encodeKeychainSecretEnvelope(secret);
+      const secretHex = Buffer.from(storedSecret, "utf8").toString("hex");
+      runSecurityCommand(["-i"], {
+        execFileSyncImpl,
+        input: `add-generic-password -s ${service} -a ${account} -X ${secretHex}\n`,
+        stdin: "pipe",
+      });
+      return;
+    }
+    // A trailing `-w` prompts for both the password and its confirmation. One
+    // input line causes `security` to retry on EOF and create an empty item
+    // while still exiting zero. Application and database keys are bounded
+    // base64 values, so send the same value twice over the private stdin pipe.
     runSecurityCommand(
       ["add-generic-password", "-s", service, "-a", account, "-w"],
       {
         execFileSyncImpl,
-        input: `${secret}\n`,
+        input: `${secret}\n${secret}\n`,
         stdin: "pipe",
       },
     );
@@ -317,8 +382,10 @@ module.exports = {
   WORKSPACE_MODEL_CREDENTIAL_SERVICE,
   WORKSPACE_MODEL_CREDENTIAL_ACCOUNT_PREFIX,
   MacOsKeychainItemCollisionError,
+  decodeKeychainSecretEnvelope,
   deleteGenericPassword,
   deleteWorkspaceModelCredential,
+  encodeKeychainSecretEnvelope,
   ensureMacOsKeychainKey,
   isMacOsKeychainItemNotFound,
   isMacOsKeychainItemCollision,

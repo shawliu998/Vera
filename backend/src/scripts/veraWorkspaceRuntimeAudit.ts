@@ -425,8 +425,8 @@ async function run() {
   );
   assert.match(
     runtimeSource,
-    /handlers: \{ document_parse: \(context\) => parser\.handleJob\(context\) \}/,
-    "the production pump registers only the fenced document parser handler",
+    /document_parse: \(context\) => parser\.handleJob\(context\)[\s\S]*?assistant_generate: \(context\)/,
+    "the production pump registers both fenced document and Assistant handlers",
   );
   await auditProductionWorkflowCrud();
   let cascaded = false;
@@ -721,7 +721,15 @@ async function run() {
   );
   assert.deepEqual(
     migrationFailure.health(),
-    { started: false, draining: false, worker: { documentParse: false } },
+    {
+      started: false,
+      draining: false,
+      worker: {
+        documentParse: false,
+        assistantGenerate: false,
+        tabularCell: false,
+      },
+    },
     "a migration failure never reports a usable runtime health state",
   );
 
@@ -746,7 +754,15 @@ async function run() {
   );
   assert.deepEqual(
     pumpFailure.health(),
-    { started: false, draining: false, worker: { documentParse: false } },
+    {
+      started: false,
+      draining: false,
+      worker: {
+        documentParse: false,
+        assistantGenerate: false,
+        tabularCell: false,
+      },
+    },
     "a failed pump start is never observable as a started runtime",
   );
 

@@ -1,4 +1,250 @@
-# Aletheia Desktop App
+# Vera Desktop App
+
+This document starts with the current Mike-derived Vera P0 client. The legacy
+desktop operations reference is retained below for historical compatibility.
+
+## Current release status
+
+Status on 2026-07-15: **P0 Phases 0-7 complete; fresh packaged verification
+passed**. One full invocation of `./scripts/package-desktop-mac.sh` exited `0`.
+It built the current backend, frontend, Electron host and credential worker,
+then passed package hygiene, SQLCipher, legacy migration, packaged startup and
+port release, workspace cross-restart E2E, backup bridge, and interrupted
+restore fail-closed verification.
+
+The packaged smoke launched the actual app with
+`ALETHEIA_APPLICATION_ENCRYPTION=disabled` and separately with
+`ALETHEIA_DATABASE_ENCRYPTION=metadata_plaintext`. Both downgrade attempts were
+rejected with exit code `1` before the local ports were occupied. The packaged
+restore fail-closed suite also inspected the working desktop log: it contained
+`startup_failed`, contained no `renderer_window_creating` event, kept the local
+services offline, and retained the pending restore record for recovery.
+
+The default package mode is unsigned and unnotarized. It is a local development
+artifact for the Mac that built it, not a distributable release. A release
+claim requires a successful `VERA_RELEASE_SIGNING=true` build with a real
+Developer ID identity, Apple notarization, stapling, Gatekeeper verification,
+and checksum verification.
+
+## Product and routes
+
+Electron opens the real Vera workspace at `/assistant`. Its four core
+Mike-derived workspaces are Assistant (`/assistant`), Projects (`/projects`),
+Tabular Review (`/tabular-review`), and Workflows (`/workflows`); Settings
+(`/settings`) is the fifth first-level local control surface. Project pages make
+Documents, Assistant, Workflows, and Tabular Reviews available within the same
+generic Project container.
+
+The UI and product framework are ported from Open Legal Products' Mike at the
+pinned commit `e32daad5a4c64a5561e04c53ee12411e3c5e7238`, with permission to use
+the Mike UI. Mike and Vera retain `AGPL-3.0-only` attribution. Vera's deliberate
+local adaptations replace cloud authentication, organisations, sharing,
+Supabase/PostgreSQL, R2/S3, MCP/OAuth, and server-wide provider secrets with a
+single-user desktop runtime.
+
+Legacy `/aletheia/*` routes remain compiled for regression and access to
+existing local records. They are not part of the new primary navigation.
+
+## Build and artifacts
+
+On macOS, install the backend and frontend dependencies, then run the packaging
+script from the repository root:
+
+```bash
+npm ci --prefix backend
+npm ci --prefix frontend
+./scripts/package-desktop-mac.sh
+```
+
+The default outputs are:
+
+```text
+desktop/dist/mac-<arch>/Vera.app
+desktop/dist/Vera-1.0.1-<arch>.dmg
+desktop/dist/Vera-1.0.1-<arch>.zip
+desktop/dist/Vera-1.0.1-SHA256SUMS.txt
+```
+
+The version is read from `desktop/package.json`; do not hard-code `1.0.1` in
+release automation. The default script explicitly reports
+`signed=false notarized=false distribution=local-only`.
+
+### Accepted 2026-07-15 arm64 artifact record
+
+```text
+relative app:      desktop/dist/mac-arm64/Vera.app
+absolute app:      /Users/a1-6/Documents/new agent/desktop/dist/mac-arm64/Vera.app
+
+relative DMG:      desktop/dist/Vera-1.0.1-arm64.dmg
+absolute DMG:      /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-arm64.dmg
+SHA-256:           69a2ee56379a7cf6cb7fe441685fb59c846e77512928704955e774f3d8d42dd7
+
+relative ZIP:      desktop/dist/Vera-1.0.1-arm64.zip
+absolute ZIP:      /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-arm64.zip
+SHA-256:           47fcd64f214bf9b28e6982953043c76dba68ff0f2a933107ff6ec07eb704e648
+
+relative manifest: desktop/dist/Vera-1.0.1-SHA256SUMS.txt
+absolute manifest: /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-SHA256SUMS.txt
+```
+
+Running `shasum -a 256 -c Vera-1.0.1-SHA256SUMS.txt` from `desktop/dist`
+verified both entries. The manifest content is:
+
+```text
+69a2ee56379a7cf6cb7fe441685fb59c846e77512928704955e774f3d8d42dd7  Vera-1.0.1-arm64.dmg
+47fcd64f214bf9b28e6982953043c76dba68ff0f2a933107ff6ec07eb704e648  Vera-1.0.1-arm64.zip
+```
+
+To request the credentialed release path:
+
+```bash
+VERA_RELEASE_SIGNING=true \
+CSC_NAME="Developer ID Application: Example Corp (TEAMID)" \
+APPLE_TEAM_ID="TEAMID" \
+APPLE_ID="release@example.com" \
+APPLE_APP_SPECIFIC_PASSWORD="..." \
+./scripts/package-desktop-mac.sh
+```
+
+The API-key notarization variant is also supported by the signing scripts. Do
+not combine partial or mixed notarization methods.
+
+## Local runtime boundary
+
+Vera owns all required local services. It does not require Docker, Supabase,
+PostgreSQL, R2/S3, or a separately started backend.
+
+At launch, Electron:
+
+1. takes a single-instance lock and preserves the existing
+   `Application Support/aletheia-desktop` compatibility directory;
+2. provisions or reads the independent application-encryption and SQLCipher
+   keys from the current user's macOS Keychain;
+3. creates an isolated credential-worker utility process for model-provider
+   secrets;
+4. creates a new random 32-byte bearer token for that launch;
+5. starts the backend on `127.0.0.1:43761` and the frontend on
+   `127.0.0.1:43760` using explicit environment allowlists;
+6. passes the token only through the trusted preload bridge and opens
+   `/assistant` after both services are healthy;
+7. shuts down the frontend, backend, and credential worker in a bounded order
+   and verifies port release.
+
+The renderer uses `nodeIntegration: false`, `contextIsolation: true`, and
+`sandbox: true`. New windows and untrusted navigation are denied, renderer
+permissions are denied by default, and the desktop CSP limits connections to
+the exact loopback backend. Child processes do not inherit ambient cloud
+credentials, proxy variables, or Node injection flags.
+
+## Local persistence and credentials
+
+Workspace schema migrations currently run through v10
+(`v10AssistantDurableEvents`). Projects, folders, document versions, chats,
+messages, jobs, workflow definitions/runs/step runs, Tabular Reviews/cells,
+model-profile metadata, and durable Assistant events use the local Workspace
+database. The packaged client requires SQLCipher and fails closed if the
+database key, adapter, schema read, or integrity check fails.
+
+Original files, extracted content, and local exports use versioned
+AES-256-GCM envelope encryption. The application master key and SQLCipher key
+are separate Keychain items. Losing either key can make its corresponding data
+unrecoverable; use the documented escrow procedure for cross-Mac recovery.
+
+Provider API keys are never stored in normal Workspace tables, returned by the
+Settings API, or sent to the renderer after entry. The renderer submits a new
+secret once; the backend sends it over a private MessagePort to the isolated
+credential worker, which writes the bound item to the macOS Keychain. Database
+records contain only a non-secret credential reference, origin binding, and
+status. Credential readback is available only to the backend model adapter.
+
+## Models and Settings
+
+Settings exposes OpenAI, DeepSeek, Anthropic, Gemini, and OpenAI-compatible
+profiles. Each profile stores its model name, endpoint metadata, context/output
+limits, enabled/default state, connection-test revision, and non-secret
+capabilities locally. A credential and a current successful connection test are
+required before a profile becomes ready and can be selected as default.
+
+OpenAI-compatible endpoints use a hardened transport. Public custom endpoints
+must use HTTPS. Exact-loopback HTTP is disabled by default and can be enabled
+only with `ALETHEIA_MODEL_PROVIDER_ALLOW_LOOPBACK_HTTP=true` for explicit local
+development or the packaged mock-provider E2E.
+
+The Local Data Settings page can:
+
+- open the data or logs directory through controlled native actions;
+- create an authenticated encrypted workspace backup;
+- inspect a selected backup before restore;
+- perform a confirmed, fail-closed restore with rollback/recovery state;
+- restart the owned local services;
+- export a redacted diagnostic summary.
+
+Backups include the encrypted database and workspace files, but not
+model-provider credentials or either Keychain encryption key. A restore cannot
+make missing Keychain material portable.
+
+Desktop logs and model-call diagnostics are owner-only, bounded, rotated, and
+redacted. Model-call records contain request ID, provider, model, start/end
+times, token counts when supplied, terminal status, and safe error code; they do
+not contain prompts, document text, authorization headers, API keys, or local
+file paths. The exported diagnostic bundle contains runtime/security and
+directory summaries, not log contents or user content.
+
+## Required verification
+
+Run source gates before packaging:
+
+```bash
+npm run build --prefix backend
+npm run test:workspace:migrations --prefix backend
+npm run test:workspace:model-settings-runtime --prefix backend
+npm run test:workspace:model-call-diagnostics --prefix backend
+npm run test:workspace:assistant-execution --prefix backend
+npm run test:workspace:workflow-execution --prefix backend
+npm run test:workspace:tabular-execution --prefix backend
+
+npm run lint --prefix frontend
+npm run build --prefix frontend
+npm run test:i18n --prefix frontend
+npm run test:assistant --prefix frontend
+npm run test:workflows --prefix frontend
+npm run test:tabular --prefix frontend
+
+npm run test:product-rename --prefix desktop
+npm run test:keychain-provisioning --prefix desktop
+npm run test:keychain-credential-store --prefix desktop
+npm run test:credential-worker --prefix desktop
+npm run test:credential-bridge --prefix desktop
+npm run test:runtime-security --prefix desktop
+npm run test:diagnostic-bundle --prefix desktop
+npm run test:desktop-logger --prefix desktop
+git diff --check
+```
+
+`./scripts/package-desktop-mac.sh` then builds a fresh package and runs the
+packaged SQLCipher/hygiene checks, legacy migration, startup/port-release smoke,
+workspace restart E2E, backup bridge, and interrupted-restore fail-closed audit.
+The workspace E2E uses an isolated exact-loopback mock provider only for the
+test. It creates a Project, parses two TXT files, persists an Assistant answer
+with two citations, executes a two-step Workflow, completes and exports a
+two-document by two-column Tabular Review, closes Vera, reopens the same
+encrypted workspace, and verifies the objects and results again.
+
+The completed P0 result is:
+
+```text
+Phase 7: complete; fresh packaged verification passed
+signed: false
+notarized: false
+distribution: local-only
+```
+
+## Legacy desktop operations reference
+
+The material below predates the Mike-derived P0 product. It is retained because
+the underlying litigation, audit, migration, encryption, and recovery paths
+remain compatibility-sensitive. Historical Aletheia artifact names, default
+routes, and UI instructions below are not current release instructions.
 
 The default macOS package is an **unsigned local-development build** for use on
 the Mac that built it. A Developer ID signed release remains available as an

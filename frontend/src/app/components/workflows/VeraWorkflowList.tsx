@@ -8,7 +8,7 @@
  * omitting shared-with-me, cloud contribution, and execution controls.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Eye,
@@ -23,6 +23,8 @@ import {
 import { ConfirmPopup } from "@/app/components/shared/ConfirmPopup";
 import { PageHeader } from "@/app/components/vera-shell/PageHeader";
 import { TableToolbar } from "@/app/components/shared/TableToolbar";
+import { useI18n } from "@/app/i18n";
+import { VeraApiError } from "@/app/lib/veraApi";
 import {
   SkeletonLine,
   TableBody,
@@ -48,12 +50,13 @@ import { VeraWorkflowFormModal } from "./VeraWorkflowFormModal";
 
 type WorkflowScope = "all" | "custom" | "system";
 
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
-}
-
-export function VeraWorkflowList() {
+export function VeraWorkflowList({
+  projectId = null,
+}: {
+  projectId?: string | null;
+} = {}) {
   const router = useRouter();
+  const { t, errorMessage } = useI18n();
   const [workflows, setWorkflows] = useState<VeraWorkflow[]>([]);
   const [hiddenIds, setHiddenIds] = useState<string[]>([]);
   const [scope, setScope] = useState<WorkflowScope>("all");
@@ -68,7 +71,7 @@ export function VeraWorkflowList() {
   const [hiddenPendingIds, setHiddenPendingIds] = useState<string[]>([]);
   const [deletePendingIds, setDeletePendingIds] = useState<string[]>([]);
 
-  async function reload(signal?: AbortSignal) {
+  const reload = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setLoadError(null);
     try {
@@ -84,17 +87,21 @@ export function VeraWorkflowList() {
       if (signal?.aborted) return;
       setWorkflows([]);
       setHiddenIds([]);
-      setLoadError(errorMessage(error, "无法加载工作流。"));
+      setLoadError(
+        error instanceof VeraApiError
+          ? errorMessage(error)
+          : t("workflows.errors.load"),
+      );
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }
+  }, [errorMessage, t]);
 
   useEffect(() => {
     const controller = new AbortController();
     void reload(controller.signal);
     return () => controller.abort();
-  }, []);
+  }, [reload]);
 
   const scopedWorkflows = useMemo(() => {
     return workflows.filter((workflow) => {
@@ -138,9 +145,17 @@ export function VeraWorkflowList() {
       const created = await createVeraWorkflow(input);
       setWorkflows((current) => [created, ...current]);
       setCreateOpen(false);
-      router.push(`/workflows/${encodeURIComponent(created.id)}`);
+      router.push(
+        `/workflows/${encodeURIComponent(created.id)}${
+          projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""
+        }`,
+      );
     } catch (error) {
-      setOperationError(errorMessage(error, "无法创建工作流。"));
+      setOperationError(
+        error instanceof VeraApiError
+          ? errorMessage(error)
+          : t("workflows.errors.save"),
+      );
     } finally {
       setCreateBusy(false);
     }
@@ -168,7 +183,11 @@ export function VeraWorkflowList() {
           ? [...new Set([...current, workflow.id])]
           : current.filter((id) => id !== workflow.id),
       );
-      setOperationError(errorMessage(error, "无法更新内置工作流显示状态。"));
+      setOperationError(
+        error instanceof VeraApiError
+          ? errorMessage(error)
+          : t("workflows.errors.save"),
+      );
     } finally {
       setHiddenPendingIds((current) =>
         current.filter((id) => id !== workflow.id),
@@ -195,7 +214,11 @@ export function VeraWorkflowList() {
       );
       setDeleteTarget(null);
     } catch (error) {
-      setOperationError(errorMessage(error, "无法删除工作流。"));
+      setOperationError(
+        error instanceof VeraApiError
+          ? errorMessage(error)
+          : t("workflows.errors.save"),
+      );
     } finally {
       setDeleteBusy(false);
       setDeletePendingIds((current) => current.filter((id) => id !== targetId));
@@ -208,7 +231,11 @@ export function VeraWorkflowList() {
   }
 
   function openWorkflow(workflowId: string) {
-    router.push(`/workflows/${encodeURIComponent(workflowId)}`);
+    router.push(
+      `/workflows/${encodeURIComponent(workflowId)}${
+        projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""
+      }`,
+    );
   }
 
   const deleteControlsLocked =
@@ -218,14 +245,14 @@ export function VeraWorkflowList() {
     <div className="flex h-full min-h-0 flex-col">
       <PageHeader
         shrink
-        breadcrumbs={[{ label: "工作流" }]}
+        breadcrumbs={[{ label: t("workflows.title") }]}
         actionGroups={[
           [
             {
               type: "search",
               value: query,
               onChange: setQuery,
-              placeholder: "搜索工作流",
+              placeholder: t("workflows.list.search"),
             },
           ],
           [
@@ -235,22 +262,22 @@ export function VeraWorkflowList() {
                 setOperationError(null);
                 setCreateOpen(true);
               },
-              title: "新建工作流",
+              title: t("workflows.form.create"),
             },
           ],
         ]}
       />
       <TableToolbar
         items={[
-          { id: "all", label: "全部" },
-          { id: "custom", label: "我的模板" },
-          { id: "system", label: "内置模板" },
+          { id: "all", label: t("workflows.list.all") },
+          { id: "custom", label: t("workflows.list.custom") },
+          { id: "system", label: t("workflows.list.system") },
         ]}
         active={scope}
         onChange={setScope}
         actions={
           <p className="text-xs text-gray-500">
-            项目可选择性地使用这些模板；此处不启动执行。
+            {t("workflows.list.projectHint")}
           </p>
         }
       />
@@ -265,12 +292,20 @@ export function VeraWorkflowList() {
       <TableScrollArea>
         <TableHeaderRow>
           <TableStickyCell header>
-            <span>名称</span>
+            <span>{t("workflows.list.name")}</span>
           </TableStickyCell>
-          <TableHeaderCell className="w-28">类型</TableHeaderCell>
-          <TableHeaderCell className="w-36">业务领域</TableHeaderCell>
-          <TableHeaderCell className="w-44">司法辖区</TableHeaderCell>
-          <TableHeaderCell className="w-28">来源</TableHeaderCell>
+          <TableHeaderCell className="w-28">
+            {t("workflows.list.type")}
+          </TableHeaderCell>
+          <TableHeaderCell className="w-36">
+            {t("workflows.list.practice")}
+          </TableHeaderCell>
+          <TableHeaderCell className="w-44">
+            {t("workflows.list.jurisdiction")}
+          </TableHeaderCell>
+          <TableHeaderCell className="w-28">
+            {t("workflows.list.source")}
+          </TableHeaderCell>
           <TableHeaderCell className="w-28" />
         </TableHeaderRow>
         {loading ? (
@@ -299,7 +334,9 @@ export function VeraWorkflowList() {
         ) : loadError ? (
           <TableEmptyState>
             <Library className="mb-4 h-8 w-8 text-red-300" />
-            <p className="text-xl font-medium text-gray-900">无法加载工作流</p>
+            <p className="text-xl font-medium text-gray-900">
+              {t("workflows.list.loadFailed")}
+            </p>
             <p
               role="alert"
               className="mt-2 max-w-md text-center text-sm text-red-700"
@@ -311,32 +348,34 @@ export function VeraWorkflowList() {
               onClick={() => void reload()}
               className="mt-4 rounded-full bg-gray-900 px-4 py-2 text-sm font-medium text-white"
             >
-              重试
+              {t("common.actions.retry")}
             </button>
           </TableEmptyState>
         ) : visible.length === 0 && workflows.length > 0 && hasActiveFilter ? (
           <TableEmptyState>
             <Library className="mb-4 h-8 w-8 text-gray-300" />
             <p className="text-xl font-medium text-gray-900">
-              没有匹配的工作流
+              {t("workflows.list.filteredEmpty")}
             </p>
             <p className="mt-2 max-w-md text-center text-sm text-gray-500">
-              当前搜索或筛选条件没有匹配项；本地数据未被更改。
+              {t("workflows.errors.load")}
             </p>
             <button
               type="button"
               onClick={clearFilters}
               className="mt-4 rounded-full border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:border-gray-400"
             >
-              清除筛选
+              {t("workflows.list.clearFilters")}
             </button>
           </TableEmptyState>
         ) : visible.length === 0 ? (
           <TableEmptyState>
             <Library className="mb-4 h-8 w-8 text-gray-300" />
-            <p className="text-xl font-medium text-gray-900">还没有工作流</p>
+            <p className="text-xl font-medium text-gray-900">
+              {t("workflows.empty.title")}
+            </p>
             <p className="mt-2 max-w-md text-center text-sm text-gray-500">
-              创建助手或表格审阅模板。Vera 会显示真实本地服务结果。
+              {t("workflows.empty.body")}
             </p>
             <button
               type="button"
@@ -344,7 +383,7 @@ export function VeraWorkflowList() {
               className="mt-4 inline-flex items-center gap-1 rounded-full bg-gray-900 px-4 py-2 text-sm font-medium text-white"
             >
               <Plus className="h-4 w-4" />
-              新建工作流
+              {t("workflows.create")}
             </button>
           </TableEmptyState>
         ) : (
@@ -361,7 +400,9 @@ export function VeraWorkflowList() {
                   className={hidden ? "opacity-50" : undefined}
                   role="link"
                   tabIndex={0}
-                  aria-label={`打开工作流：${workflow.metadata.title}`}
+                  aria-label={t("workflows.list.open", {
+                    name: workflow.metadata.title,
+                  })}
                   onClick={() => openWorkflow(workflow.id)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
@@ -376,7 +417,9 @@ export function VeraWorkflowList() {
                         {workflow.metadata.title}
                       </p>
                       {hidden && (
-                        <p className="mt-0.5 text-xs text-gray-500">已隐藏</p>
+                        <p className="mt-0.5 text-xs text-gray-500">
+                          {t("workflows.list.hidden")}
+                        </p>
                       )}
                     </div>
                   </TableStickyCell>
@@ -387,7 +430,9 @@ export function VeraWorkflowList() {
                       ) : (
                         <MessageSquare className="h-3.5 w-3.5 text-blue-700" />
                       )}
-                      {workflow.metadata.type === "tabular" ? "表格" : "助手"}
+                      {workflow.metadata.type === "tabular"
+                        ? t("workflows.list.tabular")
+                        : t("workflows.list.assistant")}
                     </span>
                   </TableCell>
                   <TableCell className="w-36">
@@ -402,7 +447,9 @@ export function VeraWorkflowList() {
                   </TableCell>
                   <TableCell className="w-28">
                     <span className="text-xs text-gray-600">
-                      {workflow.is_system ? "内置" : "本地"}
+                      {workflow.is_system
+                        ? t("workflows.list.builtin")
+                        : t("workflows.list.local")}
                     </span>
                   </TableCell>
                   <TableCell
@@ -422,17 +469,17 @@ export function VeraWorkflowList() {
                           className="rounded p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-40"
                           title={
                             hiddenPending
-                              ? "正在更新…"
+                              ? t("workflows.list.updating")
                               : hidden
-                                ? "取消隐藏"
-                                : "隐藏"
+                                ? t("workflows.list.unhide")
+                                : t("workflows.list.hide")
                           }
                           aria-label={
                             hiddenPending
-                              ? "正在更新内置工作流显示状态"
+                              ? t("workflows.list.updating")
                               : hidden
-                                ? "取消隐藏"
-                                : "隐藏"
+                                ? t("workflows.list.unhide")
+                                : t("workflows.list.hide")
                           }
                         >
                           {hidden ? (
@@ -451,9 +498,15 @@ export function VeraWorkflowList() {
                             setDeleteTarget(workflow);
                           }}
                           className="rounded p-1.5 text-red-500 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
-                          title={deletePending ? "正在删除…" : "删除工作流"}
+                          title={
+                            deletePending
+                              ? t("workflows.list.deleting")
+                              : t("workflows.editor.delete")
+                          }
                           aria-label={
-                            deletePending ? "正在删除工作流" : "删除工作流"
+                            deletePending
+                              ? t("workflows.list.deleting")
+                              : t("workflows.editor.delete")
                           }
                         >
                           <Trash2 className="h-4 w-4" />
@@ -478,13 +531,15 @@ export function VeraWorkflowList() {
       />
       <ConfirmPopup
         open={deleteTarget !== null}
-        title="删除工作流？"
+        title={t("workflows.deleteConfirm.title")}
         message={
           deleteTarget
-            ? `“${deleteTarget.metadata.title}”将从本地工作区永久删除。`
+            ? t("workflows.list.deleteMessage", {
+                name: deleteTarget.metadata.title,
+              })
             : undefined
         }
-        confirmLabel="删除"
+        confirmLabel={t("common.actions.delete")}
         confirmStatus={deleteBusy ? "loading" : "idle"}
         confirmDisabled={
           !deleteTarget ||

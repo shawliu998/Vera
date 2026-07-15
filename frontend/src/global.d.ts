@@ -5,8 +5,6 @@ interface AletheiaDesktopInfo {
   backendUrl: string;
   workspaceApiUrl: string;
   frontendUrl: string;
-  dataDir: string;
-  logsDir: string;
   localClient: boolean;
   encryptedVolumeAttested: boolean;
   applicationEncryption: "required" | "disabled";
@@ -19,6 +17,13 @@ interface Window {
     getAuthToken: () => Promise<string>;
     openDataDirectory: () => Promise<{ opened: true }>;
     openLogsDirectory: () => Promise<{ opened: true }>;
+    exportDiagnosticBundle: () => Promise<{
+      saved: boolean;
+      canceled: boolean;
+      bytes?: number;
+      sha256?: string;
+      createdAt?: string;
+    }>;
     restartLocalServices: () => Promise<{ restarted: true }>;
     getAuditAnchorConfiguration: () => Promise<{
       enabled: boolean;

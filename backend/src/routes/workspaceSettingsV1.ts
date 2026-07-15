@@ -1,9 +1,17 @@
-import { Router, type RequestHandler } from "express";
+import { Router, type RequestHandler, type Response } from "express";
 import { ZodError, z } from "zod";
 
 import { WorkspaceApiError } from "../lib/workspace/errors";
+import { MODEL_CONNECTION_TEST_ERROR_CODES } from "../lib/workspace/modelConnectionReadiness";
 
 const Uuid = z.string().uuid();
+const StrictUtcTimestamp = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
+  .refine((value) => {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+  });
 const EmptyBody = z.object({}).strict();
 const Provider = z.enum([
   "openai",
@@ -12,12 +20,20 @@ const Provider = z.enum([
   "gemini",
   "openai_compatible",
 ]);
-const ModelMutationBody = z
+const ModelCapabilities = z
   .object({
-    name: z.string().trim().min(1).max(120).optional(),
-    provider: Provider.optional(),
-    model: z.string().trim().min(1).max(200).optional(),
-    base_url: z.string().trim().min(1).nullable().optional(),
+    streaming: z.boolean(),
+    toolCalling: z.boolean(),
+    structuredOutput: z.boolean(),
+    vision: z.boolean(),
+  })
+  .strict();
+const ModelCreateBody = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    provider: Provider,
+    model: z.string().trim().min(1).max(200),
+    base_url: z.string().trim().min(1).max(500).nullable().optional(),
     context_window_tokens: z
       .number()
       .int()
@@ -32,17 +48,25 @@ const ModelMutationBody = z
       .max(10_000_000)
       .nullable()
       .optional(),
-    capabilities: z
-      .object({
-        streaming: z.boolean(),
-        toolCalling: z.boolean(),
-        structuredOutput: z.boolean(),
-        vision: z.boolean(),
-      })
-      .strict()
-      .optional(),
-    enabled: z.boolean().optional(),
-    is_default: z.boolean().optional(),
+    capabilities: ModelCapabilities.optional(),
+  })
+  .strict();
+const ModelPatchBody = ModelCreateBody.partial()
+  .strict()
+  .refine(
+    (value) => Object.keys(value).length > 0,
+    "at least one update is required",
+  );
+const CredentialBody = z
+  .object({
+    secret: z
+      .string()
+      .min(1)
+      .refine((value) => !/[\r\n]/.test(value), "secret is invalid")
+      .refine(
+        (value) => Buffer.byteLength(value, "utf8") <= 8 * 1024,
+        "secret is too large",
+      ),
   })
   .strict();
 const SettingsPatchBody = z
@@ -60,49 +84,124 @@ const SettingsPatchBody = z
 const CapabilitiesWireSchema = z
   .object({
     schema_version: z.literal("vera-workspace-model-settings-v1"),
+    settings_available: z.boolean(),
     local_only: z.literal(true),
     loopback_http_allowed: z.boolean(),
+    supported_providers: z.array(Provider).max(5),
     credential_write_enabled: z.boolean(),
     secret_readback_supported: z.literal(false),
     runtime_wired: z.boolean(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      new Set(value.supported_providers).size !==
+      value.supported_providers.length
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["supported_providers"],
+        message: "supported providers must be unique",
+      });
+    }
+    if (
+      value.settings_available &&
+      (!value.runtime_wired || !value.credential_write_enabled)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["settings_available"],
+        message: "settings availability requires complete runtime wiring",
+      });
+    }
+  });
 const EndpointBindingWireSchema = z
   .object({
     provider: Provider,
     model: z.string().min(1).max(200),
-    normalized_base_url: z.string().min(1).nullable(),
-    canonical_origin: z.string().min(1).nullable(),
+    normalized_base_url: z.string().min(1).max(500).nullable(),
+    canonical_origin: z.string().min(1).max(500).nullable(),
     execution_revision: z.number().int().nonnegative(),
-    profile_updated_at: z.string().datetime({ offset: true }),
+    connection_revision: z.number().int().min(0).max(2_147_483_647),
+    profile_updated_at: StrictUtcTimestamp,
   })
   .strict();
+const ConnectionTestWireSchema = z
+  .discriminatedUnion("status", [
+    z
+      .object({
+        status: z.literal("untested"),
+        error_code: z.null(),
+        retryable: z.literal(false),
+        latency_ms: z.null(),
+        tested_at: z.null(),
+      })
+      .strict(),
+    z
+      .object({
+        status: z.literal("passed"),
+        error_code: z.null(),
+        retryable: z.literal(false),
+        latency_ms: z.number().int().min(0).max(600_000).nullable(),
+        tested_at: StrictUtcTimestamp,
+      })
+      .strict(),
+    z
+      .object({
+        status: z.literal("failed"),
+        error_code: z.enum(MODEL_CONNECTION_TEST_ERROR_CODES),
+        retryable: z.boolean(),
+        latency_ms: z.number().int().min(0).max(600_000).nullable(),
+        tested_at: StrictUtcTimestamp,
+      })
+      .strict(),
+    z
+      .object({
+        status: z.literal("stale"),
+        error_code: z.enum(MODEL_CONNECTION_TEST_ERROR_CODES).nullable(),
+        retryable: z.boolean(),
+        latency_ms: z.number().int().min(0).max(600_000).nullable(),
+        tested_at: StrictUtcTimestamp,
+      })
+      .strict(),
+  ])
+  .superRefine((value, context) => {
+    if (
+      value.status === "stale" &&
+      value.error_code === null &&
+      value.retryable
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["retryable"],
+        message: "a retryable stale result requires an error code",
+      });
+    }
+  });
 const ModelWireSchema = z
   .object({
     id: Uuid,
     name: z.string().min(1).max(120),
     provider: Provider,
     model: z.string().min(1).max(200),
-    base_url: z.string().min(1).nullable(),
-    context_window_tokens: z.number().int().positive().nullable(),
-    max_output_tokens: z.number().int().positive().nullable(),
+    base_url: z.string().min(1).max(500).nullable(),
+    context_window_tokens: z
+      .number()
+      .int()
+      .positive()
+      .max(10_000_000)
+      .nullable(),
+    max_output_tokens: z.number().int().positive().max(10_000_000).nullable(),
     enabled: z.boolean(),
     is_default: z.boolean(),
-    created_at: z.string().datetime({ offset: true }),
-    updated_at: z.string().datetime({ offset: true }),
-    capabilities: z
-      .object({
-        streaming: z.boolean(),
-        toolCalling: z.boolean(),
-        structuredOutput: z.boolean(),
-        vision: z.boolean(),
-      })
-      .strict(),
+    created_at: StrictUtcTimestamp,
+    updated_at: StrictUtcTimestamp,
+    capabilities: ModelCapabilities,
     credential: z
       .object({
         status: z.enum(["configured", "missing", "invalid"]),
         configured: z.boolean(),
-        canonical_origin: z.string().min(1).nullable(),
+        canonical_origin: z.string().min(1).max(500).nullable(),
       })
       .strict(),
     endpoint_binding: EndpointBindingWireSchema,
@@ -120,16 +219,58 @@ const ModelWireSchema = z
         selectable: z.boolean(),
       })
       .strict(),
+    connection_test: ConnectionTestWireSchema,
     requires_credential: z.literal(true),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      value.credential.configured !==
+      (value.credential.status === "configured")
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["credential", "configured"],
+        message: "credential status is inconsistent",
+      });
+    }
+    if (
+      value.provider !== value.endpoint_binding.provider ||
+      value.model !== value.endpoint_binding.model ||
+      value.updated_at !== value.endpoint_binding.profile_updated_at ||
+      value.credential.canonical_origin !==
+        value.endpoint_binding.canonical_origin
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["endpoint_binding"],
+        message: "endpoint binding is inconsistent",
+      });
+    }
+    if (
+      value.availability.selectable !==
+        (value.availability.status === "ready") ||
+      (!value.enabled && value.availability.status !== "disabled") ||
+      (value.enabled && value.connection_test.status !== "passed") ||
+      (value.is_default &&
+        (!value.enabled ||
+          !value.availability.selectable ||
+          value.connection_test.status !== "passed"))
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["availability"],
+        message: "model readiness state is inconsistent",
+      });
+    }
+  });
 const SettingsWireSchema = z
   .object({
     locale: z.enum(["zh-CN", "en-US"]),
     theme: z.enum(["system", "light", "dark"]),
     default_model_profile_id: Uuid.nullable(),
     default_project_id: Uuid.nullable(),
-    updated_at: z.string().datetime({ offset: true }),
+    updated_at: StrictUtcTimestamp,
   })
   .strict();
 const StatusWireSchema = z
@@ -138,9 +279,24 @@ const StatusWireSchema = z
     settings: SettingsWireSchema,
     models: z.array(ModelWireSchema),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    const defaults = value.models.filter((profile) => profile.is_default);
+    if (
+      defaults.length > 1 ||
+      (defaults[0]?.id ?? null) !== value.settings.default_model_profile_id
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["settings", "default_model_profile_id"],
+        message: "default model selection is inconsistent",
+      });
+    }
+  });
 
-function toModelPatch(value: z.infer<typeof ModelMutationBody>) {
+function toModelInput(
+  value: z.infer<typeof ModelCreateBody> | z.infer<typeof ModelPatchBody>,
+) {
   return {
     ...(value.name !== undefined ? { name: value.name } : {}),
     ...(value.provider !== undefined ? { provider: value.provider } : {}),
@@ -155,8 +311,6 @@ function toModelPatch(value: z.infer<typeof ModelMutationBody>) {
     ...(value.capabilities !== undefined
       ? { capabilities: value.capabilities }
       : {}),
-    ...(value.enabled !== undefined ? { enabled: value.enabled } : {}),
-    ...(value.is_default !== undefined ? { isDefault: value.is_default } : {}),
   };
 }
 
@@ -173,16 +327,53 @@ function toSettingsPatch(value: z.infer<typeof SettingsPatchBody>) {
   };
 }
 
-function handleRouteError(
-  res: {
-    status: (status: number) => { json: (body: unknown) => unknown };
-  },
-  error: unknown,
-) {
+function sensitiveWireKey(key: string) {
+  const normalized = key
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[-\s]+/g, "_")
+    .toLowerCase();
+  return (
+    normalized === "secret" ||
+    normalized.endsWith("_secret") ||
+    normalized === "api_key" ||
+    normalized.endsWith("_api_key") ||
+    normalized === "credential_ref" ||
+    normalized.endsWith("_credential_ref") ||
+    normalized === "credential_reference" ||
+    normalized.endsWith("_credential_reference")
+  );
+}
+
+function assertNoSensitiveOutput(value: unknown) {
+  const seen = new Set<object>();
+  const visit = (candidate: unknown): void => {
+    if (!candidate || typeof candidate !== "object" || seen.has(candidate))
+      return;
+    seen.add(candidate);
+    if (Array.isArray(candidate)) {
+      candidate.forEach(visit);
+      return;
+    }
+    for (const [key, nested] of Object.entries(candidate)) {
+      if (sensitiveWireKey(key)) {
+        throw new WorkspaceApiError(
+          500,
+          "INTERNAL_ERROR",
+          "Workspace model settings route emitted an invalid response.",
+        );
+      }
+      visit(nested);
+    }
+  };
+  visit(value);
+}
+
+function handleRouteError(response: Response, error: unknown) {
   if (error instanceof WorkspaceApiError) {
-    return void res.status(error.status).json(error.toResponse());
+    response.status(error.status).json(error.toResponse());
+    return;
   }
-  return void res
+  response
     .status(500)
     .json(
       new WorkspaceApiError(
@@ -220,8 +411,10 @@ function parseOutput<T extends z.ZodTypeAny>(
   value: unknown,
 ): z.infer<T> {
   try {
+    assertNoSensitiveOutput(value);
     return schema.parse(value);
-  } catch {
+  } catch (error) {
+    if (error instanceof WorkspaceApiError) throw error;
     throw new WorkspaceApiError(
       500,
       "INTERNAL_ERROR",
@@ -252,7 +445,7 @@ export interface WorkspaceModelSettingsRuntimePort {
   ): Promise<WorkspaceModelWire[]> | WorkspaceModelWire[];
   createModel(
     context: WorkspaceModelSettingsContext,
-    input: ReturnType<typeof toModelPatch>,
+    input: ReturnType<typeof toModelInput>,
   ): Promise<WorkspaceModelWire> | WorkspaceModelWire;
   getModel(
     context: WorkspaceModelSettingsContext,
@@ -261,7 +454,20 @@ export interface WorkspaceModelSettingsRuntimePort {
   updateModel(
     context: WorkspaceModelSettingsContext,
     id: string,
-    input: ReturnType<typeof toModelPatch>,
+    input: ReturnType<typeof toModelInput>,
+  ): Promise<WorkspaceModelWire> | WorkspaceModelWire;
+  putCredential(
+    context: WorkspaceModelSettingsContext,
+    id: string,
+    input: { secret: string },
+  ): Promise<WorkspaceModelWire> | WorkspaceModelWire;
+  deleteCredential(
+    context: WorkspaceModelSettingsContext,
+    id: string,
+  ): Promise<WorkspaceModelWire> | WorkspaceModelWire;
+  testModel(
+    context: WorkspaceModelSettingsContext,
+    id: string,
   ): Promise<WorkspaceModelWire> | WorkspaceModelWire;
   enableModel(
     context: WorkspaceModelSettingsContext,
@@ -283,213 +489,191 @@ export interface WorkspaceModelSettingsRuntimePort {
 
 export type WorkspaceModelSettingsRouterDependencies = {
   runtime: WorkspaceModelSettingsRuntimePort;
+  /** Production authenticates the parent /api/v1 router first. */
   auth?: RequestHandler;
-  context?:
-    | ((input: {
-        locals: Record<string, unknown>;
-      }) => WorkspaceModelSettingsContext)
-    | undefined;
+  context?: (input: {
+    locals: Record<string, unknown>;
+  }) => WorkspaceModelSettingsContext;
 };
 
 export function createWorkspaceSettingsV1Router(
   dependencies: WorkspaceModelSettingsRouterDependencies,
 ) {
   const router = Router();
-  const configuredPrincipalId =
-    process.env.WORKSPACE_LOCAL_PRINCIPAL_ID?.trim() || null;
-  const missingContextError = new WorkspaceApiError(
-    500,
-    "INTERNAL_ERROR",
-    "Workspace model settings authentication context is unavailable.",
-  );
-  const auth =
-    dependencies.auth ??
-    ((_req, res) =>
-      void res.status(500).json(missingContextError.toResponse()));
-  const context = dependencies.context
-    ? dependencies.context
-    : configuredPrincipalId
-      ? () => ({
-          principalId: configuredPrincipalId,
-        })
-      : null;
+  if (dependencies.auth) router.use(dependencies.auth);
+  const context =
+    dependencies.context ??
+    ((input: { locals: Record<string, unknown> }) => {
+      const principalId = input.locals.userId;
+      if (
+        typeof principalId !== "string" ||
+        !Uuid.safeParse(principalId).success
+      ) {
+        throw new WorkspaceApiError(
+          401,
+          "UNAUTHORIZED",
+          "Workspace authentication is required.",
+        );
+      }
+      return { principalId };
+    });
+  const requestContext = (response: Response) =>
+    context({ locals: response.locals });
   const runtime = dependencies.runtime;
-  const requireContext = (res: { locals: Record<string, unknown> }) => {
-    if (!context) throw missingContextError;
-    return context(res);
-  };
+  const run =
+    (operation: (response: Response) => Promise<void>) =>
+    (_request: unknown, response: Response) => {
+      void operation(response).catch((error) =>
+        handleRouteError(response, error),
+      );
+    };
 
-  router.get("/status", auth, async (_req, res) => {
-    try {
-      res.json(
+  router.get(
+    "/settings/status",
+    run(async (response) => {
+      response.json(
         parseOutput(
           StatusWireSchema,
-          await runtime.getStatus(requireContext(res)),
+          await runtime.getStatus(requestContext(response)),
         ),
       );
-    } catch (error) {
-      handleRouteError(res, error);
-    }
-  });
-
-  router.get("/settings", auth, async (_req, res) => {
-    try {
-      res.json(
+    }),
+  );
+  router.get(
+    "/settings",
+    run(async (response) => {
+      response.json(
         parseOutput(
           SettingsWireSchema,
-          await runtime.getSettings(requireContext(res)),
+          await runtime.getSettings(requestContext(response)),
         ),
       );
-    } catch (error) {
-      handleRouteError(res, error);
-    }
-  });
-
-  router.patch("/settings", auth, async (req, res) => {
-    try {
-      const input = toSettingsPatch(parseInput(SettingsPatchBody, req.body));
-      res.json(
+    }),
+  );
+  router.patch("/settings", (request, response) => {
+    void (async () => {
+      const input = toSettingsPatch(
+        parseInput(SettingsPatchBody, request.body),
+      );
+      response.json(
         parseOutput(
           SettingsWireSchema,
-          await runtime.updateSettings(requireContext(res), input),
+          await runtime.updateSettings(requestContext(response), input),
         ),
       );
-    } catch (error) {
-      handleRouteError(res, error);
-    }
+    })().catch((error) => handleRouteError(response, error));
   });
-
-  router.get("/models", auth, async (_req, res) => {
-    try {
-      res.json(
+  router.get(
+    "/model-profiles",
+    run(async (response) => {
+      response.json(
         parseOutput(
           z.array(ModelWireSchema),
-          await runtime.listModels(requireContext(res)),
+          await runtime.listModels(requestContext(response)),
         ),
       );
-    } catch (error) {
-      handleRouteError(res, error);
-    }
-  });
-
-  router.post("/models", auth, async (req, res) => {
-    try {
-      const input = toModelPatch(parseInput(ModelMutationBody, req.body));
-      res
+    }),
+  );
+  router.post("/model-profiles", (request, response) => {
+    void (async () => {
+      const input = toModelInput(parseInput(ModelCreateBody, request.body));
+      response
         .status(201)
         .json(
           parseOutput(
             ModelWireSchema,
-            await runtime.createModel(requireContext(res), input),
+            await runtime.createModel(requestContext(response), input),
           ),
         );
-    } catch (error) {
-      handleRouteError(res, error);
-    }
+    })().catch((error) => handleRouteError(response, error));
   });
-
-  router.get("/models/:id", auth, async (req, res) => {
-    try {
-      res.json(
+  router.get(
+    "/model-profiles/:id",
+    run(async (response) => {
+      const request = response.req;
+      response.json(
         parseOutput(
           ModelWireSchema,
           await runtime.getModel(
-            requireContext(res),
-            parseInput(Uuid, req.params.id),
+            requestContext(response),
+            parseInput(Uuid, request.params.id),
           ),
         ),
       );
-    } catch (error) {
-      handleRouteError(res, error);
-    }
-  });
-
-  router.patch("/models/:id", auth, async (req, res) => {
-    try {
-      const parsed = parseInput(ModelMutationBody, req.body);
-      if (Object.keys(parsed).length === 0) {
-        throw new WorkspaceApiError(
-          400,
-          "VALIDATION_ERROR",
-          "At least one model update is required.",
-        );
-      }
-      res.json(
+    }),
+  );
+  router.patch("/model-profiles/:id", (request, response) => {
+    void (async () => {
+      response.json(
         parseOutput(
           ModelWireSchema,
           await runtime.updateModel(
-            requireContext(res),
-            parseInput(Uuid, req.params.id),
-            toModelPatch(parsed),
+            requestContext(response),
+            parseInput(Uuid, request.params.id),
+            toModelInput(parseInput(ModelPatchBody, request.body)),
           ),
         ),
       );
-    } catch (error) {
-      handleRouteError(res, error);
-    }
+    })().catch((error) => handleRouteError(response, error));
   });
-
-  router.post("/models/:id/enable", auth, async (req, res) => {
-    try {
-      parseInput(EmptyBody, req.body ?? {});
-      res.json(
+  router.put("/model-profiles/:id/credential", (request, response) => {
+    void (async () => {
+      response.json(
         parseOutput(
           ModelWireSchema,
-          await runtime.enableModel(
-            requireContext(res),
-            parseInput(Uuid, req.params.id),
+          await runtime.putCredential(
+            requestContext(response),
+            parseInput(Uuid, request.params.id),
+            parseInput(CredentialBody, request.body),
           ),
         ),
       );
-    } catch (error) {
-      handleRouteError(res, error);
-    }
+    })().catch((error) => handleRouteError(response, error));
   });
-
-  router.post("/models/:id/disable", auth, async (req, res) => {
-    try {
-      parseInput(EmptyBody, req.body ?? {});
-      res.json(
+  router.delete("/model-profiles/:id/credential", (request, response) => {
+    void (async () => {
+      parseInput(EmptyBody, request.body ?? {});
+      response.json(
         parseOutput(
           ModelWireSchema,
-          await runtime.disableModel(
-            requireContext(res),
-            parseInput(Uuid, req.params.id),
+          await runtime.deleteCredential(
+            requestContext(response),
+            parseInput(Uuid, request.params.id),
           ),
         ),
       );
-    } catch (error) {
-      handleRouteError(res, error);
-    }
+    })().catch((error) => handleRouteError(response, error));
   });
-
-  router.post("/models/:id/default", auth, async (req, res) => {
-    try {
-      parseInput(EmptyBody, req.body ?? {});
-      res.json(
-        parseOutput(
-          ModelWireSchema,
-          await runtime.setDefaultModel(
-            requireContext(res),
-            parseInput(Uuid, req.params.id),
+  for (const [action, operation] of [
+    ["test", runtime.testModel.bind(runtime)],
+    ["enable", runtime.enableModel.bind(runtime)],
+    ["disable", runtime.disableModel.bind(runtime)],
+    ["default", runtime.setDefaultModel.bind(runtime)],
+  ] as const) {
+    router.post(`/model-profiles/:id/${action}`, (request, response) => {
+      void (async () => {
+        parseInput(EmptyBody, request.body ?? {});
+        response.json(
+          parseOutput(
+            ModelWireSchema,
+            await operation(
+              requestContext(response),
+              parseInput(Uuid, request.params.id),
+            ),
           ),
-        ),
-      );
-    } catch (error) {
-      handleRouteError(res, error);
-    }
-  });
-
-  router.delete("/models/:id", auth, async (req, res) => {
-    try {
+        );
+      })().catch((error) => handleRouteError(response, error));
+    });
+  }
+  router.delete("/model-profiles/:id", (request, response) => {
+    void (async () => {
+      parseInput(EmptyBody, request.body ?? {});
       await runtime.deleteModel(
-        requireContext(res),
-        parseInput(Uuid, req.params.id),
+        requestContext(response),
+        parseInput(Uuid, request.params.id),
       );
-      res.status(204).send();
-    } catch (error) {
-      handleRouteError(res, error);
-    }
+      response.status(204).send();
+    })().catch((error) => handleRouteError(response, error));
   });
 
   return router;

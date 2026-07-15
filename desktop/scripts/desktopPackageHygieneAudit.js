@@ -64,6 +64,18 @@ if (!exists(modulesArchive)) {
 }
 
 if (appArgument) {
+  const utilityRoot = path.join(
+    path.resolve(appArgument),
+    "Contents",
+    "Resources",
+    "aletheia",
+    "desktop",
+  );
+  for (const relative of ["credentialWorker.js", "macOsKeychain.js"]) {
+    if (!exists(path.join(utilityRoot, relative))) {
+      failures.push(`missing external desktop utility resource: ${relative}`);
+    }
+  }
   const sidecar = path.join(
     path.resolve(appArgument),
     "Contents",

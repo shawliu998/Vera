@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
@@ -27,8 +27,10 @@ import { ASSISTANT_RUNTIME_MIGRATION } from "../lib/workspace/migrations/v5Assis
 import { TABULAR_MIKE_SEMANTICS_V7_MIGRATION } from "../lib/workspace/migrations/v7TabularMikeSemantics";
 import { MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION } from "../lib/workspace/migrations/v8ModelCredentialOrigin";
 import { MODEL_CONNECTION_READINESS_V9_MIGRATION } from "../lib/workspace/migrations/v9ModelConnectionReadiness";
+import { ASSISTANT_DURABLE_EVENTS_V10_MIGRATION } from "../lib/workspace/migrations/v10AssistantDurableEvents";
 import { AssistantRetrievalRepository } from "../lib/workspace/repositories/assistantRetrieval";
 import { ChatsRepository } from "../lib/workspace/repositories/chats";
+import { ModelConnectionTestsRepository } from "../lib/workspace/repositories/modelConnectionTests";
 import { ModelProfilesRepository } from "../lib/workspace/repositories/modelProfiles";
 import { ProjectsRepository } from "../lib/workspace/repositories/projects";
 import {
@@ -45,7 +47,6 @@ import { WorkspaceJobsService } from "../lib/workspace/services/jobs";
 import { WORKSPACE_LOCAL_PRINCIPAL_ID } from "../lib/workspace/principal";
 import {
   createWorkspaceChatsV1Router,
-  type WorkspaceChatsV1Options,
   type WorkspaceChatsV1Port,
 } from "../routes/workspaceChatsV1";
 
@@ -58,6 +59,7 @@ const CHECKSUM_PARITY_MIGRATIONS = [
   TABULAR_MIKE_SEMANTICS_V7_MIGRATION,
   MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION,
   MODEL_CONNECTION_READINESS_V9_MIGRATION,
+  ASSISTANT_DURABLE_EVENTS_V10_MIGRATION,
 ] as const;
 const CHECKSUM_PARITY_MODULES = [
   ["v1InitialWorkspace", "INITIAL_WORKSPACE_MIGRATION"],
@@ -69,6 +71,7 @@ const CHECKSUM_PARITY_MODULES = [
   ["v7TabularMikeSemantics", "TABULAR_MIKE_SEMANTICS_V7_MIGRATION"],
   ["v8ModelCredentialOrigin", "MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION"],
   ["v9ModelConnectionReadiness", "MODEL_CONNECTION_READINESS_V9_MIGRATION"],
+  ["v10AssistantDurableEvents", "ASSISTANT_DURABLE_EVENTS_V10_MIGRATION"],
 ] as const;
 const BACKEND_ROOT = path.resolve(__dirname, "../..");
 const root = mkdtempSync(path.join(os.tmpdir(), "vera-assistant-audit-"));
@@ -100,7 +103,7 @@ function sha(value: string) {
 function assertMigrationChecksumRuntimeParity() {
   assert.deepEqual(
     CHECKSUM_PARITY_MIGRATIONS.map((migration) => migration.version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
   );
   const compiledRoot = path.join(root, "checksum-parity-commonjs");
   const tscPath = path.join(
@@ -218,6 +221,38 @@ function insertProject(database: WorkspaceDatabase, name: string) {
 
 function insertProfile(database: WorkspaceDatabase, name: string) {
   const id = randomUUID();
+  const readinessInstalled = Boolean(
+    database
+      .prepare(
+        "SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name='model_profile_connection_tests'",
+      )
+      .get(),
+  );
+  if (readinessInstalled) {
+    const profiles = new ModelProfilesRepository(database);
+    profiles.create({
+      id,
+      name,
+      provider: "openai_compatible",
+      model: `${name}-model`,
+      baseUrl: "https://model-audit.example/v1",
+      credentialOrigin: "https://model-audit.example",
+      credentialState: "missing",
+      contextWindowTokens: 128_000,
+      maxOutputTokens: 4_096,
+      enabled: false,
+      isDefault: false,
+      capabilities: {
+        streaming: true,
+        toolCalling: false,
+        structuredOutput: true,
+        vision: false,
+      },
+      now: NOW,
+    });
+    markProfileReady(database, id);
+    return id;
+  }
   database
     .prepare(
       `INSERT INTO model_profiles
@@ -239,6 +274,22 @@ function insertProfile(database: WorkspaceDatabase, name: string) {
       NOW,
     );
   return id;
+}
+
+function markProfileReady(database: WorkspaceDatabase, id: string) {
+  const profiles = new ModelProfilesRepository(database);
+  const stored = profiles.requireStored(id);
+  const result = new ModelConnectionTestsRepository(database).storeIfCurrent({
+    profileId: id,
+    expectedConnectionRevision: stored.connectionRevision,
+    status: "passed",
+    errorCode: null,
+    retryable: false,
+    latencyMs: 1,
+    testedAt: NOW,
+  });
+  assert.equal(result.stored, true);
+  profiles.update(id, { enabled: true, now: NOW });
 }
 
 function insertDocument(
@@ -363,7 +414,9 @@ async function withHttpServer(
 }
 
 async function run() {
-  process.env.ALETHEIA_DATABASE_ENCRYPTION = "metadata_plaintext";
+  process.env.ALETHEIA_DATABASE_ENCRYPTION = "sqlcipher_required";
+  process.env.ALETHEIA_DATABASE_KEY_SOURCE = "env";
+  process.env.ALETHEIA_DATABASE_KEY_BASE64 = randomBytes(32).toString("base64");
   assertMigrationChecksumRuntimeParity();
   const v5ChecksumMaterial = ASSISTANT_RUNTIME_MIGRATION.checksumMaterial;
   assert.doesNotMatch(
@@ -964,6 +1017,10 @@ async function run() {
       "standalone-contract",
       "The standalone governing law is England.",
     );
+
+    const currentMigration = database.runMigrations(WORKSPACE_MIGRATIONS);
+    assert.equal(currentMigration.currentVersion, 10);
+    markProfileReady(database, profileId);
 
     const projects = new ProjectsRepository(database);
     const profiles = new ModelProfilesRepository(database);
@@ -2628,10 +2685,10 @@ async function run() {
       /WorkspaceDatabase|BEGIN IMMEDIATE|new ChatsRepository/,
     );
     assert.match(routeSource, /WorkspaceChatsV1Port/);
-    assert.doesNotMatch(
+    assert.match(
       routeSource,
       /requestGeneration|AssistantGenerationEventStreamPort|parseMikeChatGeneration|text\/event-stream|sendGeneration/,
-      "the mountable Chats router exposes no generation or stream port",
+      "the Chats router composes the durable generation and replay surface",
     );
     let observedGlobalLimit: number | undefined;
     const routePort: WorkspaceChatsV1Port = {
@@ -2678,24 +2735,21 @@ async function run() {
       );
     });
 
-    const forgedGenerationOptions = {
-      generation: true,
-      capabilities: {
-        generation: true,
-        durableEventReplay: true,
-        terminalEvents: true,
-        finalCitations: true,
-      },
-    } as unknown as WorkspaceChatsV1Options;
+    assert.throws(
+      () =>
+        createWorkspaceChatsV1Router(routePort, {
+          capabilities: { generation: true },
+        }),
+      /complete durable generation port/,
+      "generation cannot be mounted with an incomplete composition port",
+    );
     const authenticatedApp = express();
     authenticatedApp.use(express.json());
     authenticatedApp.use((_request, response, next) => {
       response.locals.userId = WORKSPACE_LOCAL_PRINCIPAL_ID;
       next();
     });
-    authenticatedApp.use(
-      createWorkspaceChatsV1Router(routePort, forgedGenerationOptions),
-    );
+    authenticatedApp.use(createWorkspaceChatsV1Router(routePort));
     await withHttpServer(authenticatedApp, async (baseUrl) => {
       const listResponse = await fetch(`${baseUrl}/chat?limit=101`);
       assert.equal(listResponse.status, 200);
@@ -2785,10 +2839,10 @@ async function run() {
   }
 
   const reopened = new WorkspaceDatabase(databasePath, {
-    migrations: MIGRATIONS,
+    migrations: WORKSPACE_MIGRATIONS,
   });
   try {
-    assert.equal(reopened.migration?.currentVersion, 5);
+    assert.equal(reopened.migration?.currentVersion, 10);
     assert.equal(
       reopened
         .prepare("SELECT value FROM assistant_legacy_sentinel WHERE id=1")

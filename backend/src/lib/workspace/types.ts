@@ -232,19 +232,31 @@ export interface ModelProfile {
 }
 
 export interface PromptWorkflowStep {
+  /** Optional only for legacy persisted rows; all client-authored steps have one. */
+  id?: WorkspaceId;
   kind: "prompt";
   title: string;
   prompt: string;
+  /** When present it must match the run-level immutable model profile. */
+  modelProfileId?: WorkspaceId;
 }
 
 export interface DocumentContextWorkflowStep {
+  /** Optional only for legacy persisted rows; all client-authored steps have one. */
+  id?: WorkspaceId;
   kind: "document_context";
   title: string;
   maxDocuments: number;
   maxChunksPerDocument: number;
+  /** Client definition query; absent on legacy inferred-context steps. */
+  queryTemplate?: string;
+  /** Total evidence-result cap for client-authored retrieval steps. */
+  resultLimit?: number;
 }
 
 export interface TabularColumnWorkflowStep {
+  /** Optional only for legacy persisted rows. */
+  id?: WorkspaceId;
   kind: "tabular_column";
   title: string;
   outputType: TabularOutputType;
@@ -252,11 +264,20 @@ export interface TabularColumnWorkflowStep {
   enumValues?: string[];
 }
 
+export interface OutputWorkflowStep {
+  /** Optional only for legacy persisted rows; all client-authored steps have one. */
+  id?: WorkspaceId;
+  kind: "output";
+  title: string;
+  format: "text" | "json";
+}
+
 /** No arbitrary code, shell, network, or dynamic-tool step is permitted. */
 export type WorkflowStep =
   | PromptWorkflowStep
   | DocumentContextWorkflowStep
-  | TabularColumnWorkflowStep;
+  | TabularColumnWorkflowStep
+  | OutputWorkflowStep;
 
 export interface WorkflowColumn {
   id: WorkspaceId;

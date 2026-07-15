@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
+import type { WorkspaceChatsV1Port } from "../../routes/workspaceChatsV1";
+import type { WorkspaceTabularV1RuntimePort } from "../../routes/workspaceTabularV1";
 import type {
   WorkspaceV1Context,
   WorkspaceV1DocumentCapability,
@@ -30,16 +32,22 @@ import {
 import { WORKSPACE_LOCAL_PRINCIPAL_ID } from "./principal";
 import { WorkspaceBlobCleanupRepository } from "./repositories/blobCleanup";
 import { WorkspaceBlobRecordsRepository } from "./repositories/blobRecords";
+import { AssistantRetrievalRepository } from "./repositories/assistantRetrieval";
+import { ChatsRepository } from "./repositories/chats";
 import {
   type DocumentParseJob,
   WorkspaceDocumentsRepository,
 } from "./repositories/documents";
 import { WorkspaceJobsRepository } from "./repositories/jobs";
+import { ModelConnectionTestsRepository } from "./repositories/modelConnectionTests";
+import { ModelProfilesRepository } from "./repositories/modelProfiles";
 import {
   type ProjectOverview,
   type ProjectSummary,
   ProjectsRepository,
 } from "./repositories/projects";
+import { SettingsRepository } from "./repositories/settings";
+import { TabularRepository } from "./repositories/tabular";
 import {
   WorkspaceBlobReconciliation,
   WorkspaceBlobStartupRecovery,
@@ -58,14 +66,46 @@ import {
 } from "./services/jobs";
 import { WorkspaceJobEnqueuerAdapter } from "./services/jobEnqueuer";
 import { ProjectsService } from "./services/projects";
+import type { CredentialStorePort } from "./services/credentialStore";
+import { ModelProfilesService } from "./services/modelProfiles";
+import { SettingsService } from "./services/settings";
+import { AuthoritativeExtractedTextReader } from "./services/authoritativeExtractedText";
+import { WorkspaceTabularModelAdapter } from "./services/tabularModelAdapter";
+import { TabularService } from "./services/tabular";
+import { createTabularCellJobHandler } from "./services/tabularRuntime";
+import { WorkspaceTabularV1RuntimeAdapter } from "./services/tabularV1RuntimeAdapter";
 import { WorkflowsService } from "./services/workflows";
 import type { ProjectLifecycleCleanupRecord } from "./services/projects";
 import type { Document, ProjectFolder } from "./types";
 import { WorkflowsRepository } from "./repositories/workflows";
+import { WorkflowDocumentContextRepository } from "./repositories/workflowDocumentContext";
 import {
   MikeWorkflowCrudPortAdapter,
   seedPinnedMikeSystemWorkflows,
 } from "./workflowCompatibility";
+import {
+  WorkspaceModelProviderRegistry,
+  type WorkspaceModelProviderRegistryOptions,
+} from "./modelProviderRegistry";
+import { RotatingModelCallDiagnostics } from "./modelCallDiagnostics";
+import { WorkspaceModelSettingsRuntime } from "./modelSettingsRuntime";
+import {
+  AssistantRuntimeService,
+  type AssistantModelPort,
+  type AssistantToolPort,
+} from "./services/assistantRuntime";
+import { WorkspaceAssistantModelAdapter } from "./services/assistantModelAdapter";
+import {
+  WorkspaceAssistantCapabilityHydrator,
+  WorkspaceAssistantDocumentTools,
+} from "./services/assistantDocumentTools";
+import { WorkspaceChatsRuntimePort } from "./services/assistantChatsPort";
+import { ChatsService } from "./services/chats";
+import {
+  WorkspaceWorkflowRuntime,
+  type WorkflowStepExecutor,
+} from "./services/workflowRuntime";
+import { WorkspaceWorkflowStepExecutor } from "./services/workflowExecutor";
 
 type CleanupRecorder = ConstructorParameters<
   typeof WorkspaceDocumentsService
@@ -107,7 +147,11 @@ type FolderRequest = { name?: unknown; parent_folder_id?: unknown };
 export type WorkspaceRuntimeHealth = {
   started: boolean;
   draining: boolean;
-  worker: { documentParse: boolean };
+  worker: {
+    documentParse: boolean;
+    assistantGenerate: boolean;
+    tabularCell: boolean;
+  };
 };
 
 export type WorkspaceRuntimeDependencies = {
@@ -126,6 +170,14 @@ export type WorkspaceRuntimeDependencies = {
   workflows?: WorkflowsService;
   workflowCrud?: MikeWorkflowCrudPortAdapter;
   seedWorkflows?: (workflows: WorkflowsService) => readonly unknown[];
+  credentialStore?: CredentialStorePort;
+  modelProviderRegistry?: WorkspaceModelProviderRegistry;
+  modelSettings?: WorkspaceModelSettingsRuntime;
+  modelProviderOptions?: WorkspaceModelProviderRegistryOptions;
+  allowLocalDevelopmentModelBaseUrl?: boolean;
+  assistantModel?: AssistantModelPort;
+  assistantTools?: AssistantToolPort;
+  workflowExecutor?: WorkflowStepExecutor;
   /** Read-only authority for derived blob metadata.  This is injectable solely
    * for runtime integration tests; production shares the repository instance. */
   blobRecords?: WorkspaceBlobRecordsRepository;
@@ -189,6 +241,9 @@ export class WorkspaceRuntime implements WorkspaceV1RuntimePort {
   readonly documents: WorkspaceDocumentCatalogService;
   readonly workflows: WorkflowsService;
   readonly workflowCrud: MikeWorkflowCrudPortAdapter;
+  readonly modelSettings: WorkspaceModelSettingsRuntime;
+  readonly chats: WorkspaceChatsV1Port;
+  readonly tabular: WorkspaceTabularV1RuntimePort;
   private readonly documentService: WorkspaceDocumentsService;
   private readonly documentRepository: WorkspaceDocumentsRepository;
   private readonly blobRecords: WorkspaceBlobRecordsRepository;
@@ -198,6 +253,10 @@ export class WorkspaceRuntime implements WorkspaceV1RuntimePort {
     "recover"
   >;
   private readonly seedWorkflows: () => void;
+  private readonly tabularService: TabularService;
+  private readonly assistantGenerationEnabled: boolean;
+  private readonly workflowExecutionEnabled: boolean;
+  private readonly tabularGenerationEnabled: boolean;
   private started = false;
   private draining = false;
   private closed = false;
@@ -246,9 +305,6 @@ export class WorkspaceRuntime implements WorkspaceV1RuntimePort {
         new WorkflowsRepository(this.database),
         new WorkspaceJobEnqueuerAdapter(this.jobs),
       );
-    this.workflowCrud =
-      dependencies.workflowCrud ??
-      new MikeWorkflowCrudPortAdapter(this.workflows);
     const cleanupRecorder: CleanupRecorder = {
       record: (input) => cleanupLedger.record(input),
     };
@@ -288,6 +344,42 @@ export class WorkspaceRuntime implements WorkspaceV1RuntimePort {
         resources: lifecycle,
         cleanupRecorder: projectCleanupRecorder,
       });
+    const modelProfilesRepository = new ModelProfilesRepository(this.database);
+    const providerRegistry =
+      dependencies.modelProviderRegistry ??
+      (dependencies.credentialStore
+        ? new WorkspaceModelProviderRegistry(dependencies.credentialStore, {
+            ...dependencies.modelProviderOptions,
+            allowLocalDevelopmentBaseUrl:
+              dependencies.allowLocalDevelopmentModelBaseUrl ?? false,
+          })
+        : null);
+    const modelProfiles = new ModelProfilesService(modelProfilesRepository, {
+      allowLocalDevelopmentBaseUrl:
+        dependencies.allowLocalDevelopmentModelBaseUrl ?? false,
+      runtimeWired: providerRegistry?.runtimeWired() === true,
+      resources: lifecycle,
+      credentialStore: dependencies.credentialStore,
+      adapterRegistry: providerRegistry ?? undefined,
+    });
+    const settings = new SettingsService(
+      new SettingsRepository(this.database),
+      projectsRepository,
+      modelProfilesRepository,
+      undefined,
+      { runtimeWired: providerRegistry?.runtimeWired() === true },
+    );
+    this.modelSettings =
+      dependencies.modelSettings ??
+      new WorkspaceModelSettingsRuntime({
+        profiles: modelProfiles,
+        profileRepository: modelProfilesRepository,
+        connectionTests: new ModelConnectionTestsRepository(this.database),
+        settings,
+        providerRegistry,
+        allowLocalDevelopmentBaseUrl:
+          dependencies.allowLocalDevelopmentModelBaseUrl ?? false,
+      });
     this.documentService =
       dependencies.documentService ??
       new WorkspaceDocumentsService(
@@ -305,6 +397,129 @@ export class WorkspaceRuntime implements WorkspaceV1RuntimePort {
         this.blobs,
         this.capabilities,
       );
+    const chatsRepository = new ChatsRepository(this.database);
+    const assistantModel =
+      dependencies.assistantModel ??
+      (providerRegistry
+        ? new WorkspaceAssistantModelAdapter(
+            modelProfilesRepository,
+            providerRegistry,
+            {
+              allowLocalDevelopmentBaseUrl:
+                dependencies.allowLocalDevelopmentModelBaseUrl ?? false,
+            },
+          )
+        : null);
+    const assistantTools =
+      dependencies.assistantTools ??
+      new WorkspaceAssistantDocumentTools(
+        this.database,
+        chatsRepository,
+        new AssistantRetrievalRepository(this.database),
+      );
+    const assistantRuntime = assistantModel
+      ? new AssistantRuntimeService(
+          chatsRepository,
+          jobsRepository,
+          assistantModel,
+          { tools: assistantTools },
+        )
+      : null;
+    this.assistantGenerationEnabled = assistantRuntime !== null;
+    const workflowExecutor =
+      dependencies.workflowExecutor ??
+      (assistantModel
+        ? new WorkspaceWorkflowStepExecutor(
+            assistantModel,
+            new WorkflowDocumentContextRepository(this.database),
+          )
+        : null);
+    const workflowRuntime = workflowExecutor
+      ? new WorkspaceWorkflowRuntime(
+          this.workflows,
+          this.jobs.repository,
+          workflowExecutor,
+        )
+      : null;
+    this.workflowExecutionEnabled = workflowRuntime !== null;
+    this.workflowCrud =
+      dependencies.workflowCrud ??
+      new MikeWorkflowCrudPortAdapter(this.workflows, {
+        executionAvailable: () => this.workflowExecutionEnabled,
+      });
+    const chatLifecycle = {
+      cancelQueued: (ids: readonly string[]) => {
+        for (const id of ids) {
+          this.jobs.requestCancellation(id, "Chat deletion requested.");
+        }
+      },
+      requestAbortRunning: (ids: readonly string[]) => {
+        for (const id of ids) {
+          this.jobs.requestCancellation(id, "Chat deletion requested.");
+        }
+      },
+    };
+    this.chats = new WorkspaceChatsRuntimePort(
+      new ChatsService(
+        chatsRepository,
+        projectsRepository,
+        modelProfilesRepository,
+        undefined,
+        {
+          jobs: this.jobs,
+          generationControl: this.jobs,
+          capabilities: new WorkspaceAssistantCapabilityHydrator(
+            this.database,
+            this.documentRepository,
+          ),
+          lifecycle: chatLifecycle,
+        },
+      ),
+    );
+    const tabularRepository = new TabularRepository(this.database);
+    const tabularSnapshots = new AuthoritativeExtractedTextReader(
+      this.database,
+      this.blobs,
+    );
+    const tabularModel =
+      providerRegistry?.runtimeWired() === true
+        ? new WorkspaceTabularModelAdapter(
+            modelProfilesRepository,
+            providerRegistry,
+            tabularSnapshots,
+            {
+              allowLocalDevelopmentBaseUrl:
+                dependencies.allowLocalDevelopmentModelBaseUrl ?? false,
+            },
+          )
+        : null;
+    this.tabularGenerationEnabled = tabularModel !== null;
+    this.tabularService = new TabularService(
+      tabularRepository,
+      new WorkspaceJobEnqueuerAdapter(this.jobs),
+      undefined,
+      undefined,
+      tabularModel
+        ? {
+            snapshots: tabularSnapshots,
+            profiles: modelProfilesRepository,
+          }
+        : undefined,
+    );
+    this.tabular = new WorkspaceTabularV1RuntimeAdapter(
+      this.database,
+      tabularRepository,
+      this.tabularService,
+    );
+    const tabularCellHandler = tabularModel
+      ? createTabularCellJobHandler({
+          database: this.database,
+          tabular: tabularRepository,
+          jobs: this.jobs.repository,
+          model: tabularModel,
+          snapshots: tabularSnapshots,
+        })
+      : null;
     const parser = new WorkspaceDocumentParser(
       this.documentRepository,
       this.blobs,
@@ -317,7 +532,40 @@ export class WorkspaceRuntime implements WorkspaceV1RuntimePort {
       new WorkspaceJobPump({
         jobs: this.jobs,
         abortRegistry: this.abortRegistry,
-        handlers: { document_parse: (context) => parser.handleJob(context) },
+        concurrency:
+          assistantRuntime || workflowRuntime || tabularCellHandler ? 2 : 1,
+        handlers: {
+          document_parse: (context) => parser.handleJob(context),
+          ...(assistantRuntime
+            ? {
+                assistant_generate: (context) => {
+                  if (!context.claim) {
+                    throw new WorkspaceApiError(
+                      500,
+                      "INTERNAL_ERROR",
+                      "Assistant generation requires a fenced job claim.",
+                    );
+                  }
+                  return assistantRuntime.execute({
+                    jobId: context.job.id,
+                    leaseOwner: context.claim.leaseOwner,
+                    attempt: context.claim.attempt,
+                    signal: context.signal,
+                  });
+                },
+              }
+            : {}),
+          ...(workflowRuntime
+            ? {
+                workflow_run: (context) => workflowRuntime.handle(context),
+              }
+            : {}),
+          ...(tabularCellHandler
+            ? {
+                tabular_cell: tabularCellHandler,
+              }
+            : {}),
+        },
       });
     const cleanupReplay =
       dependencies.cleanupReplay ??
@@ -353,9 +601,12 @@ export class WorkspaceRuntime implements WorkspaceV1RuntimePort {
     if (this.closed) throw new Error("Workspace runtime is closed.");
     try {
       this.startMigrations();
+      await this.modelSettings.reconcileCredentialOrphans();
       this.seedWorkflows();
       this.startupRecovery.recover();
       await this.pump.start();
+      this.tabularService.reconcileGenerationJobs();
+      this.workflows.reconcileTerminalJobs();
       this.started = true;
     } catch (error) {
       try {
@@ -397,8 +648,26 @@ export class WorkspaceRuntime implements WorkspaceV1RuntimePort {
     return {
       started: this.started,
       draining: this.draining,
-      worker: { documentParse: pump.started && !pump.stopping },
+      worker: {
+        documentParse: pump.started && !pump.stopping,
+        assistantGenerate:
+          this.assistantGenerationEnabled && pump.started && !pump.stopping,
+        tabularCell:
+          this.tabularGenerationEnabled && pump.started && !pump.stopping,
+      },
     };
+  }
+
+  assistantGenerationAvailable() {
+    return this.assistantGenerationEnabled;
+  }
+
+  workflowExecutionAvailable() {
+    return this.workflowExecutionEnabled;
+  }
+
+  tabularGenerationAvailable() {
+    return this.tabularGenerationEnabled;
   }
 
   async listProjects(context: WorkspaceV1Context, page: WorkspaceV1Page) {
@@ -981,5 +1250,21 @@ export class WorkspaceRuntime implements WorkspaceV1RuntimePort {
 export function createWorkspaceRuntime(
   dependencies: WorkspaceRuntimeDependencies = {},
 ) {
-  return new WorkspaceRuntime(dependencies);
+  const allowLocalDevelopmentModelBaseUrl =
+    dependencies.allowLocalDevelopmentModelBaseUrl ??
+    process.env.ALETHEIA_MODEL_PROVIDER_ALLOW_LOOPBACK_HTTP === "true";
+  const modelProviderOptions = { ...(dependencies.modelProviderOptions ?? {}) };
+  const modelCallLogDirectory = process.env.ALETHEIA_MODEL_CALL_LOG_DIR;
+  if (!modelProviderOptions.modelCallDiagnostics && modelCallLogDirectory) {
+    if (!path.isAbsolute(modelCallLogDirectory)) {
+      throw new Error("The model call log directory must be absolute.");
+    }
+    modelProviderOptions.modelCallDiagnostics =
+      new RotatingModelCallDiagnostics(modelCallLogDirectory);
+  }
+  return new WorkspaceRuntime({
+    ...dependencies,
+    allowLocalDevelopmentModelBaseUrl,
+    modelProviderOptions,
+  });
 }

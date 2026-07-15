@@ -21,7 +21,7 @@ async function main() {
   const frontendPort = Number(
     process.env.ALETHEIA_DESKTOP_FRONTEND_PORT ?? 43760,
   );
-  const frontendUrl = `http://127.0.0.1:${frontendPort}/projects`;
+  const frontendUrl = `http://127.0.0.1:${frontendPort}/assistant`;
   const root = fs.mkdtempSync(
     path.join(os.tmpdir(), "aletheia-notification-audit-"),
   );
@@ -31,9 +31,9 @@ async function main() {
   try {
     app = await electron.launch({
       executablePath,
-      args: [`--user-data-dir=${userDataDir}`],
       env: {
         ...process.env,
+        VERA_DESKTOP_PROFILE_DIR: userDataDir,
         ALETHEIA_DEMO_SEED_ENABLED: "false",
         ALETHEIA_REQUIRE_ENCRYPTED_VOLUME: "false",
         ALETHEIA_APPLICATION_ENCRYPTION: "required",

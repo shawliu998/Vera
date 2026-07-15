@@ -4,11 +4,21 @@ import { z } from "zod";
 import { MIKE_LOCAL_USER_ID } from "./mikeCompatibility";
 import { WorkspaceApiError } from "./errors";
 import { SYSTEM_WORKFLOWS } from "./mikeSystemWorkflows.e32daad";
-import type { Workflow, WorkflowColumn, WorkspaceJson } from "./types";
+import type {
+  Workflow,
+  WorkflowColumn,
+  WorkflowStep,
+  WorkspaceJson,
+} from "./types";
 import type {
   MikeBuiltinWorkflowSeed,
   WorkflowsService,
 } from "./services/workflows";
+import type { PageRequest } from "./pagination";
+import type {
+  PreparedWorkflowRun,
+  WorkflowRunDetail,
+} from "./repositories/workflows";
 
 const MikeWorkflowTypeSchema = z.enum(["assistant", "tabular"]);
 const MikeColumnFormatSchema = z.enum([
@@ -142,6 +152,116 @@ export type MikeCreateWorkflowRequest = z.infer<
 >;
 export type MikeUpdateWorkflowRequest = z.infer<
   typeof MikeUpdateWorkflowRequestSchema
+>;
+
+const VeraWorkflowDefinitionPromptStepSchema = z
+  .object({
+    id: z.string().uuid(),
+    type: z.literal("prompt"),
+    name: z.string().trim().min(1).max(160),
+    prompt: z.string().trim().min(1).max(20_000),
+    model_profile_id: z.string().uuid().optional(),
+    // Reserved for a future real binding implementation. An empty mapping is
+    // accepted so clients can emit their default form shape; any key fails.
+    input_mapping: z.object({}).strict().optional(),
+  })
+  .strict();
+
+const VeraWorkflowDefinitionRetrievalStepSchema = z
+  .object({
+    id: z.string().uuid(),
+    type: z.literal("document_retrieval"),
+    name: z.string().trim().min(1).max(160),
+    query_template: z.string().trim().min(1).max(2_000),
+    limit: z.number().int().min(1).max(100),
+  })
+  .strict();
+
+const VeraWorkflowDefinitionOutputStepSchema = z
+  .object({
+    id: z.string().uuid(),
+    type: z.literal("output"),
+    name: z.string().trim().min(1).max(160),
+    format: z.enum(["text", "json"]),
+  })
+  .strict();
+
+export const VeraWorkflowDefinitionStepSchema = z.discriminatedUnion("type", [
+  VeraWorkflowDefinitionPromptStepSchema,
+  VeraWorkflowDefinitionRetrievalStepSchema,
+  VeraWorkflowDefinitionOutputStepSchema,
+]);
+
+const VeraWorkflowDefinitionFieldsObjectSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    description: z.string().trim().min(1).max(2_000).nullable(),
+    project_id: z.string().uuid().nullable(),
+    steps: z.array(VeraWorkflowDefinitionStepSchema).max(100),
+  })
+  .strict();
+
+function refineVeraWorkflowDefinition(
+  value: z.infer<typeof VeraWorkflowDefinitionFieldsObjectSchema>,
+  context: z.RefinementCtx,
+) {
+  const ids = new Set<string>();
+  for (const [index, step] of value.steps.entries()) {
+    if (ids.has(step.id)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["steps", index, "id"],
+        message: "Workflow step identifiers must be unique.",
+      });
+    }
+    ids.add(step.id);
+  }
+  const outputIndexes = value.steps
+    .map((step, index) => (step.type === "output" ? index : -1))
+    .filter((index) => index >= 0);
+  if (outputIndexes.length > 1) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["steps"],
+      message: "A workflow can contain at most one output step.",
+    });
+  }
+  const outputIndex = outputIndexes[0];
+  if (outputIndex !== undefined && outputIndex !== value.steps.length - 1) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["steps", outputIndex],
+      message: "The output step must be the final workflow step.",
+    });
+  }
+  if (
+    outputIndex !== undefined &&
+    !value.steps.slice(0, outputIndex).some((step) => step.type === "prompt")
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["steps", outputIndex],
+      message: "The output step requires an earlier prompt step.",
+    });
+  }
+}
+
+export const VeraWorkflowDefinitionUpdateRequestSchema =
+  VeraWorkflowDefinitionFieldsObjectSchema.superRefine(
+    refineVeraWorkflowDefinition,
+  );
+
+export const VeraWorkflowDefinitionWireSchema =
+  VeraWorkflowDefinitionFieldsObjectSchema.extend({
+    id: z.string().uuid(),
+    type: z.literal("assistant"),
+    updated_at: z.string().datetime(),
+  })
+    .strict()
+    .superRefine(refineVeraWorkflowDefinition);
+
+export type VeraWorkflowDefinitionWire = z.infer<
+  typeof VeraWorkflowDefinitionWireSchema
 >;
 
 function outputTypeToFormat(column: WorkflowColumn): MikeColumnFormat {
@@ -340,6 +460,116 @@ function assertNoSecretOrPath(value: unknown): void {
     }
   };
   visit(value);
+}
+
+function definitionStepToCanonical(
+  step: z.infer<typeof VeraWorkflowDefinitionStepSchema>,
+): WorkflowStep {
+  if (step.type === "prompt") {
+    return {
+      id: step.id,
+      kind: "prompt",
+      title: step.name,
+      prompt: step.prompt,
+      ...(step.model_profile_id === undefined
+        ? {}
+        : { modelProfileId: step.model_profile_id }),
+    };
+  }
+  if (step.type === "document_retrieval") {
+    return {
+      id: step.id,
+      kind: "document_context",
+      title: step.name,
+      queryTemplate: step.query_template,
+      resultLimit: step.limit,
+      maxDocuments: Math.min(step.limit, 20),
+      maxChunksPerDocument: Math.min(step.limit, 20),
+    };
+  }
+  return {
+    id: step.id,
+    kind: "output",
+    title: step.name,
+    format: step.format,
+  };
+}
+
+function definitionStepWire(step: WorkflowStep) {
+  if (!step.id) {
+    throw new WorkspaceApiError(
+      500,
+      "INTERNAL_ERROR",
+      "Client workflow definition step identifier is unavailable.",
+    );
+  }
+  if (step.kind === "prompt") {
+    return VeraWorkflowDefinitionStepSchema.parse({
+      id: step.id,
+      type: "prompt",
+      name: step.title,
+      prompt: step.prompt,
+      ...(step.modelProfileId === undefined
+        ? {}
+        : { model_profile_id: step.modelProfileId }),
+    });
+  }
+  if (step.kind === "document_context") {
+    return VeraWorkflowDefinitionStepSchema.parse({
+      id: step.id,
+      type: "document_retrieval",
+      name: step.title,
+      query_template: step.queryTemplate ?? step.title,
+      limit:
+        step.resultLimit ??
+        Math.min(step.maxDocuments * step.maxChunksPerDocument, 100),
+    });
+  }
+  if (step.kind === "output") {
+    return VeraWorkflowDefinitionStepSchema.parse({
+      id: step.id,
+      type: "output",
+      name: step.title,
+      format: step.format,
+    });
+  }
+  throw new WorkspaceApiError(
+    409,
+    "CONFLICT",
+    "Tabular column steps are not valid in an Assistant definition.",
+  );
+}
+
+export function parseVeraWorkflowDefinitionUpdate(value: unknown) {
+  assertNoSecretOrPath(value);
+  const input = VeraWorkflowDefinitionUpdateRequestSchema.parse(value);
+  return {
+    projectId: input.project_id,
+    title: input.name,
+    description: input.description,
+    steps: input.steps.map(definitionStepToCanonical),
+  };
+}
+
+export function serializeVeraWorkflowDefinition(
+  workflow: Workflow,
+): VeraWorkflowDefinitionWire {
+  if (workflow.type !== "assistant" || workflow.isBuiltin) {
+    throw new WorkspaceApiError(
+      403,
+      "FORBIDDEN",
+      "Only local Assistant workflows expose editable definitions.",
+    );
+  }
+  return VeraWorkflowDefinitionWireSchema.parse({
+    id: workflow.id,
+    type: "assistant",
+    name: workflow.title,
+    description: workflow.description,
+    project_id: workflow.projectId,
+    steps: workflow.steps.map(definitionStepWire),
+    updated_at: workflow.updatedAt,
+  });
 }
 
 export function parseMikeWorkflowCreate(value: unknown) {
@@ -566,7 +796,26 @@ const MAX_MIKE_WORKFLOW_LIST_PAGES = 100;
  * Workflow[] response.
  */
 export class MikeWorkflowCrudPortAdapter {
-  constructor(private readonly workflows: WorkflowsService) {}
+  constructor(
+    private readonly workflows: WorkflowsService,
+    private readonly options: {
+      executionAvailable?: () => boolean;
+    } = {},
+  ) {}
+
+  executionAvailable(_context: { principalId: string }) {
+    return this.options.executionAvailable?.() === true;
+  }
+
+  private requireExecutionAvailable() {
+    if (!this.options.executionAvailable?.()) {
+      throw new WorkspaceApiError(
+        503,
+        "PRECONDITION_FAILED",
+        "Workflow execution runtime is unavailable.",
+      );
+    }
+  }
 
   private serialize(workflow: Workflow): MikeWorkflowWire {
     const mapping = this.workflows.getMikeBuiltinMapping(workflow.id);
@@ -635,6 +884,30 @@ export class MikeWorkflowCrudPortAdapter {
     );
   }
 
+  async getDefinition(
+    _context: { principalId: string },
+    workflowId: string,
+  ): Promise<VeraWorkflowDefinitionWire> {
+    return serializeVeraWorkflowDefinition(
+      this.workflows.getAssistantDefinition(
+        this.workflows.resolveMikeWorkflowId(workflowId),
+      ),
+    );
+  }
+
+  async updateDefinition(
+    _context: { principalId: string },
+    workflowId: string,
+    input: ReturnType<typeof parseVeraWorkflowDefinitionUpdate>,
+  ): Promise<VeraWorkflowDefinitionWire> {
+    return serializeVeraWorkflowDefinition(
+      this.workflows.updateAssistantDefinition(
+        this.workflows.resolveMikeWorkflowId(workflowId),
+        input,
+      ),
+    );
+  }
+
   async create(
     _context: { principalId: string },
     input: ReturnType<typeof parseMikeWorkflowCreate>,
@@ -680,5 +953,54 @@ export class MikeWorkflowCrudPortAdapter {
     workflowId: string,
   ): Promise<void> {
     this.workflows.unhideMikeWorkflow(workflowId);
+  }
+
+  async startRun(
+    _context: { principalId: string },
+    workflowId: string,
+    input: unknown,
+  ): Promise<PreparedWorkflowRun> {
+    this.requireExecutionAvailable();
+    return this.workflows.prepareRun(
+      this.workflows.resolveMikeWorkflowId(workflowId),
+      input,
+    );
+  }
+
+  async listRuns(
+    _context: { principalId: string },
+    workflowId: string,
+    page: PageRequest,
+  ) {
+    this.requireExecutionAvailable();
+    return this.workflows.listRuns(
+      this.workflows.resolveMikeWorkflowId(workflowId),
+      page,
+    );
+  }
+
+  async getRun(
+    _context: { principalId: string },
+    runId: string,
+  ): Promise<WorkflowRunDetail> {
+    this.requireExecutionAvailable();
+    return this.workflows.getRun(runId);
+  }
+
+  async cancelRun(
+    _context: { principalId: string },
+    runId: string,
+  ): Promise<WorkflowRunDetail> {
+    this.requireExecutionAvailable();
+    return this.workflows.cancelRun(runId);
+  }
+
+  async retryRun(
+    _context: { principalId: string },
+    runId: string,
+    idempotencyKey: string,
+  ): Promise<PreparedWorkflowRun> {
+    this.requireExecutionAvailable();
+    return this.workflows.retryPreparedRun(runId, idempotencyKey);
   }
 }

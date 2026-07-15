@@ -13,6 +13,9 @@ import { WorkspaceApiError } from "../errors";
 import { assertMikeSafePayload } from "../mikeCompatibility";
 import {
   ChatsRepository,
+  type AssistantGenerationEventPage,
+  type AssistantGenerationJobControlPort,
+  type AssistantGenerationStatus,
   type AssistantJobEnqueuerPort,
   type AssistantSourceLocator,
   type AssistantCitationMetadata,
@@ -33,6 +36,7 @@ export interface ChatResourceLifecyclePort {
 
 export type ChatsServiceOptions = Readonly<{
   jobs?: AssistantJobEnqueuerPort;
+  generationControl?: AssistantGenerationJobControlPort;
   capabilities?: AssistantCapabilityHydratorPort;
   lifecycle?: ChatResourceLifecyclePort;
   createId?: () => string;
@@ -326,5 +330,132 @@ export class ChatsService {
       outputMessageId: created.outputMessage.id,
       status: "queued" as const,
     };
+  }
+
+  generationStatus(jobId: string): AssistantGenerationStatus {
+    return this.chats.generationStatus(jobId);
+  }
+
+  listGenerationStatuses(chatId: string, limit?: number) {
+    return this.chats.listGenerationStatuses(chatId, limit);
+  }
+
+  generationEvents(
+    jobId: string,
+    input: { cursor?: number; limit?: number } = {},
+  ): AssistantGenerationEventPage {
+    return this.chats.listGenerationEvents(jobId, input);
+  }
+
+  cancelGeneration(jobId: string, reason?: string | null) {
+    const controls = this.options.generationControl;
+    if (!controls) {
+      throw new WorkspaceApiError(
+        503,
+        "PRECONDITION_FAILED",
+        "Assistant generation control is not configured.",
+      );
+    }
+    if (reason !== undefined && reason !== null) {
+      if (
+        typeof reason !== "string" ||
+        reason.trim().length < 1 ||
+        reason.length > 500
+      ) {
+        throw new WorkspaceApiError(
+          400,
+          "VALIDATION_ERROR",
+          "Assistant cancellation reason is invalid.",
+        );
+      }
+      try {
+        assertMikeSafePayload(reason);
+      } catch {
+        throw new WorkspaceApiError(
+          400,
+          "VALIDATION_ERROR",
+          "Assistant cancellation reason contains unsafe material.",
+        );
+      }
+    }
+    const status = this.chats.generationStatus(jobId);
+    if (status.status === "queued") {
+      return this.chats.cancelQueuedGeneration({
+        jobId,
+        reason,
+        now: this.now(),
+        jobs: controls,
+      });
+    }
+    if (status.status !== "running") {
+      throw new WorkspaceApiError(
+        409,
+        "CONFLICT",
+        "Assistant generation is not cancellable.",
+      );
+    }
+    try {
+      controls.requestCancellation(jobId, reason);
+    } catch {
+      throw new WorkspaceApiError(
+        409,
+        "CONFLICT",
+        "Assistant cancellation request was rejected.",
+      );
+    }
+    try {
+      this.options.lifecycle?.requestAbortRunning([jobId]);
+    } catch {
+      // The durable cancellation request remains authoritative. The job pump
+      // observes it through its lease heartbeat even if immediate wake-up fails.
+    }
+    return this.chats.generationStatus(jobId);
+  }
+
+  retryGeneration(jobId: string) {
+    const controls = this.options.generationControl;
+    if (!controls) {
+      throw new WorkspaceApiError(
+        503,
+        "PRECONDITION_FAILED",
+        "Assistant generation control is not configured.",
+      );
+    }
+    const status = this.chats.retryGeneration({
+      jobId,
+      now: this.now(),
+      jobs: controls,
+    });
+    return {
+      chatId: status.chatId,
+      jobId: status.jobId,
+      promptMessageId: status.promptMessageId,
+      outputMessageId: status.outputMessageId,
+      status: "queued" as const,
+    };
+  }
+
+  regenerateGeneration(jobId: string) {
+    const status = this.chats.generationStatus(jobId);
+    if (!status.terminal) {
+      throw new WorkspaceApiError(
+        409,
+        "CONFLICT",
+        "Assistant generation must be terminal before regeneration.",
+      );
+    }
+    const snapshot = this.chats.generationSnapshot(jobId);
+    return this.requestGeneration({
+      chatId: snapshot.chatId,
+      prompt: snapshot.prompt,
+      modelProfileId: snapshot.modelProfileId,
+      allowedDocumentIds: snapshot.documents.map(
+        (document) => document.documentId,
+      ),
+      attachmentDocumentIds: snapshot.documents
+        .filter((document) => document.attached)
+        .map((document) => document.documentId),
+      retrievalLimit: snapshot.retrievalLimit,
+    });
   }
 }

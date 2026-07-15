@@ -387,7 +387,7 @@ export class ModelGateway {
       if (request.contentType) headers.set("content-type", request.contentType);
       if (request.accept) headers.set("accept", request.accept);
       addAllowedHeaders(headers, request.headers);
-      secret = this.resolver.resolve(resolverInput);
+      secret = await Promise.resolve(this.resolver.resolve(resolverInput));
       for (const [key, value] of Object.entries(
         providerCredentialHeaders(profile, secret),
       )) {

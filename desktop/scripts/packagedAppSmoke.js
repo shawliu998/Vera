@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 
+const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -16,7 +17,7 @@ const FRONTEND_PORT = Number(
 const BACKEND_PORT = Number(
   process.env.ALETHEIA_DESKTOP_BACKEND_PORT ?? 43761,
 );
-const FRONTEND_URL = `http://${HOST}:${FRONTEND_PORT}/projects`;
+const FRONTEND_URL = `http://${HOST}:${FRONTEND_PORT}/assistant`;
 const BACKEND_URL = `http://${HOST}:${BACKEND_PORT}/health`;
 const STARTUP_TIMEOUT_MS = 180_000;
 const SHUTDOWN_TIMEOUT_MS = 20_000;
@@ -82,6 +83,71 @@ function requestStatus(url) {
       resolve({ status: 0, error: error.message });
     });
   });
+}
+
+function requireRegularFile(filePath, label, { privateAccess = false } = {}) {
+  const info = fs.statSync(filePath, { throwIfNoEntry: false });
+  if (!info?.isFile() || info.size <= 0) {
+    throw new Error(`${label} was not created inside the isolated profile.`);
+  }
+  if (privateAccess && (info.mode & 0o077) !== 0) {
+    throw new Error(`${label} must not grant group or world access.`);
+  }
+  return info.size;
+}
+
+function verifyIsolatedProfile(userDataDir) {
+  const databasePath = path.join(userDataDir, "aletheia-data", "aletheia.db");
+  const logPath = path.join(userDataDir, "logs", "vera", "vera.log");
+  const runtimeRoot = path.join(
+    userDataDir,
+    "runtime",
+    "frontend-node-modules",
+  );
+  const runtimeEntries = fs
+    .readdirSync(runtimeRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink());
+  if (runtimeEntries.length !== 1) {
+    throw new Error(
+      "The isolated profile must contain exactly one traced frontend dependency set.",
+    );
+  }
+  const runtimeDirectory = path.join(runtimeRoot, runtimeEntries[0].name);
+  const readyBytes = requireRegularFile(
+    path.join(runtimeDirectory, ".ready"),
+    "Frontend runtime readiness marker",
+  );
+  const nextPackageBytes = requireRegularFile(
+    path.join(runtimeDirectory, "node_modules", "next", "package.json"),
+    "Traced Next runtime",
+  );
+  return {
+    encryptedDatabaseBytes: requireRegularFile(
+      databasePath,
+      "Encrypted workspace database",
+      { privateAccess: true },
+    ),
+    desktopLogBytes: requireRegularFile(logPath, "Desktop log", {
+      privateAccess: true,
+    }),
+    frontendRuntimeReadyBytes: readyBytes,
+    nextRuntimePackageBytes: nextPackageBytes,
+  };
+}
+
+function readIsolatedLogTail(userDataDir) {
+  const logPath = path.join(userDataDir, "logs", "vera", "vera.log");
+  const info = fs.statSync(logPath, { throwIfNoEntry: false });
+  if (!info?.isFile() || info.size <= 0) return "";
+  const length = Math.min(info.size, MAX_LOG_BYTES);
+  const buffer = Buffer.alloc(length);
+  const descriptor = fs.openSync(logPath, "r");
+  try {
+    fs.readSync(descriptor, buffer, 0, length, info.size - length);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  return buffer.toString("utf8");
 }
 
 async function waitForServices(child, processState) {
@@ -154,6 +220,68 @@ async function terminateApp(child) {
   }
 }
 
+async function assertPackagedEncryptionDowngradeRejected({
+  name,
+  applicationEncryption,
+  databaseEncryption,
+  expectedFailure,
+}) {
+  const userDataDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), `vera-packaged-encryption-${name}-`),
+  );
+  fs.chmodSync(userDataDir, 0o700);
+  let child = null;
+  let output = "";
+  try {
+    child = spawn(executablePath, [], {
+      cwd: desktopDir,
+      detached: true,
+      env: {
+        ...process.env,
+        VERA_DESKTOP_PROFILE_DIR: userDataDir,
+        ALETHEIA_DEMO_SEED_ENABLED: "false",
+        ALETHEIA_REQUIRE_ENCRYPTED_VOLUME: "false",
+        ALETHEIA_APPLICATION_ENCRYPTION: applicationEncryption,
+        ALETHEIA_MASTER_KEY_SOURCE: "env",
+        ALETHEIA_MASTER_KEY_BASE64: crypto.randomBytes(32).toString("base64"),
+        ALETHEIA_DATABASE_ENCRYPTION: databaseEncryption,
+        ALETHEIA_DATABASE_KEY_SOURCE: "env",
+        ALETHEIA_DATABASE_KEY_BASE64: crypto.randomBytes(32).toString("base64"),
+        ALETHEIA_DESKTOP_FRONTEND_PORT: String(FRONTEND_PORT),
+        ALETHEIA_DESKTOP_BACKEND_PORT: String(BACKEND_PORT),
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const append = (chunk) => {
+      output = appendLog(output, chunk);
+    };
+    child.stdout?.on("data", append);
+    child.stderr?.on("data", append);
+    const exited = await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        signalProcessGroup(child, "SIGTERM");
+        reject(new Error(`${name} encryption downgrade did not fail closed.`));
+      }, 60_000);
+      child.once("error", (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+      child.once("close", (code, signal) => {
+        clearTimeout(timeout);
+        resolve({ code, signal });
+      });
+    });
+    child = null;
+    assert.deepEqual(exited, { code: 1, signal: null });
+    assert.match(output, /\[vera-profile-bootstrap\] startup_failed:/);
+    assert.match(output, expectedFailure);
+    await assertPortsFree();
+  } finally {
+    if (child) await terminateApp(child).catch(() => undefined);
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   if (process.platform !== "darwin") {
     throw new Error("This smoke test requires macOS.");
@@ -163,6 +291,18 @@ async function main() {
   }
   fs.accessSync(executablePath, fs.constants.X_OK);
   await assertPortsFree();
+  await assertPackagedEncryptionDowngradeRejected({
+    name: "application",
+    applicationEncryption: "disabled",
+    databaseEncryption: "sqlcipher_required",
+    expectedFailure: /Packaged Vera requires application file encryption\./,
+  });
+  await assertPackagedEncryptionDowngradeRejected({
+    name: "database",
+    applicationEncryption: "required",
+    databaseEncryption: "metadata_plaintext",
+    expectedFailure: /Packaged Vera requires SQLCipher database encryption\./,
+  });
 
   const userDataDir = fs.mkdtempSync(
     path.join(os.tmpdir(), "aletheia-packaged-app-smoke-"),
@@ -173,13 +313,16 @@ async function main() {
   let stderr = "";
   let child = null;
   let failure = null;
+  let isolatedProfile = null;
+  let isolatedLogTail = "";
 
   try {
-    child = spawn(executablePath, [`--user-data-dir=${userDataDir}`], {
+    child = spawn(executablePath, [], {
       cwd: desktopDir,
       detached: true,
       env: {
         ...process.env,
+        VERA_DESKTOP_PROFILE_DIR: userDataDir,
         ALETHEIA_DEMO_SEED_ENABLED: "false",
         ALETHEIA_REQUIRE_ENCRYPTED_VOLUME: "false",
         ALETHEIA_APPLICATION_ENCRYPTION: "required",
@@ -206,6 +349,7 @@ async function main() {
     });
 
     await waitForServices(child, processState);
+    isolatedProfile = verifyIsolatedProfile(userDataDir);
   } catch (error) {
     failure = error;
   } finally {
@@ -214,12 +358,18 @@ async function main() {
     } catch (error) {
       failure ||= error;
     }
+    if (failure) isolatedLogTail = readIsolatedLogTail(userDataDir);
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
 
   if (failure) {
     if (stdout.trim()) process.stderr.write(`\n[packaged-app stdout]\n${stdout}`);
     if (stderr.trim()) process.stderr.write(`\n[packaged-app stderr]\n${stderr}`);
+    if (isolatedLogTail.trim()) {
+      process.stderr.write(
+        `\n[packaged-app isolated redacted log]\n${isolatedLogTail}`,
+      );
+    }
     throw failure;
   }
 
@@ -231,9 +381,12 @@ async function main() {
         appPath,
         checks: {
           isolatedUserData: true,
+          applicationEncryptionDowngradeRejected: true,
+          databaseEncryptionDowngradeRejected: true,
           demoSeedDisabled: true,
           frontendStatus: 200,
           backendHealthStatus: 200,
+          isolatedProfile,
           applicationExited: true,
           frontendPortReleased: true,
           backendPortReleased: true,

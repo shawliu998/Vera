@@ -7,6 +7,8 @@ import type { Express } from "express";
 import type { MikeWorkflowWire } from "../lib/workspace/workflowCompatibility";
 import { WorkspaceApiError } from "../lib/workspace/errors";
 import type { WorkspaceWorkflowsV1Port } from "../routes/workspaceWorkflowsV1";
+import type { WorkspaceChatsV1Port } from "../routes/workspaceChatsV1";
+import type { WorkspaceTabularV1RuntimePort } from "../routes/workspaceTabularV1";
 import {
   bootstrapVeraApplication,
   createVeraApplication,
@@ -133,6 +135,80 @@ function fakeWorkflowCrud(): WorkspaceWorkflowsV1Port {
   };
 }
 
+function fakeChats(): WorkspaceChatsV1Port {
+  const now = "2026-07-14T00:00:00.000Z";
+  const chat = (
+    id: string,
+    projectId: string | null = null,
+    title = "Audit chat",
+    modelProfileId: string | null = null,
+  ) => ({
+    id,
+    projectId,
+    scope: projectId === null ? ("global" as const) : ("project" as const),
+    title,
+    status: "active" as const,
+    modelProfileId,
+    createdAt: now,
+    updatedAt: now,
+  });
+  return {
+    async listChats() {
+      return { items: [], nextCursor: null };
+    },
+    async listProjectChats() {
+      return [];
+    },
+    async createChat(_context, input) {
+      return chat(
+        "00000000-0000-4000-8000-000000000090",
+        input.projectId,
+        input.title,
+        input.modelProfileId,
+      );
+    },
+    async getChatDetail(_context, chatId) {
+      return { chat: chat(chatId), messages: [] };
+    },
+    async updateChat(_context, chatId, input) {
+      return chat(chatId, null, input.title);
+    },
+    async deleteChat() {},
+  };
+}
+
+function fakeTabular(): WorkspaceTabularV1RuntimePort {
+  return {
+    async listTabularReviews() {
+      return [];
+    },
+    async createTabularReview() {
+      return { id: "00000000-0000-4000-8000-000000000091" };
+    },
+    async getTabularReview(_context, reviewId) {
+      return { id: reviewId };
+    },
+    async updateTabularReview(_context, reviewId) {
+      return { id: reviewId };
+    },
+    async deleteTabularReview() {},
+    async clearTabularCells() {},
+    async cancelTabularCell() {
+      return { cancelled: true };
+    },
+    async exportTabularReview(_context, _reviewId, format) {
+      return {
+        filename: format === "csv" ? "review.csv" : "review.xlsx",
+        contentType:
+          format === "csv"
+            ? "text/csv; charset=utf-8"
+            : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        body: format === "csv" ? "column\r\n" : new Uint8Array([80, 75, 3, 4]),
+      };
+    },
+  };
+}
+
 function fakeRuntime(
   options: {
     events?: EventLog;
@@ -154,14 +230,38 @@ function fakeRuntime(
         options.health ?? {
           started: true,
           draining: false,
-          worker: { documentParse: true },
+          worker: {
+            documentParse: true,
+            assistantGenerate: false,
+            tabularCell: false,
+          },
         }
       );
     },
+    assistantGenerationAvailable() {
+      return false;
+    },
+    tabularGenerationAvailable() {
+      return false;
+    },
+    chats: fakeChats(),
+    tabular: fakeTabular(),
     async listProjects() {
       options.onListProjects?.();
       return { items: [], nextCursor: null };
     },
+    modelSettings: new Proxy(
+      {},
+      {
+        get(_target, property) {
+          return async () => {
+            throw new Error(
+              `Unexpected fake model settings call: ${String(property)}`,
+            );
+          };
+        },
+      },
+    ),
     workflowCrud: fakeWorkflowCrud(),
   };
   return new Proxy(base, {
@@ -353,9 +453,19 @@ async function auditApplicationSurface(): Promise<void> {
     assert(!healthText.includes("workspace.db"));
     assert(!healthText.includes("secret-token"));
     const healthBody = JSON.parse(healthText) as {
-      vera: { workspace: { pump: { documentParse: boolean } } };
+      vera: {
+        workspace: {
+          pump: {
+            documentParse: boolean;
+            assistantGenerate: boolean;
+            tabularCell: boolean;
+          };
+        };
+      };
     };
     assert.equal(healthBody.vera.workspace.pump.documentParse, true);
+    assert.equal(healthBody.vera.workspace.pump.assistantGenerate, false);
+    assert.equal(healthBody.vera.workspace.pump.tabularCell, false);
 
     const malformed = await fetch(`${baseUrl}/api/v1/projects`, {
       method: "POST",
@@ -385,15 +495,18 @@ async function auditApplicationSurface(): Promise<void> {
   });
   await withHttpServer(workflowApp, async (baseUrl) => {
     const workflowsUrl = `${baseUrl}/api/v1/workflows`;
+    const tabularUrl = `${baseUrl}/api/v1/tabular-review`;
     for (const authorization of [undefined, "Bearer wrong-workflow-token"]) {
-      const response = await fetch(workflowsUrl, {
-        headers: authorization ? { authorization } : undefined,
-      });
-      assert.equal(
-        response.status,
-        401,
-        "workflow CRUD requires a valid token",
-      );
+      for (const url of [workflowsUrl, tabularUrl]) {
+        const response = await fetch(url, {
+          headers: authorization ? { authorization } : undefined,
+        });
+        assert.equal(
+          response.status,
+          401,
+          "workspace capability routes require a valid token",
+        );
+      }
     }
     const headers = {
       authorization: `Bearer ${workflowToken}`,
@@ -449,28 +562,56 @@ async function auditApplicationSurface(): Promise<void> {
 
     const dormantProjectId = "00000000-0000-4000-8000-000000000001";
     const dormantChatId = "00000000-0000-4000-8000-000000000002";
-    const dormantRoutes = [
-      { method: "GET", path: "/api/v1/chat" },
-      { method: "POST", path: "/api/v1/chat/create" },
-      { method: "GET", path: `/api/v1/projects/${dormantProjectId}/chats` },
-      { method: "GET", path: `/api/v1/chat/${dormantChatId}` },
+    const routeExpectations = [
+      { method: "GET", path: "/api/v1/chat", status: 200 },
+      { method: "POST", path: "/api/v1/chat/create", status: 201 },
+      {
+        method: "GET",
+        path: `/api/v1/projects/${dormantProjectId}/chats`,
+        status: 200,
+      },
+      { method: "GET", path: `/api/v1/chat/${dormantChatId}`, status: 200 },
       {
         method: "PATCH",
         path: `/api/v1/chat/${dormantChatId}`,
         body: { title: "Dormant chat" },
+        status: 204,
       },
-      { method: "DELETE", path: `/api/v1/chat/${dormantChatId}` },
-      { method: "POST", path: `/api/v1/workflows/${systemId}/runs` },
-      { method: "GET", path: "/api/v1/tabular-review" },
-      { method: "POST", path: "/api/v1/tabular-review" },
-      { method: "GET", path: "/api/v1/settings" },
-      { method: "PATCH", path: "/api/v1/settings" },
-      { method: "GET", path: "/api/v1/models" },
-      { method: "POST", path: "/api/v1/models" },
-      { method: "GET", path: "/api/v1/providers" },
-      { method: "POST", path: "/api/v1/credentials" },
+      {
+        method: "DELETE",
+        path: `/api/v1/chat/${dormantChatId}`,
+        status: 204,
+      },
+      { method: "POST", path: "/api/v1/chat", status: 404 },
+      {
+        method: "POST",
+        path: `/api/v1/projects/${dormantProjectId}/chat`,
+        status: 404,
+      },
+      {
+        method: "POST",
+        path: `/api/v1/workflows/${systemId}/runs`,
+        body: { idempotency_key: "application-audit-workflow-run" },
+        status: 503,
+      },
+      { method: "GET", path: "/api/v1/tabular-review", status: 200 },
+      { method: "POST", path: "/api/v1/tabular-review", status: 201 },
+      {
+        method: "GET",
+        path: "/api/v1/tabular-review/capabilities",
+        status: 200,
+      },
+      {
+        method: "POST",
+        path: "/api/v1/tabular-review/00000000-0000-4000-8000-000000000091/generate",
+        status: 404,
+      },
+      { method: "GET", path: "/api/v1/models", status: 404 },
+      { method: "POST", path: "/api/v1/models", status: 404 },
+      { method: "GET", path: "/api/v1/providers", status: 404 },
+      { method: "POST", path: "/api/v1/credentials", status: 404 },
     ] as const;
-    for (const route of dormantRoutes) {
+    for (const route of routeExpectations) {
       const response = await fetch(`${baseUrl}${route.path}`, {
         method: route.method,
         headers,
@@ -482,8 +623,8 @@ async function auditApplicationSurface(): Promise<void> {
       });
       assert.equal(
         response.status,
-        404,
-        `${route.method} ${route.path} stays dormant`,
+        route.status,
+        `${route.method} ${route.path} matches composed capabilities`,
       );
     }
   });
@@ -498,26 +639,28 @@ async function auditApplicationSurface(): Promise<void> {
     auditWriteBlocked: () => true,
   });
   await withHttpServer(blockedWorkflowApp, async (baseUrl) => {
-    const url = `${baseUrl}/api/v1/workflows`;
-    const unauthenticated = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: "{}",
-    });
-    assert.equal(
-      unauthenticated.status,
-      401,
-      "authentication runs before the mutation audit guard",
-    );
-    const blocked = await fetch(url, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${workflowToken}`,
-        "content-type": "application/json",
-      },
-      body: "{}",
-    });
-    assert.equal(blocked.status, 503);
+    for (const pathName of ["/api/v1/workflows", "/api/v1/tabular-review"]) {
+      const url = `${baseUrl}${pathName}`;
+      const unauthenticated = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      assert.equal(
+        unauthenticated.status,
+        401,
+        "authentication runs before the mutation audit guard",
+      );
+      const blocked = await fetch(url, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${workflowToken}`,
+          "content-type": "application/json",
+        },
+        body: "{}",
+      });
+      assert.equal(blocked.status, 503);
+    }
   });
 
   const blockedApp = createVeraApplication({
@@ -815,6 +958,16 @@ async function auditStaticOwnership(): Promise<void> {
     applicationSource,
     /workspaceApi\.use\(\s*"\/workflows",\s*createWorkspaceWorkflowsV1Router\(options\.runtime\.workflowCrud\),/,
     "Mike workflow CRUD is mounted beneath the sole /api/v1 composition root",
+  );
+  assert.equal(
+    (applicationSource.match(/createWorkspaceTabularV1Router\(/g) ?? []).length,
+    1,
+    "Mike tabular runtime must be mounted exactly once",
+  );
+  assert.match(
+    applicationSource,
+    /createWorkspaceTabularV1Router\(options\.runtime\.tabular,[\s\S]*?generation:\s*options\.runtime\.tabularGenerationAvailable\(\),[\s\S]*?chat:\s*false/,
+    "Mike tabular uses the real generation gate and keeps chat disabled",
   );
   const healthSource = applicationSource.slice(
     applicationSource.indexOf('app.get("/health"'),

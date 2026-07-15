@@ -73,6 +73,12 @@ function auditLegalSourceConfiguration() {
     /selectedProcessEnvironment\(BACKEND_LOCAL_CONFIG_ENV_KEYS\)/,
     "the backend must receive the explicit desktop configuration allowlist",
   );
+  assert.ok(
+    backendEnvironmentKeys.includes(
+      "ALETHEIA_MODEL_PROVIDER_ALLOW_LOOPBACK_HTTP",
+    ),
+    "packaged E2E may explicitly enable the non-secret exact-loopback model-provider switch",
+  );
   assert.doesNotMatch(
     mainSource,
     /VERA_[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|API_KEY)/,
@@ -116,9 +122,9 @@ assert.match(
 assert.match(mainSource, /app\.setName\(PRODUCT_NAME\);/);
 assert.match(mainSource, /app\.setPath\(\s*"userData"/);
 assert.match(mainSource, /com\.aletheia\.desktop\.application-encryption/);
-assert.match(mainSource, /const WORKSPACE_PATH = "\/projects";/);
-assert.match(applicationMenuSource, /label: "Open Data Folder"/);
-assert.match(applicationMenuSource, /label: "Open Logs Folder"/);
+assert.match(mainSource, /const WORKSPACE_PATH = "\/assistant";/);
+assert.match(applicationMenuSource, /label: "打开数据文件夹"/);
+assert.match(applicationMenuSource, /label: "打开日志文件夹"/);
 assert.doesNotMatch(
   applicationMenuSource,
   /\/aletheia\/|New Matter|Settings\.\.\./,
@@ -146,7 +152,7 @@ console.log(
         packageName: packageDocument.name,
         appId: packageDocument.build.appId,
         userDataDirectory: "aletheia-desktop",
-        startupPath: "/projects",
+        startupPath: "/assistant",
         legacyRoutesPreserved: true,
         legalSourceConfiguration: {
           forwardedToBackend: LEGAL_SOURCE_CONFIG_ENV_KEYS,

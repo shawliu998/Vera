@@ -14,6 +14,13 @@ const globals = fs.readFileSync(
   path.join(repositoryRoot, "frontend/src/global.d.ts"),
   "utf8",
 );
+const getInfoStart = main.indexOf('ipcMain.handle("aletheia:get-info"');
+const getInfoEnd = main.indexOf(
+  'ipcMain.handle("aletheia:get-auth-token"',
+  getInfoStart,
+);
+assert.ok(getInfoStart >= 0 && getInfoEnd > getInfoStart);
+const getInfoHandler = main.slice(getInfoStart, getInfoEnd);
 
 assert.match(
   preload,
@@ -45,6 +52,16 @@ assert.match(
   globals,
   /workspaceApiUrl:\s*string/,
   "the packaged bridge contract includes the workspace API URL",
+);
+assert.doesNotMatch(
+  getInfoHandler,
+  /(?:dataDir|logsDir):\s*(?:localDataDir\(\)|app\.getPath\("logs"\))/,
+  "runtime info must not disclose local filesystem paths to the renderer",
+);
+assert.doesNotMatch(
+  globals,
+  /^\s*(?:dataDir|logsDir):\s*string;/m,
+  "the renderer bridge type must not advertise local filesystem paths",
 );
 
 console.log("vera workspace packaged bridge audit passed");

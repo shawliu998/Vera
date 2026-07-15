@@ -1,5 +1,132 @@
 # Vera
 
+Vera is a single-user, local-first macOS legal AI desktop client. Its P0
+product structure, interaction model, and UI are a controlled port of the
+open-source [Mike](https://github.com/Open-Legal-Products/mike) project at the
+pinned commit `e32daad5a4c64a5561e04c53ee12411e3c5e7238`. The UI use has been
+authorised; Mike and this repository are distributed under
+`AGPL-3.0-only`. Vera supplies the local desktop lifecycle, security boundary,
+encrypted persistence, model credentials, backup, and recovery layer.
+
+> **P0 status (2026-07-15):** Phases 0-7 are complete. One fresh invocation of
+> `./scripts/package-desktop-mac.sh` exited successfully after the packaged
+> workspace restart E2E, backup bridge, and restore fail-closed gates passed.
+> This closes the local-client P0; it does not make the unsigned, unnotarized
+> artifacts a public release.
+
+The final packaged smoke also proved that the real app exits before starting
+local services when `ALETHEIA_APPLICATION_ENCRYPTION=disabled` or
+`ALETHEIA_DATABASE_ENCRYPTION=metadata_plaintext` is injected. In the packaged
+restore fail-closed cases, the working desktop log recorded `startup_failed`
+and contained no `renderer_window_creating` event, proving that no renderer was
+created before pending-restore validation failed.
+
+## Current P0 product
+
+The P0 product has four core Mike-derived workspaces—Assistant, Projects,
+Workflows, and Tabular Review—plus Settings as the fifth local control surface.
+The desktop opens `/assistant` and exposes exactly these five first-level
+destinations:
+
+| Navigation | Route | Local capability |
+|---|---|---|
+| Assistant | `/assistant` | Durable streaming chat, stop, retry, regenerate, Project documents, and citations |
+| Projects | `/projects` | Generic containers for documents, conversations, workflows, and Tabular Reviews |
+| Tabular Review | `/tabular-review` | Multi-document, multi-column generation, cell retry/cancel, citations, CSV, and XLSX export |
+| Workflows | `/workflows` | Mike-derived local workflow templates, editing, bounded execution, cancellation, retry, and run history |
+| Settings | `/settings` | Language/theme, model profiles, Keychain credentials, local data, backup, restore, logs, and diagnostics |
+
+Inside a Project, the active tabs are Documents, Assistant, Workflows, and
+Tabular Reviews. `Project` is the general-purpose container; the new product
+path does not reinterpret every Project as a litigation matter.
+
+The packaged P0 runtime does **not** require or start Docker, Supabase,
+PostgreSQL, R2/S3, Cloudflare, a login service, or a manually operated backend.
+Electron owns one loopback-only Express backend and one loopback-only Next.js
+frontend. Workspace metadata is stored in SQLCipher, document/blob content is
+encrypted locally, and provider API keys are stored in the macOS Keychain
+through an isolated credential worker. Demo seeding is off by default.
+
+Supported external model profile types are OpenAI, DeepSeek, Anthropic,
+Gemini, and OpenAI-compatible endpoints. A profile cannot become the active
+default until its credential is present and its real connection test passes.
+The exact-loopback HTTP provider exception exists only for explicit local
+test/development use; normal custom providers require the hardened transport.
+
+## Build the macOS client
+
+Use macOS with Node.js/npm and the Xcode command-line tools. From the repository
+root:
+
+```bash
+npm ci --prefix backend
+npm ci --prefix frontend
+./scripts/package-desktop-mac.sh
+```
+
+The script builds the backend and frontend, prepares the traced runtime,
+packages `Vera.app`, audits the packaged resources, runs packaged startup,
+workspace-restart, backup, and restore checks, and generates:
+
+```text
+desktop/dist/Vera-<version>-<arch>.dmg
+desktop/dist/Vera-<version>-<arch>.zip
+desktop/dist/Vera-<version>-SHA256SUMS.txt
+```
+
+The accepted fresh arm64 package from 2026-07-15 is recorded at both its
+repository-relative and build-machine absolute locations:
+
+```text
+app:      desktop/dist/mac-arm64/Vera.app
+          /Users/a1-6/Documents/new agent/desktop/dist/mac-arm64/Vera.app
+dmg:      desktop/dist/Vera-1.0.1-arm64.dmg
+          /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-arm64.dmg
+zip:      desktop/dist/Vera-1.0.1-arm64.zip
+          /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-arm64.zip
+manifest: desktop/dist/Vera-1.0.1-SHA256SUMS.txt
+          /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-SHA256SUMS.txt
+```
+
+The verified manifest entries are:
+
+```text
+69a2ee56379a7cf6cb7fe441685fb59c846e77512928704955e774f3d8d42dd7  Vera-1.0.1-arm64.dmg
+47fcd64f214bf9b28e6982953043c76dba68ff0f2a933107ff6ec07eb704e648  Vera-1.0.1-arm64.zip
+```
+
+The default build is intentionally unsigned and unnotarized. It is
+`local-only`, must remain on the Mac that built it, and must not be presented as
+a public release. A distributable build requires real Developer ID and Apple
+notarization credentials with `VERA_RELEASE_SIGNING=true`; see
+[the desktop guide](docs/desktop_app.md).
+
+Useful source-level gates before packaging:
+
+```bash
+npm run build --prefix backend
+npm run lint --prefix frontend
+npm run build --prefix frontend
+npm run test:assistant --prefix frontend
+npm run test:workflows --prefix frontend
+npm run test:tabular --prefix frontend
+npm run test:product-rename --prefix desktop
+npm run test:runtime-security --prefix desktop
+git diff --check
+```
+
+The authoritative migration status and Mike provenance are recorded in
+[the P0 migration plan](docs/p0_mike_desktop_migration.md) and
+[the controlled port manifest](docs/mike_port_manifest.md).
+
+## Legacy Vera history
+
+The material below documents the earlier civil-litigation, research,
+governance, and private-pilot work. That code remains in the repository for
+compatibility and regression coverage, but `/aletheia/*` is not the P0 primary
+navigation, and the historical Docker/demo workflow is not the current desktop
+quick start.
+
 **Vera is not a legal chatbot.** It is a local-first civil-litigation workspace
 for lawyer-led matter work, from intake and evidence review through procedure,
 legal research, drafting, approval, and audited export.

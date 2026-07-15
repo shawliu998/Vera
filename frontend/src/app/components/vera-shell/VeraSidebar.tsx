@@ -2,7 +2,7 @@
 
 // Direct port of Mike e32daad5a4c64a5561e04c53ee12411e3c5e7238:
 // frontend/src/app/components/shared/AppSidebar.tsx
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
     PanelLeft,
     MessageSquare,
@@ -10,25 +10,30 @@ import {
     Table2,
     Library,
     Settings,
+    ChevronDown,
+    RefreshCw,
 } from "lucide-react";
 import { useRouter, usePathname } from "next/navigation";
 import { useI18n } from "@/app/i18n";
+import { useVeraSettings } from "@/app/contexts/VeraSettingsContext";
 import { cn } from "@/lib/utils";
 import { VeraSiteLogo } from "@/app/components/vera-shell/VeraSiteLogo";
+import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
+import { SidebarChatItem } from "@/app/components/assistant/SidebarChatItem";
 
 const NAV_ITEMS = [
     {
-        href: null,
+        href: "/assistant",
         labelKey: "nav.assistant",
         icon: MessageSquare,
     },
     { href: "/projects", labelKey: "nav.projects", icon: FolderOpen },
     {
-        href: null,
+        href: "/tabular-review",
         labelKey: "nav.tabular",
         icon: Table2,
     },
-    { href: null, labelKey: "nav.workflows", icon: Library },
+    { href: "/workflows", labelKey: "nav.workflows", icon: Library },
     { href: null, labelKey: "nav.settings", icon: Settings },
 ] as const;
 
@@ -41,7 +46,29 @@ export function VeraSidebar({ isOpen, onToggle }: VeraSidebarProps) {
     const router = useRouter();
     const pathname = usePathname();
     const { t } = useI18n();
+    const { settingsRuntimeAvailable } = useVeraSettings();
+    const {
+        chats,
+        hasMoreChats,
+        error: chatHistoryError,
+        currentChatId,
+        setCurrentChatId,
+        loadChats,
+        loadMoreChats,
+    } = useChatHistoryContext();
     const [shouldAnimate, setShouldAnimate] = useState(false);
+    const [historyCollapsed, setHistoryCollapsed] = useState(false);
+    const routeChatId = useMemo(() => {
+        const global = pathname.match(/^\/assistant\/chat\/([^/]+)/);
+        const project = pathname.match(
+            /^\/projects\/[^/]+\/assistant\/chat\/([^/]+)/,
+        );
+        return global?.[1] ?? project?.[1] ?? null;
+    }, [pathname]);
+
+    useEffect(() => {
+        setCurrentChatId(routeChatId);
+    }, [routeChatId, setCurrentChatId]);
 
     const handleToggle = () => {
         if (isOpen) setShouldAnimate(true);
@@ -110,22 +137,28 @@ export function VeraSidebar({ isOpen, onToggle }: VeraSidebarProps) {
 
                 {/* Nav items */}
                 {NAV_ITEMS.map(({ href, labelKey, icon: Icon }) => {
-                    // Vera local patch: only the service-backed Projects and
-                    // Documents surface is interactive in this milestone.
-                    // Keeping future Mike modules visible-but-disabled avoids
-                    // inventing links before their local composition lands.
-                    const isAvailable = href !== null;
+                    // Vera local patch: Settings becomes interactive only
+                    // after its canonical status endpoint explicitly reports
+                    // settings_available=true. A missing or failed service
+                    // therefore leaves the Mike navigation item disabled.
+                    const resolvedHref =
+                        labelKey === "nav.settings" &&
+                        settingsRuntimeAvailable
+                            ? "/settings"
+                            : href;
+                    const isAvailable = href !== null || resolvedHref !== null;
                     const isActive =
                         isAvailable &&
-                        (pathname === href || pathname.startsWith(href + "/"));
+                        (pathname === resolvedHref ||
+                            pathname.startsWith(resolvedHref + "/"));
                     const label = t(labelKey);
                     return (
                         <div key={labelKey} className="py-0.5 px-2.5">
                             <button
                                 type="button"
                                 onClick={
-                                    isAvailable
-                                        ? () => router.push(href)
+                                    resolvedHref !== null
+                                        ? () => router.push(resolvedHref)
                                         : undefined
                                 }
                                 disabled={!isAvailable}
@@ -167,15 +200,101 @@ export function VeraSidebar({ isOpen, onToggle }: VeraSidebarProps) {
                     );
                 })}
 
-                {/* Vera local port: retain Mike's secondary-content container
-                    but hide its cloud-bound recent-project/history/profile
-                    blocks until their local service-backed ports land. */}
                 {isOpen && (
-                    <div
-                        hidden
-                        aria-hidden="true"
-                        className="mt-4 flex-1 min-h-0 flex flex-col gap-4"
-                    />
+                    <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4">
+                        {/* Mike's Assistant History block, backed only by the
+                            local Vera Chats service. */}
+                        <div className="flex min-h-0 flex-1 flex-col">
+                            <button
+                                type="button"
+                                onClick={() =>
+                                    setHistoryCollapsed((current) => !current)
+                                }
+                                className={`mb-2 flex w-full items-center justify-between px-5 text-xs font-semibold text-gray-500 transition-colors hover:text-gray-700 ${
+                                    shouldAnimate ? "sidebar-fade-in" : ""
+                                }`}
+                            >
+                                <span>{t("assistant.history.title")}</span>
+                                <ChevronDown
+                                    className={`h-3.5 w-3.5 transition-transform ${
+                                        historyCollapsed ? "-rotate-90" : ""
+                                    }`}
+                                />
+                            </button>
+                            {!historyCollapsed && (
+                                <div className="min-h-0 flex-1 overflow-y-auto">
+                                    {chats === null ? (
+                                        <div className="space-y-1 px-2.5">
+                                            {[40, 60, 50, 70, 45].map(
+                                                (width, index) => (
+                                                    <div
+                                                        key={index}
+                                                        className="flex h-9 items-center px-3"
+                                                    >
+                                                        <div
+                                                            className="h-3 animate-pulse rounded bg-gray-200"
+                                                            style={{
+                                                                width: `${width}%`,
+                                                            }}
+                                                        />
+                                                    </div>
+                                                ),
+                                            )}
+                                        </div>
+                                    ) : chatHistoryError ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => void loadChats()}
+                                            className="mx-2.5 flex w-[calc(100%-1.25rem)] items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-red-600 hover:bg-red-50"
+                                        >
+                                            <RefreshCw className="h-3.5 w-3.5" />
+                                            {t("assistant.history.reload")}
+                                        </button>
+                                    ) : chats.length === 0 ? (
+                                        <p className="px-5 py-2 text-xs text-gray-500">
+                                            {t("assistant.history.empty")}
+                                        </p>
+                                    ) : (
+                                        <>
+                                            <div className="space-y-1 px-2.5">
+                                                {chats.map((chat) => (
+                                                    <SidebarChatItem
+                                                        key={chat.id}
+                                                        chat={chat}
+                                                        active={
+                                                            currentChatId ===
+                                                            chat.id
+                                                        }
+                                                        onSelect={() => {
+                                                            setCurrentChatId(
+                                                                chat.id,
+                                                            );
+                                                            router.push(
+                                                                chat.project_id
+                                                                    ? `/projects/${chat.project_id}/assistant/chat/${chat.id}`
+                                                                    : `/assistant/chat/${chat.id}`,
+                                                            );
+                                                        }}
+                                                    />
+                                                ))}
+                                            </div>
+                                            {hasMoreChats && (
+                                                <div className="px-2.5 pt-1">
+                                                    <button
+                                                        type="button"
+                                                        onClick={loadMoreChats}
+                                                        className="flex h-8 w-full items-center rounded-md px-3 text-left text-xs font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
+                                                    >
+                                                        {t("assistant.history.loadMore")}
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </div>
                 )}
             </div>
         </>

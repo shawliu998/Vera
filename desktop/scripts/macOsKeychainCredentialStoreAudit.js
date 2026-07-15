@@ -2,11 +2,14 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const {
+  decodeKeychainSecretEnvelope,
   deleteGenericPassword,
   deleteWorkspaceModelCredential,
+  encodeKeychainSecretEnvelope,
   isMacOsKeychainItemCollision,
   MacOsKeychainItemCollisionError,
   readGenericPassword,
@@ -57,6 +60,26 @@ function assertSecurityOptions(options, stdinMode) {
   assert.deepEqual(options.stdio, [stdinMode, "pipe", "pipe"]);
 }
 
+function interactiveWorkspaceCommand(service, account, secret) {
+  const stored = encodeKeychainSecretEnvelope(secret);
+  return `add-generic-password -s ${service} -a ${account} -X ${Buffer.from(
+    stored,
+    "utf8",
+  ).toString("hex")}\n`;
+}
+
+function auditSecretEnvelope() {
+  const secret = "Vera 凭据 !@#$%^&*()";
+  const encoded = encodeKeychainSecretEnvelope(secret);
+  assert.equal(encoded.includes(secret), false);
+  assert.equal(decodeKeychainSecretEnvelope(encoded), secret);
+  assert.equal(decodeKeychainSecretEnvelope("legacy-plain-secret"), "legacy-plain-secret");
+  assert.throws(
+    () => decodeKeychainSecretEnvelope(`${encoded.slice(0, -1)}A`),
+    /Unable to decode the requested macOS Keychain item/,
+  );
+}
+
 function auditAccountNaming() {
   const base = {
     profileId: "00000000-0000-4000-8000-000000000901",
@@ -95,19 +118,21 @@ function auditWriteUsesBoundedRedactedCommand() {
   });
   const mock = securityMock([
     {
-      args: [
-        "add-generic-password",
-        "-s",
-        WORKSPACE_MODEL_CREDENTIAL_SERVICE,
-        "-a",
-        account,
-        "-w",
-      ],
+      args: ["-i"],
       assert({ args, options }) {
         assertSecurityOptions(options, "pipe");
-        assert.equal(options.input, `${secret}\n`);
+        assert.equal(
+          options.input,
+          interactiveWorkspaceCommand(
+            WORKSPACE_MODEL_CREDENTIAL_SERVICE,
+            account,
+            secret,
+          ),
+        );
         assert.equal(args.includes(secret), false);
+        assert.equal(options.input.includes(secret), false);
         assert.equal(args.includes("-U"), false);
+        assert.equal(options.input.includes(" -U "), false);
       },
     },
   ]);
@@ -142,19 +167,20 @@ function auditCreateOnlyCollisionClassification() {
   );
   const mock = securityMock([
     {
-      args: [
-        "add-generic-password",
-        "-s",
-        WORKSPACE_MODEL_CREDENTIAL_SERVICE,
-        "-a",
-        account,
-        "-w",
-      ],
+      args: ["-i"],
       error: collision,
       assert({ args, options }) {
         assert.equal(args.includes("-U"), false);
         assert.equal(args.includes(secret), false);
         assertSecurityOptions(options, "pipe");
+        assert.equal(
+          options.input,
+          interactiveWorkspaceCommand(
+            WORKSPACE_MODEL_CREDENTIAL_SERVICE,
+            account,
+            secret,
+          ),
+        );
       },
     },
   ]);
@@ -353,23 +379,17 @@ function auditSanitizedFailures() {
   const secret = "dont-leak-me";
   const writeMock = securityMock([
     {
-      args: [
-        "add-generic-password",
-        "-s",
-        WORKSPACE_MODEL_CREDENTIAL_SERVICE,
-        "-a",
-        account,
-        "-w",
-      ],
+      args: ["-i"],
       error: securityError({
         message: `security failed for ${account} with ${secret}`,
       }),
-      assert({ args }) {
+      assert({ args, options }) {
         assert.equal(
           args.includes("-U"),
           false,
           "Credential writes must be create-only and never overwrite collisions.",
         );
+        assert.equal(options.input.includes(" -U "), false);
       },
     },
   ]);
@@ -462,6 +482,31 @@ function auditWriteRejectsLineBreakSecrets() {
   );
 }
 
+function auditRealMacOsRoundTrip() {
+  if (process.platform !== "darwin") return "skipped";
+  const suffix = crypto.randomBytes(12).toString("hex");
+  const service = WORKSPACE_MODEL_CREDENTIAL_SERVICE;
+  const account = `vera-roundtrip-${suffix}`;
+  const secret = `Vera:${crypto.randomBytes(24).toString("base64url")}:中文`;
+  let created = false;
+  try {
+    assert.equal(readGenericPassword({ service, account }), null);
+    writeGenericPassword({ service, account, secret });
+    created = true;
+    assert.equal(readGenericPassword({ service, account }), secret);
+    assert.throws(
+      () => writeGenericPassword({ service, account, secret: "replacement" }),
+      (error) => error instanceof MacOsKeychainItemCollisionError,
+    );
+    assert.equal(readGenericPassword({ service, account }), secret);
+  } finally {
+    const deleted = deleteGenericPassword({ service, account });
+    if (created) assert.equal(deleted, true);
+  }
+  assert.equal(readGenericPassword({ service, account }), null);
+  return "passed";
+}
+
 function auditStaticIntegration() {
   const packageJson = JSON.parse(
     fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"),
@@ -470,16 +515,26 @@ function auditStaticIntegration() {
     packageJson.scripts["test:keychain-credential-store"],
     "node scripts/macOsKeychainCredentialStoreAudit.js",
   );
-  assert.equal(packageJson.build.files.includes("macOsKeychain.js"), true);
+  assert.equal(packageJson.build.files.includes("macOsKeychain.js"), false);
+  assert.equal(
+    packageJson.build.extraResources.some(
+      (entry) =>
+        entry.from === "macOsKeychain.js" &&
+        entry.to === "aletheia/desktop/macOsKeychain.js",
+    ),
+    true,
+  );
 }
 
 auditAccountNaming();
+auditSecretEnvelope();
 auditWriteUsesBoundedRedactedCommand();
 auditCreateOnlyCollisionClassification();
 auditReadAndDeleteBehaviors();
 auditRestartSafeBoundCredentialDeletion();
 auditSanitizedFailures();
 auditWriteRejectsLineBreakSecrets();
+const realRoundTrip = auditRealMacOsRoundTrip();
 auditStaticIntegration();
 
 console.log(
@@ -489,9 +544,11 @@ console.log(
       suite: "vera-macos-keychain-credential-store-v1",
       checks: [
         "model-profile account naming is deterministic and origin-bound without exposing raw origin",
-        "generic password writes are create-only without -U and use argv arrays, stdin secret input, timeout, maxBuffer, and no shell",
+        "versioned UTF-8 secret envelopes round-trip non-ASCII values while retaining legacy plain-value reads",
+        "model credential writes are create-only without -U and use validated security interactive tokens with an exact UTF-8 envelope only on bounded stdin",
         "duplicate-item failures are classified as definite no-write collisions without exposing account or secret material",
         "generic password reads and deletes stay bounded and classify missing items safely",
+        `real macOS Keychain write/read/collision/delete round trip: ${realRoundTrip}`,
         "reference plus immutable binding reconstructs the exact delete account after restart and rejects incomplete or cross-profile locators",
         "credential-store command failures stay redacted and never echo secret, account, or service names",
       ],

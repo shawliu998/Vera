@@ -1,14 +1,22 @@
 import { isDeepStrictEqual } from "node:util";
 
+import {
+  MikeAssistantStreamEventSchema,
+  type MikeAssistantStreamEvent,
+} from "../assistantCompatibility";
 import type { WorkspaceDatabaseAdapter } from "../database";
 import { WorkspaceApiError } from "../errors";
+import { assertMikeSafePayload } from "../mikeCompatibility";
 import {
   normalizePageRequest,
   type Page,
   type PageRequest,
 } from "../pagination";
 import type { Chat, ChatMessage, MessageSource } from "../types";
-import type { WorkspaceJobsRepository } from "./jobs";
+import {
+  WorkspaceJobLeaseLostError,
+  type WorkspaceJobsRepository,
+} from "./jobs";
 
 type Row = Record<string, unknown>;
 
@@ -25,6 +33,17 @@ const MESSAGE_STATUSES = [
 ] as const;
 export const ASSISTANT_GENERATION_DOCUMENT_LIMIT = 50;
 export const ASSISTANT_PROJECT_CHAT_LIST_LIMIT = 200;
+export const ASSISTANT_GENERATION_EVENT_PAGE_LIMIT = 100;
+const ASSISTANT_GENERATION_EVENT_PAGE_CHAR_LIMIT = 2_000_000;
+const ASSISTANT_GENERATION_EVENT_MAX_SEQUENCE = 2_147_483_647;
+const JOB_STATUSES = [
+  "queued",
+  "running",
+  "complete",
+  "failed",
+  "cancelled",
+  "interrupted",
+] as const;
 
 function corrupt(message: string): never {
   throw new WorkspaceApiError(500, "INTERNAL_ERROR", message);
@@ -364,6 +383,41 @@ export interface AssistantJobEnqueuerPort {
   }): { id: string; type: string; status: string };
 }
 
+export interface AssistantGenerationJobControlPort
+  extends AssistantJobEnqueuerPort {
+  getJob(id: string): {
+    id: string;
+    type: string;
+    status: (typeof JOB_STATUSES)[number];
+    resourceType: string;
+    resourceId: string;
+    attempt: number;
+    maxAttempts: number;
+    retryable: boolean;
+    cancelRequestedAt: string | null;
+  } | null;
+  transitionJobInCurrentTransaction(
+    id: string,
+    event:
+      | { type: "cancel"; at: string; reason?: string | null }
+      | { type: "retry"; at: string },
+  ): {
+    id: string;
+    type: string;
+    status: string;
+    attempt: number;
+    maxAttempts: number;
+  };
+  requestCancellation(
+    id: string,
+    reason?: string | null,
+  ): {
+    id: string;
+    status: string;
+    cancelRequestedAt: string | null;
+  };
+}
+
 export type AssistantClaimIdentity = Readonly<{
   jobId: string;
   leaseOwner: string;
@@ -373,8 +427,41 @@ export type AssistantClaimIdentity = Readonly<{
 
 export type AssistantClaimTransactionPort = Pick<
   WorkspaceJobsRepository,
-  "assertClaimInCurrentTransaction" | "finishClaimInCurrentTransaction"
+  | "assertClaimInCurrentTransaction"
+  | "finishClaimInCurrentTransaction"
+  | "transitionJobInCurrentTransaction"
 >;
+
+export type AssistantGenerationStatus = Readonly<{
+  jobId: string;
+  chatId: string;
+  promptMessageId: string;
+  outputMessageId: string;
+  status: (typeof JOB_STATUSES)[number];
+  attempt: number;
+  activeAttempt: number;
+  maxAttempts: number;
+  retryable: boolean;
+  cancelRequested: boolean;
+  terminal: boolean;
+}>;
+
+export type AssistantGenerationEventRecord = Readonly<{
+  cursor: number;
+  attempt: number;
+  event: MikeAssistantStreamEvent;
+  terminal: boolean;
+  createdAt: string;
+}>;
+
+export type AssistantGenerationEventPage = Readonly<{
+  jobId: string;
+  status: AssistantGenerationStatus["status"];
+  attempt: number;
+  terminal: boolean;
+  events: readonly AssistantGenerationEventRecord[];
+  nextCursor: number;
+}>;
 
 export type AssistantSourceWrite = Readonly<{
   id: string;
@@ -417,6 +504,204 @@ export class ChatsRepository {
           "SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name='assistant_generation_snapshots'",
         )
         .get(),
+    );
+  }
+
+  private hasV10AssistantEventSchema() {
+    return Boolean(
+      this.database
+        .prepare(
+          "SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name='assistant_generation_events'",
+        )
+        .get(),
+    );
+  }
+
+  private requireV10AssistantEventSchema() {
+    if (!this.hasV10AssistantEventSchema()) {
+      throw new WorkspaceApiError(
+        503,
+        "PRECONDITION_FAILED",
+        "Assistant durable event migration is not installed.",
+      );
+    }
+  }
+
+  private activeGenerationAttempt(status: string, attempt: number) {
+    const active = status === "queued" ? attempt + 1 : Math.max(attempt, 1);
+    if (!Number.isSafeInteger(active) || active < 1 || active > 100) {
+      corrupt("Invalid persisted Assistant generation attempt.");
+    }
+    return active;
+  }
+
+  private generationStatusInCurrentTransaction(
+    jobId: string,
+  ): AssistantGenerationStatus {
+    const row = this.database
+      .prepare(
+        `SELECT snapshot.job_id,snapshot.chat_id,snapshot.prompt_message_id,
+                snapshot.output_message_id,job.status,job.attempt,
+                job.max_attempts,job.retryable,job.cancel_requested_at
+           FROM assistant_generation_snapshots snapshot
+           JOIN jobs job
+             ON job.id=snapshot.job_id
+            AND job.type='assistant_generate'
+            AND job.resource_type='chat'
+            AND job.resource_id=snapshot.chat_id
+          WHERE snapshot.job_id=?`,
+      )
+      .get(jobId);
+    if (!row) {
+      throw new WorkspaceApiError(
+        404,
+        "NOT_FOUND",
+        "Assistant generation job not found.",
+      );
+    }
+    const status = enumValue(row.status, JOB_STATUSES, "generation job status");
+    const attempt = requiredInteger(row.attempt, "generation job attempt");
+    const maxAttempts = requiredInteger(
+      row.max_attempts,
+      "generation job max attempts",
+    );
+    if (maxAttempts < 1 || maxAttempts > 100 || attempt > maxAttempts) {
+      corrupt("Invalid persisted Assistant generation attempt bounds.");
+    }
+    const retryable = requiredInteger(
+      row.retryable,
+      "generation job retryable flag",
+    );
+    if (retryable !== 0 && retryable !== 1) {
+      corrupt("Invalid persisted Assistant generation retryable flag.");
+    }
+    return {
+      jobId: requiredString(row.job_id, "generation job id"),
+      chatId: requiredString(row.chat_id, "generation chat id"),
+      promptMessageId: requiredString(
+        row.prompt_message_id,
+        "generation prompt message id",
+      ),
+      outputMessageId: requiredString(
+        row.output_message_id,
+        "generation output message id",
+      ),
+      status,
+      attempt,
+      activeAttempt: this.activeGenerationAttempt(status, attempt),
+      maxAttempts,
+      retryable: retryable === 1,
+      cancelRequested: row.cancel_requested_at !== null,
+      terminal: ["complete", "failed", "cancelled", "interrupted"].includes(
+        status,
+      ),
+    };
+  }
+
+  private insertGenerationEventInCurrentTransaction(input: {
+    jobId: string;
+    attempt: number;
+    event: MikeAssistantStreamEvent;
+    terminal?: boolean;
+    now: string;
+  }): AssistantGenerationEventRecord {
+    this.requireV10AssistantEventSchema();
+    const event = MikeAssistantStreamEventSchema.parse(input.event);
+    assertMikeSafePayload(event);
+    const terminal = input.terminal === true;
+    if (terminal !== (event.type === "complete" || event.type === "error")) {
+      throw new WorkspaceApiError(
+        500,
+        "INTERNAL_ERROR",
+        "Assistant terminal event classification is invalid.",
+      );
+    }
+    if (
+      !Number.isSafeInteger(input.attempt) ||
+      input.attempt < 1 ||
+      input.attempt > 100
+    ) {
+      throw new WorkspaceApiError(
+        500,
+        "INTERNAL_ERROR",
+        "Assistant event attempt is invalid.",
+      );
+    }
+    const serialized = JSON.stringify(event);
+    const sequence = requiredInteger(
+      this.database
+        .prepare(
+          `SELECT coalesce(max(sequence),0)+1 AS sequence
+             FROM assistant_generation_events WHERE job_id=?`,
+        )
+        .get(input.jobId)?.sequence,
+      "next Assistant event sequence",
+    );
+    if (sequence > ASSISTANT_GENERATION_EVENT_MAX_SEQUENCE) {
+      throw new WorkspaceApiError(
+        409,
+        "CONFLICT",
+        "Assistant event sequence limit reached.",
+      );
+    }
+    try {
+      this.database
+        .prepare(
+          `INSERT INTO assistant_generation_events
+            (job_id,sequence,attempt,event_type,event_json,terminal,created_at)
+           VALUES (?,?,?,?,?,?,?)`,
+        )
+        .run(
+          input.jobId,
+          sequence,
+          input.attempt,
+          event.type,
+          serialized,
+          terminal ? 1 : 0,
+          input.now,
+        );
+    } catch (error) {
+      if (/idx_assistant_generation_events_terminal/i.test(String(error))) {
+        throw new WorkspaceApiError(
+          409,
+          "CONFLICT",
+          "Assistant generation attempt already has a terminal event.",
+        );
+      }
+      throw error;
+    }
+    return {
+      cursor: sequence,
+      attempt: input.attempt,
+      event,
+      terminal,
+      createdAt: input.now,
+    };
+  }
+
+  private hasGenerationEvent(input: {
+    jobId: string;
+    attempt: number;
+    eventType: MikeAssistantStreamEvent["type"];
+    status?: string;
+  }) {
+    const parameters: unknown[] = [
+      input.jobId,
+      input.attempt,
+      input.eventType,
+    ];
+    const statusClause = input.status
+      ? "AND json_extract(event_json,'$.status')=?"
+      : "";
+    if (input.status) parameters.push(input.status);
+    return Boolean(
+      this.database
+        .prepare(
+          `SELECT 1 AS present FROM assistant_generation_events
+            WHERE job_id=? AND attempt=? AND event_type=? ${statusClause}
+            LIMIT 1`,
+        )
+        .get(...parameters),
     );
   }
 
@@ -1352,6 +1637,23 @@ export class ChatsRepository {
             document.attached ? 1 : 0,
           );
       }
+      this.requireV10AssistantEventSchema();
+      this.insertGenerationEventInCurrentTransaction({
+        jobId: input.jobId,
+        attempt: 1,
+        event: { type: "chat_id", chatId: input.chatId },
+        now: input.now,
+      });
+      this.insertGenerationEventInCurrentTransaction({
+        jobId: input.jobId,
+        attempt: 1,
+        event: {
+          type: "status",
+          job_id: input.jobId,
+          status: "queued",
+        },
+        now: input.now,
+      });
       this.database
         .prepare("UPDATE chats SET updated_at=? WHERE id=?")
         .run(input.now, input.chatId);
@@ -1542,6 +1844,575 @@ export class ChatsRepository {
     );
   }
 
+  beginGenerationAttempt(input: {
+    snapshot: AssistantGenerationSnapshot;
+    claim: AssistantClaimIdentity;
+    claims: AssistantClaimTransactionPort;
+    now: string;
+  }) {
+    return this.transaction(() => {
+      this.requireV10AssistantEventSchema();
+      input.claims.assertClaimInCurrentTransaction({
+        id: input.claim.jobId,
+        type: "assistant_generate",
+        resourceType: "chat",
+        resourceId: input.snapshot.chatId,
+        leaseOwner: input.claim.leaseOwner,
+        attempt: input.claim.attempt,
+        at: input.now,
+        payload: input.snapshot.payload,
+      });
+      const status = this.generationStatusInCurrentTransaction(
+        input.claim.jobId,
+      );
+      if (
+        status.status !== "running" ||
+        status.activeAttempt !== input.claim.attempt
+      ) {
+        throw new WorkspaceJobLeaseLostError();
+      }
+      if (
+        !this.hasGenerationEvent({
+          jobId: status.jobId,
+          attempt: status.activeAttempt,
+          eventType: "chat_id",
+        })
+      ) {
+        this.insertGenerationEventInCurrentTransaction({
+          jobId: status.jobId,
+          attempt: status.activeAttempt,
+          event: { type: "chat_id", chatId: status.chatId },
+          now: input.now,
+        });
+      }
+      if (
+        status.activeAttempt > 1 &&
+        !this.hasGenerationEvent({
+          jobId: status.jobId,
+          attempt: status.activeAttempt,
+          eventType: "status",
+          status: "retrying",
+        })
+      ) {
+        this.insertGenerationEventInCurrentTransaction({
+          jobId: status.jobId,
+          attempt: status.activeAttempt,
+          event: {
+            type: "status",
+            job_id: status.jobId,
+            status: "retrying",
+          },
+          now: input.now,
+        });
+      }
+      if (
+        !this.hasGenerationEvent({
+          jobId: status.jobId,
+          attempt: status.activeAttempt,
+          eventType: "status",
+          status: "running",
+        })
+      ) {
+        this.insertGenerationEventInCurrentTransaction({
+          jobId: status.jobId,
+          attempt: status.activeAttempt,
+          event: {
+            type: "status",
+            job_id: status.jobId,
+            status: "running",
+          },
+          now: input.now,
+        });
+      }
+      return status;
+    });
+  }
+
+  appendGenerationEvent(input: {
+    snapshot: AssistantGenerationSnapshot;
+    claim: AssistantClaimIdentity;
+    claims: AssistantClaimTransactionPort;
+    event: MikeAssistantStreamEvent;
+    now: string;
+  }) {
+    if (input.event.type === "complete" || input.event.type === "error") {
+      throw new WorkspaceApiError(
+        500,
+        "INTERNAL_ERROR",
+        "Assistant terminal events must be committed with the terminal job state.",
+      );
+    }
+    return this.transaction(() => {
+      input.claims.assertClaimInCurrentTransaction({
+        id: input.claim.jobId,
+        type: "assistant_generate",
+        resourceType: "chat",
+        resourceId: input.snapshot.chatId,
+        leaseOwner: input.claim.leaseOwner,
+        attempt: input.claim.attempt,
+        at: input.now,
+        payload: input.snapshot.payload,
+      });
+      const status = this.generationStatusInCurrentTransaction(
+        input.claim.jobId,
+      );
+      if (
+        status.status !== "running" ||
+        status.activeAttempt !== input.claim.attempt
+      ) {
+        throw new WorkspaceJobLeaseLostError();
+      }
+      return this.insertGenerationEventInCurrentTransaction({
+        jobId: status.jobId,
+        attempt: status.activeAttempt,
+        event: input.event,
+        now: input.now,
+      });
+    });
+  }
+
+  private terminalEvent(status: AssistantGenerationStatus) {
+    if (status.status === "complete") {
+      return MikeAssistantStreamEventSchema.parse({
+        type: "complete",
+        message_id: status.outputMessageId,
+        job_id: status.jobId,
+      });
+    }
+    const values = {
+      cancelled: {
+        code: "assistant_cancelled",
+        message: "Assistant generation was cancelled.",
+      },
+      interrupted: {
+        code: "assistant_generation_interrupted",
+        message: "Assistant generation was interrupted.",
+      },
+      failed: {
+        code: "assistant_generation_failed",
+        message: "Assistant generation failed.",
+      },
+    } as const;
+    const value =
+      status.status === "cancelled" ||
+      status.status === "interrupted" ||
+      status.status === "failed"
+        ? values[status.status]
+        : corrupt("Assistant terminal event requested for an active job.");
+    return MikeAssistantStreamEventSchema.parse({
+      type: "error",
+      code: value.code,
+      message: value.message,
+    });
+  }
+
+  private reconcileGenerationTerminalInCurrentTransaction(
+    status: AssistantGenerationStatus,
+    now: string,
+  ) {
+    if (!status.terminal) return status;
+    const output = this.database
+      .prepare("SELECT status FROM chat_messages WHERE id=? AND job_id=?")
+      .get(status.outputMessageId, status.jobId);
+    if (!output) corrupt("Assistant generation output message is missing.");
+    const outputStatus = enumValue(
+      output.status,
+      MESSAGE_STATUSES,
+      "Assistant output message status",
+    );
+    if (status.status === "complete") {
+      if (outputStatus !== "complete") {
+        corrupt("Completed Assistant job is missing its completed message.");
+      }
+    } else {
+      const expected = status.status;
+      if (outputStatus === "pending" || outputStatus === "streaming") {
+        this.database
+          .prepare(
+            `UPDATE chat_messages
+                SET status=?,error_code=?,updated_at=?,completed_at=?
+              WHERE id=? AND job_id=? AND status IN ('pending','streaming')`,
+          )
+          .run(
+            expected,
+            expected === "cancelled"
+              ? "assistant_cancelled"
+              : expected === "interrupted"
+                ? "assistant_generation_interrupted"
+                : "assistant_generation_failed",
+            now,
+            now,
+            status.outputMessageId,
+            status.jobId,
+          );
+      } else if (outputStatus !== expected) {
+        corrupt("Assistant job and output message terminal states diverged.");
+      }
+    }
+    if (
+      !this.database
+        .prepare(
+          `SELECT 1 AS present FROM assistant_generation_events
+            WHERE job_id=? AND attempt=? AND terminal=1`,
+        )
+        .get(status.jobId, status.activeAttempt)
+    ) {
+      if (status.status === "complete") {
+        this.insertGenerationEventInCurrentTransaction({
+          jobId: status.jobId,
+          attempt: status.activeAttempt,
+          event: { type: "content_done" },
+          now,
+        });
+      }
+      this.insertGenerationEventInCurrentTransaction({
+        jobId: status.jobId,
+        attempt: status.activeAttempt,
+        event: this.terminalEvent(status),
+        terminal: true,
+        now,
+      });
+    }
+    return status;
+  }
+
+  generationStatus(jobId: string) {
+    this.requireV10AssistantEventSchema();
+    return this.transaction(() => {
+      const status = this.generationStatusInCurrentTransaction(jobId);
+      return this.reconcileGenerationTerminalInCurrentTransaction(
+        status,
+        new Date().toISOString(),
+      );
+    });
+  }
+
+  listGenerationStatuses(chatId: string, limit = 20) {
+    this.require(chatId);
+    this.requireV10AssistantEventSchema();
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) {
+      throw new WorkspaceApiError(
+        400,
+        "VALIDATION_ERROR",
+        "Assistant generation status limit must be between 1 and 20.",
+      );
+    }
+    return this.transaction(() => {
+      const rows = this.database
+        .prepare(
+          `SELECT snapshot.job_id
+             FROM assistant_generation_snapshots snapshot
+            WHERE snapshot.chat_id=?
+            ORDER BY snapshot.created_at DESC,snapshot.job_id DESC
+            LIMIT ?`,
+        )
+        .all(chatId, limit);
+      const now = new Date().toISOString();
+      return rows.map((row) => {
+        const status = this.generationStatusInCurrentTransaction(
+          requiredString(row.job_id, "generation job id"),
+        );
+        return this.reconcileGenerationTerminalInCurrentTransaction(status, now);
+      });
+    });
+  }
+
+  listGenerationEvents(
+    jobId: string,
+    input: { cursor?: number; limit?: number } = {},
+  ): AssistantGenerationEventPage {
+    this.requireV10AssistantEventSchema();
+    const cursor = input.cursor ?? 0;
+    const limit = input.limit ?? ASSISTANT_GENERATION_EVENT_PAGE_LIMIT;
+    if (
+      !Number.isSafeInteger(cursor) ||
+      cursor < 0 ||
+      cursor > ASSISTANT_GENERATION_EVENT_MAX_SEQUENCE
+    ) {
+      throw new WorkspaceApiError(
+        400,
+        "VALIDATION_ERROR",
+        "Assistant event cursor is invalid.",
+      );
+    }
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > ASSISTANT_GENERATION_EVENT_PAGE_LIMIT
+    ) {
+      throw new WorkspaceApiError(
+        400,
+        "VALIDATION_ERROR",
+        `Assistant event limit must be between 1 and ${ASSISTANT_GENERATION_EVENT_PAGE_LIMIT}.`,
+      );
+    }
+    return this.transaction(() => {
+      let status = this.generationStatusInCurrentTransaction(jobId);
+      status = this.reconcileGenerationTerminalInCurrentTransaction(
+        status,
+        new Date().toISOString(),
+      );
+      const maximum = requiredInteger(
+        this.database
+          .prepare(
+            `SELECT coalesce(max(sequence),0) AS sequence
+               FROM assistant_generation_events WHERE job_id=?`,
+          )
+          .get(jobId)?.sequence,
+        "Assistant event maximum cursor",
+      );
+      if (cursor > maximum) {
+        throw new WorkspaceApiError(
+          409,
+          "CONFLICT",
+          "Assistant event cursor is ahead of the durable stream.",
+        );
+      }
+      const rows = this.database
+        .prepare(
+          `SELECT sequence,attempt,event_json,terminal,created_at
+             FROM assistant_generation_events
+            WHERE job_id=? AND attempt=? AND sequence>?
+            ORDER BY sequence
+            LIMIT ?`,
+        )
+        .all(jobId, status.activeAttempt, cursor, limit);
+      const events: AssistantGenerationEventRecord[] = [];
+      let characters = 0;
+      for (const row of rows) {
+        if (typeof row.event_json !== "string") {
+          corrupt("Invalid persisted Assistant event JSON.");
+        }
+        characters += row.event_json.length;
+        if (
+          characters > ASSISTANT_GENERATION_EVENT_PAGE_CHAR_LIMIT &&
+          events.length > 0
+        ) {
+          break;
+        }
+        let event: MikeAssistantStreamEvent;
+        try {
+          event = MikeAssistantStreamEventSchema.parse(
+            JSON.parse(row.event_json),
+          );
+          assertMikeSafePayload(event);
+        } catch {
+          corrupt("Invalid persisted Assistant event payload.");
+        }
+        const terminal = requiredInteger(
+          row.terminal,
+          "Assistant event terminal flag",
+        );
+        if (terminal !== 0 && terminal !== 1) {
+          corrupt("Invalid persisted Assistant event terminal flag.");
+        }
+        events.push({
+          cursor: requiredInteger(row.sequence, "Assistant event cursor"),
+          attempt: requiredInteger(row.attempt, "Assistant event attempt"),
+          event,
+          terminal: terminal === 1,
+          createdAt: requiredString(row.created_at, "Assistant event createdAt"),
+        });
+      }
+      return {
+        jobId,
+        status: status.status,
+        attempt: status.activeAttempt,
+        terminal: status.terminal,
+        events,
+        nextCursor: events.at(-1)?.cursor ?? cursor,
+      };
+    });
+  }
+
+  cancelQueuedGeneration(input: {
+    jobId: string;
+    reason?: string | null;
+    now: string;
+    jobs: AssistantGenerationJobControlPort;
+  }) {
+    return this.transaction(() => {
+      const status = this.generationStatusInCurrentTransaction(input.jobId);
+      if (status.status !== "queued") {
+        throw new WorkspaceApiError(
+          409,
+          "CONFLICT",
+          "Only a queued Assistant generation may be cancelled atomically.",
+        );
+      }
+      const cancelled = input.jobs.transitionJobInCurrentTransaction(
+        input.jobId,
+        { type: "cancel", at: input.now, reason: input.reason },
+      );
+      if (cancelled.status !== "cancelled") {
+        corrupt("Assistant queued cancellation did not reach a terminal state.");
+      }
+      const updated = this.database
+        .prepare(
+          `UPDATE chat_messages
+              SET status='cancelled',error_code='assistant_cancelled',
+                  updated_at=?,completed_at=?
+            WHERE id=? AND job_id=? AND status='pending'`,
+        )
+        .run(input.now, input.now, status.outputMessageId, input.jobId) as {
+        changes?: unknown;
+      };
+      if (Number(updated?.changes ?? 0) !== 1) {
+        corrupt("Assistant queued cancellation did not update its output message.");
+      }
+      const terminalStatus = this.generationStatusInCurrentTransaction(
+        input.jobId,
+      );
+      this.insertGenerationEventInCurrentTransaction({
+        jobId: input.jobId,
+        attempt: terminalStatus.activeAttempt,
+        event: this.terminalEvent(terminalStatus),
+        terminal: true,
+        now: input.now,
+      });
+      return terminalStatus;
+    });
+  }
+
+  retryGeneration(input: {
+    jobId: string;
+    now: string;
+    jobs: AssistantGenerationJobControlPort;
+  }) {
+    return this.transaction(() => {
+      const status = this.generationStatusInCurrentTransaction(input.jobId);
+      if (
+        (status.status !== "failed" && status.status !== "interrupted") ||
+        !status.retryable ||
+        status.attempt >= status.maxAttempts
+      ) {
+        throw new WorkspaceApiError(
+          409,
+          "CONFLICT",
+          "Assistant generation is not eligible for retry.",
+        );
+      }
+      const retried = input.jobs.transitionJobInCurrentTransaction(
+        input.jobId,
+        { type: "retry", at: input.now },
+      );
+      if (retried.status !== "queued") {
+        corrupt("Assistant retry did not return to the queued state.");
+      }
+      const reset = this.database
+        .prepare(
+          `UPDATE chat_messages
+              SET content='',status='pending',error_code=NULL,
+                  updated_at=?,completed_at=NULL
+            WHERE id=? AND job_id=? AND status IN ('failed','interrupted')`,
+        )
+        .run(input.now, status.outputMessageId, input.jobId) as {
+        changes?: unknown;
+      };
+      if (Number(reset?.changes ?? 0) !== 1) {
+        corrupt("Assistant retry did not reset its output message.");
+      }
+      this.database
+        .prepare("DELETE FROM message_sources WHERE message_id=?")
+        .run(status.outputMessageId);
+      const queued = this.generationStatusInCurrentTransaction(input.jobId);
+      this.insertGenerationEventInCurrentTransaction({
+        jobId: queued.jobId,
+        attempt: queued.activeAttempt,
+        event: { type: "chat_id", chatId: queued.chatId },
+        now: input.now,
+      });
+      this.insertGenerationEventInCurrentTransaction({
+        jobId: queued.jobId,
+        attempt: queued.activeAttempt,
+        event: {
+          type: "status",
+          job_id: queued.jobId,
+          status: "retrying",
+        },
+        now: input.now,
+      });
+      this.insertGenerationEventInCurrentTransaction({
+        jobId: queued.jobId,
+        attempt: queued.activeAttempt,
+        event: { type: "status", job_id: queued.jobId, status: "queued" },
+        now: input.now,
+      });
+      return queued;
+    });
+  }
+
+  commitGenerationCancellation(input: {
+    snapshot: AssistantGenerationSnapshot;
+    claim: AssistantClaimIdentity;
+    claims: AssistantClaimTransactionPort;
+    content?: string;
+    now: string;
+  }) {
+    return this.transaction(() => {
+      const fence = this.database
+        .prepare(
+          `SELECT cancel_requested_at,cancellation_reason
+             FROM jobs
+            WHERE id=? AND type='assistant_generate'
+              AND resource_type='chat' AND resource_id=?
+              AND status='running' AND lease_owner=? AND attempt=?
+              AND lease_expires_at>?`,
+        )
+        .get(
+          input.claim.jobId,
+          input.snapshot.chatId,
+          input.claim.leaseOwner,
+          input.claim.attempt,
+          input.now,
+        );
+      if (!fence) throw new WorkspaceJobLeaseLostError();
+      if (fence.cancel_requested_at === null) return false;
+      const cancelled = input.claims.transitionJobInCurrentTransaction(
+        input.claim.jobId,
+        {
+          type: "cancel",
+          at: input.now,
+          reason:
+            typeof fence.cancellation_reason === "string"
+              ? fence.cancellation_reason
+              : "Assistant generation cancellation requested.",
+        },
+      );
+      if (cancelled.status !== "cancelled") {
+        corrupt("Assistant claimed cancellation did not reach a terminal state.");
+      }
+      const updated = this.database
+        .prepare(
+          `UPDATE chat_messages
+              SET content=?,status='cancelled',error_code='assistant_cancelled',
+                  updated_at=?,completed_at=?
+            WHERE id=? AND job_id=? AND status='pending'`,
+        )
+        .run(
+          input.content ?? "",
+          input.now,
+          input.now,
+          input.snapshot.outputMessageId,
+          input.claim.jobId,
+        ) as { changes?: unknown };
+      if (Number(updated?.changes ?? 0) !== 1) {
+        corrupt("Assistant claimed cancellation did not update its output message.");
+      }
+      const terminalStatus = this.generationStatusInCurrentTransaction(
+        input.claim.jobId,
+      );
+      this.insertGenerationEventInCurrentTransaction({
+        jobId: input.claim.jobId,
+        attempt: terminalStatus.activeAttempt,
+        event: this.terminalEvent(terminalStatus),
+        terminal: true,
+        now: input.now,
+      });
+      return true;
+    });
+  }
+
   commitGenerationComplete(input: {
     snapshot: AssistantGenerationSnapshot;
     claim: AssistantClaimIdentity;
@@ -1624,6 +2495,23 @@ export class ChatsRepository {
           result: { messageId: input.snapshot.outputMessageId },
         },
       });
+      this.insertGenerationEventInCurrentTransaction({
+        jobId: input.claim.jobId,
+        attempt: input.claim.attempt,
+        event: { type: "content_done" },
+        now: input.now,
+      });
+      this.insertGenerationEventInCurrentTransaction({
+        jobId: input.claim.jobId,
+        attempt: input.claim.attempt,
+        event: {
+          type: "complete",
+          message_id: input.snapshot.outputMessageId,
+          job_id: input.claim.jobId,
+        },
+        terminal: true,
+        now: input.now,
+      });
       return this.detail(input.snapshot.chatId);
     });
   }
@@ -1676,6 +2564,17 @@ export class ChatsRepository {
         attempt: claimInput.attempt,
         payload: claimInput.payload,
         event: { type: "fail", at: input.now, error: input.error },
+      });
+      this.insertGenerationEventInCurrentTransaction({
+        jobId: input.claim.jobId,
+        attempt: input.claim.attempt,
+        event: {
+          type: "error",
+          code: input.error.code,
+          message: input.error.message,
+        },
+        terminal: true,
+        now: input.now,
       });
     });
   }

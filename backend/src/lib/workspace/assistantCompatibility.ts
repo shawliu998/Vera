@@ -387,10 +387,81 @@ export const MikeGenerationAcceptedSchema = z
   })
   .strict();
 
+export const MikeGenerationStatusSchema = z
+  .object({
+    job_id: Id,
+    chat_id: Id,
+    prompt_message_id: Id,
+    output_message_id: Id,
+    status: z.enum([
+      "queued",
+      "running",
+      "complete",
+      "failed",
+      "cancelled",
+      "interrupted",
+    ]),
+    attempt: z.number().int().nonnegative().max(100),
+    active_attempt: z.number().int().positive().max(100),
+    max_attempts: z.number().int().positive().max(100),
+    retryable: z.boolean(),
+    cancel_requested: z.boolean(),
+    terminal: z.boolean(),
+  })
+  .strict();
+
+export const MikeGenerationControlSchema = z
+  .object({
+    job_id: Id,
+    status: z.enum([
+      "queued",
+      "running",
+      "complete",
+      "failed",
+      "cancelled",
+      "interrupted",
+    ]),
+    cancel_requested: z.boolean(),
+    terminal: z.boolean(),
+  })
+  .strict();
+
+export const MikeGenerationEventRecordSchema = z
+  .object({
+    cursor: z.number().int().positive().max(2_147_483_647),
+    attempt: z.number().int().positive().max(100),
+    event: z.lazy(() => MikeAssistantStreamEventSchema),
+    terminal: z.boolean(),
+    created_at: z.string().datetime(),
+  })
+  .strict();
+
+export const MikeGenerationReplaySchema = z
+  .object({
+    job_id: Id,
+    status: z.enum([
+      "queued",
+      "running",
+      "complete",
+      "failed",
+      "cancelled",
+      "interrupted",
+    ]),
+    attempt: z.number().int().positive().max(100),
+    terminal: z.boolean(),
+    events: z.array(MikeGenerationEventRecordSchema).max(100),
+    next_cursor: z.number().int().nonnegative().max(2_147_483_647),
+  })
+  .strict();
+
 export const MikeAssistantStreamEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("chat_id"), chatId: Id }).strict(),
   z
-    .object({ type: z.literal("status"), job_id: Id, status: z.string() })
+    .object({
+      type: z.literal("status"),
+      job_id: Id,
+      status: z.enum(["queued", "running", "retrying"]),
+    })
     .strict(),
   z.object({ type: z.literal("content_delta"), text: SafeText }).strict(),
   z.object({ type: z.literal("content_done") }).strict(),

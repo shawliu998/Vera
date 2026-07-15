@@ -3,7 +3,83 @@
 This document is the authoritative short status for Vera. Keep broader
 design notes in the existing architecture and deployment documents.
 
-## Current Stage
+## Current P0 stage — Mike-derived desktop client
+
+Current stage on 2026-07-15: **P0 Phases 0-7 complete; fresh packaged
+verification passed**.
+
+The primary product is now a Vera-branded, single-user, local-first macOS legal
+AI client whose UI, information architecture, and workflow semantics are a
+controlled port of Open Legal Products' Mike at
+`e32daad5a4c64a5561e04c53ee12411e3c5e7238`. Mike UI use is authorised and the
+port retains `AGPL-3.0-only` attribution. Vera supplies the Electron lifecycle,
+loopback authentication, SQLCipher/encrypted-file persistence, isolated
+Keychain credential worker, bounded local job runtime, backup, restore,
+diagnostics, and packaging boundary.
+
+The four core Mike-derived workspaces are Assistant, Projects, Workflows, and
+Tabular Review; Settings is the fifth first-level local control surface. The
+desktop opens `/assistant`. `Project` is the generic container for documents,
+Assistant conversations, workflow runs, and Tabular Reviews. The active local
+`/api/v1` surface covers those resources, model profiles, durable jobs,
+citations, exports, and settings. Workspace migrations are additive through
+v10.
+
+**Implemented in source:** real local Project/document CRUD and parsing;
+OpenAI, DeepSeek, Anthropic, Gemini, and hardened OpenAI-compatible profiles;
+Keychain-only provider secrets and connection-gated activation; durable
+Assistant streaming/stop/retry/regenerate/recovery and citations; Mike-derived
+workflow templates/editor with bounded persisted execution; multi-document,
+multi-column Tabular generation, cell retry/cancel, citations, CSV/XLSX export;
+encrypted backup/restore; redacted rotating desktop and model-call diagnostics;
+sandboxed renderer, explicit child-process environment allowlists, and
+loopback-only services.
+
+**Packaged P0 acceptance completed:** one full
+`./scripts/package-desktop-mac.sh` invocation exited `0` after package hygiene,
+SQLCipher, legacy migration, packaged startup/port release, workspace restart
+E2E, backup bridge, and restore fail-closed passed.
+
+The final packaged smoke also used the real executable to reject application
+encryption `disabled` and database encryption `metadata_plaintext`; each launch
+exited `1` before local services bound their ports. In the restore fail-closed
+cases, the working desktop log contained `startup_failed` and no
+`renderer_window_creating` event, while both services remained offline.
+
+```text
+relative app:      desktop/dist/mac-arm64/Vera.app
+absolute app:      /Users/a1-6/Documents/new agent/desktop/dist/mac-arm64/Vera.app
+relative DMG:      desktop/dist/Vera-1.0.1-arm64.dmg
+absolute DMG:      /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-arm64.dmg
+relative ZIP:      desktop/dist/Vera-1.0.1-arm64.zip
+absolute ZIP:      /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-arm64.zip
+relative manifest: desktop/dist/Vera-1.0.1-SHA256SUMS.txt
+absolute manifest: /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-SHA256SUMS.txt
+```
+
+The verified `desktop/dist/Vera-1.0.1-SHA256SUMS.txt` entries are:
+
+```text
+69a2ee56379a7cf6cb7fe441685fb59c846e77512928704955e774f3d8d42dd7  Vera-1.0.1-arm64.dmg
+47fcd64f214bf9b28e6982953043c76dba68ff0f2a933107ff6ec07eb704e648  Vera-1.0.1-arm64.zip
+```
+
+This closes P0 local-client acceptance, not public release readiness. The
+accepted package remains unsigned, unnotarized, and local-only.
+See [the P0 migration record](p0_mike_desktop_migration.md),
+[Mike port manifest](mike_port_manifest.md), and
+[desktop guide](desktop_app.md).
+
+Legacy `/aletheia/*` litigation, governance, audit, research, and opinion paths
+remain in the repository for compatibility and regression coverage, but they
+are not the P0 primary navigation.
+
+## Legacy historical status — Research Agent convergence
+
+The remainder of this document records the earlier civil-litigation and
+Research Agent programme. Statements such as “Current stage”, “Next”, or
+“Available now” below apply to that historical track and are superseded for the
+primary product by the P0 status above.
 
 Current stage: **Vera Research Agent convergence.** The product is being
 reduced to one local-first Chinese civil-commercial litigation workflow:

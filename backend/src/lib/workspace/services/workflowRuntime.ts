@@ -5,26 +5,25 @@ import {
 } from "../repositories/jobs";
 import { WorkspaceApiError } from "../errors";
 import type { StructuredError, WorkflowStep, WorkspaceJson } from "../types";
-import type { WorkflowExecutionSnapshot } from "../repositories/workflows";
+import type {
+  WorkflowExecutionSnapshot,
+  WorkflowRunStep,
+} from "../repositories/workflows";
 import { type WorkflowClaimCallbacks, WorkflowsService } from "./workflows";
 
-/**
- * Fixed Mike e32daad semantics treat workflows as Assistant-consumed
- * skill_md/columns_config metadata. Vera P1 does not ship a Mike-compatible
- * workflow planner, so this capability is deliberately not mountable.
- */
 export const WORKSPACE_WORKFLOW_EXECUTION_CAPABILITY = Object.freeze({
-  enabled: false as const,
-  reason:
-    "Mike workflow execution is Assistant-owned; Vera P1 has no compatible planner.",
+  enabled: true as const,
+  assistantRuns: true as const,
+  tabularRuns: false as const,
+  requiresRuntimeComposition: true as const,
 });
 
 export function workflowExecutionUnsupportedError(): WorkspaceApiError {
   return new WorkspaceApiError(
-    501,
+    503,
     "PRECONDITION_FAILED",
-    `Workflow execution is unsupported (capability=false). ${WORKSPACE_WORKFLOW_EXECUTION_CAPABILITY.reason}`,
-    [{ path: "capability", message: "false" }],
+    "Workflow execution is unavailable because its model runtime is not fully composed.",
+    [{ path: "execution_enabled", message: "false" }],
   );
 }
 
@@ -43,11 +42,23 @@ export type WorkflowStepExecutionResult =
   | { status: "complete"; output: WorkspaceJson }
   | { status: "unsupported"; message: string };
 
+export type WorkflowPreparedStepInput =
+  | { status: "ready"; input: WorkspaceJson }
+  | { status: "unsupported"; message: string };
+
 export interface WorkflowStepExecutor {
+  prepareStep?(input: {
+    snapshot: WorkflowExecutionSnapshot;
+    step: WorkflowStep;
+    ordinal: number;
+    history: readonly WorkflowRunStep[];
+  }): Promise<WorkflowPreparedStepInput> | WorkflowPreparedStepInput;
   executeStep(input: {
     snapshot: WorkflowExecutionSnapshot;
     step: WorkflowStep;
     ordinal: number;
+    stepInput: WorkspaceJson;
+    history: readonly WorkflowRunStep[];
     signal: AbortSignal;
   }): Promise<WorkflowStepExecutionResult> | WorkflowStepExecutionResult;
 }
@@ -76,12 +87,23 @@ function toStructuredError(error: unknown): StructuredError {
       details: null,
     };
   }
+  if (
+    error !== null &&
+    typeof error === "object" &&
+    typeof (error as { code?: unknown }).code === "string" &&
+    /^[a-z0-9_]{1,120}$/.test((error as { code: string }).code) &&
+    typeof (error as { retryable?: unknown }).retryable === "boolean"
+  ) {
+    return {
+      code: (error as { code: string }).code,
+      message: "Workflow model execution failed.",
+      retryable: (error as { retryable: boolean }).retryable,
+      details: null,
+    };
+  }
   return {
     code: "workflow_execution_failed",
-    message:
-      error instanceof Error && error.message.trim()
-        ? error.message
-        : "Workflow execution failed.",
+    message: "Workflow execution failed.",
     retryable: true,
     details: null,
   };
@@ -134,11 +156,6 @@ function throwAbortError(): never {
   throw error;
 }
 
-/**
- * Quarantined generic runtime adapter. It is intentionally disabled for Vera
- * P1: production composition must not register it with the Jobs pump because
- * Mike's workflow execution is owned by Assistant tooling, not generic steps.
- */
 export class WorkspaceWorkflowRuntime {
   constructor(
     private readonly workflows: WorkflowsService,
@@ -221,13 +238,10 @@ export class WorkspaceWorkflowRuntime {
       );
     }
     try {
+      this.workflows.requireExecutionSnapshotReady(payload.runId);
       if (snapshot.steps.length === 0) {
-        // Mike's skill_md and columns_config require a real planner/executor.
-        // This adapter only runs explicit domain steps, so completing a zero
-        // step snapshot would fabricate work.  Fail closed until composition
-        // supplies that Mike execution port.
         throw new UnsupportedWorkflowStepError(
-          "Workflow requires a Mike skill or tabular execution planner; no executable steps are available.",
+          "Workflow execution snapshot has no materialized Assistant steps.",
         );
       }
       for (const [ordinal, step] of snapshot.steps.entries()) {
@@ -248,11 +262,47 @@ export class WorkspaceWorkflowRuntime {
         }
         if (latest.status === "complete" || latest.status === "skipped")
           continue;
-        this.workflows.startClaimedStep(payload.runId, ordinal, {}, callbacks);
+        if (
+          latest.status !== "queued" &&
+          latest.status !== "waiting" &&
+          latest.status !== "running"
+        ) {
+          throw new WorkspaceApiError(
+            409,
+            "CONFLICT",
+            "Workflow step is not executable.",
+          );
+        }
+        const history = current.steps.filter(
+          (candidate) => candidate.ordinal < ordinal,
+        );
+        let stepInput = latest.input;
+        if (latest.status !== "running") {
+          const prepared = this.executor.prepareStep
+            ? await this.executor.prepareStep({
+                snapshot,
+                step,
+                ordinal,
+                history,
+              })
+            : ({ status: "ready", input: {} } as const);
+          if (prepared.status === "unsupported") {
+            throw new UnsupportedWorkflowStepError(prepared.message);
+          }
+          stepInput = prepared.input;
+          this.workflows.startClaimedStep(
+            payload.runId,
+            ordinal,
+            stepInput,
+            callbacks,
+          );
+        }
         const result = await this.executor.executeStep({
           snapshot,
           step,
           ordinal,
+          stepInput,
+          history,
           signal: context.signal,
         });
         if (result.status === "unsupported") {
@@ -266,9 +316,70 @@ export class WorkspaceWorkflowRuntime {
           callbacks,
         );
       }
+      const finished = this.workflows.getRun(payload.runId);
+      const promptSteps = finished.steps
+        .filter((step) => step.step.kind === "prompt" && step.output !== null)
+        .map((step) => ({ status: step.status, output: step.output }))
+        .filter(
+          (
+            step,
+          ): step is {
+            status: typeof step.status;
+            output: Record<string, WorkspaceJson>;
+          } =>
+            step.output !== null &&
+            typeof step.output === "object" &&
+            !Array.isArray(step.output),
+        );
+      const finalPrompt = promptSteps.at(-1)?.output;
+      const explicitOutput = [...finished.steps]
+        .reverse()
+        .find(
+          (step) =>
+            step.step.kind === "output" &&
+            step.status === "complete" &&
+            step.output !== null &&
+            typeof step.output === "object" &&
+            !Array.isArray(step.output) &&
+            step.output.schema === "vera-workflow-output-result-v1" &&
+            step.output.kind === "output",
+        )?.output;
+      const explicitOutputRecord =
+        explicitOutput !== null &&
+        typeof explicitOutput === "object" &&
+        !Array.isArray(explicitOutput)
+          ? explicitOutput
+          : null;
       this.workflows.completeClaimedRun(
         payload.runId,
-        { executedStepCount: snapshot.steps.length },
+        {
+          schema: "vera-workflow-run-result-v1",
+          executedStepCount: snapshot.steps.length,
+          modelCallCount: promptSteps.filter(
+            (step) => step.status === "complete",
+          ).length,
+          ...(explicitOutputRecord?.format === "text" ||
+          explicitOutputRecord?.format === "json"
+            ? { format: explicitOutputRecord.format }
+            : {}),
+          content:
+            explicitOutputRecord?.format === "text" &&
+            typeof explicitOutputRecord.content === "string"
+              ? explicitOutputRecord.content
+              : explicitOutputRecord?.format === "json"
+                ? null
+                : typeof finalPrompt?.content === "string"
+                  ? finalPrompt.content
+                  : null,
+          ...(explicitOutputRecord?.format === "json"
+            ? { value: explicitOutputRecord.value ?? null }
+            : {}),
+          sources: Array.isArray(explicitOutputRecord?.sources)
+            ? explicitOutputRecord.sources
+            : Array.isArray(finalPrompt?.sources)
+              ? finalPrompt.sources
+              : [],
+        },
         callbacks,
       );
     } catch (error) {

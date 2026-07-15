@@ -11,6 +11,10 @@ import {
   buildEndpointBindingSnapshot,
   MODEL_GATEWAY_HARD_MAX_REQUEST_BYTES,
 } from "../services/modelGateway";
+import {
+  CredentialWorkerCredentialNotFoundError,
+  CredentialWorkerUnavailableError,
+} from "../services/credentialWorkerClient";
 import { readBoundedJsonSse } from "./sse";
 import {
   abortError,
@@ -299,6 +303,20 @@ export class ProviderStreamingTransport {
           false,
         );
       }
+      if (error instanceof CredentialWorkerCredentialNotFoundError) {
+        throw new ProviderProtocolError(
+          "credential_not_found",
+          "The configured model credential was not found.",
+          false,
+        );
+      }
+      if (error instanceof CredentialWorkerUnavailableError) {
+        throw new ProviderProtocolError(
+          "credential_unavailable",
+          "The local credential store is unavailable.",
+          true,
+        );
+      }
       if (error instanceof WorkspaceApiError) {
         throw new ProviderProtocolError(
           "configuration_error",
@@ -391,6 +409,20 @@ export class ProviderStreamingTransport {
       }
       if (isAbortError(error)) throw abortError();
       if (error instanceof ProviderProtocolError) throw error;
+      if (error instanceof CredentialWorkerCredentialNotFoundError) {
+        throw new ProviderProtocolError(
+          "credential_not_found",
+          "The configured model credential was not found.",
+          false,
+        );
+      }
+      if (error instanceof CredentialWorkerUnavailableError) {
+        throw new ProviderProtocolError(
+          "credential_unavailable",
+          "The local credential store is unavailable.",
+          true,
+        );
+      }
       if (error instanceof WorkspaceApiError) {
         throw new ProviderProtocolError(
           "configuration_error",

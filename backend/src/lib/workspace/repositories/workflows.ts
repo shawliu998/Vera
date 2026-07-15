@@ -26,6 +26,7 @@ import type {
   WorkflowStepRun,
   WorkspaceJson,
 } from "../types";
+import { isDeepStrictEqual } from "node:util";
 
 type Row = Record<string, unknown>;
 
@@ -866,13 +867,42 @@ export class WorkflowsRepository {
         "Model profile is disabled.",
       );
     }
+    const readinessTable = this.database
+      .prepare(
+        "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'model_profile_connection_tests'",
+      )
+      .get();
+    if (readinessTable) {
+      const passed = this.database
+        .prepare(
+          `SELECT 1 AS present
+             FROM model_profiles profile
+             JOIN model_profile_connection_tests test
+               ON test.profile_id = profile.id
+            WHERE profile.id = ?
+              AND test.connection_revision = profile.connection_revision
+              AND test.status = 'passed'
+              AND test.error_code IS NULL
+              AND test.retryable = 0
+            LIMIT 1`,
+        )
+        .get(modelProfileId);
+      if (!passed) {
+        throw new WorkspaceApiError(
+          409,
+          "CONFLICT",
+          "Model profile requires a current passed connection test.",
+        );
+      }
+    }
     return { id: modelProfileId };
   }
 
   executionModelProfile(modelProfileId: string): WorkspaceJson {
     const row = this.database
       .prepare(
-        `SELECT id, provider, model, context_window_tokens, max_output_tokens,
+        `SELECT id, provider, model, base_url, execution_revision,
+                connection_revision, context_window_tokens, max_output_tokens,
                 capabilities_json, enabled, updated_at
            FROM model_profiles WHERE id = ?`,
       )
@@ -888,6 +918,9 @@ export class WorkflowsRepository {
       id: String(row.id),
       provider: String(row.provider),
       model: String(row.model),
+      baseUrl: row.base_url == null ? null : String(row.base_url),
+      executionRevision: Number(row.execution_revision),
+      connectionRevision: Number(row.connection_revision),
       contextWindow:
         row.context_window_tokens == null
           ? null
@@ -902,6 +935,40 @@ export class WorkflowsRepository {
       enabled: true,
       updatedAt: String(row.updated_at),
     });
+  }
+
+  requireExecutionModelProfileSnapshot(snapshot: WorkflowExecutionSnapshot) {
+    if (!snapshot.modelProfileId) {
+      throw new WorkspaceApiError(
+        412,
+        "PRECONDITION_FAILED",
+        "Workflow execution snapshot has no model profile.",
+      );
+    }
+    this.requireEnabledModelProfile(snapshot.modelProfileId);
+    if (
+      snapshot.config === null ||
+      typeof snapshot.config !== "object" ||
+      Array.isArray(snapshot.config) ||
+      snapshot.config.modelProfile === null ||
+      typeof snapshot.config.modelProfile !== "object" ||
+      Array.isArray(snapshot.config.modelProfile)
+    ) {
+      throw new WorkspaceApiError(
+        500,
+        "INTERNAL_ERROR",
+        "Workflow execution model snapshot is invalid.",
+      );
+    }
+    const current = this.executionModelProfile(snapshot.modelProfileId);
+    if (!isDeepStrictEqual(current, snapshot.config.modelProfile)) {
+      throw new WorkspaceApiError(
+        409,
+        "CONFLICT",
+        "Workflow model profile changed after the immutable run snapshot was created.",
+      );
+    }
+    return current;
   }
 
   workspaceDefaults() {
@@ -1091,7 +1158,10 @@ export class WorkflowsRepository {
     return detail;
   }
 
-  listRuns(workflowId: string, request: PageRequest = {}): Page<WorkflowRun> {
+  listRuns(
+    workflowId: string,
+    request: PageRequest = {},
+  ): Page<WorkflowRunRecord> {
     this.require(workflowId);
     const page = normalizePageRequest(request);
     const cursor = decodeCursor(page.cursor);
@@ -1118,6 +1188,107 @@ export class WorkflowsRepository {
           ? encodeCursor({ createdAt: last.createdAt, id: last.id })
           : null,
     };
+  }
+
+  /**
+   * Reconciles the exceptional case where Jobs recovery reached a terminal
+   * state while the feature transaction could no longer run (for example,
+   * repeated process death after lease claim). Normal completion/failure/
+   * cancellation remains claim-fenced and atomic with Jobs.
+   */
+  reconcileTerminalJobRuns(now: string) {
+    const terminal = this.database
+      .prepare(
+        `SELECT run.id AS run_id, job.status AS job_status
+           FROM workflow_runs run
+           JOIN jobs job ON job.id = run.job_id
+          WHERE run.status IN ('queued', 'waiting', 'running')
+            AND job.type = 'workflow_run'
+            AND job.resource_type = 'workflow_run'
+            AND job.resource_id = run.id
+            AND job.status IN ('failed', 'cancelled', 'interrupted')
+          ORDER BY run.created_at, run.id`,
+      )
+      .all();
+    if (terminal.length === 0) return 0;
+    return this.transaction(() => {
+      for (const row of terminal) {
+        const runId = String(row.run_id);
+        const jobStatus = String(row.job_status);
+        const runStatus =
+          jobStatus === "cancelled"
+            ? "cancelled"
+            : jobStatus === "interrupted"
+              ? "interrupted"
+              : "failed";
+        const code =
+          runStatus === "cancelled"
+            ? "workflow_cancelled"
+            : runStatus === "interrupted"
+              ? "workflow_restart_recovery_exhausted"
+              : "workflow_job_failed";
+        const error: StructuredError | null =
+          runStatus === "cancelled"
+            ? null
+            : {
+                code,
+                message:
+                  runStatus === "interrupted"
+                    ? "Workflow execution was interrupted during restart recovery."
+                    : "Workflow execution failed before feature finalization.",
+                retryable: runStatus === "interrupted",
+                details: { recovery: true },
+              };
+        this.database
+          .prepare(
+            `UPDATE workflow_step_runs
+                SET status = CASE
+                      WHEN ? = 'cancelled' THEN 'cancelled'
+                      WHEN status = 'running' THEN ?
+                      ELSE 'skipped'
+                    END,
+                    error_json = CASE
+                      WHEN status = 'running' AND ? IS NOT NULL THEN ?
+                      ELSE error_json
+                    END,
+                    error_code = CASE
+                      WHEN status = 'running' AND ? IS NOT NULL THEN ?
+                      ELSE error_code
+                    END,
+                    completed_at = coalesce(completed_at, ?),
+                    updated_at = ?
+              WHERE workflow_run_id = ?
+                AND status IN ('queued', 'waiting', 'running')`,
+          )
+          .run(
+            runStatus,
+            runStatus,
+            error ? code : null,
+            error ? serialize(error) : null,
+            error ? code : null,
+            error ? code : null,
+            now,
+            now,
+            runId,
+          );
+        this.database
+          .prepare(
+            `UPDATE workflow_runs
+                SET status = ?, error_json = ?, error_code = ?,
+                    completed_at = coalesce(completed_at, ?), updated_at = ?
+              WHERE id = ? AND status IN ('queued', 'waiting', 'running')`,
+          )
+          .run(
+            runStatus,
+            error ? serialize(error) : null,
+            error ? code : null,
+            now,
+            now,
+            runId,
+          );
+      }
+      return terminal.length;
+    });
   }
 
   startStep(

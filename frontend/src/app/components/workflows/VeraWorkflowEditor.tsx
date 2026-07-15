@@ -4,44 +4,56 @@
  * Adapted from Mike e32daad5a4c64a5561e04c53ee12411e3c5e7238
  * frontend/src/app/components/workflows/WorkflowDetailPage.tsx.
  *
- * Vera keeps configuration editing only. Workflow execution, sharing,
- * contribution, export, and cloud account controls are intentionally absent.
+ * Vera keeps Mike's configuration hierarchy while replacing cloud sharing
+ * with the local durable Assistant workflow execution surface.
  */
 
 import { useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { Check, EyeOff, Plus, Save, X } from "lucide-react";
+import { Check, EyeOff, Loader2, Plus, RefreshCw, Save, X } from "lucide-react";
 
 import { ConfirmPopup } from "@/app/components/shared/ConfirmPopup";
 import { PageHeader } from "@/app/components/vera-shell/PageHeader";
+import { useI18n } from "@/app/i18n";
+import { VeraApiError } from "@/app/lib/veraApi";
 import {
   deleteVeraWorkflow,
+  getVeraWorkflowDefinition,
   getVeraWorkflow,
   hideVeraWorkflow,
   updateVeraWorkflow,
   VERA_WORKFLOW_FORMATS,
   type VeraWorkflow,
   type VeraWorkflowColumn,
+  type VeraWorkflowDefinition,
   type VeraWorkflowFormat,
 } from "@/app/lib/veraWorkflowApi";
 
+import { VeraWorkflowDefinitionEditor } from "./VeraWorkflowDefinitionEditor";
 import { VeraWorkflowFormModal } from "./VeraWorkflowFormModal";
+import { VeraWorkflowRunPanel } from "./VeraWorkflowRunPanel";
 
-const FORMAT_LABELS: Record<VeraWorkflowFormat, string> = {
-  text: "文本",
-  bulleted_list: "项目列表",
-  number: "数字",
-  currency: "货币",
-  yes_no: "是 / 否",
-  date: "日期",
-  tag: "标签",
-  percentage: "百分比",
-  monetary_amount: "金额",
-};
+// Mike keeps TipTap out of the server bundle; Vera retains that boundary.
+const VeraWorkflowPromptEditor = dynamic(
+  () =>
+    import("./VeraWorkflowPromptEditor").then((module) => ({
+      default: module.VeraWorkflowPromptEditor,
+    })),
+  { ssr: false },
+);
 
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
-}
+const FORMAT_MESSAGE_KEYS = {
+  text: "workflows.formats.text",
+  bulleted_list: "workflows.formats.bulletedList",
+  number: "workflows.formats.number",
+  currency: "workflows.formats.currency",
+  yes_no: "workflows.formats.yesNo",
+  date: "workflows.formats.date",
+  tag: "workflows.formats.tag",
+  percentage: "workflows.formats.percentage",
+  monetary_amount: "workflows.formats.monetaryAmount",
+} as const;
 
 function normalizedColumns(
   columns: VeraWorkflowColumn[] | null,
@@ -56,9 +68,23 @@ function normalizedColumns(
     }));
 }
 
-export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
+export function VeraWorkflowEditor({
+  workflowId,
+  initialProjectId = null,
+}: {
+  workflowId: string;
+  initialProjectId?: string | null;
+}) {
   const router = useRouter();
+  const { t, errorMessage } = useI18n();
   const [workflow, setWorkflow] = useState<VeraWorkflow | null>(null);
+  const [definition, setDefinition] = useState<VeraWorkflowDefinition | null>(
+    null,
+  );
+  const [definitionLoading, setDefinitionLoading] = useState(false);
+  const [definitionLoadError, setDefinitionLoadError] = useState<string | null>(
+    null,
+  );
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
@@ -76,22 +102,67 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
     async function load() {
       setLoading(true);
       setLoadError(null);
+      setDefinition(null);
+      setDefinitionLoadError(null);
       try {
         const loaded = await getVeraWorkflow(workflowId, controller.signal);
         if (controller.signal.aborted) return;
         setWorkflow(loaded);
         setSkillMarkdown(loaded.skill_md ?? "");
         setColumns(normalizedColumns(loaded.columns_config));
+        if (loaded.metadata.type === "assistant" && !loaded.is_system) {
+          setDefinitionLoading(true);
+          try {
+            const loadedDefinition = await getVeraWorkflowDefinition(
+              loaded.id,
+              controller.signal,
+            );
+            if (!controller.signal.aborted) setDefinition(loadedDefinition);
+          } catch (error) {
+            if (!controller.signal.aborted) {
+              setDefinitionLoadError(
+                error instanceof VeraApiError
+                  ? errorMessage(error)
+                  : t("workflows.errors.definitionLoad"),
+              );
+            }
+          } finally {
+            if (!controller.signal.aborted) setDefinitionLoading(false);
+          }
+        }
       } catch (error) {
         if (!controller.signal.aborted)
-          setLoadError(errorMessage(error, "无法加载工作流。"));
+          setLoadError(
+            error instanceof VeraApiError
+              ? errorMessage(error)
+              : t("workflows.errors.load"),
+          );
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
     }
     void load();
     return () => controller.abort();
-  }, [workflowId]);
+  }, [errorMessage, t, workflowId]);
+
+  async function reloadDefinition() {
+    if (!workflow || workflow.metadata.type !== "assistant" || workflow.is_system) {
+      return;
+    }
+    setDefinitionLoading(true);
+    setDefinitionLoadError(null);
+    try {
+      setDefinition(await getVeraWorkflowDefinition(workflow.id));
+    } catch (error) {
+      setDefinitionLoadError(
+        error instanceof VeraApiError
+          ? errorMessage(error)
+          : t("workflows.errors.definitionLoad"),
+      );
+    } finally {
+      setDefinitionLoading(false);
+    }
+  }
 
   const editable = Boolean(
     workflow && !workflow.is_system && workflow.allow_edit && workflow.is_owner,
@@ -99,13 +170,36 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
   const metadata = useMemo(() => {
     if (!workflow) return [];
     return [
-      ["类型", workflow.metadata.type === "assistant" ? "助手" : "表格审阅"],
-      ["来源", workflow.is_system ? "Vera 内置模板" : "本地模板"],
-      ["语言", workflow.metadata.language],
-      ["业务领域", workflow.metadata.practice ?? "—"],
-      ["司法辖区", workflow.metadata.jurisdictions?.join("、") || "—"],
+      [
+        t("workflows.editor.type"),
+        workflow.metadata.type === "assistant"
+          ? t("workflows.editor.assistantType")
+          : t("workflows.editor.tabularType"),
+      ],
+      [
+        t("workflows.editor.source"),
+        workflow.is_system
+          ? t("workflows.editor.builtinSource")
+          : t("workflows.editor.localSource"),
+      ],
+      [t("workflows.editor.language"), workflow.metadata.language],
+      [t("workflows.editor.practice"), workflow.metadata.practice ?? "—"],
+      [
+        t("workflows.editor.jurisdiction"),
+        workflow.metadata.jurisdictions?.join("、") || "—",
+      ],
     ] as const;
-  }, [workflow]);
+  }, [t, workflow]);
+  const configuredDefinitionModelId = useMemo(() => {
+    const ids = new Set(
+      (definition?.steps ?? []).flatMap((step) =>
+        step.type === "prompt" && step.model_profile_id
+          ? [step.model_profile_id]
+          : [],
+      ),
+    );
+    return ids.size === 1 ? ([...ids][0] ?? null) : null;
+  }, [definition]);
 
   async function persist(
     input: Parameters<typeof updateVeraWorkflow>[1],
@@ -123,21 +217,19 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2_000);
     } catch (error) {
-      setOperationError(errorMessage(error, successMessage));
+      setOperationError(
+        error instanceof VeraApiError ? errorMessage(error) : successMessage,
+      );
     } finally {
       setSaving(false);
     }
-  }
-
-  async function saveAssistant() {
-    await persist({ skill_md: skillMarkdown }, "无法保存工作流指令。");
   }
 
   async function saveColumns() {
     if (
       columns.some((column) => !column.name.trim() || !column.prompt.trim())
     ) {
-      setOperationError("请填写每个表格列的名称和指令后再保存。");
+      setOperationError(t("errors.validation"));
       return;
     }
     await persist(
@@ -152,7 +244,7 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
             : { tags: [] }),
         })),
       },
-      "无法保存表格列。",
+      t("workflows.errors.save"),
     );
   }
 
@@ -165,9 +257,22 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
     try {
       const updated = await updateVeraWorkflow(workflow.id, input);
       setWorkflow(updated);
+      setDefinition((current) =>
+        current
+          ? {
+              ...current,
+              name: updated.metadata.title,
+              description: updated.metadata.description,
+            }
+          : current,
+      );
       setEditDetails(false);
     } catch (error) {
-      setOperationError(errorMessage(error, "无法保存工作流信息。"));
+      setOperationError(
+        error instanceof VeraApiError
+          ? errorMessage(error)
+          : t("workflows.errors.save"),
+      );
     } finally {
       setSaving(false);
     }
@@ -182,7 +287,11 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
       await hideVeraWorkflow(workflow.id);
       router.push("/workflows");
     } catch (error) {
-      setOperationError(errorMessage(error, "无法更新内置工作流显示状态。"));
+      setOperationError(
+        error instanceof VeraApiError
+          ? errorMessage(error)
+          : t("workflows.errors.save"),
+      );
     } finally {
       setHiddenBusy(false);
     }
@@ -196,7 +305,11 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
       await deleteVeraWorkflow(workflow.id);
       router.replace("/workflows");
     } catch (error) {
-      setOperationError(errorMessage(error, "无法删除工作流。"));
+      setOperationError(
+        error instanceof VeraApiError
+          ? errorMessage(error)
+          : t("workflows.errors.save"),
+      );
       setDeleteBusy(false);
     }
   }
@@ -212,23 +325,25 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-gray-500">
-        正在加载工作流…
+        {t("workflows.editor.loading")}
       </div>
     );
   }
   if (!workflow) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-        <p className="text-lg font-medium text-gray-900">无法打开工作流</p>
+        <p className="text-lg font-medium text-gray-900">
+          {t("workflows.editor.notFound")}
+        </p>
         <p role="alert" className="max-w-lg text-sm text-red-700">
-          {loadError ?? "工作流不存在。"}
+          {loadError ?? t("errors.notFound")}
         </p>
         <button
           type="button"
           onClick={() => router.push("/workflows")}
           className="rounded-full bg-gray-900 px-4 py-2 text-sm text-white"
         >
-          返回工作流
+          {t("workflows.editor.back")}
         </button>
       </div>
     );
@@ -240,9 +355,9 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
         shrink
         breadcrumbs={[
           {
-            label: "工作流",
+            label: t("workflows.title"),
             onClick: () => router.push("/workflows"),
-            title: "返回工作流",
+            title: t("workflows.editor.back"),
           },
           { label: workflow.metadata.title },
         ]}
@@ -254,7 +369,7 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
                   render: (
                     <span className="inline-flex items-center gap-1 text-xs text-emerald-700">
                       <Check className="h-3.5 w-3.5" />
-                      已保存
+                      {t("workflows.editor.saved")}
                     </span>
                   ),
                 },
@@ -265,7 +380,7 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
               ? [
                   {
                     type: "button" as const,
-                    label: "编辑信息",
+                    label: t("workflows.editor.details"),
                     onClick: () => setEditDetails(true),
                   },
                 ]
@@ -275,8 +390,12 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
                   {
                     type: "button" as const,
                     icon: <EyeOff className="h-4 w-4" />,
-                    label: hiddenBusy ? "正在隐藏…" : "隐藏内置模板",
-                    title: hiddenBusy ? "正在隐藏内置模板…" : "隐藏内置模板",
+                    label: hiddenBusy
+                      ? t("workflows.editor.hidingBuiltin")
+                      : t("workflows.editor.hideBuiltin"),
+                    title: hiddenBusy
+                      ? t("workflows.editor.hidingBuiltin")
+                      : t("workflows.editor.hideBuiltin"),
                     disabled: hiddenBusy,
                     onClick: () => void toggleHidden(),
                   },
@@ -286,7 +405,7 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
               ? [
                   {
                     type: "delete" as const,
-                    title: "删除工作流",
+                    title: t("workflows.editor.delete"),
                     onClick: () => setDeleteOpen(true),
                   },
                 ]
@@ -303,9 +422,7 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
         </p>
       )}
       <div className="shrink-0 border-b border-gray-100 px-4 pb-4 pt-1 md:px-10">
-        <p className="text-xs text-gray-500">
-          项目可选择性地使用此模板；当前配置页面不会启动或排队执行工作流。
-        </p>
+        <p className="text-xs text-gray-500">{t("workflows.subtitle")}</p>
         <dl className="mt-4 flex flex-wrap gap-x-8 gap-y-3 text-xs">
           {metadata.map(([label, value]) => (
             <div key={label}>
@@ -316,38 +433,89 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
         </dl>
       </div>
       {workflow.metadata.type === "assistant" ? (
-        <section className="flex min-h-0 flex-1 flex-col px-4 py-4 md:px-10">
-          <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-sm font-medium text-gray-900">工作流指令</h2>
-            {editable && (
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() => void saveAssistant()}
-                className="inline-flex items-center gap-1 rounded-full bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
-              >
-                <Save className="h-3.5 w-3.5" />
-                {saving ? "正在保存…" : "保存"}
-              </button>
-            )}
+        workflow.is_system ? (
+          <section className="grid min-h-0 flex-1 gap-4 overflow-y-auto px-4 py-4 md:px-10 xl:grid-cols-[minmax(24rem,1.12fr)_minmax(24rem,0.88fr)] xl:overflow-hidden">
+            <div className="flex min-h-[32rem] min-w-0 flex-col xl:min-h-0">
+              <div className="mb-2">
+                <h2 className="text-sm font-medium text-gray-900">
+                  {t("workflows.editor.instructions")}
+                </h2>
+                <p className="mt-1 text-xs text-gray-500">
+                  {t("workflows.editor.instructionsHint")}
+                </p>
+              </div>
+              <div className="min-h-0 flex-1">
+                <VeraWorkflowPromptEditor
+                  value={skillMarkdown}
+                  onChange={setSkillMarkdown}
+                  readOnly
+                />
+              </div>
+            </div>
+            <VeraWorkflowRunPanel
+              workflow={workflow}
+              initialProjectId={initialProjectId}
+            />
+          </section>
+        ) : definitionLoading ? (
+          <div className="flex min-h-72 flex-1 items-center justify-center text-sm text-gray-500">
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            {t("workflows.definition.loading")}
           </div>
-          <textarea
-            aria-label="工作流指令"
-            value={skillMarkdown}
-            onChange={(event) => setSkillMarkdown(event.target.value)}
-            readOnly={!editable}
-            maxLength={100_000}
-            placeholder="此工作流还没有指令。"
-            className="min-h-72 flex-1 resize-none rounded-xl border border-gray-200 bg-white px-4 py-3 font-mono text-sm leading-6 text-gray-800 outline-none focus:border-gray-500 read-only:bg-gray-50 read-only:text-gray-600"
-          />
-        </section>
+        ) : !definition ? (
+          <div className="flex min-h-72 flex-1 flex-col items-center justify-center px-6 text-center">
+            <p role="alert" className="max-w-xl text-sm text-red-700">
+              {definitionLoadError ?? t("workflows.errors.definitionLoad")}
+            </p>
+            <button
+              type="button"
+              onClick={() => void reloadDefinition()}
+              className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-gray-950 px-4 py-2 text-xs font-medium text-white"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              {t("common.actions.retry")}
+            </button>
+          </div>
+        ) : (
+          <section className="grid min-h-0 flex-1 gap-4 overflow-y-auto px-4 py-4 md:px-10 xl:grid-cols-[minmax(25rem,1.12fr)_minmax(24rem,0.88fr)] xl:overflow-hidden">
+            <div className="min-h-[32rem] min-w-0 xl:min-h-0 xl:overflow-y-auto">
+              <VeraWorkflowDefinitionEditor
+                definition={definition}
+                editable={editable}
+                onSaved={(updated) => {
+                  setDefinition(updated);
+                  setWorkflow((current) =>
+                    current
+                      ? {
+                          ...current,
+                          metadata: {
+                            ...current.metadata,
+                            title: updated.name,
+                            description: updated.description,
+                          },
+                        }
+                      : current,
+                  );
+                }}
+              />
+            </div>
+            <VeraWorkflowRunPanel
+              workflow={workflow}
+              initialProjectId={definition.project_id ?? initialProjectId}
+              boundProjectId={definition.project_id}
+              configuredModelProfileId={configuredDefinitionModelId}
+            />
+          </section>
+        )
       ) : (
         <section className="min-h-0 flex-1 overflow-auto px-4 py-4 md:px-10">
           <div className="mb-3 flex items-center justify-between">
             <div>
-              <h2 className="text-sm font-medium text-gray-900">提取列</h2>
+              <h2 className="text-sm font-medium text-gray-900">
+                {t("workflows.editor.columns")}
+              </h2>
               <p className="mt-1 text-xs text-gray-500">
-                支持九种输出格式与标签语义。
+                {t("workflows.editor.columnsHint")}
               </p>
             </div>
             {editable && (
@@ -369,7 +537,7 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
                   className="inline-flex items-center gap-1 rounded-full border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700"
                 >
                   <Plus className="h-3.5 w-3.5" />
-                  添加列
+                  {t("workflows.editor.addColumn")}
                 </button>
                 <button
                   type="button"
@@ -378,28 +546,33 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
                   className="inline-flex items-center gap-1 rounded-full bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
                 >
                   <Save className="h-3.5 w-3.5" />
-                  {saving ? "正在保存…" : "保存"}
+                  {saving
+                    ? t("common.status.saving")
+                    : t("workflows.editor.saveColumns")}
                 </button>
               </div>
             )}
           </div>
           {columns.length === 0 ? (
             <div className="rounded-xl border border-dashed border-gray-200 p-8 text-center text-sm text-gray-500">
-              尚未配置提取列。
+              {t("workflows.empty.body")}
             </div>
           ) : (
             <div className="min-w-[720px] overflow-hidden rounded-xl border border-gray-200">
               <div className="grid grid-cols-[minmax(160px,1fr)_140px_minmax(260px,2fr)_36px] border-b border-gray-200 bg-gray-50 px-3 py-2 text-xs font-medium text-gray-500">
-                <span>列名称</span>
-                <span>格式</span>
-                <span>指令</span>
+                <span>{t("workflows.editor.columnName")}</span>
+                <span>{t("workflows.editor.columnFormat")}</span>
+                <span>{t("workflows.editor.columnPrompt")}</span>
                 <span />
               </div>
               {columns.map((column) => {
                 const ordinal = column.index + 1;
                 const descriptor = column.name.trim()
-                  ? `第 ${ordinal} 列：${column.name.trim()}`
-                  : `第 ${ordinal} 列`;
+                  ? t("workflows.editor.columnDescriptorNamed", {
+                      ordinal,
+                      name: column.name.trim(),
+                    })
+                  : t("workflows.editor.columnDescriptor", { ordinal });
                 const fieldId = `vera-workflow-column-${column.index}`;
                 return (
                   <div
@@ -408,7 +581,7 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
                   >
                     <div>
                       <label className="sr-only" htmlFor={`${fieldId}-name`}>
-                        {descriptor}名称
+                        {`${descriptor} ${t("workflows.editor.columnName")}`}
                       </label>
                       <input
                         id={`${fieldId}-name`}
@@ -425,7 +598,7 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
                     </div>
                     <div>
                       <label className="sr-only" htmlFor={`${fieldId}-format`}>
-                        {descriptor}格式
+                        {`${descriptor} ${t("workflows.editor.columnFormat")}`}
                       </label>
                       <select
                         id={`${fieldId}-format`}
@@ -444,14 +617,14 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
                       >
                         {VERA_WORKFLOW_FORMATS.map((format) => (
                           <option key={format} value={format}>
-                            {FORMAT_LABELS[format]}
+                            {t(FORMAT_MESSAGE_KEYS[format])}
                           </option>
                         ))}
                       </select>
                     </div>
                     <div>
                       <label className="sr-only" htmlFor={`${fieldId}-prompt`}>
-                        {descriptor}指令
+                        {`${descriptor} ${t("workflows.editor.columnPrompt")}`}
                       </label>
                       <textarea
                         id={`${fieldId}-prompt`}
@@ -471,7 +644,7 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
                             className="sr-only"
                             htmlFor={`${fieldId}-tags`}
                           >
-                            {descriptor}标签，使用逗号分隔
+                            {`${descriptor} ${t("workflows.editor.tags")}`}
                           </label>
                           <input
                             id={`${fieldId}-tags`}
@@ -485,7 +658,7 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
                                   .filter(Boolean),
                               })
                             }
-                            placeholder="标签，逗号分隔"
+                            placeholder={t("workflows.editor.tags")}
                             className="mt-1.5 h-8 w-full rounded border border-gray-200 px-2 text-xs read-only:border-transparent read-only:bg-transparent"
                           />
                         </>
@@ -502,7 +675,9 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
                           )
                         }
                         className="self-start rounded p-1.5 text-red-500 hover:bg-red-50"
-                        aria-label={`删除${descriptor}`}
+                        aria-label={t("workflows.editor.removeColumn", {
+                          name: descriptor,
+                        })}
                       >
                         <X className="h-4 w-4" />
                       </button>
@@ -512,6 +687,12 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
               })}
             </div>
           )}
+          <div className="mt-4 max-w-2xl">
+            <VeraWorkflowRunPanel
+              workflow={workflow}
+              initialProjectId={initialProjectId}
+            />
+          </div>
         </section>
       )}
       <VeraWorkflowFormModal
@@ -526,9 +707,9 @@ export function VeraWorkflowEditor({ workflowId }: { workflowId: string }) {
       />
       <ConfirmPopup
         open={deleteOpen}
-        title="删除工作流？"
-        message={`“${workflow.metadata.title}”将从本地工作区永久删除。`}
-        confirmLabel="删除"
+        title={t("workflows.deleteConfirm.title")}
+        message={t("workflows.deleteConfirm.body")}
+        confirmLabel={t("common.actions.delete")}
         confirmStatus={deleteBusy ? "loading" : "idle"}
         onConfirm={() => void deleteWorkflow()}
         onCancel={() => !deleteBusy && setDeleteOpen(false)}

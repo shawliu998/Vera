@@ -177,6 +177,7 @@ function activeSectionFromSegments(
     segments: string[],
 ): ProjectWorkspaceSection {
     if (segments[0] === "assistant") return "assistant";
+    if (segments[0] === "workflows") return "workflows";
     if (segments[0] === "tabular-reviews") return "reviews";
     return "documents";
 }
@@ -198,7 +199,7 @@ export function ProjectWorkspaceProvider({
     const [projectError, setProjectError] = useState<string | null>(null);
     const [searchBySection, setSearchBySection] = useState<
         Record<ProjectWorkspaceSection, string>
-    >({ documents: "", assistant: "", reviews: "" });
+    >({ documents: "", assistant: "", workflows: "", reviews: "" });
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
     const [deleteConfirmName, setDeleteConfirmName] = useState("");
     const [deleteStatus, setDeleteStatus] = useState<
@@ -462,8 +463,9 @@ export function ProjectSectionToolbar({
     const router = useRouter();
     const items = [
         { id: "documents", label: t("documents.title"), disabled: false },
-        { id: "assistant", label: t("assistant.title"), disabled: true },
-        { id: "reviews", label: t("tabular.title"), disabled: true },
+        { id: "assistant", label: t("assistant.title"), disabled: false },
+        { id: "workflows", label: t("workflows.title"), disabled: false },
+        { id: "reviews", label: t("tabular.title"), disabled: false },
     ] as const;
 
     return (
@@ -479,6 +481,12 @@ export function ProjectSectionToolbar({
                         onClick={() => {
                             if (item.id === "documents") {
                                 router.push(`/projects/${projectId}`);
+                            } else if (item.id === "assistant") {
+                                router.push(`/projects/${projectId}/assistant`);
+                            } else if (item.id === "workflows") {
+                                router.push(`/projects/${projectId}/workflows`);
+                            } else if (item.id === "reviews") {
+                                router.push(`/projects/${projectId}/tabular-reviews`);
                             }
                         }}
                         className={`text-xs transition-colors disabled:cursor-not-allowed ${

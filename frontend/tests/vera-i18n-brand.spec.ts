@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import {
@@ -33,6 +33,20 @@ function flattenMessages(value: unknown): string[] {
   return Object.values(value as Record<string, unknown>).flatMap((child) =>
     flattenMessages(child),
   );
+}
+
+function sourceFiles(root: string): string[] {
+  return readdirSync(root).flatMap((entry) => {
+    const absolute = path.join(root, entry);
+    if (statSync(absolute).isDirectory()) return sourceFiles(absolute);
+    return /\.(?:ts|tsx)$/.test(entry) ? [absolute] : [];
+  });
+}
+
+function withoutComments(value: string): string {
+  return value
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
 }
 
 test("Vera dictionaries are complete, Chinese-first, and cover the desktop product", () => {
@@ -96,7 +110,7 @@ test("stable backend error codes always resolve to localized safe copy", () => {
   expect(localized).not.toContain(internalBackendMessage);
 });
 
-test("capability copy distinguishes available workspace features from planned features", () => {
+test("capability copy describes the real Assistant, Workflow, and Tabular surfaces", () => {
   expect(MESSAGES["zh-CN"].projects.subtitle).toContain("创建项目");
   expect(MESSAGES["zh-CN"].documents.subtitle).toContain("管理项目资料");
   expect(MESSAGES["en-US"].projects.subtitle).toContain("Create projects");
@@ -104,36 +118,77 @@ test("capability copy distinguishes available workspace features from planned fe
     "Manage project materials",
   );
 
-  for (const copy of [
-    MESSAGES["zh-CN"].assistant.subtitle,
-    ...Object.values(MESSAGES["zh-CN"].assistant.errors),
-    MESSAGES["zh-CN"].workflows.subtitle,
-    ...Object.values(MESSAGES["zh-CN"].workflows.errors),
-    MESSAGES["zh-CN"].tabular.subtitle,
-    ...Object.values(MESSAGES["zh-CN"].tabular.errors),
-  ]) {
-    expect(copy).toMatch(/后续版本启用|尚未启用/);
-  }
-  for (const copy of [
-    MESSAGES["en-US"].assistant.subtitle,
-    ...Object.values(MESSAGES["en-US"].assistant.errors),
-    MESSAGES["en-US"].workflows.subtitle,
-    ...Object.values(MESSAGES["en-US"].workflows.errors),
-    MESSAGES["en-US"].tabular.subtitle,
-    ...Object.values(MESSAGES["en-US"].tabular.errors),
-  ]) {
-    expect(copy).toMatch(/later release|not enabled yet/);
-  }
+  expect(MESSAGES["zh-CN"].assistant.subtitle).toContain("本地可恢复的对话");
+  expect(MESSAGES["zh-CN"].workflows.subtitle).toContain("本地持久执行");
+  expect(MESSAGES["zh-CN"].tabular.subtitle).toContain("批量提取结构化结果");
+  expect(MESSAGES["en-US"].assistant.subtitle).toContain("durable local conversations");
+  expect(MESSAGES["en-US"].workflows.subtitle).toContain("run them durably");
+  expect(MESSAGES["en-US"].tabular.subtitle).toContain("Extract structured results");
+
+  const capabilityCopy = [
+    ...flattenMessages(MESSAGES["zh-CN"]),
+    ...flattenMessages(MESSAGES["en-US"]),
+  ].join("\n");
+  expect(capabilityCopy).not.toMatch(
+    /后续版本启用|尚未启用|本版本未启用|当前版本未启用|later release|not enabled (?:yet|in this (?:release|version))/i,
+  );
 
   expect(
     localizeBackendError("REMOTE_PROVIDER_DISABLED", (key, values) =>
       translateMessage("zh-CN", key, values),
     ),
-  ).toBe("当前版本未启用远程模型。");
-  expect(MESSAGES["zh-CN"].errors.remoteDisabled).not.toMatch(/设置|本地模型/);
-  expect(MESSAGES["en-US"].errors.remoteDisabled).not.toMatch(
-    /Settings|local model/i,
+  ).toBe("当前运行环境不提供远程模型调用。");
+  expect(MESSAGES["en-US"].errors.remoteDisabled).toBe(
+    "This runtime does not provide remote model calls.",
   );
+});
+
+test("P0 product sources keep user copy in i18n dictionaries", () => {
+  const sourceRoot = path.join(process.cwd(), "src", "app");
+  const roots = [
+    path.join(sourceRoot, "components", "assistant"),
+    path.join(sourceRoot, "components", "models"),
+    path.join(sourceRoot, "components", "projects"),
+    path.join(sourceRoot, "components", "tabular"),
+    path.join(sourceRoot, "components", "vera-shell"),
+    path.join(sourceRoot, "components", "workflows"),
+    path.join(sourceRoot, "(pages)", "assistant"),
+    path.join(sourceRoot, "(pages)", "projects"),
+    path.join(sourceRoot, "(pages)", "settings"),
+    path.join(sourceRoot, "(pages)", "tabular-review"),
+    path.join(sourceRoot, "(pages)", "workflows"),
+  ];
+  const explicitFiles = [
+    path.join(sourceRoot, "hooks", "useAssistantChat.ts"),
+    path.join(sourceRoot, "components", "shared", "ConfirmPopup.tsx"),
+    path.join(sourceRoot, "components", "shared", "Modal.tsx"),
+    path.join(sourceRoot, "components", "shared", "RowActions.tsx"),
+  ];
+  const persistedCompatibilityValues = new Set([
+    path.join(sourceRoot, "components", "tabular", "pillUtils.ts"),
+    path.join(sourceRoot, "components", "workflows", "VeraWorkflowFormModal.tsx"),
+  ]);
+
+  const files = [...new Set([...roots.flatMap(sourceFiles), ...explicitFiles])];
+  for (const file of files) {
+    const source = withoutComments(readFileSync(file, "utf8"));
+    if (!persistedCompatibilityValues.has(file)) {
+      expect(source, `${path.relative(process.cwd(), file)} has hard-coded Han copy`)
+        .not.toMatch(/[\u3400-\u9fff]/);
+    }
+
+    const brandAuditedSource = file.endsWith(
+      path.join("settings", "data", "page.tsx"),
+    )
+      ? source
+          .replaceAll("AletheiaDesktopInfo", "DesktopInfo")
+          .replaceAll("aletheiaDesktop", "desktopBridge")
+      : source;
+    expect(
+      brandAuditedSource,
+      `${path.relative(process.cwd(), file)} contains a legacy product brand`,
+    ).not.toMatch(/\b(?:mike|aletheia|supabase)\b/i);
+  }
 });
 
 test("date, number, and file-size formatting is delegated to Intl", () => {
@@ -184,4 +239,13 @@ test("brand primitives use Vera assets and expose accessible names", () => {
   expect(providerSource).toContain("initialLocale = DEFAULT_LOCALE");
   expect(providerSource).toContain("document.documentElement.lang = locale");
   expect(rootLayoutSource).toContain('<html lang="zh-CN">');
+  expect(rootLayoutSource).toContain('title: "Vera"');
+  expect(rootLayoutSource).toContain('siteName: "Vera"');
+  expect(rootLayoutSource).toContain('url: "/vera-mark.png"');
+  expect(rootLayoutSource).not.toMatch(/icon\.svg|mike|aletheia|supabase/i);
+
+  expect(readdirSync(path.join(process.cwd(), "public")).sort()).toEqual([
+    "vera-mark.png",
+    "vera-wordmark.png",
+  ]);
 });

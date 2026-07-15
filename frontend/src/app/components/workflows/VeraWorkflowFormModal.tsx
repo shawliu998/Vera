@@ -11,6 +11,7 @@ import { useMemo, useState } from "react";
 import { MessageSquare, Table2 } from "lucide-react";
 
 import { Modal } from "@/app/components/shared/Modal";
+import { useI18n, type MessageKey } from "@/app/i18n";
 import type {
   VeraWorkflow,
   VeraWorkflowCreateInput,
@@ -18,15 +19,23 @@ import type {
   VeraWorkflowUpdateInput,
 } from "@/app/lib/veraWorkflowApi";
 
-const LANGUAGES = ["中文", "English", "日本語", "한국어", "Other"] as const;
-const PRACTICES = [
-  "通用",
-  "公司",
-  "争议解决",
-  "合规",
-  "知识产权",
-  "Other",
-] as const;
+type FormOption = { value: string; labelKey: MessageKey | null };
+
+const LANGUAGE_OPTIONS: readonly FormOption[] = [
+  { value: "中文", labelKey: "workflows.form.options.languageChinese" },
+  { value: "English", labelKey: "workflows.form.options.languageEnglish" },
+  { value: "日本語", labelKey: "workflows.form.options.languageJapanese" },
+  { value: "한국어", labelKey: "workflows.form.options.languageKorean" },
+  { value: "Other", labelKey: "workflows.form.options.other" },
+];
+const PRACTICE_OPTIONS: readonly FormOption[] = [
+  { value: "通用", labelKey: "workflows.form.options.practiceGeneral" },
+  { value: "公司", labelKey: "workflows.form.options.practiceCorporate" },
+  { value: "争议解决", labelKey: "workflows.form.options.practiceDisputes" },
+  { value: "合规", labelKey: "workflows.form.options.practiceCompliance" },
+  { value: "知识产权", labelKey: "workflows.form.options.practiceIp" },
+  { value: "Other", labelKey: "workflows.form.options.other" },
+];
 
 interface VeraWorkflowFormModalCommonProps {
   open: boolean;
@@ -60,6 +69,7 @@ function initialValue(workflow?: VeraWorkflow | null) {
 
 export function VeraWorkflowFormModal(props: VeraWorkflowFormModalProps) {
   const { open, mode, workflow, busy = false, error, onClose } = props;
+  const { t } = useI18n();
   const [value, setValue] = useState(() => initialValue(workflow));
   const formId =
     mode === "create" ? "vera-workflow-create" : "vera-workflow-edit";
@@ -72,16 +82,16 @@ export function VeraWorkflowFormModal(props: VeraWorkflowFormModalProps) {
         .filter(Boolean),
     [value.jurisdictions],
   );
-  const languageOptions = LANGUAGES.includes(
-    value.language as (typeof LANGUAGES)[number],
+  const languageOptions = LANGUAGE_OPTIONS.some(
+    (option) => option.value === value.language,
   )
-    ? LANGUAGES
-    : [value.language, ...LANGUAGES];
-  const practiceOptions = PRACTICES.includes(
-    value.practice as (typeof PRACTICES)[number],
+    ? LANGUAGE_OPTIONS
+    : [{ value: value.language, labelKey: null }, ...LANGUAGE_OPTIONS];
+  const practiceOptions = PRACTICE_OPTIONS.some(
+    (option) => option.value === value.practice,
   )
-    ? PRACTICES
-    : [value.practice, ...PRACTICES];
+    ? PRACTICE_OPTIONS
+    : [{ value: value.practice, labelKey: null }, ...PRACTICE_OPTIONS];
 
   if (!open) return null;
 
@@ -119,14 +129,25 @@ export function VeraWorkflowFormModal(props: VeraWorkflowFormModalProps) {
     <Modal
       open
       onClose={busy ? () => undefined : onClose}
-      breadcrumbs={["工作流", isEdit ? "编辑信息" : "新建工作流"]}
+      breadcrumbs={[
+        t("workflows.title"),
+        isEdit ? t("workflows.form.edit") : t("workflows.form.create"),
+      ]}
       primaryAction={{
         type: "submit",
         form: formId,
-        label: busy ? "正在保存…" : isEdit ? "保存更改" : "创建工作流",
+        label: busy
+          ? t("workflows.form.saving")
+          : isEdit
+            ? t("workflows.form.saveChanges")
+            : t("workflows.form.createAction"),
         disabled: !canSubmit,
       }}
-      cancelAction={{ label: "取消", onClick: onClose, disabled: busy }}
+      cancelAction={{
+        label: t("common.actions.cancel"),
+        onClick: onClose,
+        disabled: busy,
+      }}
     >
       <form
         id={formId}
@@ -134,7 +155,7 @@ export function VeraWorkflowFormModal(props: VeraWorkflowFormModalProps) {
         className="space-y-5 py-2"
       >
         <p className="rounded-xl border border-blue-100 bg-blue-50/70 px-3 py-2 text-xs leading-5 text-blue-900">
-          工作流模板独立保存；项目仅是可选的使用容器，不会在这里创建共享或云端关联。
+          {t("workflows.form.localHint")}
         </p>
         {error && (
           <p
@@ -145,7 +166,7 @@ export function VeraWorkflowFormModal(props: VeraWorkflowFormModalProps) {
           </p>
         )}
         <label className="block text-sm font-medium text-gray-800">
-          名称
+          {t("workflows.form.name")}
           <input
             autoFocus
             value={value.title}
@@ -153,18 +174,20 @@ export function VeraWorkflowFormModal(props: VeraWorkflowFormModalProps) {
             onChange={(event) =>
               setValue((current) => ({ ...current, title: event.target.value }))
             }
-            placeholder="例如：合同风险摘要"
+            placeholder={t("workflows.form.namePlaceholder")}
             className="mt-1.5 h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm outline-none transition focus:border-gray-500"
           />
         </label>
         {!isEdit && (
           <fieldset>
-            <legend className="text-sm font-medium text-gray-800">类型</legend>
+            <legend className="text-sm font-medium text-gray-800">
+              {t("workflows.form.type")}
+            </legend>
             <div className="mt-1.5 grid grid-cols-2 gap-2">
               {(
                 [
-                  ["assistant", "助手工作流", MessageSquare],
-                  ["tabular", "表格审阅工作流", Table2],
+                  ["assistant", t("workflows.form.assistant"), MessageSquare],
+                  ["tabular", t("workflows.form.tabular"), Table2],
                 ] as const
               ).map(([type, label, Icon]) => (
                 <button
@@ -187,7 +210,7 @@ export function VeraWorkflowFormModal(props: VeraWorkflowFormModalProps) {
         )}
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="block text-sm font-medium text-gray-800">
-            语言
+            {t("workflows.form.language")}
             <select
               value={value.language}
               onChange={(event) =>
@@ -198,13 +221,15 @@ export function VeraWorkflowFormModal(props: VeraWorkflowFormModalProps) {
               }
               className="mt-1.5 h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm outline-none focus:border-gray-500"
             >
-              {languageOptions.map((language) => (
-                <option key={language}>{language}</option>
+              {languageOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.labelKey ? t(option.labelKey) : option.value}
+                </option>
               ))}
             </select>
           </label>
           <label className="block text-sm font-medium text-gray-800">
-            业务领域
+            {t("workflows.form.practice")}
             <select
               value={value.practice}
               onChange={(event) =>
@@ -215,14 +240,16 @@ export function VeraWorkflowFormModal(props: VeraWorkflowFormModalProps) {
               }
               className="mt-1.5 h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm outline-none focus:border-gray-500"
             >
-              {practiceOptions.map((practice) => (
-                <option key={practice}>{practice}</option>
+              {practiceOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.labelKey ? t(option.labelKey) : option.value}
+                </option>
               ))}
             </select>
           </label>
         </div>
         <label className="block text-sm font-medium text-gray-800">
-          司法辖区（可选，逗号分隔）
+          {t("workflows.form.jurisdiction")}
           <input
             value={value.jurisdictions}
             maxLength={1_600}
@@ -232,13 +259,13 @@ export function VeraWorkflowFormModal(props: VeraWorkflowFormModalProps) {
                 jurisdictions: event.target.value,
               }))
             }
-            placeholder="中国大陆，香港特别行政区"
+            placeholder={t("workflows.form.jurisdictionPlaceholder")}
             className="mt-1.5 h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm outline-none focus:border-gray-500"
           />
         </label>
         {value.type === "assistant" && (
           <label className="block text-sm font-medium text-gray-800">
-            工作流指令（可选）
+            {t("workflows.form.instructions")}
             <textarea
               value={value.skillMarkdown}
               maxLength={100_000}
@@ -248,7 +275,7 @@ export function VeraWorkflowFormModal(props: VeraWorkflowFormModalProps) {
                   skillMarkdown: event.target.value,
                 }))
               }
-              placeholder="写下可复用的分析指令…"
+              placeholder={t("workflows.form.instructionsPlaceholder")}
               className="mt-1.5 min-h-32 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-gray-500"
             />
           </label>

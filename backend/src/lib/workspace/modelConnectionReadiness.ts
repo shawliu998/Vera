@@ -44,6 +44,8 @@ export function normalizeModelConnectionTestErrorCode(
     case "hardened_transport_required":
     case "provider_request_failed":
       return "configuration_error";
+    case "credential_not_found":
+      return "credential_unavailable";
     default:
       return "invalid_response";
   }
