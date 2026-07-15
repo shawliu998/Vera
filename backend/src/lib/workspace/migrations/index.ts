@@ -12,6 +12,7 @@ import { PROJECT_SOURCE_FOUNDATION_V11_MIGRATION } from "./v11ProjectSourceFound
 import { DOCUMENT_STUDIO_V12_MIGRATION } from "./v12DocumentStudio";
 import { SOURCE_RETENTION_LIFECYCLE_V13_MIGRATION } from "./v13SourceRetentionLifecycle";
 import { DOCUMENT_STUDIO_SUGGESTIONS_V14_MIGRATION } from "./v14DocumentStudioSuggestions";
+import { MATTER_PROFILES_V15_MIGRATION } from "./v15MatterProfiles";
 
 export {
   detectWorkspaceDatabaseCapabilities,
@@ -41,6 +42,7 @@ export { PROJECT_SOURCE_FOUNDATION_V11_MIGRATION } from "./v11ProjectSourceFound
 export { DOCUMENT_STUDIO_V12_MIGRATION } from "./v12DocumentStudio";
 export { SOURCE_RETENTION_LIFECYCLE_V13_MIGRATION } from "./v13SourceRetentionLifecycle";
 export { DOCUMENT_STUDIO_SUGGESTIONS_V14_MIGRATION } from "./v14DocumentStudioSuggestions";
+export { MATTER_PROFILES_V15_MIGRATION } from "./v15MatterProfiles";
 
 export const WORKSPACE_MIGRATIONS = [
   INITIAL_WORKSPACE_MIGRATION,
@@ -57,4 +59,5 @@ export const WORKSPACE_MIGRATIONS = [
   DOCUMENT_STUDIO_V12_MIGRATION,
   SOURCE_RETENTION_LIFECYCLE_V13_MIGRATION,
   DOCUMENT_STUDIO_SUGGESTIONS_V14_MIGRATION,
+  MATTER_PROFILES_V15_MIGRATION,
 ] as const;

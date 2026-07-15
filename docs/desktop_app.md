@@ -136,10 +136,11 @@ credentials, proxy variables, or Node injection flags.
 
 ## Local persistence and credentials
 
-Workspace schema migrations currently run through v14
-(`v14DocumentStudioSuggestions`). V11 adds the Project source foundation, v12
-adds Document Studio, v13 adds source-retention lifecycle enforcement, and v14
-adds reviewable Document Studio suggestions. Projects, folders, document
+Workspace schema migrations currently run through v15
+(`v15MatterProfiles`). V11 adds the Project source foundation, v12 adds
+Document Studio, v13 adds source-retention lifecycle enforcement, v14 adds
+reviewable Document Studio suggestions, and v15 adds the optional one-to-one
+Matter Profile plus fail-closed Matter Policy foundation. Projects, folders, document
 versions, chats, messages, jobs, workflow definitions/runs/step runs, Tabular
 Reviews/cells, model-profile metadata, durable Assistant events, source
 provenance, and Studio state use the local Workspace database. The packaged

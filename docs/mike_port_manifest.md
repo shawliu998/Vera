@@ -59,7 +59,7 @@ Mike UI 的使用已经获得授权。仓库仍按 AGPL-3.0-only 基线保留来
 ## 2. 当前工作树事实快照
 
 - 固定 Mike commit 已在本地 Git 对象库中，移植文件保留 source-lock/provenance。
-- `backend/src/lib/workspace/` 已收敛到 additive SQLCipher migrations v1-v14、repositories/services、加密 Blob、下载 capability、FTS、持久 jobs/events 和统一 runtime。
+- `backend/src/lib/workspace/` 已收敛到 additive SQLCipher migrations v1-v15、repositories/services、加密 Blob、下载 capability、FTS、持久 jobs/events 和统一 runtime；v15 以一对一可选扩展保留 Project 技术边界。
 - `backend/src/index.ts` 是薄入口；`backend/src/veraApplication.ts` 是唯一 composition root。Legacy `/aletheia` 保留，Workspace API 只在 `/api/v1` 挂载一次。
 - 同一个持久 job pump 执行 `document_parse`、`assistant_generate`、`workflow_run` 和 `tabular_cell`；没有第二套前端假执行器或内存任务状态机。
 - Assistant、Projects、Tabular Review、Workflows、Settings 的活动页面与真实本地 API 已接通；主导航不再进入 `/aletheia/*`。
@@ -152,7 +152,7 @@ Mike UI 的使用已经获得授权。仓库仍按 AGPL-3.0-only 基线保留来
 | renderer transport | `veraRuntime.ts`、`veraApi.ts`、`veraSse.ts`、`veraWireTypes.ts`；token 由 preload 提供                                                         | `source-complete`                    |
 | preload            | 只暴露必要 token、backup/restore、日志、凭据和受控 native 能力；`window.aletheiaDesktop` 名称仅作为 Legacy 兼容边界                             | `source-complete; packaged-complete` |
 | downloads          | `/api/v1/downloads/:token` + 短期 capability                                                                                                    | `source-complete; packaged-complete` |
-| schema             | additive SQLCipher migrations v1-v14；不导入 Mike Postgres/RLS schema                                                                           | `source-complete`                    |
+| schema             | additive SQLCipher migrations v1-v15；不导入 Mike Postgres/RLS schema                                                                           | `source-complete`                    |
 
 ## 10. 明确排除的云端和多用户依赖
 
