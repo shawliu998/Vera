@@ -474,6 +474,98 @@ async function run() {
       "Quality checked: 30 days written notice.",
     );
 
+    // A document_context result is durable and may outlive the source's
+    // payload-retention window. Simulate a tombstone taking effect between
+    // retrieval and the final prompt boundary: the persisted evidence remains
+    // auditable, but the provider must receive zero calls.
+    const retentionPreflightWorkflow = workflows.create({
+      type: "assistant",
+      projectId: PROJECT,
+      title: "Retention preflight",
+      skillMarkdown: "Use only current, policy-allowed evidence.",
+      steps: [
+        {
+          kind: "document_context",
+          title: "Persist evidence",
+          queryTemplate: "termination written notice",
+          maxDocuments: 1,
+          maxChunksPerDocument: 1,
+        },
+        {
+          kind: "prompt",
+          title: "Do not call a provider after tombstone",
+          prompt: "Analyze the persisted evidence.",
+        },
+      ],
+    });
+    const retentionPreflightRun = workflows.prepareRun(
+      retentionPreflightWorkflow.id,
+      {
+        idempotencyKey: "retention-preflight",
+        projectId: PROJECT,
+        modelProfileId: MODEL,
+        inputBinding: { document_ids: [document.documentId] },
+      },
+    );
+    const retentionChecks: Array<{
+      projectId: string;
+      documentId: string;
+      versionId: string;
+    }> = [];
+    const retentionExecutor = new WorkspaceWorkflowStepExecutor(
+      model,
+      new WorkflowDocumentContextRepository(database),
+      {
+        assertModelUse(input) {
+          retentionChecks.push(input);
+          throw new WorkspaceApiError(
+            409,
+            "PRECONDITION_FAILED",
+            "Source payload access is unavailable because the source is tombstoned.",
+          );
+        },
+      },
+    );
+    const retentionRuntime = new WorkspaceWorkflowRuntime(
+      workflows,
+      jobsRepository,
+      retentionExecutor,
+      clock,
+    );
+    const providerCallsBeforeRetentionPreflight = model.calls.length;
+    await retentionRuntime.handle(
+      createClaimedContext(
+        jobsRepository,
+        retentionPreflightRun.detail.run.jobId!,
+      ),
+    );
+    const retentionPreflightDone = workflows.getRun(
+      retentionPreflightRun.detail.run.id,
+    );
+    assert.equal(retentionPreflightDone.run.status, "failed");
+    assert.equal(retentionPreflightDone.steps[0]?.status, "complete");
+    assert.match(
+      JSON.stringify(retentionPreflightDone.steps[0]?.output),
+      /thirty days written notice/,
+    );
+    assert.equal(retentionPreflightDone.steps[1]?.status, "failed");
+    assert.equal(
+      retentionPreflightDone.steps[1]?.error?.code,
+      "precondition_failed",
+    );
+    assert.deepEqual(retentionChecks, [
+      {
+        projectId: PROJECT,
+        documentId: document.documentId,
+        versionId: document.versionId,
+      },
+    ]);
+    assert.equal(
+      model.calls.length - providerCallsBeforeRetentionPreflight,
+      0,
+      "retention preflight denial must occur before model.runTurn",
+    );
+
     const legacyDefinition = workflows.getAssistantDefinition(sequential.id);
     assert.equal(legacyDefinition.type, "assistant");
     const repairedIds = legacyDefinition.steps.map((step) => step.id);

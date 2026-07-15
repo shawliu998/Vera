@@ -8,13 +8,16 @@ const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
-const { _electron: electron } = require("../../frontend/node_modules/playwright");
+const {
+  _electron: electron,
+} = require("../../frontend/node_modules/playwright");
 
 const DOCX_MIME_TYPE =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const STARTUP_TIMEOUT_MS = 180_000;
 const POLL_TIMEOUT_MS = 180_000;
 const REQUEST_TIMEOUT_MS = 30_000;
+const CLOSE_TIMEOUT_MS = 30_000;
 const LEGAL_PROVIDER_ENV_KEYS = [
   "VERA_PKULAW_API_ENDPOINT",
   "VERA_PKULAW_API_ALLOWED_HOSTS",
@@ -38,6 +41,75 @@ function array(value, label) {
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function assertAttributeStable(
+  locator,
+  name,
+  expected,
+  message,
+  durationMs = 500,
+) {
+  const deadline = Date.now() + durationMs;
+  while (Date.now() < deadline) {
+    assert.equal(await locator.getAttribute(name), expected, message);
+    await delay(50);
+  }
+}
+
+function forceTerminate(app) {
+  try {
+    const child = app.process();
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+  } catch {
+    // Best effort after a bounded graceful-close failure.
+  }
+}
+
+async function closeVera(running) {
+  const dialogs = [];
+  const dialogTasks = [];
+  const onDialog = (dialog) => {
+    dialogs.push(dialog.type());
+    dialogTasks.push(dialog.accept().catch(() => undefined));
+  };
+  if (running.page) running.page.on("dialog", onDialog);
+
+  let timeoutHandle;
+  const closeResult = running.app.close().then(
+    () => ({ status: "closed" }),
+    (error) => ({ status: "error", error }),
+  );
+  const timeoutResult = new Promise((resolve) => {
+    timeoutHandle = setTimeout(
+      () => resolve({ status: "timeout" }),
+      CLOSE_TIMEOUT_MS,
+    );
+  });
+  const result = await Promise.race([closeResult, timeoutResult]);
+  clearTimeout(timeoutHandle);
+
+  if (result.status === "timeout") {
+    forceTerminate(running.app);
+    await Promise.race([closeResult, delay(5_000)]);
+  }
+  await Promise.race([Promise.all(dialogTasks), delay(5_000)]);
+  try {
+    running.page?.off("dialog", onDialog);
+  } catch {
+    // The page normally closes before the listener can be detached.
+  }
+
+  if (result.status === "timeout") {
+    throw new Error("Packaged Vera graceful close exceeded its hard timeout.");
+  }
+  if (result.status === "error") {
+    forceTerminate(running.app);
+    throw result.error;
+  }
+  return dialogs;
 }
 
 function auditFetch(input, init = {}) {
@@ -77,7 +149,8 @@ async function assertPortsFree(frontendPort, backendPort) {
 async function waitForPortsClosed(frontendPort, backendPort) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    if (!(await portOpen(frontendPort)) && !(await portOpen(backendPort))) return;
+    if (!(await portOpen(frontendPort)) && !(await portOpen(backendPort)))
+      return;
     await delay(200);
   }
   throw new Error("Packaged Vera did not release its local service ports.");
@@ -105,16 +178,17 @@ async function launchVera(options) {
     env: options.env,
     timeout: STARTUP_TIMEOUT_MS,
   });
+  let page = null;
   try {
-    const page = await app.firstWindow();
+    page = await app.firstWindow();
     await page.waitForURL(options.frontendUrl, { timeout: STARTUP_TIMEOUT_MS });
     const token = await page.evaluate(() =>
       window.aletheiaDesktop.getAuthToken(),
     );
     assert.ok(typeof token === "string" && token.length > 20);
-    return { app, token };
+    return { app, page, token };
   } catch (error) {
-    await app.close().catch(() => undefined);
+    await closeVera({ app, page }).catch(() => forceTerminate(app));
     throw error;
   }
 }
@@ -124,14 +198,13 @@ async function listProjectDocuments(backendBaseUrl, token, projectId) {
     `${backendBaseUrl}/api/v1/projects/${projectId}/documents?limit=100`,
     { headers: authHeaders(token, false) },
   );
-  return array(await responseJson(response, "Project document list"), "documents");
+  return array(
+    await responseJson(response, "Project document list"),
+    "documents",
+  );
 }
 
-async function readProjectDocumentVersions(
-  backendBaseUrl,
-  token,
-  documentId,
-) {
+async function readProjectDocumentVersions(backendBaseUrl, token, documentId) {
   const response = await auditFetch(
     `${backendBaseUrl}/api/v1/documents/${documentId}/versions`,
     { headers: authHeaders(token, false) },
@@ -206,10 +279,7 @@ function assertOcrSummary(document) {
     summary.low_confidence_pages_truncated,
     summary.low_confidence_page_count > summary.low_confidence_pages.length,
   );
-  assert.equal(
-    summary.review_required,
-    summary.low_confidence_page_count > 0,
-  );
+  assert.equal(summary.review_required, summary.low_confidence_page_count > 0);
   return summary;
 }
 
@@ -218,10 +288,10 @@ function assertLegalProvidersRemainDisabled(value) {
   assert.equal(payload.schemaVersion, "vera-legal-source-provider-status-v1");
   assert.equal(payload.localOnly, true);
   const providers = array(payload.providers, "legal providers");
-  assert.deepEqual(
-    providers.map((provider) => provider.provider).sort(),
-    ["pkulaw", "wolters"],
-  );
+  assert.deepEqual(providers.map((provider) => provider.provider).sort(), [
+    "pkulaw",
+    "wolters",
+  ]);
   for (const provider of providers) {
     assert.equal(provider.deploymentReady, false);
     assert.equal(provider.endpointConfigured, false);
@@ -263,11 +333,7 @@ async function exportStudioDocx(
   return bytes;
 }
 
-async function runOptionalLegacyMatterOcr(
-  backendBaseUrl,
-  token,
-  fixture,
-) {
+async function runOptionalLegacyMatterOcr(backendBaseUrl, token, fixture) {
   const enabled = process.env.VERA_PACKAGED_OCR_LEGACY_MATTER ?? "false";
   assert.ok(
     enabled === "true" || enabled === "false",
@@ -320,7 +386,8 @@ async function runOptionalLegacyMatterOcr(
 }
 
 async function main() {
-  if (process.platform !== "darwin") throw new Error("This audit requires macOS.");
+  if (process.platform !== "darwin")
+    throw new Error("This audit requires macOS.");
   const desktopDir = path.resolve(__dirname, "..");
   const appPath =
     process.env.ALETHEIA_PACKAGED_APP_PATH ??
@@ -389,17 +456,23 @@ async function main() {
   let sourceDocumentId;
   let sourceVersionId;
   let snapshotId;
+  let citationAnchorId;
+  let citationChunkId;
   let studioDocumentId;
   let studioInitialVersionId;
   let studioSavedVersionId;
   let studioImportedVersionId;
   let legacyMatterIncluded = false;
   const studioRoundTripSentinel = "VERAPACKAGEDP1STUDIOSENTINEL";
-  const studioContent =
-    `# Packaged P1 Studio\n\n${studioRoundTripSentinel} preserves Project OCR work product. 😀`;
+  const citationQuote = "2026-09-01";
+  const studioContent = `# Packaged P1 Studio\n\n${studioRoundTripSentinel} preserves Project OCR work product. 😀`;
 
   try {
-    running = await launchVera({ executablePath, env: launchEnvironment, frontendUrl });
+    running = await launchVera({
+      executablePath,
+      env: launchEnvironment,
+      frontendUrl,
+    });
     let token = running.token;
     assertLegalProvidersRemainDisabled(
       await readLegalProviders(backendBaseUrl, token),
@@ -489,6 +562,52 @@ async function main() {
     assert.equal(snapshot.license.basis, "user_provided");
     assert.equal(snapshot.license.retention, "full_text_permitted");
 
+    const sourceContentResponse = await auditFetch(
+      `${backendBaseUrl}/api/v1/projects/${projectId}/sources/${snapshotId}/content?limit=20`,
+      { headers: authHeaders(token, false) },
+    );
+    const sourceContent = record(
+      await responseJson(sourceContentResponse, "Project source content"),
+      "Project source content",
+    );
+    assert.equal(sourceContent.snapshot_id, snapshotId);
+    assert.equal(sourceContent.document.document_id, sourceDocumentId);
+    assert.equal(sourceContent.document.version_id, sourceVersionId);
+    const citationChunk = array(
+      sourceContent.chunks,
+      "Project source chunks",
+    ).find(
+      (chunk) =>
+        typeof chunk.text === "string" && chunk.text.includes(citationQuote),
+    );
+    assert.ok(
+      citationChunk,
+      "Packaged Project source chunk must contain citation quote.",
+    );
+    citationChunkId = citationChunk.id;
+
+    const anchorResponse = await auditFetch(
+      `${backendBaseUrl}/api/v1/projects/${projectId}/sources/${snapshotId}/anchors`,
+      {
+        method: "POST",
+        headers: authHeaders(token),
+        body: JSON.stringify({
+          chunk_id: citationChunkId,
+          exact_quote: citationQuote,
+        }),
+      },
+    );
+    assert.equal(anchorResponse.status, 201);
+    const citationAnchor = record(
+      record(await anchorResponse.json(), "citation anchor response").anchor,
+      "citation anchor",
+    );
+    citationAnchorId = citationAnchor.id;
+    assert.equal(citationAnchor.snapshot_id, snapshotId);
+    assert.equal(citationAnchor.exact_quote, citationQuote);
+    assert.equal(citationAnchor.locator.chunkId, citationChunkId);
+    assert.equal(citationAnchor.locator.ocr.page, 1);
+
     const createStudioResponse = await auditFetch(
       `${backendBaseUrl}/api/v1/projects/${projectId}/studio/documents`,
       {
@@ -498,7 +617,10 @@ async function main() {
       },
     );
     assert.equal(createStudioResponse.status, 201);
-    const studioCreated = record(await createStudioResponse.json(), "Studio draft");
+    const studioCreated = record(
+      await createStudioResponse.json(),
+      "Studio draft",
+    );
     studioDocumentId = studioCreated.document_id;
     studioInitialVersionId = studioCreated.current_version_id;
     assert.equal(studioCreated.content, "");
@@ -512,7 +634,7 @@ async function main() {
           expected_version_id: studioInitialVersionId,
           content: studioContent,
           source: "user_upload",
-          citation_anchor_ids: [],
+          citation_anchor_ids: [citationAnchorId],
           summary: "Packaged P1 CAS save",
         }),
       },
@@ -522,6 +644,10 @@ async function main() {
     studioSavedVersionId = studioSaved.current_version_id;
     assert.notEqual(studioSavedVersionId, studioInitialVersionId);
     assert.equal(studioSaved.content, studioContent);
+    assert.deepEqual(studioSaved.version.citation_anchor_ids, [
+      citationAnchorId,
+    ]);
+    assert.equal(studioSaved.citation_anchors[0].id, citationAnchorId);
 
     const exportedDocx = await exportStudioDocx(
       backendBaseUrl,
@@ -547,10 +673,17 @@ async function main() {
     );
     assert.equal(importResponse.status, 201);
     const imported = record(await importResponse.json(), "Studio DOCX import");
-    const importedDocument = record(imported.document, "imported Studio document");
+    const importedDocument = record(
+      imported.document,
+      "imported Studio document",
+    );
     studioImportedVersionId = importedDocument.current_version_id;
     assert.notEqual(studioImportedVersionId, studioSavedVersionId);
     assert.ok(importedDocument.content.includes(studioRoundTripSentinel));
+    assert.deepEqual(importedDocument.version.citation_anchor_ids, [
+      citationAnchorId,
+    ]);
+    assert.equal(importedDocument.citation_anchors[0].id, citationAnchorId);
 
     legacyMatterIncluded = await runOptionalLegacyMatterOcr(
       backendBaseUrl,
@@ -558,12 +691,22 @@ async function main() {
       fixture,
     );
 
-    await running.app.close();
+    const firstLaunch = running;
+    const firstCloseDialogs = await closeVera(firstLaunch);
     running = null;
     await waitForPortsClosed(frontendPort, backendPort);
+    assert.deepEqual(
+      firstCloseDialogs,
+      [],
+      "The first packaged launch must close without a browser dialog.",
+    );
     await assertPortsFree(frontendPort, backendPort);
 
-    running = await launchVera({ executablePath, env: launchEnvironment, frontendUrl });
+    running = await launchVera({
+      executablePath,
+      env: launchEnvironment,
+      frontendUrl,
+    });
     token = running.token;
     assertLegalProvidersRemainDisabled(
       await readLegalProviders(backendBaseUrl, token),
@@ -628,7 +771,26 @@ async function main() {
       "source detail",
     );
     assert.equal(sourceDetail.snapshot.id, snapshotId);
-    assert.deepEqual(sourceDetail.anchors, []);
+    assert.equal(sourceDetail.anchors.length, 1);
+    assert.equal(sourceDetail.anchors[0].id, citationAnchorId);
+    assert.equal(sourceDetail.anchors[0].exact_quote, citationQuote);
+    assert.equal(sourceDetail.anchors[0].locator.chunkId, citationChunkId);
+
+    const recoveredSourceContentResponse = await auditFetch(
+      `${backendBaseUrl}/api/v1/projects/${projectId}/sources/${snapshotId}/content?chunk_id=${citationChunkId}`,
+      { headers: authHeaders(token, false) },
+    );
+    const recoveredSourceContent = record(
+      await responseJson(
+        recoveredSourceContentResponse,
+        "recovered Project source content",
+      ),
+      "recovered Project source content",
+    );
+    assert.equal(recoveredSourceContent.snapshot_id, snapshotId);
+    assert.equal(recoveredSourceContent.chunks.length, 1);
+    assert.equal(recoveredSourceContent.chunks[0].id, citationChunkId);
+    assert.ok(recoveredSourceContent.chunks[0].text.includes(citationQuote));
 
     const studioCurrentResponse = await auditFetch(
       `${backendBaseUrl}/api/v1/projects/${projectId}/studio/documents/${studioDocumentId}`,
@@ -640,6 +802,11 @@ async function main() {
     );
     assert.equal(studioCurrent.current_version_id, studioImportedVersionId);
     assert.ok(studioCurrent.content.includes(studioRoundTripSentinel));
+    assert.deepEqual(studioCurrent.version.citation_anchor_ids, [
+      citationAnchorId,
+    ]);
+    assert.equal(studioCurrent.citation_anchors.length, 1);
+    assert.equal(studioCurrent.citation_anchors[0].id, citationAnchorId);
 
     const studioVersionsResponse = await auditFetch(
       `${backendBaseUrl}/api/v1/projects/${projectId}/studio/documents/${studioDocumentId}/versions`,
@@ -673,6 +840,84 @@ async function main() {
     );
     assert.equal(historical.version.id, studioSavedVersionId);
     assert.equal(historical.content, studioContent);
+    assert.deepEqual(historical.version.citation_anchor_ids, [
+      citationAnchorId,
+    ]);
+    assert.equal(historical.citation_anchors[0].id, citationAnchorId);
+
+    await running.page.goto(
+      `http://127.0.0.1:${frontendPort}/projects/${projectId}/documents/${studioDocumentId}/studio`,
+    );
+    const studioSaveStatus = running.page.getByTestId("studio-save-status");
+    await studioSaveStatus.waitFor({
+      state: "visible",
+      timeout: STARTUP_TIMEOUT_MS,
+    });
+    const citationButton = running.page.getByTestId(
+      `studio-citation-open-${citationAnchorId}`,
+    );
+    await citationButton.waitFor({
+      state: "visible",
+      timeout: STARTUP_TIMEOUT_MS,
+    });
+    await assertAttributeStable(
+      studioSaveStatus,
+      "data-state",
+      "saved",
+      "Loading authoritative Studio content must not create an unsaved edit.",
+    );
+    const displayResponsePromise = running.page.waitForResponse(
+      (response) => {
+        const url = new URL(response.url());
+        return (
+          url.origin === backendBaseUrl &&
+          url.pathname === `/api/v1/documents/${sourceDocumentId}/display`
+        );
+      },
+      { timeout: REQUEST_TIMEOUT_MS },
+    );
+    await citationButton.click();
+    const displayResponse = await displayResponsePromise;
+    const displayUrl = new URL(displayResponse.url());
+    assert.equal(displayResponse.status(), 200);
+    assert.equal(displayUrl.searchParams.get("version_id"), sourceVersionId);
+    assert.equal(
+      String(displayResponse.headers()["content-type"])
+        .split(";", 1)[0]
+        .trim()
+        .toLowerCase(),
+      "application/pdf",
+    );
+    const sourceViewer = running.page.getByTestId(
+      "project-citation-source-viewer",
+    );
+    await sourceViewer.waitFor({
+      state: "visible",
+      timeout: REQUEST_TIMEOUT_MS,
+    });
+    assert.equal(
+      await running.page
+        .getByTestId("project-citation-highlight")
+        .textContent(),
+      citationQuote,
+    );
+    const originalPdfFrame = running.page.locator(
+      '[data-testid="project-citation-original-pdf"] iframe',
+    );
+    await originalPdfFrame.waitFor({
+      state: "visible",
+      timeout: REQUEST_TIMEOUT_MS,
+    });
+    assert.match(
+      String(await originalPdfFrame.getAttribute("src")),
+      /#page=1$/,
+    );
+    await assertAttributeStable(
+      studioSaveStatus,
+      "data-state",
+      "saved",
+      "Opening a citation must not dirty the Studio document.",
+    );
 
     await exportStudioDocx(
       backendBaseUrl,
@@ -689,12 +934,21 @@ async function main() {
       await responseJson(afterHistoricalExport, "post-export Studio versions"),
       "post-export Studio versions",
     );
-    assert.equal(afterExportVersions.current_version_id, studioImportedVersionId);
+    assert.equal(
+      afterExportVersions.current_version_id,
+      studioImportedVersionId,
+    );
     assert.equal(afterExportVersions.versions.length, 3);
 
-    await running.app.close();
+    const secondLaunch = running;
+    const secondCloseDialogs = await closeVera(secondLaunch);
     running = null;
     await waitForPortsClosed(frontendPort, backendPort);
+    assert.deepEqual(
+      secondCloseDialogs,
+      [],
+      "The Studio packaged launch must close without a browser dialog.",
+    );
     await assertPortsFree(frontendPort, backendPort);
 
     process.stdout.write(
@@ -709,12 +963,13 @@ async function main() {
             "image-only PDF parsed to ready through the packaged helper",
             "current Project document version exposes bounded OCR review summary",
             "immutable Project document source captured through the public API",
+            "bounded source content creates a real exact-quote citation anchor",
             "Studio draft CAS save and DOCX export-import round trip",
             "same encrypted profile and keys restart successfully",
-            "Project OCR source and Studio versions/content persist after restart",
+            "Project OCR source, exact anchor, and Studio citation binding persist after restart",
+            "Studio citation reopens the authenticated original PDF at the recorded page",
             "historical Studio DOCX export remains available without mutation",
             "legal providers remain secret-free and untested",
-            "citation-anchor integrity remains covered by the backend P1 convergence audit without DB bypass",
             "packaged local service ports release between launches",
           ],
         },
@@ -723,13 +978,21 @@ async function main() {
       )}\n`,
     );
   } finally {
-    if (running) await running.app.close().catch(() => undefined);
+    if (running) {
+      const failedLaunch = running;
+      running = null;
+      await closeVera(failedLaunch).catch(() =>
+        forceTerminate(failedLaunch.app),
+      );
+    }
     await waitForPortsClosed(frontendPort, backendPort).catch(() => undefined);
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
 main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
+  process.stderr.write(
+    `${error instanceof Error ? error.stack : String(error)}\n`,
+  );
   process.exitCode = 1;
 });

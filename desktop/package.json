@@ -35,6 +35,7 @@
     "test:original-document-save": "node scripts/originalDocumentSaveAudit.js",
     "test:p0-source": "npm run test:product-rename && npm run test:keychain-provisioning && npm run test:keychain-credential-store && npm run test:credential-worker && npm run test:credential-worker-utility && npm run test:credential-bridge && npm run test:credential-backend-integration && npm run test:encryption-policy && npm run test:runtime-security && npm run test:workspace-bridge && npm run test:diagnostic-bundle && npm run test:desktop-logger && npm run test:original-document-save",
     "signing:preflight": "node scripts/releaseSigningPreflight.js",
+    "signing:readiness": "node scripts/macReleaseReadiness.js",
     "signing:verify": "node scripts/verifyMacRelease.js",
     "test:signing-pipeline": "node scripts/releaseSigningAudit.js",
     "prepare:frontend-runtime": "node scripts/prepareFrontendRuntime.js && node scripts/buildNativeOcr.js",
@@ -52,6 +53,7 @@
     "productName": "Vera",
     "asar": true,
     "afterSign": "scripts/afterSign.js",
+    "afterAllArtifactBuild": "scripts/afterAllArtifactBuild.js",
     "files": [
       "main.js",
       "preload.js",
@@ -113,11 +115,16 @@
         "zip"
       ],
       "hardenedRuntime": true,
+      "notarize": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "gatekeeperAssess": false,
       "artifactName": "Vera-${version}-${arch}.${ext}"
     },
     "dmg": {
-      "artifactName": "Vera-${version}-${arch}.${ext}"
+      "artifactName": "Vera-${version}-${arch}.${ext}",
+      "sign": true,
+      "writeUpdateInfo": false
     }
   }
 }

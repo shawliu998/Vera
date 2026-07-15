@@ -6,12 +6,14 @@
 // are intentionally omitted; durable local reasoning, document reads/finds,
 // citations, completion, retry, and regeneration remain real.
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Check,
   ChevronDown,
   Copy,
   FileSearch,
   FileText,
+  FilePenLine,
   Loader2,
   RefreshCw,
   RotateCcw,
@@ -21,13 +23,20 @@ import {
 import type {
   AssistantEvent,
   CitationAnnotation,
+  DocumentCitationAnnotation,
   Message,
 } from "@/app/components/shared/types";
 import {
   displayCitationQuote,
+  firstDocumentCitationViewerEntry,
   getDocumentCitationQuotes,
 } from "@/app/components/shared/types";
+import {
+  ProjectCitationSourceViewer,
+  type ProjectAssistantCitationSource,
+} from "@/app/components/projects/ProjectCitationSourceViewer";
 import { useI18n, type MessageKey, type Translate } from "@/app/i18n";
+import { createVeraStudioDraftFromAssistant } from "@/app/lib/veraDocumentStudioApi";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import { ResponseStatus } from "./ResponseStatus";
 
@@ -36,11 +45,16 @@ const TOOL_LABEL_KEYS: Readonly<Record<string, MessageKey>> = {
   read_document: "assistant.events.readDocument",
   fetch_documents: "assistant.events.fetchDocuments",
   find_in_document: "assistant.events.findInDocument",
+  read_studio_document: "assistant.events.readStudioDocument",
+  suggest_studio_edit: "assistant.events.suggestStudioEdit",
   list_workflows: "assistant.events.listWorkflows",
   read_workflow: "assistant.events.readWorkflow",
 };
 
-function preEventLabel(event: AssistantEvent, t: Translate): {
+function preEventLabel(
+  event: AssistantEvent,
+  t: Translate,
+): {
   icon: React.ReactNode;
   title: string;
   detail?: string;
@@ -68,9 +82,7 @@ function preEventLabel(event: AssistantEvent, t: Translate): {
     case "tool_call_start":
       return {
         icon: <Wrench className="h-3.5 w-3.5" />,
-        title: t(
-          TOOL_LABEL_KEYS[event.name] ?? "assistant.events.localTool",
-        ),
+        title: t(TOOL_LABEL_KEYS[event.name] ?? "assistant.events.localTool"),
         active: event.isStreaming,
       };
     case "doc_read_start":
@@ -122,10 +134,7 @@ function preEventLabel(event: AssistantEvent, t: Translate): {
   }
 }
 
-function citationLocation(
-  citation: CitationAnnotation,
-  t: Translate,
-): string {
+function citationLocation(citation: CitationAnnotation, t: Translate): string {
   if (citation.kind === "case") {
     return (
       citation.citation ||
@@ -147,7 +156,10 @@ function citationLocation(
 }
 
 function responseState(message: Message, streaming: boolean) {
-  if (message.error || ["failed", "interrupted"].includes(message.generation?.status ?? "")) {
+  if (
+    message.error ||
+    ["failed", "interrupted"].includes(message.generation?.status ?? "")
+  ) {
     return "error" as const;
   }
   if (streaming) return "active" as const;
@@ -161,17 +173,30 @@ export function AssistantMessage({
   isLatest,
   onRetry,
   onRegenerate,
+  studioHandoff,
+  citationScope,
 }: {
   message: Message;
   isStreaming: boolean;
   isLatest: boolean;
   onRetry: () => void | Promise<void>;
   onRegenerate: () => void | Promise<void>;
+  studioHandoff?: Readonly<{ projectId: string; chatId: string }>;
+  citationScope?: Readonly<{
+    projectId: string;
+    documentIds: readonly string[];
+  }>;
 }) {
+  const router = useRouter();
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
+  const [creatingDraft, setCreatingDraft] = useState(false);
+  const [draftFailure, setDraftFailure] = useState(false);
   const [selectedCitation, setSelectedCitation] =
     useState<CitationAnnotation | null>(null);
+  const [citationSource, setCitationSource] =
+    useState<ProjectAssistantCitationSource | null>(null);
+  const [citationSourceFailure, setCitationSourceFailure] = useState(false);
   const citations = message.annotations ?? [];
   const events = useMemo(() => message.events ?? [], [message.events]);
   const contentEvents = events.filter(
@@ -190,8 +215,71 @@ export function AssistantMessage({
   );
   const generation = message.generation;
   const canRetry =
-    isLatest && generation?.terminal && generation.retryable && generation.status !== "complete";
-  const canRegenerate = isLatest && generation?.terminal && generation.status === "complete";
+    isLatest &&
+    generation?.terminal &&
+    generation.retryable &&
+    generation.status !== "complete";
+  const canRegenerate =
+    isLatest && generation?.terminal && generation.status === "complete";
+  const canCreateDraft =
+    Boolean(studioHandoff) &&
+    Boolean(message.id) &&
+    Boolean(content.trim()) &&
+    generation?.status === "complete";
+
+  async function createStudioDraft() {
+    if (!studioHandoff || !message.id || !canCreateDraft || creatingDraft)
+      return;
+    setCreatingDraft(true);
+    setDraftFailure(false);
+    try {
+      const draft = await createVeraStudioDraftFromAssistant(
+        studioHandoff.projectId,
+        {
+          chat_id: studioHandoff.chatId,
+          assistant_message_id: message.id,
+        },
+      );
+      router.push(
+        `/projects/${draft.project_id}/documents/${draft.document_id}/studio`,
+      );
+    } catch {
+      setDraftFailure(true);
+    } finally {
+      setCreatingDraft(false);
+    }
+  }
+
+  function openCitation(citation: CitationAnnotation) {
+    setCitationSourceFailure(false);
+    if (citation.kind === "case" || !citationScope) {
+      setSelectedCitation(citation);
+      return;
+    }
+    const documentCitation = citation as DocumentCitationAnnotation;
+    // The source viewer highlights one exact page-bound excerpt. Never merge
+    // later-page text into the first page and label that aggregate verified.
+    const firstEntry = firstDocumentCitationViewerEntry(documentCitation);
+    const quote = firstEntry?.quote.trim() ?? "";
+    if (
+      !documentCitation.version_id ||
+      !citationScope.documentIds.includes(documentCitation.document_id) ||
+      !quote
+    ) {
+      setSelectedCitation(null);
+      setCitationSourceFailure(true);
+      return;
+    }
+    setSelectedCitation(null);
+    setCitationSource({
+      kind: "assistant_document",
+      documentId: documentCitation.document_id,
+      versionId: documentCitation.version_id,
+      filename: documentCitation.filename,
+      quote,
+      page: firstEntry?.page ?? null,
+    });
+  }
 
   return (
     <div className="w-full" data-message-id={message.id}>
@@ -206,7 +294,9 @@ export function AssistantMessage({
                 className="group border-b border-gray-100 px-3 py-2 text-xs text-gray-600 last:border-b-0"
               >
                 <summary className="flex cursor-pointer list-none items-center gap-2">
-                  <span className={item.active ? "animate-spin" : undefined}>{item.icon}</span>
+                  <span className={item.active ? "animate-spin" : undefined}>
+                    {item.icon}
+                  </span>
                   <span className="font-medium">{item.title}</span>
                 </summary>
                 <p className="mt-2 whitespace-pre-wrap border-l border-gray-200 pl-5 leading-5 text-gray-500">
@@ -218,7 +308,9 @@ export function AssistantMessage({
                 key={`${item.title}-${index}`}
                 className="flex items-center gap-2 border-b border-gray-100 px-3 py-2 text-xs text-gray-600 last:border-b-0"
               >
-                <span className={item.active ? "animate-spin" : undefined}>{item.icon}</span>
+                <span className={item.active ? "animate-spin" : undefined}>
+                  {item.icon}
+                </span>
                 <span className="font-medium">{item.title}</span>
               </div>
             ),
@@ -230,8 +322,14 @@ export function AssistantMessage({
         <AssistantMarkdown
           text={content}
           citations={citations}
-          onCitationClick={setSelectedCitation}
+          onCitationClick={openCitation}
         />
+      )}
+
+      {citationSourceFailure && (
+        <p role="alert" className="mb-3 text-xs text-red-600">
+          {t("assistant.errors.citationSource")}
+        </p>
       )}
 
       {selectedCitation && (
@@ -241,7 +339,7 @@ export function AssistantMessage({
               <p className="font-medium text-gray-900">
                 [{selectedCitation.ref}]{" "}
                 {selectedCitation.kind === "case"
-                  ? selectedCitation.case_name ?? selectedCitation.citation
+                  ? (selectedCitation.case_name ?? selectedCitation.citation)
                   : selectedCitation.filename}
               </p>
               <p className="mt-1 text-gray-500">
@@ -272,12 +370,13 @@ export function AssistantMessage({
               <button
                 key={`${citation.ref}-${citation.kind === "case" ? citation.cluster_id : citation.document_id}`}
                 type="button"
-                onClick={() => setSelectedCitation(citation)}
+                onClick={() => openCitation(citation)}
+                data-testid={`assistant-citation-open-${citation.ref}`}
                 className="rounded-full border border-gray-200 bg-white px-2.5 py-1 text-xs text-gray-700 transition-colors hover:bg-gray-100"
               >
                 [{citation.ref}]{" "}
                 {citation.kind === "case"
-                  ? citation.case_name ?? citation.citation
+                  ? (citation.case_name ?? citation.citation)
                   : citation.filename}
               </button>
             ))}
@@ -298,42 +397,79 @@ export function AssistantMessage({
         </div>
       )}
 
-      {!isStreaming && (content || canRetry || canRegenerate) && (
-        <div className="flex items-center gap-1 text-gray-400">
-          {content && (
-            <button
-              type="button"
-              onClick={() => {
-                void navigator.clipboard.writeText(content).then(() => setCopied(true));
-              }}
-              className="rounded-md p-1.5 transition-colors hover:bg-gray-100 hover:text-gray-700"
-              title={t("assistant.copyAnswer")}
-              aria-label={t("assistant.copyAnswer")}
-            >
-              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-            </button>
-          )}
-          {canRetry && (
-            <button
-              type="button"
-              onClick={() => void onRetry()}
-              className="flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors hover:bg-gray-100 hover:text-gray-700"
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-              {t("common.actions.retry")}
-            </button>
-          )}
-          {canRegenerate && (
-            <button
-              type="button"
-              onClick={() => void onRegenerate()}
-              className="flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors hover:bg-gray-100 hover:text-gray-700"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              {t("assistant.regenerate")}
-            </button>
-          )}
-        </div>
+      {draftFailure && (
+        <p role="alert" className="mb-3 text-xs text-red-600">
+          {t("assistant.errors.studioDraft")}
+        </p>
+      )}
+
+      {!isStreaming &&
+        (content || canRetry || canRegenerate || canCreateDraft) && (
+          <div className="flex items-center gap-1 text-gray-400">
+            {content && (
+              <button
+                type="button"
+                onClick={() => {
+                  void navigator.clipboard
+                    .writeText(content)
+                    .then(() => setCopied(true));
+                }}
+                className="rounded-md p-1.5 transition-colors hover:bg-gray-100 hover:text-gray-700"
+                title={t("assistant.copyAnswer")}
+                aria-label={t("assistant.copyAnswer")}
+              >
+                {copied ? (
+                  <Check className="h-3.5 w-3.5" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5" />
+                )}
+              </button>
+            )}
+            {canCreateDraft && (
+              <button
+                type="button"
+                disabled={creatingDraft}
+                onClick={() => void createStudioDraft()}
+                className="flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors hover:bg-gray-100 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {creatingDraft ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <FilePenLine className="h-3.5 w-3.5" />
+                )}
+                {creatingDraft
+                  ? t("assistant.creatingStudioDraft")
+                  : t("assistant.createStudioDraft")}
+              </button>
+            )}
+            {canRetry && (
+              <button
+                type="button"
+                onClick={() => void onRetry()}
+                className="flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors hover:bg-gray-100 hover:text-gray-700"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                {t("common.actions.retry")}
+              </button>
+            )}
+            {canRegenerate && (
+              <button
+                type="button"
+                onClick={() => void onRegenerate()}
+                className="flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors hover:bg-gray-100 hover:text-gray-700"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                {t("assistant.regenerate")}
+              </button>
+            )}
+          </div>
+        )}
+
+      {citationSource && (
+        <ProjectCitationSourceViewer
+          source={citationSource}
+          onClose={() => setCitationSource(null)}
+        />
       )}
     </div>
   );

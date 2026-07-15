@@ -4,11 +4,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type {
-  BlobStore,
-  WorkspaceBlobCodec,
-} from "../lib/workspace/blobStore";
+import type { BlobStore, WorkspaceBlobCodec } from "../lib/workspace/blobStore";
 import { WorkspaceDatabase } from "../lib/workspace/database";
+import { WorkspaceApiError } from "../lib/workspace/errors";
 import { defaultOriginForProvider } from "../lib/workspace/modelCompatibility";
 import { WorkspaceModelProviderRegistry } from "../lib/workspace/modelProviderRegistry";
 import { LocalWorkspaceBlobStore } from "../lib/workspace/localWorkspaceBlobStore";
@@ -48,6 +46,7 @@ const NOW = "2026-07-15T08:00:00.000Z";
 const PROFILE_ID = "10000000-0000-4000-8000-000000000001";
 const PROJECT_A = "20000000-0000-4000-8000-000000000001";
 const PROJECT_B = "20000000-0000-4000-8000-000000000002";
+// privacy-preflight-public-token-sha256:406eb031736243fc31c15a8daa472ededeee2b2fe8b9640bfb667a122524eef1
 const SECRET = "sk-audit-provider-secret-1234567890";
 const SECRET_PATH = "/Users/private/legal-provider-key";
 
@@ -147,7 +146,8 @@ function fakeOpenAiFetch(control: ProviderControl): typeof fetch {
         },
       );
     }
-    const prompt = body.input?.map((message) => String(message.content)).join("\n") ?? "";
+    const prompt =
+      body.input?.map((message) => String(message.content)).join("\n") ?? "";
     const output = JSON.stringify(responseForPrompt(prompt));
     return new Response(
       sse([
@@ -378,11 +378,7 @@ function runtime(input: {
   };
 }
 
-async function waitFor(
-  check: () => boolean,
-  label: string,
-  timeoutMs = 5_000,
-) {
+async function waitFor(check: () => boolean, label: string, timeoutMs = 5_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (check()) return;
@@ -532,6 +528,57 @@ async function main() {
         ),
       /integrity/,
     );
+    let sourceTombstoned = false;
+    let retentionChecks = 0;
+    const retentionReader = new AuthoritativeExtractedTextReader(
+      database,
+      blobs,
+      {
+        assertModelUse() {
+          retentionChecks += 1;
+          if (sourceTombstoned) {
+            throw new WorkspaceApiError(
+              409,
+              "PRECONDITION_FAILED",
+              "Source payload access is unavailable because the source is tombstoned.",
+            );
+          }
+        },
+      },
+    );
+    const readBeforeTombstone = retentionReader.read(
+      validSnapshot,
+      MAX_TABULAR_DOCUMENT_TEXT_BYTES,
+    );
+    const retentionChecksAfterRead = retentionChecks;
+    sourceTombstoned = true;
+    const providerCallsBeforeTombstonePreflight = control.requests.length;
+    const retentionModel = new WorkspaceTabularModelAdapter(
+      profiles,
+      registry,
+      retentionReader,
+    );
+    await assert.rejects(
+      retentionModel.generateCell({
+        snapshot: readBeforeTombstone,
+        column: review.columns[0]!,
+        modelProfileId: PROFILE_ID,
+        modelExecutionRevision:
+          profiles.requireStored(PROFILE_ID).executionRevision,
+        signal: new AbortController().signal,
+      }),
+      (error: unknown) =>
+        error instanceof WorkspaceApiError &&
+        error.status === 409 &&
+        error.code === "PRECONDITION_FAILED" &&
+        /tombstoned/i.test(error.message),
+    );
+    assert.equal(retentionChecks, retentionChecksAfterRead + 1);
+    assert.equal(
+      control.requests.length - providerCallsBeforeTombstonePreflight,
+      0,
+      "a tombstone after text read must block the provider call",
+    );
     await assert.rejects(
       current.model.generateCell({
         snapshot: current.reader.read(
@@ -642,19 +689,16 @@ async function main() {
           ),
       ),
     );
-    assert.deepEqual(
-      Object.keys(detailWire.cells[0]!.sources[0]!).sort(),
-      [
-        "chunk_id",
-        "document_id",
-        "end_offset",
-        "page_end",
-        "page_start",
-        "quote",
-        "start_offset",
-        "version_id",
-      ],
-    );
+    assert.deepEqual(Object.keys(detailWire.cells[0]!.sources[0]!).sort(), [
+      "chunk_id",
+      "document_id",
+      "end_offset",
+      "page_end",
+      "page_start",
+      "quote",
+      "start_offset",
+      "version_id",
+    ]);
 
     // First restart proves completed cells and exact references are durable.
     assert.equal((await current.pump.stop()).drained, true);
@@ -693,7 +737,9 @@ async function main() {
         .filter((cell) => cell.documentId === docB.documentId)
         .every(
           (cell) =>
-            cell.status === "empty" && cell.jobId === null && cell.attempt === 0,
+            cell.status === "empty" &&
+            cell.jobId === null &&
+            cell.attempt === 0,
         ),
     );
     const retryTarget = cleared.cells.find(
@@ -702,31 +748,41 @@ async function main() {
     control.failNext = true;
     current.service.regenerateCell(retryTarget.id);
     await waitFor(
-      () => current!.service.get(review.review.id).cells.find((cell) => cell.id === retryTarget.id)?.status === "failed",
+      () =>
+        current!.service
+          .get(review.review.id)
+          .cells.find((cell) => cell.id === retryTarget.id)?.status ===
+        "failed",
       "retryable provider failure",
     );
-    const failed = current.service.get(review.review.id).cells.find(
-      (cell) => cell.id === retryTarget.id,
-    )!;
+    const failed = current.service
+      .get(review.review.id)
+      .cells.find((cell) => cell.id === retryTarget.id)!;
     assert.equal(failed.error?.code, "tabular_model_rate_limited");
     assert.equal(failed.error?.retryable, true);
     assert.doesNotMatch(JSON.stringify(failed.error), /sk-|\/Users\//);
     current.service.retryCell(failed.id);
     await waitFor(
-      () => current!.service.get(review.review.id).cells.find((cell) => cell.id === failed.id)?.status === "complete",
+      () =>
+        current!.service
+          .get(review.review.id)
+          .cells.find((cell) => cell.id === failed.id)?.status === "complete",
       "cell retry completion",
     );
 
     // Cancellation commits cell+job terminal state before aborting provider IO.
     cleared = current.service.get(review.review.id);
     const cancelTarget = cleared.cells.find(
-      (cell) =>
-        cell.documentId === docB.documentId && cell.status === "empty",
+      (cell) => cell.documentId === docB.documentId && cell.status === "empty",
     )!;
     control.holdNext = true;
     current.service.regenerateCell(cancelTarget.id);
     await waitFor(
-      () => current!.service.get(review.review.id).cells.find((cell) => cell.id === cancelTarget.id)?.status === "running",
+      () =>
+        current!.service
+          .get(review.review.id)
+          .cells.find((cell) => cell.id === cancelTarget.id)?.status ===
+        "running",
       "held provider request",
     );
     current.service.cancelCell(
@@ -735,11 +791,17 @@ async function main() {
       `cancel ${SECRET} ${SECRET_PATH}`,
     );
     await waitFor(
-      () => current!.service.get(review.review.id).cells.find((cell) => cell.id === cancelTarget.id)?.status === "cancelled",
+      () =>
+        current!.service
+          .get(review.review.id)
+          .cells.find((cell) => cell.id === cancelTarget.id)?.status ===
+        "cancelled",
       "cell cancellation",
     );
     const cancelledJob = current.jobsRepository.getJob(
-      current.service.get(review.review.id).cells.find((cell) => cell.id === cancelTarget.id)!.jobId!,
+      current.service
+        .get(review.review.id)
+        .cells.find((cell) => cell.id === cancelTarget.id)!.jobId!,
     );
     assert.equal(cancelledJob?.status, "cancelled");
     const cancelledWire = (await current.wire.getTabularReview(
@@ -763,8 +825,8 @@ async function main() {
     // failure instead of leaving a forever-running cell.
     assert.equal((await current.pump.stop()).drained, true);
     current.service.clearCells(review.review.id, [docB.documentId]);
-    const staleTarget = current
-      .service.get(review.review.id)
+    const staleTarget = current.service
+      .get(review.review.id)
       .cells.find((cell) => cell.documentId === docB.documentId)!;
     const staleQueued = current.service.regenerateCell(staleTarget.id);
     const staleJobId = staleQueued.jobId!;
@@ -793,9 +855,9 @@ async function main() {
     const recovered = await current.pump.start();
     assert.ok(recovered.recoveredJobs.some((job) => job.id === staleJobId));
     current.service.reconcileGenerationJobs();
-    const staleRecovered = current.service.get(review.review.id).cells.find(
-      (cell) => cell.id === staleTarget.id,
-    )!;
+    const staleRecovered = current.service
+      .get(review.review.id)
+      .cells.find((cell) => cell.id === staleTarget.id)!;
     assert.equal(staleRecovered.status, "failed");
     assert.equal(staleRecovered.error?.retryable, true);
 
@@ -839,6 +901,7 @@ async function main() {
           status: "pass",
           checks: [
             "authoritative-extracted-text-snapshot-and-blob-tamper-gate",
+            "post-read-retention-tombstone-zero-provider-call-preflight",
             "two-documents-by-two-columns-durable-cell-jobs",
             "official-provider-registry-keychain-readiness-and-revision-fence",
             "exact-quote-local-chunk-page-sources",

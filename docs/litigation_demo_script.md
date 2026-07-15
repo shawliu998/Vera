@@ -22,10 +22,11 @@
 ### 3.1 安装依赖
 
 ```bash
-cd "/Users/a1-6/Documents/new agent/backend"
+export REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT/backend"
 npm ci
 
-cd "/Users/a1-6/Documents/new agent/frontend"
+cd "$REPO_ROOT/frontend"
 npm ci
 ```
 
@@ -34,7 +35,7 @@ npm ci
 建议在启动服务前播种；命令输出会给出 `matterId` 和 `matterUrl`。
 
 ```bash
-cd "/Users/a1-6/Documents/new agent/backend"
+cd "$REPO_ROOT/backend"
 ALETHEIA_AUTH_MODE=single_user \
 ALETHEIA_DATA_DIR=.data/deepseek-litigation-demo \
 npm run seed:aletheia:litigation-demo
@@ -47,7 +48,7 @@ npm run seed:aletheia:litigation-demo
 主脚本显式不配置模型：
 
 ```bash
-cd "/Users/a1-6/Documents/new agent/backend"
+cd "$REPO_ROOT/backend"
 env -u ALETHEIA_LOCAL_MODELS_JSON \
   -u ALETHEIA_LOCAL_MODEL_NAME \
   -u ALETHEIA_OLLAMA_MODEL \
@@ -59,7 +60,7 @@ env -u ALETHEIA_LOCAL_MODELS_JSON \
 ### 3.4 启动前端
 
 ```bash
-cd "/Users/a1-6/Documents/new agent/frontend"
+cd "$REPO_ROOT/frontend"
 NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:3001 npm run dev
 ```
 
@@ -213,7 +214,7 @@ http://127.0.0.1:3000/aletheia/matters/<matterId>/litigation
 仅在演示前完成模型下载和健康检查后使用。示例为 Ollama；模型名需与本机实际安装一致：
 
 ```bash
-cd "/Users/a1-6/Documents/new agent/backend"
+cd "$REPO_ROOT/backend"
 ALETHEIA_AUTH_MODE=single_user \
 ALETHEIA_DATA_DIR=.data/deepseek-litigation-demo \
 ALETHEIA_LOCAL_MODEL_NAME=qwen3:8b \
@@ -240,12 +241,12 @@ npm run dev
 ## 7. 演示后验收
 
 ```bash
-cd "/Users/a1-6/Documents/new agent/backend"
+cd "$REPO_ROOT/backend"
 npm run test:aletheia:litigation-domain
 npm run test:aletheia:litigation-export-integrity
 npm run test:aletheia:durable-agent
 
-cd "/Users/a1-6/Documents/new agent/frontend"
+cd "$REPO_ROOT/frontend"
 env -u ALETHEIA_LOCAL_MODELS_JSON \
   -u ALETHEIA_LOCAL_MODEL_NAME \
   -u ALETHEIA_OLLAMA_MODEL \

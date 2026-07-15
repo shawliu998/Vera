@@ -72,35 +72,33 @@ release automation. The default script explicitly reports
 ### Accepted 2026-07-15 arm64 artifact record
 
 ```text
-relative app:      desktop/dist/mac-arm64/Vera.app
-absolute app:      /Users/a1-6/Documents/new agent/desktop/dist/mac-arm64/Vera.app
+app:      desktop/dist/mac-arm64/Vera.app
 
-relative DMG:      desktop/dist/Vera-1.0.1-arm64.dmg
-absolute DMG:      /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-arm64.dmg
-SHA-256:           69a2ee56379a7cf6cb7fe441685fb59c846e77512928704955e774f3d8d42dd7
+DMG:      desktop/dist/Vera-1.0.1-arm64.dmg
+bytes:    198122845
+SHA-256:  fd246214916b3485e25bb16c8e00bcf6e8be471ed95679190e7685a5c1c49ef8
 
-relative ZIP:      desktop/dist/Vera-1.0.1-arm64.zip
-absolute ZIP:      /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-arm64.zip
-SHA-256:           47fcd64f214bf9b28e6982953043c76dba68ff0f2a933107ff6ec07eb704e648
+ZIP:      desktop/dist/Vera-1.0.1-arm64.zip
+bytes:    200992113
+SHA-256:  7be4a9504151ddd8518141901e3d2753a1cda2fbe13ac27fa7842a9f3d347f1b
 
-relative manifest: desktop/dist/Vera-1.0.1-SHA256SUMS.txt
-absolute manifest: /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-SHA256SUMS.txt
+manifest: desktop/dist/Vera-1.0.1-SHA256SUMS.txt
 ```
 
 Running `shasum -a 256 -c Vera-1.0.1-SHA256SUMS.txt` from `desktop/dist`
 verified both entries. The manifest content is:
 
 ```text
-69a2ee56379a7cf6cb7fe441685fb59c846e77512928704955e774f3d8d42dd7  Vera-1.0.1-arm64.dmg
-47fcd64f214bf9b28e6982953043c76dba68ff0f2a933107ff6ec07eb704e648  Vera-1.0.1-arm64.zip
+fd246214916b3485e25bb16c8e00bcf6e8be471ed95679190e7685a5c1c49ef8  Vera-1.0.1-arm64.dmg
+7be4a9504151ddd8518141901e3d2753a1cda2fbe13ac27fa7842a9f3d347f1b  Vera-1.0.1-arm64.zip
 ```
 
 To request the credentialed release path:
 
 ```bash
 VERA_RELEASE_SIGNING=true \
-CSC_NAME="Developer ID Application: Example Corp (TEAMID)" \
-APPLE_TEAM_ID="TEAMID" \
+CSC_NAME="Example Corp (ABCDE12345)" \
+APPLE_TEAM_ID="ABCDE12345" \
 APPLE_ID="release@example.com" \
 APPLE_APP_SPECIFIC_PASSWORD="..." \
 ./scripts/package-desktop-mac.sh
@@ -138,12 +136,15 @@ credentials, proxy variables, or Node injection flags.
 
 ## Local persistence and credentials
 
-Workspace schema migrations currently run through v10
-(`v10AssistantDurableEvents`). Projects, folders, document versions, chats,
-messages, jobs, workflow definitions/runs/step runs, Tabular Reviews/cells,
-model-profile metadata, and durable Assistant events use the local Workspace
-database. The packaged client requires SQLCipher and fails closed if the
-database key, adapter, schema read, or integrity check fails.
+Workspace schema migrations currently run through v14
+(`v14DocumentStudioSuggestions`). V11 adds the Project source foundation, v12
+adds Document Studio, v13 adds source-retention lifecycle enforcement, and v14
+adds reviewable Document Studio suggestions. Projects, folders, document
+versions, chats, messages, jobs, workflow definitions/runs/step runs, Tabular
+Reviews/cells, model-profile metadata, durable Assistant events, source
+provenance, and Studio state use the local Workspace database. The packaged
+client requires SQLCipher and fails closed if the database key, adapter, schema
+read, or integrity check fails.
 
 Original files, extracted content, and local exports use versioned
 AES-256-GCM envelope encryption. The application master key and SQLCipher key
@@ -239,19 +240,22 @@ notarized: false
 distribution: local-only
 ```
 
-## Legacy desktop operations reference
+## Archived pre-Vera desktop operations reference — not current instructions
 
 The material below predates the Mike-derived P0 product. It is retained because
 the underlying litigation, audit, migration, encryption, and recovery paths
 remain compatibility-sensitive. Historical Aletheia artifact names, default
 routes, and UI instructions below are not current release instructions.
+Identifiers containing `aletheia` in commands, environment variables, routes,
+database tables, or storage paths are retained compatibility interfaces; they
+are not Vera product or user-interface branding.
 
 The default macOS package is an **unsigned local-development build** for use on
 the Mac that built it. A Developer ID signed release remains available as an
 explicit optional mode when the project has an Apple developer account.
 
-Aletheia Desktop wraps the local backend and frontend in an Electron app. It is
-for local professional workspace use and does not require Docker or a remote
+Vera Desktop wraps the local backend and frontend in an Electron app. It is for
+local professional workspace use and does not require Docker or a remote
 database.
 It is not a production SaaS service and is not legal advice software.
 
@@ -277,14 +281,20 @@ credentials are available, request release mode explicitly:
 
 ```bash
 VERA_RELEASE_SIGNING=true \
-CSC_NAME="Developer ID Application: Example Corp (TEAMID)" \
+CSC_NAME="Example Corp (ABCDE12345)" \
+APPLE_TEAM_ID="ABCDE12345" \
+APPLE_ID="release@example.com" \
+APPLE_APP_SPECIFIC_PASSWORD="..." \
 ./scripts/package-desktop-mac.sh
 ```
 
 Release-mode effect:
 
-- `CSC_NAME` must be a non-ad-hoc `Developer ID Application` identity whose
-  parenthesized team ID matches `APPLE_TEAM_ID`.
+- `CSC_NAME` must be the exact Electron Builder-compatible qualifier
+  `Certificate Name (TEAMID)`, without the `Developer ID Application:` prefix.
+  Vera reconstructs and checks the complete
+  `Developer ID Application: Certificate Name (TEAMID)` authority before any
+  Apple submission; the parenthesized team ID must match `APPLE_TEAM_ID`.
 - Use exactly one complete notarization method: `APPLE_ID`,
   `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`; or `APPLE_API_KEY` (a readable
   `.p8` path), `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, `APPLE_TEAM_ID`.
@@ -293,36 +303,56 @@ Release-mode effect:
   the backend or frontend builds start. It reports only that signing and
   notarization are required; it never claims they succeeded or prints a
   credential value.
-- Electron Builder applies hardened runtime signing and its entitlement template
-  unless a project entitlement plist is added. Its `afterSign` hook submits to
-  Apple, staples the accepted ticket, and validates it.
-- The packaging script then verifies `codesign --verify --deep --strict`, the
-  non-ad-hoc Developer ID authority and team, Gatekeeper assessment, the
-  stapled ticket, and the generated SHA-256 artifact manifest.
+- Electron Builder applies hardened runtime signing with Vera's checked-in,
+  least-privilege main and inherited entitlement plists. The main app receives
+  JIT only; nested Electron runtime code additionally receives its executable-
+  memory requirement. The verifier requires those exact allowlists for every
+  main and nested code target; extra or missing entitlements fail the release
+  gate.
+- The packaging script verifies nested code inner-to-outer, then the outer app,
+  Developer ID authority/team, hardened-runtime flags, Gatekeeper, stapled
+  tickets, final DMG/ZIP semantics, and the generated SHA-256 manifest. It
+  mounts the DMG read-only with browsing and automatic opening disabled,
+  requires exactly one top-level `Vera.app`, applies the same full verification,
+  and detaches in `finally` with a force fallback. ZIP is not itself codesignable
+  or staplable. Before extraction, Vera rejects duplicate/unsafe paths,
+  unsupported entry types, and absolute or archive-escaping symbolic-link
+  targets. The archive must contain exactly one application, named `Vera.app`,
+  and that extracted app receives the full verification; ZIP container checks
+  are reported as not applicable, not passed.
+- Electron Builder's implicit notarization is pinned off, so credentials cannot
+  cause an unreviewed duplicate submission. `afterSign` first checks the exact
+  Developer ID authority/team, then notarizes and staples the signed app.
+  Electron Builder signs the final DMG only in credentialed release mode, and
+  the release-only
+  `afterAllArtifactBuild` hook checks its Developer ID/team before submission,
+  then notarizes, staples, and validates that DMG. Both notarization hooks
+  explicitly skip local unsigned builds.
 
 The packaging script does not request an ad-hoc application-signing or
 quarantine-bypass mode.
 
-## Install From Release
+## Credentialed Vera release installation contract
 
-Download from the GitHub Release page:
+No credentialed public release is claimed by this document. When a release has
+passed the Developer ID, notarization, stapling, Gatekeeper, and checksum gates,
+publish these Vera assets together:
 
-- `Aletheia-1.0.1-arm64.dmg`
-- or `Aletheia-1.0.1-arm64.zip`
-- `Aletheia-1.0.1-SHA256SUMS.txt`
+- `Vera-<version>-<arch>.dmg`
+- or `Vera-<version>-<arch>.zip`
+- `Vera-<version>-SHA256SUMS.txt`
 
 Verify the download:
 
 ```bash
 cd ~/Downloads
-shasum -a 256 -c Aletheia-1.0.1-SHA256SUMS.txt
+shasum -a 256 -c Vera-<version>-SHA256SUMS.txt
 ```
 
 Open the app:
 
-1. Open the `.dmg` and drag Aletheia to Applications.
-2. In Finder, right-click Aletheia and choose **Open**.
-3. Confirm the macOS warning.
+1. Open the `.dmg` and drag Vera to Applications.
+2. Open Vera normally from Applications.
 
 If Gatekeeper blocks a release, treat that as a failed release gate; do not ask
 users to remove quarantine attributes.
@@ -340,10 +370,10 @@ The script:
 1. builds the backend TypeScript server,
 2. builds the Next.js frontend for desktop-local API port `43761`,
 3. installs Electron packager dependencies under `desktop/`,
-4. packages the app with the rounded Aletheia desktop icon generated from the
+4. packages the app with the rounded Vera desktop icon generated from the
    same ring mark used by the web UI,
 5. creates macOS artifacts under `desktop/dist/`,
-6. writes `Aletheia-<version>-SHA256SUMS.txt`.
+6. writes `Vera-<version>-SHA256SUMS.txt`.
 
 Local output is deliberately reported as `signed=false notarized=false` and is
 local-only. It does not invoke notarization, even if Apple credential variables
@@ -354,8 +384,17 @@ Release configuration is checked independently with:
 ```bash
 cd desktop
 VERA_RELEASE_SIGNING=true npm run signing:preflight
+npm run signing:readiness -- --no-artifacts
 npm run test:signing-pipeline
 ```
+
+`signing:readiness` is read-only and defaults to exit 0. With no release
+credentials or with local artifacts it explicitly reports `UNSIGNED` and
+`NOT_NOTARIZED` plus blockers without printing any environment value. After a
+credentialed build, rerun it with `--strict-release`; strict mode requires the
+app, DMG, ZIP, Developer ID/team, hardened runtime, Gatekeeper results, tickets,
+checksums, and every command-line tool used by those checks to be complete. It
+never invokes signing or `notarytool submit`.
 
 Regenerate icon assets after changing the source mark:
 
@@ -390,7 +429,8 @@ On launch, the app:
 - stores data under the app user-data directory with owner-only directory and
   file permissions where POSIX permissions are supported,
 - starts the bundled Next.js frontend,
-- opens `/aletheia/matters`,
+- opens the Vera workspace at `/assistant`; legacy `/aletheia/*` routes remain
+  available only for compatibility regression and existing local records,
 - opens an empty real workspace by default; demo seeding is disabled in the
   packaged client,
 - downloads approved litigation artifacts through the authenticated loopback
@@ -530,7 +570,7 @@ Minimum validation for a local unsigned build:
 APP_PATH="desktop/dist/mac-$(node -p 'process.arch')/Vera.app"
 open "$APP_PATH"
 curl http://127.0.0.1:43761/health
-open http://127.0.0.1:43760/aletheia/matters
+open http://127.0.0.1:43760/assistant
 cd desktop && npm run test:packaged-app
 cd desktop && npm run test:packaged-backup
 cd desktop && npm run test:legacy-migration
@@ -554,6 +594,7 @@ It can also be rerun with the checksum manifest after packaging:
 
 ```bash
 cd desktop
-VERA_EXPECTED_TEAM_ID=TEAMID \
+CSC_NAME="Example Corp (ABCDE12345)" \
+VERA_EXPECTED_TEAM_ID=ABCDE12345 \
 npm run signing:verify -- --checksum-manifest dist/Vera-<version>-SHA256SUMS.txt
 ```

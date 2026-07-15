@@ -10,6 +10,8 @@ import { MODEL_CONNECTION_READINESS_V9_MIGRATION } from "./v9ModelConnectionRead
 import { ASSISTANT_DURABLE_EVENTS_V10_MIGRATION } from "./v10AssistantDurableEvents";
 import { PROJECT_SOURCE_FOUNDATION_V11_MIGRATION } from "./v11ProjectSourceFoundation";
 import { DOCUMENT_STUDIO_V12_MIGRATION } from "./v12DocumentStudio";
+import { SOURCE_RETENTION_LIFECYCLE_V13_MIGRATION } from "./v13SourceRetentionLifecycle";
+import { DOCUMENT_STUDIO_SUGGESTIONS_V14_MIGRATION } from "./v14DocumentStudioSuggestions";
 
 export {
   detectWorkspaceDatabaseCapabilities,
@@ -37,6 +39,8 @@ export { MODEL_CONNECTION_READINESS_V9_MIGRATION } from "./v9ModelConnectionRead
 export { ASSISTANT_DURABLE_EVENTS_V10_MIGRATION } from "./v10AssistantDurableEvents";
 export { PROJECT_SOURCE_FOUNDATION_V11_MIGRATION } from "./v11ProjectSourceFoundation";
 export { DOCUMENT_STUDIO_V12_MIGRATION } from "./v12DocumentStudio";
+export { SOURCE_RETENTION_LIFECYCLE_V13_MIGRATION } from "./v13SourceRetentionLifecycle";
+export { DOCUMENT_STUDIO_SUGGESTIONS_V14_MIGRATION } from "./v14DocumentStudioSuggestions";
 
 export const WORKSPACE_MIGRATIONS = [
   INITIAL_WORKSPACE_MIGRATION,
@@ -51,4 +55,6 @@ export const WORKSPACE_MIGRATIONS = [
   ASSISTANT_DURABLE_EVENTS_V10_MIGRATION,
   PROJECT_SOURCE_FOUNDATION_V11_MIGRATION,
   DOCUMENT_STUDIO_V12_MIGRATION,
+  SOURCE_RETENTION_LIFECYCLE_V13_MIGRATION,
+  DOCUMENT_STUDIO_SUGGESTIONS_V14_MIGRATION,
 ] as const;

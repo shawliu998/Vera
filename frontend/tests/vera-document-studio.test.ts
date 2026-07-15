@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 import {
@@ -6,18 +7,31 @@ import {
   VeraApiError,
 } from "../src/app/lib/veraApi.ts";
 import {
+  acceptVeraStudioSuggestion,
+  createVeraStudioDraftFromAssistant,
+  createVeraStudioDraftFromWorkflow,
   createVeraStudioDocument,
   exportVeraStudioDocx,
   getVeraStudioDocument,
+  getVeraStudioSuggestion,
   importVeraStudioDocx,
   listVeraStudioVersions,
+  listVeraStudioSuggestions,
+  parseVeraStudioSuggestion,
+  parseVeraStudioSuggestionPreview,
   parseVeraStudioDocument,
   parseVeraStudioDocxImport,
   parseVeraStudioVersions,
   restoreVeraStudioVersion,
+  rejectVeraStudioSuggestion,
   saveVeraStudioDocument,
   VERA_STUDIO_DOCX_MIME_TYPE,
 } from "../src/app/lib/veraDocumentStudioApi.ts";
+import {
+  getVeraProjectSourceContent,
+  parseVeraProjectSourceContent,
+  resolveVeraProjectCitation,
+} from "../src/app/lib/veraProjectSourceApi.ts";
 
 const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
 const DOCUMENT_ID = "22222222-2222-4222-8222-222222222222";
@@ -26,8 +40,52 @@ const HISTORY_VERSION_ID = "44444444-4444-4444-8444-444444444444";
 const IMPORT_VERSION_ID = "77777777-7777-4777-8777-777777777777";
 const ANCHOR_ID = "55555555-5555-4555-8555-555555555555";
 const SNAPSHOT_ID = "66666666-6666-4666-8666-666666666666";
+const SOURCE_DOCUMENT_ID = "88888888-8888-4888-8888-888888888888";
+const SOURCE_VERSION_ID = "99999999-9999-4999-8999-999999999999";
+const SOURCE_CHUNK_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const CHAT_ID = "88888888-8888-4888-8888-888888888888";
+const MESSAGE_ID = "99999999-9999-4999-8999-999999999999";
+const WORKFLOW_RUN_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const SUGGESTION_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const RESULT_VERSION_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const TOKEN = "vdt_1234567890abcdefghijklmnopqrstuvwxyz";
 const HASH = "a".repeat(64);
+
+function digest(value: string) {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+const SOURCE_QUOTE = "Payment is due on 1 September 2026.";
+const SOURCE_CHUNK_TEXT = `Recital. ${SOURCE_QUOTE} Signed.`;
+
+function sourceContent(overrides: Record<string, unknown> = {}) {
+  return {
+    snapshot_id: SNAPSHOT_ID,
+    document: {
+      document_id: SOURCE_DOCUMENT_ID,
+      version_id: SOURCE_VERSION_ID,
+      title: "Scanned contract",
+      filename: "scanned-contract.pdf",
+      mime_type: "application/pdf",
+      content_sha256: "b".repeat(64),
+      page_count: 3,
+    },
+    chunks: [
+      {
+        id: SOURCE_CHUNK_ID,
+        ordinal: 0,
+        text: SOURCE_CHUNK_TEXT,
+        content_sha256: digest(SOURCE_CHUNK_TEXT),
+        start_offset: 0,
+        end_offset: SOURCE_CHUNK_TEXT.length,
+        page_start: 2,
+        page_end: 2,
+      },
+    ],
+    next_cursor: null,
+    ...overrides,
+  };
+}
 
 function studioDocument(overrides: Record<string, unknown> = {}) {
   return {
@@ -94,6 +152,55 @@ function versions() {
         citation_anchor_ids: [],
       },
     ],
+  };
+}
+
+function suggestionPreview(overrides: Record<string, unknown> = {}) {
+  return {
+    id: SUGGESTION_ID,
+    project_id: PROJECT_ID,
+    document_id: DOCUMENT_ID,
+    base_version_id: CURRENT_VERSION_ID,
+    message_id: MESSAGE_ID,
+    start_offset: 6,
+    end_offset: 9,
+    offset_scope: "raw_markdown_v1",
+    offset_unit: "utf16_code_unit",
+    deleted_preview: "old",
+    inserted_preview: "new",
+    deleted_truncated: false,
+    inserted_truncated: false,
+    context_before: "Hello ",
+    context_after: " world.",
+    summary: "Replace old with new",
+    status: "pending",
+    created_at: "2026-07-15T10:30:00.000Z",
+    ...overrides,
+  };
+}
+
+function suggestionDetail(overrides: Record<string, unknown> = {}) {
+  return {
+    id: SUGGESTION_ID,
+    project_id: PROJECT_ID,
+    document_id: DOCUMENT_ID,
+    base_version_id: CURRENT_VERSION_ID,
+    message_id: MESSAGE_ID,
+    change_id: `assistant-tool:${"d".repeat(64)}`,
+    start_offset: 6,
+    end_offset: 9,
+    offset_scope: "raw_markdown_v1",
+    offset_unit: "utf16_code_unit",
+    deleted_text: "old",
+    inserted_text: "new",
+    context_before: "Hello ",
+    context_after: " world.",
+    summary: "Replace old with new",
+    status: "pending",
+    created_at: "2026-07-15T10:30:00.000Z",
+    resolved_at: null,
+    result_version_id: null,
+    ...overrides,
   };
 }
 
@@ -217,6 +324,124 @@ test("Studio parser fails closed on extra fields, invalid provenance, and unsafe
   );
 });
 
+test("Project source content parser enforces a bounded path-free chunk wire", () => {
+  const parsed = parseVeraProjectSourceContent(sourceContent());
+  assert.equal(parsed.snapshot_id, SNAPSHOT_ID);
+  assert.equal(parsed.document.version_id, SOURCE_VERSION_ID);
+  assert.equal(parsed.chunks[0]?.text, SOURCE_CHUNK_TEXT);
+
+  assert.throws(
+    () =>
+      parseVeraProjectSourceContent(
+        sourceContent({ storage_key: "/private/vera/source.pdf" }),
+      ),
+    VeraApiError,
+  );
+  assert.throws(
+    () =>
+      parseVeraProjectSourceContent(
+        sourceContent({
+          chunks: [
+            {
+              ...sourceContent().chunks[0],
+              content_sha256: digest(SOURCE_CHUNK_TEXT).toUpperCase(),
+            },
+          ],
+        }),
+      ),
+    VeraApiError,
+  );
+  assert.throws(
+    () =>
+      parseVeraProjectSourceContent(
+        sourceContent({
+          document: {
+            ...sourceContent().document,
+            filename: "../../source.pdf",
+          },
+        }),
+      ),
+    VeraApiError,
+  );
+});
+
+test("Project citation resolution uses only the scoped content route and rechecks exact hashes and offsets", async () => {
+  const restoreDesktop = installDesktop();
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: URL; init?: RequestInit }> = [];
+  let sourceResponse = sourceContent();
+  globalThis.fetch = async (input, init) => {
+    calls.push({ url: new URL(String(input)), init });
+    return new Response(JSON.stringify(sourceResponse), {
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  const quoteStart = SOURCE_CHUNK_TEXT.indexOf(SOURCE_QUOTE);
+  const citation = {
+    snapshot_id: SNAPSHOT_ID,
+    exact_quote: SOURCE_QUOTE,
+    quote_sha256: digest(SOURCE_QUOTE),
+    locator: {
+      documentVersionId: SOURCE_VERSION_ID,
+      chunkId: SOURCE_CHUNK_ID,
+      chunkContentSha256: digest(SOURCE_CHUNK_TEXT),
+      startOffset: quoteStart,
+      endOffset: quoteStart + SOURCE_QUOTE.length,
+      pageStart: 2,
+      pageEnd: 2,
+      ocr: { page: 2 },
+    },
+  };
+
+  try {
+    const direct = await getVeraProjectSourceContent(PROJECT_ID, SNAPSHOT_ID, {
+      chunkId: SOURCE_CHUNK_ID,
+    });
+    assert.equal(direct.chunks[0]?.id, SOURCE_CHUNK_ID);
+    const resolved = await resolveVeraProjectCitation(PROJECT_ID, citation);
+    assert.equal(resolved.exact_quote, SOURCE_QUOTE);
+    assert.equal(resolved.page, 2);
+    assert.equal(
+      resolved.chunk.text.slice(resolved.quote_start, resolved.quote_end),
+      SOURCE_QUOTE,
+    );
+    assert.equal(calls.length, 2);
+    for (const call of calls) {
+      assert.equal(
+        call.url.pathname,
+        `/api/v1/projects/${PROJECT_ID}/sources/${SNAPSHOT_ID}/content`,
+      );
+      assert.equal(call.url.searchParams.get("chunk_id"), SOURCE_CHUNK_ID);
+      assert.equal(
+        new Headers(call.init?.headers).get("Authorization"),
+        `Bearer ${TOKEN}`,
+      );
+    }
+
+    await assert.rejects(
+      resolveVeraProjectCitation(PROJECT_ID, {
+        ...citation,
+        exact_quote: "A guessed replacement quote.",
+      }),
+      (error: unknown) =>
+        error instanceof VeraApiError && error.code === "INVALID_RESPONSE",
+    );
+
+    sourceResponse = sourceContent({
+      document: { ...sourceContent().document, page_count: 1 },
+    });
+    await assert.rejects(
+      resolveVeraProjectCitation(PROJECT_ID, citation),
+      (error: unknown) =>
+        error instanceof VeraApiError && error.code === "INVALID_RESPONSE",
+      "a poisoned chunk page must not exceed the authoritative document page count",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreDesktop();
+  }
+});
+
 test("Studio transport uses only Project-scoped create, load, CAS save, list, and restore routes", async () => {
   const restoreDesktop = installDesktop();
   const originalFetch = globalThis.fetch;
@@ -312,6 +537,80 @@ test("Studio transport uses only Project-scoped create, load, CAS save, list, an
       assert.equal(headers.get("Authorization"), `Bearer ${TOKEN}`);
       assert.equal(call.url.hostname, "127.0.0.1");
     }
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreDesktop();
+  }
+});
+
+test("Assistant and Workflow handoffs submit identity only and accept a real immutable Studio document", async () => {
+  const restoreDesktop = installDesktop();
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: URL; init?: RequestInit; body: unknown }> = [];
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+    calls.push({ url, init, body });
+    return new Response(
+      JSON.stringify(
+        studioDocument({
+          version: {
+            ...studioDocument().version,
+            version_number: 1,
+            source: "assistant_edit",
+            citation_anchor_ids: [],
+          },
+          citation_anchors: [],
+        }),
+      ),
+      { status: 201, headers: { "Content-Type": "application/json" } },
+    );
+  };
+  try {
+    const assistantDraft = await createVeraStudioDraftFromAssistant(
+      PROJECT_ID,
+      { chat_id: CHAT_ID, assistant_message_id: MESSAGE_ID },
+    );
+    const workflowDraft = await createVeraStudioDraftFromWorkflow(PROJECT_ID, {
+      workflow_run_id: WORKFLOW_RUN_ID,
+    });
+    assert.equal(assistantDraft.version.version_number, 1);
+    assert.equal(assistantDraft.version.source, "assistant_edit");
+    assert.equal(workflowDraft.version.source, "assistant_edit");
+    assert.equal(calls.length, 2);
+    assert.equal(
+      calls[0]?.url.pathname,
+      `/api/v1/projects/${PROJECT_ID}/studio/drafts/from-assistant`,
+    );
+    assert.deepEqual(calls[0]?.body, {
+      chat_id: CHAT_ID,
+      assistant_message_id: MESSAGE_ID,
+    });
+    assert.equal(
+      calls[1]?.url.pathname,
+      `/api/v1/projects/${PROJECT_ID}/studio/drafts/from-workflow`,
+    );
+    assert.deepEqual(calls[1]?.body, { workflow_run_id: WORKFLOW_RUN_ID });
+    for (const call of calls) {
+      assert.equal(call.init?.method, "POST");
+      assert.deepEqual(
+        Object.keys(call.body as object).sort(),
+        call === calls[0]
+          ? ["assistant_message_id", "chat_id"]
+          : ["workflow_run_id"],
+      );
+      assert.equal(
+        new Headers(call.init?.headers).get("Authorization"),
+        `Bearer ${TOKEN}`,
+      );
+    }
+    await assert.rejects(
+      createVeraStudioDraftFromAssistant(PROJECT_ID, {
+        chat_id: CHAT_ID,
+        assistant_message_id: "not-a-message-id",
+      }),
+    );
+    assert.equal(calls.length, 2, "invalid identity never reaches fetch");
   } finally {
     globalThis.fetch = originalFetch;
     restoreDesktop();
@@ -526,8 +825,7 @@ test("Studio DOCX client fails closed on poisoned import bodies, files, and warn
       headers: {
         "Content-Type": VERA_STUDIO_DOCX_MIME_TYPE,
         "Content-Disposition": 'attachment; filename="safe.docx"',
-        "X-Vera-Warning-Codes":
-          "MARKDOWN_HTML_AS_TEXT,MARKDOWN_HTML_AS_TEXT",
+        "X-Vera-Warning-Codes": "MARKDOWN_HTML_AS_TEXT,MARKDOWN_HTML_AS_TEXT",
       },
     });
   };
@@ -619,11 +917,255 @@ test("Project document parser accepts only coherent real Studio capability combi
       },
     ]) {
       capability = poisoned;
-      await assert.rejects(
-        listVeraProjectDocuments(PROJECT_ID),
-        VeraApiError,
-      );
+      await assert.rejects(listVeraProjectDocuments(PROJECT_ID), VeraApiError);
     }
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreDesktop();
+  }
+});
+
+test("Studio suggestion preview/detail and explicit decisions use strict empty-body scoped transport", async () => {
+  assert.equal(
+    parseVeraStudioSuggestionPreview(suggestionPreview()).status,
+    "pending",
+  );
+  assert.equal(
+    parseVeraStudioSuggestion(suggestionDetail()).deleted_text,
+    "old",
+  );
+  assert.equal(
+    [
+      ...parseVeraStudioSuggestionPreview(
+        suggestionPreview({ summary: "😀".repeat(500) }),
+      ).summary,
+    ].length,
+    500,
+  );
+  assert.throws(
+    () =>
+      parseVeraStudioSuggestionPreview(
+        suggestionPreview({ summary: "😀".repeat(501) }),
+      ),
+    VeraApiError,
+  );
+
+  const restoreDesktop = installDesktop();
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: URL; method: string; body: unknown }> = [];
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    const method = init?.method ?? "GET";
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+    calls.push({ url, method, body });
+    let payload: unknown;
+    if (url.pathname.endsWith(`/${SUGGESTION_ID}/accept`)) {
+      payload = {
+        suggestion: suggestionDetail({
+          status: "accepted",
+          resolved_at: "2026-07-15T10:31:00.000Z",
+          result_version_id: RESULT_VERSION_ID,
+        }),
+        document: studioDocument({
+          current_version_id: RESULT_VERSION_ID,
+          version: {
+            ...studioDocument().version,
+            id: RESULT_VERSION_ID,
+            version_number: 3,
+            source: "user_accept",
+          },
+          content: "Hello new world.",
+        }),
+      };
+    } else if (url.pathname.endsWith(`/${SUGGESTION_ID}/reject`)) {
+      payload = {
+        suggestion: suggestionDetail({
+          status: "rejected",
+          resolved_at: "2026-07-15T10:31:00.000Z",
+        }),
+      };
+    } else if (url.pathname.endsWith(`/${SUGGESTION_ID}`)) {
+      payload = { suggestion: suggestionDetail() };
+    } else {
+      payload = { suggestions: [suggestionPreview()], has_more: false };
+    }
+    return new Response(JSON.stringify(payload), {
+      status: method === "POST" ? 201 : 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  try {
+    const page = await listVeraStudioSuggestions(PROJECT_ID, DOCUMENT_ID);
+    assert.equal(page.suggestions[0]?.id, SUGGESTION_ID);
+    assert.equal(page.has_more, false);
+    assert.equal(
+      (await getVeraStudioSuggestion(PROJECT_ID, DOCUMENT_ID, SUGGESTION_ID))
+        .inserted_text,
+      "new",
+    );
+    const accepted = await acceptVeraStudioSuggestion(PROJECT_ID, DOCUMENT_ID, {
+      reviewedSuggestion: parseVeraStudioSuggestion(suggestionDetail()),
+      baseDocument: parseVeraStudioDocument(
+        studioDocument({ content: "Hello old world." }),
+      ),
+    });
+    assert.equal(accepted.document.version.source, "user_accept");
+    assert.equal(accepted.suggestion.result_version_id, RESULT_VERSION_ID);
+    assert.equal(
+      (await rejectVeraStudioSuggestion(PROJECT_ID, DOCUMENT_ID, SUGGESTION_ID))
+        .status,
+      "rejected",
+    );
+    assert.equal(calls.length, 4);
+    const root = `/api/v1/projects/${PROJECT_ID}/studio/documents/${DOCUMENT_ID}/suggestions`;
+    assert.equal(calls[0]?.url.pathname, root);
+    assert.equal(calls[1]?.url.pathname, `${root}/${SUGGESTION_ID}`);
+    assert.equal(calls[2]?.url.pathname, `${root}/${SUGGESTION_ID}/accept`);
+    assert.equal(calls[3]?.url.pathname, `${root}/${SUGGESTION_ID}/reject`);
+    assert.deepEqual(calls[2]?.body, {});
+    assert.deepEqual(calls[3]?.body, {});
+    assert.equal(calls[2]?.method, "POST");
+    assert.equal(calls[3]?.method, "POST");
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreDesktop();
+  }
+});
+
+test("Studio suggestion clients reject duplicate and poisoned cross-scope bindings", async () => {
+  const restoreDesktop = installDesktop();
+  const originalFetch = globalThis.fetch;
+  let payload: unknown = {};
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  try {
+    const acceptanceExpectation = {
+      reviewedSuggestion: parseVeraStudioSuggestion(suggestionDetail()),
+      baseDocument: parseVeraStudioDocument(
+        studioDocument({ content: "Hello old world." }),
+      ),
+    };
+    const acceptReviewedSuggestion = () =>
+      acceptVeraStudioSuggestion(
+        PROJECT_ID,
+        DOCUMENT_ID,
+        acceptanceExpectation,
+      );
+    payload = {
+      suggestions: [suggestionPreview(), suggestionPreview()],
+      has_more: false,
+    };
+    await assert.rejects(
+      listVeraStudioSuggestions(PROJECT_ID, DOCUMENT_ID),
+      VeraApiError,
+    );
+
+    payload = {
+      suggestions: [suggestionPreview({ project_id: SOURCE_DOCUMENT_ID })],
+      has_more: false,
+    };
+    await assert.rejects(
+      listVeraStudioSuggestions(PROJECT_ID, DOCUMENT_ID),
+      VeraApiError,
+    );
+
+    payload = {
+      suggestion: suggestionDetail({ document_id: SOURCE_DOCUMENT_ID }),
+    };
+    await assert.rejects(
+      getVeraStudioSuggestion(PROJECT_ID, DOCUMENT_ID, SUGGESTION_ID),
+      VeraApiError,
+    );
+
+    payload = {
+      suggestion: suggestionDetail({
+        id: SOURCE_CHUNK_ID,
+        status: "accepted",
+        resolved_at: "2026-07-15T10:31:00.000Z",
+        result_version_id: RESULT_VERSION_ID,
+      }),
+      document: studioDocument({
+        current_version_id: RESULT_VERSION_ID,
+        version: {
+          ...studioDocument().version,
+          id: RESULT_VERSION_ID,
+          version_number: 3,
+          source: "user_accept",
+        },
+      }),
+    };
+    await assert.rejects(acceptReviewedSuggestion(), VeraApiError);
+
+    const acceptedSuggestion = {
+      status: "accepted",
+      resolved_at: "2026-07-15T10:31:00.000Z",
+      result_version_id: RESULT_VERSION_ID,
+    };
+    const acceptedVersion = {
+      ...studioDocument().version,
+      id: RESULT_VERSION_ID,
+      version_number: 3,
+      source: "user_accept",
+    };
+    payload = {
+      suggestion: suggestionDetail(acceptedSuggestion),
+      document: studioDocument({
+        current_version_id: RESULT_VERSION_ID,
+        version: acceptedVersion,
+        content: "poisoned accepted content",
+      }),
+    };
+    await assert.rejects(acceptReviewedSuggestion(), VeraApiError);
+
+    payload = {
+      suggestion: suggestionDetail(acceptedSuggestion),
+      document: studioDocument({
+        current_version_id: RESULT_VERSION_ID,
+        version: { ...acceptedVersion, citation_anchor_ids: [] },
+        citation_anchors: [],
+        content: "Hello new world.",
+      }),
+    };
+    await assert.rejects(acceptReviewedSuggestion(), VeraApiError);
+
+    payload = {
+      suggestion: suggestionDetail(acceptedSuggestion),
+      document: studioDocument({
+        current_version_id: RESULT_VERSION_ID,
+        version: { ...acceptedVersion, source: "user_upload" },
+        content: "Hello new world.",
+      }),
+    };
+    await assert.rejects(acceptReviewedSuggestion(), VeraApiError);
+
+    payload = {
+      suggestion: suggestionDetail({
+        ...acceptedSuggestion,
+        inserted_text: "poison",
+      }),
+      document: studioDocument({
+        current_version_id: RESULT_VERSION_ID,
+        version: acceptedVersion,
+        content: "Hello poison world.",
+      }),
+    };
+    await assert.rejects(acceptReviewedSuggestion(), VeraApiError);
+
+    payload = {
+      suggestion: suggestionDetail({
+        project_id: SOURCE_DOCUMENT_ID,
+        status: "rejected",
+        resolved_at: "2026-07-15T10:31:00.000Z",
+      }),
+    };
+    await assert.rejects(
+      rejectVeraStudioSuggestion(PROJECT_ID, DOCUMENT_ID, SUGGESTION_ID),
+      VeraApiError,
+    );
   } finally {
     globalThis.fetch = originalFetch;
     restoreDesktop();

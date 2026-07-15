@@ -11,7 +11,10 @@ import { WORKFLOW_DOCUMENT_CONTEXT_LIMITS } from "../repositories/workflowDocume
 import type { WorkflowExecutionSnapshot } from "../repositories/workflows";
 import type { WorkflowRunStep } from "../repositories/workflows";
 import type { WorkflowStep, WorkspaceJson } from "../types";
-import type { AssistantModelPort } from "./assistantRuntime";
+import {
+  AssistantModelSourcesSchema,
+  type AssistantModelPort,
+} from "./assistantRuntime";
 import type {
   WorkflowPreparedStepInput,
   WorkflowStepExecutionResult,
@@ -109,7 +112,7 @@ const PromptOutputSchema = z
     schema: z.literal("vera-workflow-prompt-result-v1"),
     kind: z.literal("prompt"),
     content: z.string().max(MAX_MODEL_OUTPUT_CHARS),
-    sources: z.array(SafeStructuredValueSchema).max(200),
+    sources: AssistantModelSourcesSchema,
     model: z
       .object({
         adapter: z.literal("workspace_assistant_model"),
@@ -126,7 +129,7 @@ const OutputInputSchema = z
     kind: z.literal("output"),
     format: z.enum(["text", "json"]),
     content: z.string().max(MAX_MODEL_OUTPUT_CHARS),
-    sources: z.array(SafeStructuredValueSchema).max(200),
+    sources: AssistantModelSourcesSchema,
   })
   .strict();
 
@@ -136,7 +139,7 @@ const OutputTextResultSchema = z
     kind: z.literal("output"),
     format: z.literal("text"),
     content: z.string().max(MAX_MODEL_OUTPUT_CHARS),
-    sources: z.array(SafeStructuredValueSchema).max(200),
+    sources: AssistantModelSourcesSchema,
   })
   .strict();
 
@@ -146,7 +149,7 @@ const OutputJsonResultSchema = z
     kind: z.literal("output"),
     format: z.literal("json"),
     value: SafeStructuredValueSchema,
-    sources: z.array(SafeStructuredValueSchema).max(200),
+    sources: AssistantModelSourcesSchema,
   })
   .strict();
 
@@ -160,6 +163,14 @@ export interface WorkflowDocumentContextPort {
     signal: AbortSignal;
   }): WorkflowDocumentContextResult;
 }
+
+export type WorkflowStepExecutorOptions = Readonly<{
+  assertModelUse?: (input: {
+    projectId: string;
+    documentId: string;
+    versionId: string;
+  }) => void;
+}>;
 
 function jsonText(value: WorkspaceJson, limit: number, label: string) {
   const text = JSON.stringify(value);
@@ -383,7 +394,29 @@ export class WorkspaceWorkflowStepExecutor implements WorkflowStepExecutor {
   constructor(
     private readonly model: AssistantModelPort,
     private readonly documents: WorkflowDocumentContextPort,
+    private readonly options: WorkflowStepExecutorOptions = {},
   ) {}
+
+  private assertPromptModelUse(
+    projectId: string | null,
+    documents: readonly z.infer<typeof ModelDocumentSchema>[],
+  ) {
+    if (documents.length === 0) return;
+    if (!projectId) {
+      throw new WorkspaceApiError(
+        412,
+        "PRECONDITION_FAILED",
+        "Workflow evidence requires a project-scoped run.",
+      );
+    }
+    for (const document of documents) {
+      this.options.assertModelUse?.({
+        projectId,
+        documentId: document.documentId,
+        versionId: document.versionId,
+      });
+    }
+  }
 
   prepareStep(input: {
     snapshot: WorkflowExecutionSnapshot;
@@ -664,6 +697,11 @@ export class WorkspaceWorkflowStepExecutor implements WorkflowStepExecutor {
         "Workflow model adapter lacks required streaming capability.",
       );
     }
+    // Evidence is durable across workflow steps, while legal-source retention
+    // can expire or be tombstoned between those steps. Re-evaluate every
+    // document immediately before the model boundary instead of trusting the
+    // earlier document_context retrieval decision.
+    this.assertPromptModelUse(input.snapshot.projectId, prepared.documents);
     let streamed = "";
     const turn = await this.model.runTurn({
       modelProfileId: input.snapshot.modelProfileId ?? "",

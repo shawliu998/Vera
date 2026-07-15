@@ -23,9 +23,14 @@ desktop opens `/assistant`. `Project` is the generic container for documents,
 Assistant conversations, workflow runs, and Tabular Reviews. The active local
 `/api/v1` surface covers those resources, model profiles, durable jobs,
 citations, exports, and settings. Workspace migrations are additive through
-v10.
+v14.
 
 **Implemented in source:** real local Project/document CRUD and parsing;
+packaged Apple Vision OCR with reviewable provenance and exact-page source
+reopening; v13 fail-closed legal-source retention/use/export lifecycle; v14
+Document Studio AI suggestions with explicit user acceptance and immutable
+version history, while real legal connectors remain activation-gated and
+disabled;
 OpenAI, DeepSeek, Anthropic, Gemini, and hardened OpenAI-compatible profiles;
 Keychain-only provider secrets and connection-gated activation; durable
 Assistant streaming/stop/retry/regenerate/recovery and citations; Mike-derived
@@ -48,27 +53,25 @@ cases, the working desktop log contained `startup_failed` and no
 
 ```text
 relative app:      desktop/dist/mac-arm64/Vera.app
-absolute app:      /Users/a1-6/Documents/new agent/desktop/dist/mac-arm64/Vera.app
-relative DMG:      desktop/dist/Vera-1.0.1-arm64.dmg
-absolute DMG:      /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-arm64.dmg
-relative ZIP:      desktop/dist/Vera-1.0.1-arm64.zip
-absolute ZIP:      /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-arm64.zip
+relative DMG:      desktop/dist/Vera-1.0.1-arm64.dmg (198122845 bytes)
+relative ZIP:      desktop/dist/Vera-1.0.1-arm64.zip (200992113 bytes)
 relative manifest: desktop/dist/Vera-1.0.1-SHA256SUMS.txt
-absolute manifest: /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-SHA256SUMS.txt
 ```
 
 The verified `desktop/dist/Vera-1.0.1-SHA256SUMS.txt` entries are:
 
 ```text
-69a2ee56379a7cf6cb7fe441685fb59c846e77512928704955e774f3d8d42dd7  Vera-1.0.1-arm64.dmg
-47fcd64f214bf9b28e6982953043c76dba68ff0f2a933107ff6ec07eb704e648  Vera-1.0.1-arm64.zip
+fd246214916b3485e25bb16c8e00bcf6e8be471ed95679190e7685a5c1c49ef8  Vera-1.0.1-arm64.dmg
+7be4a9504151ddd8518141901e3d2753a1cda2fbe13ac27fa7842a9f3d347f1b  Vera-1.0.1-arm64.zip
 ```
 
 This closes P0 local-client acceptance, not public release readiness. The
 accepted package remains unsigned, unnotarized, and local-only.
 See [the P0 migration record](p0_mike_desktop_migration.md),
 [Mike port manifest](mike_port_manifest.md), and
-[desktop guide](desktop_app.md).
+[desktop guide](desktop_app.md). The completed OCR, legal-source retention, and
+Document Studio scope is recorded in
+[the P1 implementation record](p1_ocr_legal_document_studio.md).
 
 Legacy `/aletheia/*` litigation, governance, audit, research, and opinion paths
 remain in the repository for compatibility and regression coverage, but they
@@ -613,8 +616,7 @@ from the append-only lawyer comparison action and cannot satisfy it. Full
 frontend lint, typecheck and production build pass; focused desktop/mobile
 viewer regression passes 7 flows with one intentional project skip. The rebuilt
 local-only `Vera.app` passed SQLCipher/runtime package hygiene and isolated
-packaged smoke, then reopened with frontend and backend health both returning
-200. It remains unsigned and unnotarized.
+packaged smoke, then reopened with frontend and backend health both returning 200. It remains unsigned and unnotarized.
 
 The in-viewer counsel-comparison pass is recorded under
 `docs/screenshots/ui-audit-2026-07-12-in-viewer-verification/`. Sol approved the

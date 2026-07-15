@@ -45,6 +45,197 @@ async function waitForHealth(timeoutMs = 90_000) {
   );
 }
 
+function lstatOrNull(filePath) {
+  try {
+    return fs.lstatSync(filePath);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function assertOwnerOnlyRegularFile(filePath, label) {
+  const info = fs.lstatSync(filePath);
+  if (info.isSymbolicLink() || !info.isFile() || (info.mode & 0o077) !== 0) {
+    throw new Error(`${label} must be an owner-only regular file.`);
+  }
+  return info;
+}
+
+function assertRealDirectory(directory, label) {
+  const info = fs.lstatSync(directory);
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw new Error(`${label} must be a non-symlink directory.`);
+  }
+  if (fs.realpathSync(directory) !== directory) {
+    throw new Error(`${label} must use its canonical path.`);
+  }
+}
+
+function readPendingRestoreRecord(recordPath, expectedTarget) {
+  assertOwnerOnlyRegularFile(recordPath, "Pending restore record");
+  let record;
+  try {
+    record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+  } catch {
+    throw new Error("Pending restore record must contain valid JSON.");
+  }
+  if (
+    !record ||
+    typeof record !== "object" ||
+    Array.isArray(record) ||
+    Object.keys(record).sort().join("\n") !==
+      ["createdAt", "rollback", "schema", "target"].join("\n") ||
+    record.schema !== "aletheia-pending-restore-v1" ||
+    typeof record.target !== "string" ||
+    record.target !== expectedTarget ||
+    typeof record.rollback !== "string" ||
+    path.dirname(record.rollback) !== path.dirname(expectedTarget) ||
+    !/^\.aletheia-restore-rollback-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+      path.basename(record.rollback),
+    ) ||
+    typeof record.createdAt !== "string" ||
+    !Number.isFinite(Date.parse(record.createdAt)) ||
+    new Date(record.createdAt).toISOString() !== record.createdAt
+  ) {
+    throw new Error("Pending restore record has an invalid schema or path.");
+  }
+  return record;
+}
+
+function captureLogCheckpoint(logPath) {
+  const info = assertOwnerOnlyRegularFile(logPath, "Desktop audit log");
+  return { device: info.dev, inode: info.ino, bytes: info.size };
+}
+
+function restoreUtilityCompleted(logPath, checkpoint) {
+  const info = assertOwnerOnlyRegularFile(logPath, "Desktop audit log");
+  if (
+    info.dev !== checkpoint.device ||
+    info.ino !== checkpoint.inode ||
+    info.size < checkpoint.bytes
+  ) {
+    throw new Error("Desktop audit log changed identity during restore.");
+  }
+  const appended = fs
+    .readFileSync(logPath)
+    .subarray(checkpoint.bytes)
+    .toString("utf8");
+  const completeBytes = appended.lastIndexOf("\n");
+  if (completeBytes < 0) return false;
+  return appended
+    .slice(0, completeBytes)
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .some(
+      (record) =>
+        record?.component === "encrypted_restore" &&
+        record?.event === "utility_complete" &&
+        Number.isSafeInteger(record?.detail?.output_bytes) &&
+        record.detail.output_bytes > 0,
+    );
+}
+
+async function waitForCompletedRestoreSwap(args, timeoutMs = 90_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!lstatOrNull(args.pendingRestorePath)) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      continue;
+    }
+    const record = readPendingRestoreRecord(
+      args.pendingRestorePath,
+      args.expectedTarget,
+    );
+    const targetInfo = lstatOrNull(record.target);
+    const rollbackInfo = lstatOrNull(record.rollback);
+    const utilityComplete = restoreUtilityCompleted(
+      args.logPath,
+      args.logCheckpoint,
+    );
+    if (!targetInfo || !rollbackInfo) {
+      if (utilityComplete) {
+        throw new Error(
+          "Restore utility exited before the workspace swap completed.",
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      continue;
+    }
+    assertRealDirectory(record.target, "Restored workspace");
+    assertRealDirectory(record.rollback, "Rollback workspace");
+    const rollbackMarker = path.join(
+      record.rollback,
+      path.basename(args.postBackupMarker),
+    );
+    assertOwnerOnlyRegularFile(rollbackMarker, "Rollback marker");
+    if (fs.readFileSync(rollbackMarker, "utf8") !== args.markerContents) {
+      throw new Error("Rollback workspace marker content changed.");
+    }
+    if (lstatOrNull(args.postBackupMarker)) {
+      throw new Error(
+        "Restored workspace still contains the post-backup marker.",
+      );
+    }
+    const restoredDatabase = path.join(record.target, "aletheia.db");
+    const databaseInfo = fs.lstatSync(restoredDatabase);
+    if (databaseInfo.isSymbolicLink() || !databaseInfo.isFile()) {
+      throw new Error("Restored workspace database is unsafe or missing.");
+    }
+    if (utilityComplete) return record;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("Timed out waiting for a completed post-swap restore.");
+}
+
+async function settlesWithin(promise, timeoutMs) {
+  let timeout;
+  try {
+    return await Promise.race([
+      promise.then(() => true),
+      new Promise((resolve) => {
+        timeout = setTimeout(() => resolve(false), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function processHasExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function waitForProcessExit(child) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      child.off("exit", finish);
+      child.off("close", finish);
+      resolve();
+    };
+    child.once("exit", finish);
+    child.once("close", finish);
+    if (processHasExited(child)) finish();
+  });
+}
+
+async function closeApplication(application, timeoutMs = 10_000) {
+  const applicationProcess = application.process();
+  const exitPromise = waitForProcessExit(applicationProcess);
+  void application.close().catch(() => undefined);
+  if (await settlesWithin(exitPromise, timeoutMs)) return;
+  if (!processHasExited(applicationProcess)) {
+    applicationProcess.kill("SIGKILL");
+  }
+  if (!(await settlesWithin(exitPromise, timeoutMs))) {
+    throw new Error("The isolated Vera audit process did not terminate.");
+  }
+}
+
 function sha256(filePath) {
   return crypto
     .createHash("sha256")
@@ -195,7 +386,8 @@ async function main() {
       "aletheia-data",
       "post-backup-marker.txt",
     );
-    fs.writeFileSync(postBackupMarker, "must disappear after restore\n", {
+    const postBackupMarkerContents = "must disappear after restore\n";
+    fs.writeFileSync(postBackupMarker, postBackupMarkerContents, {
       mode: 0o600,
     });
     const rolledBackMatter = await createMatter("恢复后必须消失的备份后案件");
@@ -205,14 +397,45 @@ async function main() {
         checkboxChecked: false,
       });
     });
-    const closePromise = electronApp.waitForEvent("close", { timeout: 180_000 });
+    const pendingRestorePath = path.join(userDataDir, "pending-restore.json");
+    const desktopLogPath = path.join(
+      userDataDir,
+      "logs",
+      "vera",
+      "vera.log",
+    );
+    const restoreLogCheckpoint = captureLogCheckpoint(desktopLogPath);
+    const localDataPath = path.join(userDataDir, "aletheia-data");
+    const expectedRestoreTarget = path.join(
+      fs.realpathSync(path.dirname(localDataPath)),
+      path.basename(localDataPath),
+    );
+    const interruptedProcess = electronApp.process();
+    const interruptedExitPromise = waitForProcessExit(interruptedProcess);
+    const closePromise = electronApp.waitForEvent("close", {
+      timeout: 180_000,
+    });
     const interruptedRestore = page
       .evaluate(() => window.aletheiaDesktop.restoreEncryptedBackup())
       .catch(() => null);
+    await waitForCompletedRestoreSwap({
+      pendingRestorePath,
+      expectedTarget: expectedRestoreTarget,
+      postBackupMarker,
+      markerContents: postBackupMarkerContents,
+      logPath: desktopLogPath,
+      logCheckpoint: restoreLogCheckpoint,
+    });
+    if (!processHasExited(interruptedProcess)) {
+      interruptedProcess.kill("SIGKILL");
+    }
+    if (!(await settlesWithin(interruptedExitPromise, 10_000))) {
+      throw new Error("Interrupted Vera process did not terminate.");
+    }
     await closePromise;
     await interruptedRestore;
     electronApp = null;
-    assert.equal(fs.existsSync(path.join(userDataDir, "pending-restore.json")), true);
+    assert.equal(fs.existsSync(pendingRestorePath), true);
 
     electronApp = await launchApp(false);
     captureApplicationLog(electronApp);
@@ -238,7 +461,11 @@ async function main() {
     const rechecked = await page.evaluate(() =>
       window.aletheiaDesktop.inspectEncryptedBackup(),
     );
-    assert.equal(rechecked.ok, true);
+    assert.equal(
+      rechecked.ok,
+      true,
+      `Recovered backup preflight failed: ${JSON.stringify(rechecked)}`,
+    );
     await electronApp.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({
         response: 1,
@@ -358,8 +585,11 @@ async function main() {
       )}\n`,
     );
   } finally {
-    if (electronApp) await electronApp.close().catch(() => undefined);
-    fs.rmSync(root, { recursive: true, force: true });
+    try {
+      if (electronApp) await closeApplication(electronApp);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   }
 }
 

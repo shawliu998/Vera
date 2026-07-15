@@ -116,6 +116,7 @@ export type AletheiaLegalSourceUnavailableReason =
   | "endpoint_missing"
   | "endpoint_not_allowlisted"
   | "credential_reference_missing"
+  | "activation_gate_closed"
   | "credential_unavailable"
   | "secret_storage_unavailable";
 
@@ -325,6 +326,24 @@ function parseLegalSourceConnectionStatus(
     "connectionTested",
   ]);
   if (raw.connectionTested !== false) return invalidLegalSourceWire();
+  // The code-owned provider activation gate has higher precedence than local
+  // credential availability once the endpoint, allowlist, and credential
+  // reference deployment fields are complete. In the current closed state the
+  // backend deliberately does not decrypt credentials, so hasSecret and
+  // encryptionEnabled cannot replace this reason.
+  if (
+    provider.endpointConfigured &&
+    provider.allowlisted &&
+    provider.credentialReferenceConfigured &&
+    raw.state === "unavailable" &&
+    raw.reason === "activation_gate_closed"
+  ) {
+    return {
+      state: "unavailable",
+      reason: "activation_gate_closed",
+      connectionTested: false,
+    };
+  }
   const expectedReason = configuredUnavailableReason(provider);
   if (expectedReason) {
     if (raw.state !== "unavailable" || raw.reason !== expectedReason) {
@@ -351,7 +370,7 @@ function parseLegalSourceConnectionStatus(
   ) {
     return {
       state: "unavailable",
-      reason: "secret_storage_unavailable",
+      reason: raw.reason,
       connectionTested: false,
     };
   }
@@ -545,7 +564,12 @@ export type LocalModelSnapshot = {
   model: string;
   modelRevision?: string;
   state:
-    "stopped" | "starting" | "ready" | "unhealthy" | "stopping" | "crashed";
+    | "stopped"
+    | "starting"
+    | "ready"
+    | "unhealthy"
+    | "stopping"
+    | "crashed";
   managed: boolean;
   contextWindowTokens: number;
   maxOutputTokens: number;
@@ -707,7 +731,11 @@ export type AletheiaMatterTemplate =
   | "civil_litigation";
 
 export type AletheiaMatterStatus =
-  "draft" | "in_progress" | "needs_review" | "completed" | "archived";
+  | "draft"
+  | "in_progress"
+  | "needs_review"
+  | "completed"
+  | "archived";
 
 export type AletheiaRiskLevel = "low" | "medium" | "high";
 
@@ -744,7 +772,11 @@ export type AletheiaWorkProductKind =
   | "legal_opinion";
 
 export type AletheiaWorkProductStatus =
-  "draft" | "generated" | "needs_review" | "accepted" | "superseded";
+  | "draft"
+  | "generated"
+  | "needs_review"
+  | "accepted"
+  | "superseded";
 
 export interface AletheiaMatterOverview {
   id: string;
@@ -919,7 +951,11 @@ export interface AletheiaEvidenceRecord {
 }
 
 export type AletheiaReviewResolutionStatus =
-  "open" | "accepted" | "rejected" | "needs_material" | "resolved";
+  | "open"
+  | "accepted"
+  | "rejected"
+  | "needs_material"
+  | "resolved";
 
 export interface AletheiaReviewRecord {
   id: string;
@@ -927,7 +963,11 @@ export interface AletheiaReviewRecord {
   work_product_id: string | null;
   evidence_item_id: string | null;
   target_type:
-    "claim" | "evidence" | "memo_section" | "work_product" | "matter";
+    | "claim"
+    | "evidence"
+    | "memo_section"
+    | "work_product"
+    | "matter";
   target_id: string;
   tag: string;
   comment: string;
@@ -981,7 +1021,12 @@ export interface AletheiaAgentStepRecord {
   title: string;
   sequence: number;
   status:
-    "pending" | "running" | "completed" | "needs_human" | "failed" | "skipped";
+    | "pending"
+    | "running"
+    | "completed"
+    | "needs_human"
+    | "failed"
+    | "skipped";
   input: Record<string, unknown>;
   output: Record<string, unknown>;
   validation_errors: unknown[];
@@ -1000,7 +1045,11 @@ export interface AletheiaToolCallRecord {
   tool_name: string;
   risk_level: "low" | "medium" | "high";
   status:
-    "pending" | "running" | "completed" | "failed" | "requires_confirmation";
+    | "pending"
+    | "running"
+    | "completed"
+    | "failed"
+    | "requires_confirmation";
   input: Record<string, unknown>;
   output: Record<string, unknown>;
   error: string | null;
@@ -1303,7 +1352,10 @@ export interface LegalResearchMemoBlockedResponse {
 }
 
 export type LitigationProposalStatus =
-  "proposed" | "confirmed" | "rejected" | "disputed";
+  | "proposed"
+  | "confirmed"
+  | "rejected"
+  | "disputed";
 
 export interface LitigationFactRecord {
   id: string;
@@ -1872,7 +1924,9 @@ export interface LitigationAgentFindingSemanticCheckRecord {
   prompt_sha256: string;
   output_sha256: string | null;
   citation_assessments:
-    LitigationAgentFindingCitationAssessment[] | string | null;
+    | LitigationAgentFindingCitationAssessment[]
+    | string
+    | null;
   derived_verdict: "supported" | "partial" | "unsupported" | null;
   overall_rationale: string | null;
   uncertainty: string | null;
@@ -2210,7 +2264,8 @@ export async function createLegalResearchMemo(
     },
     body: JSON.stringify({ findings }),
   });
-  if (!response.ok && response.status !== 422) throw await toApiError(response, path);
+  if (!response.ok && response.status !== 422)
+    throw await toApiError(response, path);
   return (await response.json()) as
     | AletheiaWorkProductRecord
     | LegalResearchMemoBlockedResponse;
@@ -2520,7 +2575,8 @@ export async function getLitigationSourceSpanOriginalVerificationHistory(
           withdrawnAt,
         }
       : null;
-    const id = historyString(item, "verification_id", "verificationId") ||
+    const id =
+      historyString(item, "verification_id", "verificationId") ||
       historyString(item, "id", "id");
     const sourceChunkSha256 = historyString(
       item,
@@ -3080,7 +3136,9 @@ export type LitigationArtifactKind =
   | "hearing_bundle_index";
 
 export type LitigationAuditChecklistStatus =
-  "satisfied" | "action_required" | "not_applicable";
+  | "satisfied"
+  | "action_required"
+  | "not_applicable";
 
 export interface LitigationAuditChecklistItem {
   id: string;
@@ -3314,7 +3372,8 @@ export async function generateLitigationArtifact(
 }
 
 export type LitigationDocumentDraftArtifactKind =
-  "litigation_brief" | "hearing_plan";
+  | "litigation_brief"
+  | "hearing_plan";
 
 export interface LitigationDocumentDraftSection {
   id: string;

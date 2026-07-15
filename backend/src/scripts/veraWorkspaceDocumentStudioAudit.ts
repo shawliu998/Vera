@@ -28,11 +28,7 @@ function sha256(value: string) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-function hasColumn(
-  database: WorkspaceDatabase,
-  table: string,
-  column: string,
-) {
+function hasColumn(database: WorkspaceDatabase, table: string, column: string) {
   return database
     .prepare(`PRAGMA table_info(${table})`)
     .all()
@@ -216,7 +212,7 @@ try {
   const legacyEditBefore = v11
     .prepare("SELECT * FROM document_edits WHERE id = ?")
     .get(legacy.editId);
-  const upgrade = v11.runMigrations(WORKSPACE_MIGRATIONS);
+  const upgrade = v11.runMigrations(WORKSPACE_MIGRATIONS.slice(0, 12));
   assert.equal(upgrade.currentVersion, 12);
   assert.deepEqual(
     upgrade.applied.map((record) => record.version),
@@ -234,7 +230,9 @@ try {
     legacyDocumentBefore,
   );
   assert.deepEqual(
-    v11.prepare("SELECT * FROM document_versions WHERE id = ?").get(legacy.versionId),
+    v11
+      .prepare("SELECT * FROM document_versions WHERE id = ?")
+      .get(legacy.versionId),
     legacyVersionBefore,
   );
   assert.deepEqual(
@@ -242,8 +240,9 @@ try {
     legacyEditBefore,
   );
   assert.equal(
-    v11.prepare("SELECT document_kind FROM documents WHERE id = ?").get(legacy.documentId)
-      ?.document_kind,
+    v11
+      .prepare("SELECT document_kind FROM documents WHERE id = ?")
+      .get(legacy.documentId)?.document_kind,
     "source",
   );
   v11.close();
@@ -272,16 +271,16 @@ try {
   const rollbackInspection = new WorkspaceDatabase(rollbackPath, {
     migrations: WORKSPACE_MIGRATIONS.slice(0, 11),
   });
-  assert.equal(hasColumn(rollbackInspection, "documents", "document_kind"), false);
+  assert.equal(
+    hasColumn(rollbackInspection, "documents", "document_kind"),
+    false,
+  );
   assert.equal(
     hasSchemaObject(rollbackInspection, "document_studio_versions"),
     false,
   );
   assert.equal(
-    hasSchemaObject(
-      rollbackInspection,
-      "document_version_citation_anchors",
-    ),
+    hasSchemaObject(rollbackInspection, "document_version_citation_anchors"),
     false,
   );
   assert.equal(
@@ -292,13 +291,13 @@ try {
   );
   rollbackInspection.close();
 
-  const database = new WorkspaceDatabase(path.join(root, "fresh.db"));
+  const database = new WorkspaceDatabase(path.join(root, "fresh.db"), {
+    migrations: WORKSPACE_MIGRATIONS.slice(0, 12),
+  });
   assert.equal(database.migration?.currentVersion, 12);
   assert.ok(hasColumn(database, "documents", "document_kind"));
   assert.ok(hasSchemaObject(database, "document_studio_versions"));
-  assert.ok(
-    hasSchemaObject(database, "document_version_citation_anchors"),
-  );
+  assert.ok(hasSchemaObject(database, "document_version_citation_anchors"));
 
   const projectA = insertProject(database, "Project A");
   const projectB = insertProject(database, "Project B");
@@ -333,8 +332,9 @@ try {
   assert.deepEqual(
     JSON.parse(
       String(
-        database.prepare("SELECT payload_json FROM jobs WHERE id = ?").get(initial.jobId)
-          ?.payload_json,
+        database
+          .prepare("SELECT payload_json FROM jobs WHERE id = ?")
+          .get(initial.jobId)?.payload_json,
       ),
     ),
     { documentId: initial.documentId, versionId: initial.versionId },
@@ -363,9 +363,9 @@ try {
     "DOCUMENT_STUDIO_NOT_FOUND",
   );
   assert.equal(
-    database.prepare("SELECT count(*) AS count FROM documents WHERE id = ?").get(
-      folderLeak.documentId,
-    )?.count,
+    database
+      .prepare("SELECT count(*) AS count FROM documents WHERE id = ?")
+      .get(folderLeak.documentId)?.count,
     0,
   );
 
@@ -414,19 +414,22 @@ try {
     "DOCUMENT_STUDIO_VERSION_CONFLICT",
   );
   assert.equal(
-    database.prepare("SELECT count(*) AS count FROM document_versions WHERE id = ?").get(
-      stale.versionId,
-    )?.count,
-    0,
-  );
-  assert.equal(
-    database.prepare("SELECT count(*) AS count FROM jobs WHERE id = ?").get(stale.jobId)
-      ?.count,
+    database
+      .prepare("SELECT count(*) AS count FROM document_versions WHERE id = ?")
+      .get(stale.versionId)?.count,
     0,
   );
   assert.equal(
     database
-      .prepare("SELECT count(*) AS count FROM workspace_blob_records WHERE id = ?")
+      .prepare("SELECT count(*) AS count FROM jobs WHERE id = ?")
+      .get(stale.jobId)?.count,
+    0,
+  );
+  assert.equal(
+    database
+      .prepare(
+        "SELECT count(*) AS count FROM workspace_blob_records WHERE id = ?",
+      )
       .get(stale.blobRecordId)?.count,
     0,
   );
@@ -465,9 +468,9 @@ try {
     "DOCUMENT_STUDIO_NOT_FOUND",
   );
   assert.equal(
-    database.prepare("SELECT count(*) AS count FROM document_versions WHERE id = ?").get(
-      wrongProjectRestore.versionId,
-    )?.count,
+    database
+      .prepare("SELECT count(*) AS count FROM document_versions WHERE id = ?")
+      .get(wrongProjectRestore.versionId)?.count,
     0,
   );
 
@@ -485,14 +488,16 @@ try {
     "DOCUMENT_STUDIO_NOT_FOUND",
   );
   assert.equal(
-    database.prepare("SELECT count(*) AS count FROM document_versions WHERE id = ?").get(
-      crossProjectCitation.versionId,
-    )?.count,
+    database
+      .prepare("SELECT count(*) AS count FROM document_versions WHERE id = ?")
+      .get(crossProjectCitation.versionId)?.count,
     0,
   );
 
   database
-    .prepare("UPDATE projects SET status = 'archived', archived_at = ? WHERE id = ?")
+    .prepare(
+      "UPDATE projects SET status = 'archived', archived_at = ? WHERE id = ?",
+    )
     .run(LATEST, projectA);
   const archivedCommit = {
     ...second,
@@ -508,7 +513,9 @@ try {
   );
   assert.ok(repository.getProjectDocument(projectA, initial.documentId));
   database
-    .prepare("UPDATE projects SET status = 'active', archived_at = NULL WHERE id = ?")
+    .prepare(
+      "UPDATE projects SET status = 'active', archived_at = NULL WHERE id = ?",
+    )
     .run(projectA);
 
   const badRestore = {
@@ -531,9 +538,9 @@ try {
     "DOCUMENT_STUDIO_PERSISTENCE_FAILED",
   );
   assert.equal(
-    database.prepare("SELECT count(*) AS count FROM document_versions WHERE id = ?").get(
-      badRestore.versionId,
-    )?.count,
+    database
+      .prepare("SELECT count(*) AS count FROM document_versions WHERE id = ?")
+      .get(badRestore.versionId)?.count,
     0,
   );
 
@@ -574,7 +581,9 @@ try {
     /immutable/i,
   );
 
-  database.prepare("DELETE FROM source_citation_anchors WHERE id = ?").run(anchorA1);
+  database
+    .prepare("DELETE FROM source_citation_anchors WHERE id = ?")
+    .run(anchorA1);
   assert.equal(
     database
       .prepare(
@@ -586,12 +595,16 @@ try {
   );
   assert.equal(
     database
-      .prepare("SELECT count(*) AS count FROM document_studio_versions WHERE document_id = ?")
+      .prepare(
+        "SELECT count(*) AS count FROM document_studio_versions WHERE document_id = ?",
+      )
       .get(initial.documentId)?.count,
     3,
   );
 
-  database.prepare("DELETE FROM documents WHERE id = ?").run(initial.documentId);
+  database
+    .prepare("DELETE FROM documents WHERE id = ?")
+    .run(initial.documentId);
   for (const table of [
     "document_versions",
     "document_studio_versions",
@@ -607,7 +620,9 @@ try {
     );
   }
   assert.ok(
-    database.prepare("SELECT id FROM source_citation_anchors WHERE id = ?").get(anchorA2),
+    database
+      .prepare("SELECT id FROM source_citation_anchors WHERE id = ?")
+      .get(anchorA2),
   );
   assert.equal(database.prepare("PRAGMA foreign_key_check").all().length, 0);
   database.close();

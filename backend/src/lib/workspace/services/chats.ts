@@ -203,6 +203,10 @@ export class ChatsService {
     return this.chats.messages(chatId);
   }
 
+  message(chatId: string, messageId: string) {
+    return this.chats.message(chatId, messageId);
+  }
+
   sources(messageId: string) {
     return this.chats.sources(messageId);
   }

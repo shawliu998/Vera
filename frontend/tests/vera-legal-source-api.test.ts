@@ -100,12 +100,29 @@ function provider(
   };
 }
 
+function closedGateProvider(
+  providerId: "pkulaw" | "wolters" = "pkulaw",
+  input: ProviderOptions = {},
+) {
+  return provider(providerId, {
+    ...input,
+    connectionStatus: {
+      state: "unavailable",
+      reason: "activation_gate_closed",
+      connectionTested: false,
+    },
+  });
+}
+
 function response() {
   return {
     schemaVersion: "vera-legal-source-provider-status-v1",
     localOnly: true,
     detail: "Authorized legal-source deployment and local credential status.",
-    providers: [provider("pkulaw"), provider("wolters", { hasSecret: false })],
+    providers: [
+      closedGateProvider("pkulaw"),
+      closedGateProvider("wolters", { hasSecret: false }),
+    ],
   };
 }
 
@@ -123,13 +140,13 @@ test("legal-source parser preserves the complete truthful provider-neutral wire"
   assert.equal(parsed.localOnly, true);
   assert.equal(parsed.providers.length, 2);
   assert.deepEqual(parsed.providers[0]?.connectionStatus, {
-    state: "configured_unverified",
-    reason: null,
+    state: "unavailable",
+    reason: "activation_gate_closed",
     connectionTested: false,
   });
   assert.deepEqual(parsed.providers[1]?.connectionStatus, {
     state: "unavailable",
-    reason: "credential_unavailable",
+    reason: "activation_gate_closed",
     connectionTested: false,
   });
   assert.equal(parsed.providers[0]?.capabilities.search, true);
@@ -173,6 +190,37 @@ test("legal-source parser preserves the complete truthful provider-neutral wire"
       "unavailable",
     );
   }
+});
+
+test("legal-source parser preserves the backend closed-gate precedence before credential state", () => {
+  for (const fixture of [
+    closedGateProvider("pkulaw", { hasSecret: false }),
+    closedGateProvider("pkulaw", { encryptionEnabled: false }),
+    closedGateProvider("pkulaw", {
+      hasSecret: false,
+      encryptionEnabled: false,
+    }),
+  ]) {
+    assert.deepEqual(
+      parseAletheiaLegalSourceProvider(fixture).connectionStatus,
+      {
+        state: "unavailable",
+        reason: "activation_gate_closed",
+        connectionTested: false,
+      },
+    );
+  }
+
+  assert.throws(
+    () =>
+      parseAletheiaLegalSourceProvider(
+        closedGateProvider("pkulaw", {
+          endpointConfigured: false,
+          allowlisted: false,
+        }),
+      ),
+    invalidResponse,
+  );
 });
 
 test("legal-source parser rejects leaks, unknown providers, and contradictory legacy test states", () => {
@@ -297,7 +345,7 @@ test("legal-source API authenticates list/save/remove and never returns or accep
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const queue: Array<{ status: number; body?: unknown }> = [
     { status: 200, body: response() },
-    { status: 200, body: provider("pkulaw") },
+    { status: 200, body: closedGateProvider("pkulaw") },
     { status: 204 },
     {
       status: 200,

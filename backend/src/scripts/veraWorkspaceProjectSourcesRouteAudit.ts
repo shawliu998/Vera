@@ -16,7 +16,9 @@ import express, { type Express } from "express";
 import type { WorkspaceBlobCodec } from "../lib/workspace/blobStore";
 import { LocalWorkspaceBlobStore } from "../lib/workspace/localWorkspaceBlobStore";
 import { WORKSPACE_LOCAL_PRINCIPAL_ID } from "../lib/workspace/principal";
+import { WorkspaceSourceFoundationRepository } from "../lib/workspace/repositories/sourceFoundation";
 import { WorkspaceRuntime } from "../lib/workspace/runtime";
+import { WorkspaceProjectSourcesService } from "../lib/workspace/services/projectSources";
 import {
   createWorkspaceProjectSourcesV1Router,
   type WorkspaceProjectSourcesV1Port,
@@ -25,6 +27,7 @@ import { createVeraApplication } from "../veraApplication";
 
 const TOKEN = "vera-project-sources-route-audit-token-0000000000000000";
 const NOW = "2026-07-15T12:00:00.000Z";
+const EXPIRED_LEGAL_BODY = "expired legal body";
 const root = mkdtempSync(
   path.join(os.tmpdir(), "vera-project-sources-route-audit-"),
 );
@@ -280,6 +283,24 @@ async function auditResponseBoundary() {
     async getProjectSource() {
       return { snapshot, anchors: [] };
     },
+    async readProjectSourceContent() {
+      return {
+        snapshot_id: snapshotId,
+        document: {
+          document_id: snapshot.source_record_id,
+          version_id: snapshot.source_version_id,
+          title: snapshot.title,
+          filename: "safe-source.txt",
+          mime_type: "text/plain",
+          content_sha256: snapshot.content_sha256,
+          page_count: null,
+        },
+        chunks: [],
+        next_cursor: null,
+        storage_path: "/private/vera/source.txt",
+        raw_parser_metadata: { credential_secret: "never-serialize-this" },
+      };
+    },
     async createProjectSourceAnchor() {
       throw new Error("unused");
     },
@@ -305,6 +326,16 @@ async function auditResponseBoundary() {
     assert.equal(body.includes("/private/vera"), false);
     assert.equal(body.includes("never-serialize-this"), false);
     assert.equal(body.includes("storage_path"), false);
+
+    const contentResponse = await fetch(
+      `${baseUrl}/projects/${projectId}/sources/${snapshotId}/content`,
+    );
+    assert.equal(contentResponse.status, 500);
+    const contentBody = await contentResponse.text();
+    assert.equal(contentBody.includes("/private/vera"), false);
+    assert.equal(contentBody.includes("never-serialize-this"), false);
+    assert.equal(contentBody.includes("storage_path"), false);
+    assert.equal(contentBody.includes("raw_parser_metadata"), false);
   });
 }
 
@@ -328,6 +359,63 @@ async function main() {
   runtime.database
     .prepare("INSERT INTO projects (id, name) VALUES (?, 'Sources B')")
     .run(projectB);
+  const legalSnapshotId = randomUUID();
+  const sourceFoundation = new WorkspaceSourceFoundationRepository(
+    runtime.database,
+  );
+  sourceFoundation.createSnapshot({
+    id: legalSnapshotId,
+    projectId: projectA,
+    sourceKind: "legal_authority",
+    sourceRecordId: "audit-expired-authority",
+    sourceVersionId: "audit-version-1",
+    titleSnapshot: "Expired authority audit record",
+    contentSha256: digest(EXPIRED_LEGAL_BODY),
+    locator: {
+      providerRecordId: "audit-expired-authority",
+      excerpt: EXPIRED_LEGAL_BODY,
+    },
+    retrievedAt: "2000-01-01T00:00:00.000Z",
+    license: {
+      basis: "deployment_contract",
+      retention: "full_text_ttl",
+      export: "exact_quotes_only",
+      modelUse: "permitted",
+    },
+    retentionPolicy: "full_text_ttl",
+    retentionExpiresAt: "2000-01-02T00:00:00.000Z",
+    retrievalMetadata: {
+      provider: "audit-provider",
+      excerpt: EXPIRED_LEGAL_BODY,
+    },
+    createdAt: "2000-01-01T00:00:00.000Z",
+  });
+  assert.equal(
+    runtime.database
+      .prepare(
+        `SELECT access_state
+           FROM project_source_snapshot_lifecycle
+          WHERE project_id = ? AND snapshot_id = ?`,
+      )
+      .get(projectA, legalSnapshotId)?.access_state,
+    "tombstoned",
+  );
+  const noRetentionService = new WorkspaceProjectSourcesService(
+    runtime.database,
+    sourceFoundation,
+  );
+  const noRetentionDetail = noRetentionService.getSnapshot(
+    projectA,
+    legalSnapshotId,
+  );
+  assert.deepEqual(noRetentionDetail.snapshot.locator, {});
+  assert.deepEqual(noRetentionDetail.snapshot.retrievalMetadata, {});
+  const noRetentionList = noRetentionService.listSnapshots({
+    projectId: projectA,
+    sourceKind: "legal_authority",
+  });
+  assert.deepEqual(noRetentionList.sources[0]?.locator, {});
+  assert.deepEqual(noRetentionList.sources[0]?.retrievalMetadata, {});
   const text =
     "Clause alpha. Clause alpha. 😀 Unique /Users/alice password=literal. aaa";
   const primary = seedDocument(runtime, {
@@ -336,6 +424,9 @@ async function main() {
     text,
     withChunk: true,
   });
+  runtime.database
+    .prepare("UPDATE document_versions SET page_count = 1 WHERE id = ?")
+    .run(primary.versionId);
   const secondary = seedDocument(runtime, {
     projectId: projectA,
     title: "Secondary evidence",
@@ -355,6 +446,33 @@ async function main() {
     title: "Legacy padded offsets",
     text: legacyPaddedText,
     withChunk: true,
+  });
+  const budgeted = seedDocument(runtime, {
+    projectId: projectA,
+    title: "UTF-8 source page budget",
+    text: "Budgeted immutable source.",
+    withChunk: false,
+  });
+  const budgetChunkText = "界😀".repeat(7_000);
+  const budgetChunkIds = Array.from({ length: 6 }, () => randomUUID());
+  const insertBudgetChunk = runtime.database.prepare(
+    `INSERT INTO document_chunks (
+       id, document_id, version_id, ordinal, text, start_offset,
+       end_offset, page_start, page_end, content_sha256, metadata_json
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, '{}')`,
+  );
+  budgetChunkIds.forEach((chunkId, ordinal) => {
+    const start = ordinal * budgetChunkText.length;
+    insertBudgetChunk.run(
+      chunkId,
+      budgeted.documentId,
+      budgeted.versionId,
+      ordinal,
+      budgetChunkText,
+      start,
+      start + budgetChunkText.length,
+      digest(budgetChunkText),
+    );
   });
   runtime.database
     .prepare(
@@ -408,6 +526,51 @@ async function main() {
   });
 
   await withServer(app, async (baseUrl) => {
+    const legalDetailResponse = await fetch(
+      `${baseUrl}/api/v1/projects/${projectA}/sources/${legalSnapshotId}`,
+      { headers: authHeaders() },
+    );
+    assert.equal(legalDetailResponse.status, 200);
+    assert.match(
+      legalDetailResponse.headers.get("cache-control") ?? "",
+      /no-store/,
+    );
+    const legalDetailText = await legalDetailResponse.text();
+    assert.equal(legalDetailText.includes(EXPIRED_LEGAL_BODY), false);
+    const legalDetail = record(
+      JSON.parse(legalDetailText) as unknown,
+      "expired legal detail",
+    );
+    const legalDetailSnapshot = record(
+      legalDetail.snapshot,
+      "expired legal detail snapshot",
+    );
+    assert.deepEqual(legalDetailSnapshot.locator, {});
+    assert.deepEqual(legalDetailSnapshot.retrieval_metadata, {});
+    assert.equal(legalDetailSnapshot.id, legalSnapshotId);
+    assert.equal(
+      legalDetailSnapshot.content_sha256,
+      digest(EXPIRED_LEGAL_BODY),
+    );
+
+    const legalListResponse = await fetch(
+      `${baseUrl}/api/v1/projects/${projectA}/sources?kind=legal_authority`,
+      { headers: authHeaders() },
+    );
+    assert.equal(legalListResponse.status, 200);
+    const legalListText = await legalListResponse.text();
+    assert.equal(legalListText.includes(EXPIRED_LEGAL_BODY), false);
+    const legalListBody = record(
+      JSON.parse(legalListText) as unknown,
+      "expired legal list",
+    );
+    const legalListSnapshot = record(
+      array(legalListBody.sources, "expired legal sources")[0],
+      "expired legal list snapshot",
+    );
+    assert.deepEqual(legalListSnapshot.locator, {});
+    assert.deepEqual(legalListSnapshot.retrieval_metadata, {});
+
     const captureUrl = `${baseUrl}/api/v1/projects/${projectA}/sources/document-snapshots`;
     const unauthenticated = await fetch(captureUrl, {
       method: "POST",
@@ -432,6 +595,7 @@ async function main() {
       body: JSON.stringify({ document_id: primary.documentId }),
     });
     assert.equal(firstCapture.status, 201);
+    assert.match(firstCapture.headers.get("cache-control") ?? "", /no-store/);
     const firstBody = record(await json(firstCapture), "first capture");
     assert.equal(firstBody.reused, false);
     const snapshot = record(firstBody.snapshot, "snapshot");
@@ -582,6 +746,152 @@ async function main() {
     );
     assert.equal(array(ocr.blocks, "quote OCR blocks").length, 1);
 
+    const sourceContent = await fetch(
+      `${baseUrl}/api/v1/projects/${projectA}/sources/${snapshotId}/content?limit=20`,
+      { headers: authHeaders() },
+    );
+    assert.equal(sourceContent.status, 200);
+    const sourceContentBody = record(
+      await json(sourceContent),
+      "source content",
+    );
+    assert.equal(sourceContentBody.snapshot_id, snapshotId);
+    const sourceDocument = record(
+      sourceContentBody.document,
+      "source content document",
+    );
+    assert.equal(sourceDocument.document_id, primary.documentId);
+    assert.equal(sourceDocument.version_id, primary.versionId);
+    assert.equal(sourceDocument.content_sha256, primary.contentHash);
+    assert.equal(sourceDocument.filename, "Primary evidence.txt");
+    assert.equal(sourceDocument.mime_type, "text/plain");
+    const sourceChunks = array(
+      sourceContentBody.chunks,
+      "source content chunks",
+    );
+    assert.equal(sourceChunks.length, 1);
+    const sourceChunk = record(sourceChunks[0], "source content chunk");
+    assert.equal(sourceChunk.id, primary.chunkId);
+    assert.equal(sourceChunk.text, text);
+    assert.equal(sourceChunk.content_sha256, digest(text));
+    assert.equal(sourceContentBody.next_cursor, null);
+    assert.equal(
+      JSON.stringify(sourceContentBody).includes("storage_key"),
+      false,
+    );
+    assert.equal(
+      JSON.stringify(sourceContentBody).includes("metadata_json"),
+      false,
+    );
+
+    const directSourceContent = await fetch(
+      `${baseUrl}/api/v1/projects/${projectA}/sources/${snapshotId}/content?chunk_id=${primary.chunkId}`,
+      { headers: authHeaders() },
+    );
+    assert.equal(directSourceContent.status, 200);
+    assert.equal(
+      record(
+        array(
+          record(await json(directSourceContent), "direct source content")
+            .chunks,
+          "direct source chunks",
+        )[0],
+        "direct source chunk",
+      ).id,
+      primary.chunkId,
+    );
+
+    runtime.database
+      .prepare(
+        "UPDATE document_chunks SET page_start = 2, page_end = 2 WHERE id = ?",
+      )
+      .run(primary.chunkId);
+    const outOfRangePageContent = await fetch(
+      `${baseUrl}/api/v1/projects/${projectA}/sources/${snapshotId}/content?chunk_id=${primary.chunkId}`,
+      { headers: authHeaders() },
+    );
+    assert.equal(outOfRangePageContent.status, 409);
+    runtime.database
+      .prepare(
+        "UPDATE document_chunks SET page_start = 1, page_end = 1 WHERE id = ?",
+      )
+      .run(primary.chunkId);
+
+    const unboundedDirectSourceContent = await fetch(
+      `${baseUrl}/api/v1/projects/${projectA}/sources/${snapshotId}/content?chunk_id=${primary.chunkId}&limit=20`,
+      { headers: authHeaders() },
+    );
+    assert.equal(unboundedDirectSourceContent.status, 422);
+    const invalidContentCursor = await fetch(
+      `${baseUrl}/api/v1/projects/${projectA}/sources/${snapshotId}/content?cursor=forged`,
+      { headers: authHeaders() },
+    );
+    assert.equal(invalidContentCursor.status, 422);
+    const crossProjectSourceContent = await fetch(
+      `${baseUrl}/api/v1/projects/${projectB}/sources/${snapshotId}/content`,
+      { headers: authHeaders() },
+    );
+    assert.equal(crossProjectSourceContent.status, 404);
+
+    const budgetCapture = await fetch(captureUrl, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ document_id: budgeted.documentId }),
+    });
+    assert.equal(budgetCapture.status, 201);
+    const budgetSnapshotId = String(
+      record(
+        record(await json(budgetCapture), "budget source capture").snapshot,
+        "budget source snapshot",
+      ).id,
+    );
+    const budgetFirstPage = await fetch(
+      `${baseUrl}/api/v1/projects/${projectA}/sources/${budgetSnapshotId}/content?limit=20`,
+      { headers: authHeaders() },
+    );
+    assert.equal(budgetFirstPage.status, 200);
+    const budgetFirstBody = record(
+      await json(budgetFirstPage),
+      "budget source first page",
+    );
+    const budgetFirstChunks = array(
+      budgetFirstBody.chunks,
+      "budget source first chunks",
+    ).map((chunk) => record(chunk, "budget source first chunk"));
+    assert.equal(budgetFirstChunks.length, 5);
+    assert.equal(typeof budgetFirstBody.next_cursor, "string");
+    assert.ok(
+      budgetFirstChunks.every(
+        (chunk) =>
+          chunk.text === budgetChunkText &&
+          Buffer.byteLength(String(chunk.text), "utf8") === 49_000,
+      ),
+    );
+    const budgetSecondPage = await fetch(
+      `${baseUrl}/api/v1/projects/${projectA}/sources/${budgetSnapshotId}/content?limit=20&cursor=${encodeURIComponent(String(budgetFirstBody.next_cursor))}`,
+      { headers: authHeaders() },
+    );
+    assert.equal(budgetSecondPage.status, 200);
+    const budgetSecondBody = record(
+      await json(budgetSecondPage),
+      "budget source second page",
+    );
+    const budgetSecondChunks = array(
+      budgetSecondBody.chunks,
+      "budget source second chunks",
+    ).map((chunk) => record(chunk, "budget source second chunk"));
+    assert.equal(budgetSecondChunks.length, 1);
+    assert.equal(budgetSecondBody.next_cursor, null);
+    assert.deepEqual(
+      [...budgetFirstChunks, ...budgetSecondChunks].map((chunk) => chunk.id),
+      budgetChunkIds,
+    );
+    assert.equal(
+      [...String(budgetSecondChunks[0].text)].at(-1),
+      "😀",
+      "UTF-8 response budgeting must not split a surrogate pair",
+    );
+
     const detail = await fetch(
       `${baseUrl}/api/v1/projects/${projectA}/sources/${snapshotId}`,
       { headers: authHeaders() },
@@ -682,6 +992,11 @@ async function main() {
       }),
     });
     assert.equal(tamperedChunk.status, 409);
+    const tamperedSourceContent = await fetch(
+      `${baseUrl}/api/v1/projects/${projectA}/sources/${snapshotId}/content?chunk_id=${primary.chunkId}`,
+      { headers: authHeaders() },
+    );
+    assert.equal(tamperedSourceContent.status, 409);
   });
 
   assert.equal(
@@ -709,10 +1024,15 @@ async function main() {
           "server-derived immutable document snapshot policy and hash",
           "transactional document snapshot idempotency",
           "bounded keyset pagination and kind filtering",
+          "tombstoned legal locator and retrieval metadata redaction",
           "cross-Project reads and writes return 404",
           "unique quote resolution and explicit UTF-16 offsets",
           "document/version/chunk hash integrity checks",
+          "chunk page bounds cannot exceed the authoritative document page count",
           "strict quote-level OCR locator projection",
+          "bounded hash-checked source content and direct chunk reads",
+          "UTF-8 byte budgeting paginates without splitting UTF-16 text",
+          "source content omits storage and raw parser metadata",
           "synthetic page markers never claim page-text OCR offsets",
           "legacy padded chunks omit unverifiable document offsets",
           "strict response serializer omits paths and secrets",

@@ -272,6 +272,10 @@ export class WorkspaceTabularModelAdapter implements TabularCellModelPort {
         : {}),
       metadata: { feature: "vera_tabular" },
     };
+    // Text may have been read earlier in the durable cell handler. Re-check
+    // both the immutable snapshot and retention policy at the last synchronous
+    // boundary before the provider is allowed to observe the request.
+    this.snapshots.assertCurrentModelUse(input.snapshot);
     let output = "";
     let completed = false;
     try {
@@ -300,10 +304,7 @@ export class WorkspaceTabularModelAdapter implements TabularCellModelPort {
           case "tool_call_start":
           case "tool_call_delta":
           case "tool_call_end":
-            throw new TabularModelError(
-              "tabular_model_output_invalid",
-              false,
-            );
+            throw new TabularModelError("tabular_model_output_invalid", false);
         }
       }
     } catch (error) {

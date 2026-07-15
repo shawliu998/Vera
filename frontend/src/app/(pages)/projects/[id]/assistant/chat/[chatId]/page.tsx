@@ -78,7 +78,9 @@ export default function ProjectAssistantChatPage({
               )}
               <button
                 type="button"
-                onClick={() => router.replace(`/projects/${projectId}/assistant`)}
+                onClick={() =>
+                  router.replace(`/projects/${projectId}/assistant`)
+                }
                 className="rounded-full border border-gray-200 bg-white px-4 py-1.5 text-xs font-medium text-gray-700"
               >
                 {t("assistant.project.backToChats")}
@@ -129,6 +131,8 @@ export default function ProjectAssistantChatPage({
             availableDocuments={workspace.documents}
             projectName={workspace.project?.name}
             documentToAttach={selectedDocument}
+            projectId={projectId}
+            chatId={chatId}
           />
         </div>
       </div>

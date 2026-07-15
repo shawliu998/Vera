@@ -494,6 +494,7 @@ async function auditDocumentTools(database: WorkspaceDatabase) {
   const snapshot = chats.generationSnapshot(generation.jobId);
   const context = {
     jobId: snapshot.jobId,
+    attempt: 1,
     chatId: snapshot.chatId,
     projectId: snapshot.payload.projectId,
     modelProfileId: snapshot.modelProfileId,

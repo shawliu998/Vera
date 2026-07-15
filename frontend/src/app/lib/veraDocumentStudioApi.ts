@@ -1,8 +1,4 @@
-import {
-  veraApiBlobRequest,
-  veraApiRequest,
-  VeraApiError,
-} from "./veraApi";
+import { veraApiBlobRequest, veraApiRequest, VeraApiError } from "./veraApi";
 import { VeraRuntimeConfigurationError } from "./veraRuntime";
 
 const UUID_PATTERN =
@@ -30,11 +26,13 @@ const STUDIO_DOCX_WARNING_CODE_SET = new Set<string>(
 const STUDIO_VERSION_SOURCES = new Set([
   "user_upload",
   "assistant_edit",
+  "user_accept",
 ] as const);
 
 export type VeraStudioVersionSourceWire =
   | "user_upload"
-  | "assistant_edit";
+  | "assistant_edit"
+  | "user_accept";
 
 export interface VeraStudioVersionWire {
   id: string;
@@ -97,6 +95,15 @@ export interface CreateVeraStudioDocumentInput {
   folder_id?: string | null;
 }
 
+export interface CreateVeraStudioDraftFromAssistantInput {
+  chat_id: string;
+  assistant_message_id: string;
+}
+
+export interface CreateVeraStudioDraftFromWorkflowInput {
+  workflow_run_id: string;
+}
+
 export interface SaveVeraStudioDocumentInput {
   expected_version_id: string;
   content: string;
@@ -118,6 +125,64 @@ export interface VeraStudioDocxDownload {
   blob: Blob;
   filename: string;
   warningCodes: VeraStudioDocxWarningCode[];
+}
+
+export interface VeraStudioSuggestionWire {
+  id: string;
+  project_id: string;
+  document_id: string;
+  base_version_id: string;
+  message_id: string | null;
+  change_id: string;
+  start_offset: number;
+  end_offset: number;
+  offset_scope: "raw_markdown_v1";
+  offset_unit: "utf16_code_unit";
+  deleted_text: string;
+  inserted_text: string;
+  context_before: string;
+  context_after: string;
+  summary: string;
+  status: "pending" | "accepted" | "rejected";
+  created_at: string;
+  resolved_at: string | null;
+  result_version_id: string | null;
+}
+
+export interface VeraStudioSuggestionPreviewWire {
+  id: string;
+  project_id: string;
+  document_id: string;
+  base_version_id: string;
+  message_id: string | null;
+  start_offset: number;
+  end_offset: number;
+  offset_scope: "raw_markdown_v1";
+  offset_unit: "utf16_code_unit";
+  deleted_preview: string;
+  inserted_preview: string;
+  deleted_truncated: boolean;
+  inserted_truncated: boolean;
+  context_before: string;
+  context_after: string;
+  summary: string;
+  status: "pending";
+  created_at: string;
+}
+
+export interface VeraStudioSuggestionPreviewPageWire {
+  suggestions: VeraStudioSuggestionPreviewWire[];
+  has_more: boolean;
+}
+
+export interface VeraStudioSuggestionAcceptanceWire {
+  suggestion: VeraStudioSuggestionWire;
+  document: VeraStudioDocumentWire;
+}
+
+export interface VeraStudioSuggestionAcceptanceExpectation {
+  reviewedSuggestion: VeraStudioSuggestionWire;
+  baseDocument: VeraStudioDocumentWire;
 }
 
 function invalidWire(label: string): never {
@@ -154,7 +219,40 @@ function boundedString(
     typeof value !== "string" ||
     value.length > maxLength ||
     (!allowEmpty && value.length === 0) ||
-    value.includes("\0")
+    value.includes("\0") ||
+    hasUnpairedSurrogate(value)
+  ) {
+    return invalidWire(label);
+  }
+  return value;
+}
+
+function hasUnpairedSurrogate(value: string) {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) return true;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function boundedCodePointString(
+  value: unknown,
+  label: string,
+  maxCodePoints: number,
+): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > maxCodePoints * 2 ||
+    [...value].length > maxCodePoints ||
+    value.includes("\0") ||
+    hasUnpairedSurrogate(value)
   ) {
     return invalidWire(label);
   }
@@ -251,9 +349,7 @@ function studioContent(value: unknown): string {
   );
   if (
     new TextEncoder().encode(content).byteLength > MAX_STUDIO_CONTENT_BYTES ||
-    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(
-      content,
-    )
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(content)
   ) {
     invalidWire("Studio content");
   }
@@ -372,14 +468,7 @@ function parseCitationAnchor(value: unknown): VeraStudioCitationAnchorWire {
   const wire = record(value, "Studio citation anchor");
   exactKeys(
     wire,
-    [
-      "id",
-      "snapshot_id",
-      "ordinal",
-      "exact_quote",
-      "quote_sha256",
-      "locator",
-    ],
+    ["id", "snapshot_id", "ordinal", "exact_quote", "quote_sha256", "locator"],
     "Studio citation anchor",
   );
   return {
@@ -499,13 +588,11 @@ function parseCurrentVeraStudioDocument(
   return document;
 }
 
-export function parseVeraStudioVersions(value: unknown): VeraStudioVersionsWire {
+export function parseVeraStudioVersions(
+  value: unknown,
+): VeraStudioVersionsWire {
   const wire = record(value, "Studio version list");
-  exactKeys(
-    wire,
-    ["current_version_id", "versions"],
-    "Studio version list",
-  );
+  exactKeys(wire, ["current_version_id", "versions"], "Studio version list");
   if (!Array.isArray(wire.versions) || wire.versions.length > 10_000) {
     invalidWire("Studio version list");
   }
@@ -518,6 +605,370 @@ export function parseVeraStudioVersions(value: unknown): VeraStudioVersionsWire 
     invalidWire("Studio current version list entry");
   }
   return { current_version_id: currentVersionId, versions };
+}
+
+export function parseVeraStudioSuggestion(
+  value: unknown,
+): VeraStudioSuggestionWire {
+  const wire = record(value, "Studio suggestion");
+  exactKeys(
+    wire,
+    [
+      "id",
+      "project_id",
+      "document_id",
+      "base_version_id",
+      "message_id",
+      "change_id",
+      "start_offset",
+      "end_offset",
+      "offset_scope",
+      "offset_unit",
+      "deleted_text",
+      "inserted_text",
+      "context_before",
+      "context_after",
+      "summary",
+      "status",
+      "created_at",
+      "resolved_at",
+      "result_version_id",
+    ],
+    "Studio suggestion",
+  );
+  const startOffset = nonNegativeInteger(
+    wire.start_offset,
+    "Studio suggestion start offset",
+  );
+  const endOffset = nonNegativeInteger(
+    wire.end_offset,
+    "Studio suggestion end offset",
+  );
+  const deletedText = boundedString(
+    wire.deleted_text,
+    "Studio suggestion deleted text",
+    200_000,
+    true,
+  );
+  const insertedText = boundedString(
+    wire.inserted_text,
+    "Studio suggestion inserted text",
+    200_000,
+    true,
+  );
+  if (
+    endOffset - startOffset !== deletedText.length ||
+    (deletedText.length === 0 && insertedText.length === 0)
+  ) {
+    invalidWire("Studio suggestion range");
+  }
+  if (
+    wire.offset_scope !== "raw_markdown_v1" ||
+    wire.offset_unit !== "utf16_code_unit"
+  ) {
+    invalidWire("Studio suggestion offset contract");
+  }
+  if (
+    wire.status !== "pending" &&
+    wire.status !== "accepted" &&
+    wire.status !== "rejected"
+  ) {
+    invalidWire("Studio suggestion status");
+  }
+  const resolvedAt =
+    wire.resolved_at === null
+      ? null
+      : isoTimestamp(wire.resolved_at, "Studio suggestion resolution time");
+  const resultVersionId =
+    wire.result_version_id === null
+      ? null
+      : uuid(wire.result_version_id, "Studio suggestion result version id");
+  if (
+    (wire.status === "pending") !== (resolvedAt === null) ||
+    (wire.status === "accepted") !== (resultVersionId !== null)
+  ) {
+    invalidWire("Studio suggestion resolution");
+  }
+  return {
+    id: uuid(wire.id, "Studio suggestion id"),
+    project_id: uuid(wire.project_id, "Studio suggestion project id"),
+    document_id: uuid(wire.document_id, "Studio suggestion document id"),
+    base_version_id: uuid(
+      wire.base_version_id,
+      "Studio suggestion base version id",
+    ),
+    message_id:
+      wire.message_id === null
+        ? null
+        : uuid(wire.message_id, "Studio suggestion message id"),
+    change_id: boundedString(
+      wire.change_id,
+      "Studio suggestion change id",
+      160,
+    ),
+    start_offset: startOffset,
+    end_offset: endOffset,
+    offset_scope: "raw_markdown_v1",
+    offset_unit: "utf16_code_unit",
+    deleted_text: deletedText,
+    inserted_text: insertedText,
+    context_before: boundedString(
+      wire.context_before,
+      "Studio suggestion context before",
+      241,
+      true,
+    ),
+    context_after: boundedString(
+      wire.context_after,
+      "Studio suggestion context after",
+      241,
+      true,
+    ),
+    summary: boundedCodePointString(
+      wire.summary,
+      "Studio suggestion summary",
+      500,
+    ),
+    status: wire.status,
+    created_at: isoTimestamp(
+      wire.created_at,
+      "Studio suggestion creation time",
+    ),
+    resolved_at: resolvedAt,
+    result_version_id: resultVersionId,
+  };
+}
+
+export function parseVeraStudioSuggestionPreview(
+  value: unknown,
+): VeraStudioSuggestionPreviewWire {
+  const wire = record(value, "Studio suggestion preview");
+  exactKeys(
+    wire,
+    [
+      "id",
+      "project_id",
+      "document_id",
+      "base_version_id",
+      "message_id",
+      "start_offset",
+      "end_offset",
+      "offset_scope",
+      "offset_unit",
+      "deleted_preview",
+      "inserted_preview",
+      "deleted_truncated",
+      "inserted_truncated",
+      "context_before",
+      "context_after",
+      "summary",
+      "status",
+      "created_at",
+    ],
+    "Studio suggestion preview",
+  );
+  const startOffset = nonNegativeInteger(
+    wire.start_offset,
+    "Studio suggestion preview start offset",
+  );
+  const endOffset = nonNegativeInteger(
+    wire.end_offset,
+    "Studio suggestion preview end offset",
+  );
+  if (
+    endOffset < startOffset ||
+    wire.offset_scope !== "raw_markdown_v1" ||
+    wire.offset_unit !== "utf16_code_unit" ||
+    wire.status !== "pending" ||
+    typeof wire.deleted_truncated !== "boolean" ||
+    typeof wire.inserted_truncated !== "boolean"
+  ) {
+    invalidWire("Studio suggestion preview contract");
+  }
+  return {
+    id: uuid(wire.id, "Studio suggestion preview id"),
+    project_id: uuid(wire.project_id, "Studio suggestion preview project id"),
+    document_id: uuid(
+      wire.document_id,
+      "Studio suggestion preview document id",
+    ),
+    base_version_id: uuid(
+      wire.base_version_id,
+      "Studio suggestion preview base version id",
+    ),
+    message_id:
+      wire.message_id === null
+        ? null
+        : uuid(wire.message_id, "Studio suggestion preview message id"),
+    start_offset: startOffset,
+    end_offset: endOffset,
+    offset_scope: "raw_markdown_v1",
+    offset_unit: "utf16_code_unit",
+    deleted_preview: boundedString(
+      wire.deleted_preview,
+      "Studio suggestion deleted preview",
+      320,
+      true,
+    ),
+    inserted_preview: boundedString(
+      wire.inserted_preview,
+      "Studio suggestion inserted preview",
+      320,
+      true,
+    ),
+    deleted_truncated: wire.deleted_truncated as boolean,
+    inserted_truncated: wire.inserted_truncated as boolean,
+    context_before: boundedString(
+      wire.context_before,
+      "Studio suggestion preview context before",
+      241,
+      true,
+    ),
+    context_after: boundedString(
+      wire.context_after,
+      "Studio suggestion preview context after",
+      241,
+      true,
+    ),
+    summary: boundedCodePointString(
+      wire.summary,
+      "Studio suggestion preview summary",
+      500,
+    ),
+    status: "pending",
+    created_at: isoTimestamp(
+      wire.created_at,
+      "Studio suggestion preview creation time",
+    ),
+  };
+}
+
+export function veraStudioSuggestionMatchesPreview(
+  suggestion: VeraStudioSuggestionWire,
+  preview: VeraStudioSuggestionPreviewWire,
+): boolean {
+  return (
+    suggestion.id === preview.id &&
+    suggestion.project_id === preview.project_id &&
+    suggestion.document_id === preview.document_id &&
+    suggestion.base_version_id === preview.base_version_id &&
+    suggestion.message_id === preview.message_id &&
+    suggestion.start_offset === preview.start_offset &&
+    suggestion.end_offset === preview.end_offset &&
+    suggestion.offset_scope === preview.offset_scope &&
+    suggestion.offset_unit === preview.offset_unit &&
+    suggestion.context_before === preview.context_before &&
+    suggestion.context_after === preview.context_after &&
+    suggestion.summary === preview.summary &&
+    suggestion.created_at === preview.created_at &&
+    suggestion.status === "pending" &&
+    suggestion.deleted_text.startsWith(preview.deleted_preview) &&
+    suggestion.inserted_text.startsWith(preview.inserted_preview) &&
+    preview.deleted_truncated ===
+      suggestion.deleted_text.length > preview.deleted_preview.length &&
+    preview.inserted_truncated ===
+      suggestion.inserted_text.length > preview.inserted_preview.length
+  );
+}
+
+function sameSuggestionImmutableFields(
+  left: VeraStudioSuggestionWire,
+  right: VeraStudioSuggestionWire,
+): boolean {
+  return (
+    left.id === right.id &&
+    left.project_id === right.project_id &&
+    left.document_id === right.document_id &&
+    left.base_version_id === right.base_version_id &&
+    left.message_id === right.message_id &&
+    left.change_id === right.change_id &&
+    left.start_offset === right.start_offset &&
+    left.end_offset === right.end_offset &&
+    left.offset_scope === right.offset_scope &&
+    left.offset_unit === right.offset_unit &&
+    left.deleted_text === right.deleted_text &&
+    left.inserted_text === right.inserted_text &&
+    left.context_before === right.context_before &&
+    left.context_after === right.context_after &&
+    left.summary === right.summary &&
+    left.created_at === right.created_at
+  );
+}
+
+function sameJsonValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((item, index) => sameJsonValue(item, right[index]))
+    );
+  }
+  if (
+    !left ||
+    !right ||
+    typeof left !== "object" ||
+    typeof right !== "object"
+  ) {
+    return false;
+  }
+  const leftRecord = left as Readonly<Record<string, unknown>>;
+  const rightRecord = right as Readonly<Record<string, unknown>>;
+  const leftKeys = Object.keys(leftRecord).sort();
+  const rightKeys = Object.keys(rightRecord).sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key, index) =>
+        key === rightKeys[index] &&
+        sameJsonValue(leftRecord[key], rightRecord[key]),
+    )
+  );
+}
+
+function sameCitationProvenance(
+  left: VeraStudioDocumentWire,
+  right: VeraStudioDocumentWire,
+): boolean {
+  return (
+    left.version.citation_anchor_ids.length ===
+      right.version.citation_anchor_ids.length &&
+    left.version.citation_anchor_ids.every(
+      (id, index) => id === right.version.citation_anchor_ids[index],
+    ) &&
+    left.citation_anchors.length === right.citation_anchors.length &&
+    left.citation_anchors.every((anchor, index) => {
+      const expected = right.citation_anchors[index];
+      return (
+        expected !== undefined &&
+        anchor.id === expected.id &&
+        anchor.snapshot_id === expected.snapshot_id &&
+        anchor.ordinal === expected.ordinal &&
+        anchor.exact_quote === expected.exact_quote &&
+        anchor.quote_sha256 === expected.quote_sha256 &&
+        sameJsonValue(anchor.locator, expected.locator)
+      );
+    })
+  );
+}
+
+function parseVeraStudioSuggestionList(
+  value: unknown,
+): VeraStudioSuggestionPreviewPageWire {
+  const wire = record(value, "Studio suggestion list");
+  exactKeys(wire, ["suggestions", "has_more"], "Studio suggestion list");
+  if (
+    !Array.isArray(wire.suggestions) ||
+    wire.suggestions.length > 50 ||
+    typeof wire.has_more !== "boolean"
+  ) {
+    invalidWire("Studio suggestion list");
+  }
+  return {
+    suggestions: wire.suggestions.map(parseVeraStudioSuggestionPreview),
+    has_more: wire.has_more,
+  };
 }
 
 function safeId(value: string, label: string): string {
@@ -635,6 +1086,48 @@ export async function createVeraStudioDocument(
   );
 }
 
+export async function createVeraStudioDraftFromAssistant(
+  projectId: string,
+  input: CreateVeraStudioDraftFromAssistantInput,
+  signal?: AbortSignal,
+): Promise<VeraStudioDocumentWire> {
+  return parseCurrentVeraStudioDocument(
+    await veraApiRequest<unknown>(
+      `/projects/${safeId(projectId, "project id")}/studio/drafts/from-assistant`,
+      {
+        method: "POST",
+        json: {
+          chat_id: safeId(input.chat_id, "Assistant chat id"),
+          assistant_message_id: safeId(
+            input.assistant_message_id,
+            "Assistant message id",
+          ),
+        },
+        signal,
+      },
+    ),
+  );
+}
+
+export async function createVeraStudioDraftFromWorkflow(
+  projectId: string,
+  input: CreateVeraStudioDraftFromWorkflowInput,
+  signal?: AbortSignal,
+): Promise<VeraStudioDocumentWire> {
+  return parseCurrentVeraStudioDocument(
+    await veraApiRequest<unknown>(
+      `/projects/${safeId(projectId, "project id")}/studio/drafts/from-workflow`,
+      {
+        method: "POST",
+        json: {
+          workflow_run_id: safeId(input.workflow_run_id, "Workflow run id"),
+        },
+        signal,
+      },
+    ),
+  );
+}
+
 export async function getVeraStudioDocument(
   projectId: string,
   documentId: string,
@@ -707,6 +1200,146 @@ export async function listVeraStudioVersions(
       { signal },
     ),
   );
+}
+
+export async function listVeraStudioSuggestions(
+  projectId: string,
+  documentId: string,
+  signal?: AbortSignal,
+): Promise<VeraStudioSuggestionPreviewPageWire> {
+  const page = parseVeraStudioSuggestionList(
+    await veraApiRequest<unknown>(
+      `${studioDocumentPath(projectId, documentId)}/suggestions`,
+      { signal },
+    ),
+  );
+  if (
+    new Set(page.suggestions.map((suggestion) => suggestion.id)).size !==
+      page.suggestions.length ||
+    page.suggestions.some(
+      (suggestion) =>
+        suggestion.project_id !== projectId ||
+        suggestion.document_id !== documentId,
+    )
+  ) {
+    invalidWire("Studio suggestion list binding");
+  }
+  return page;
+}
+
+export async function getVeraStudioSuggestion(
+  projectId: string,
+  documentId: string,
+  suggestionId: string,
+  signal?: AbortSignal,
+): Promise<VeraStudioSuggestionWire> {
+  const response = record(
+    await veraApiRequest<unknown>(
+      `${studioDocumentPath(projectId, documentId)}/suggestions/${safeId(suggestionId, "Studio suggestion id")}`,
+      { signal },
+    ),
+    "Studio suggestion detail",
+  );
+  exactKeys(response, ["suggestion"], "Studio suggestion detail");
+  const suggestion = parseVeraStudioSuggestion(response.suggestion);
+  if (
+    suggestion.id !== suggestionId ||
+    suggestion.project_id !== projectId ||
+    suggestion.document_id !== documentId
+  ) {
+    invalidWire("Studio suggestion detail binding");
+  }
+  return suggestion;
+}
+
+export async function acceptVeraStudioSuggestion(
+  projectId: string,
+  documentId: string,
+  expectation: VeraStudioSuggestionAcceptanceExpectation,
+  signal?: AbortSignal,
+): Promise<VeraStudioSuggestionAcceptanceWire> {
+  const { reviewedSuggestion, baseDocument } = expectation;
+  if (
+    reviewedSuggestion.project_id !== projectId ||
+    reviewedSuggestion.document_id !== documentId ||
+    reviewedSuggestion.status !== "pending" ||
+    reviewedSuggestion.resolved_at !== null ||
+    reviewedSuggestion.result_version_id !== null ||
+    baseDocument.project_id !== projectId ||
+    baseDocument.document_id !== documentId ||
+    baseDocument.version.id !== baseDocument.current_version_id ||
+    reviewedSuggestion.base_version_id !== baseDocument.current_version_id ||
+    reviewedSuggestion.end_offset > baseDocument.content.length ||
+    baseDocument.content.slice(
+      reviewedSuggestion.start_offset,
+      reviewedSuggestion.end_offset,
+    ) !== reviewedSuggestion.deleted_text
+  ) {
+    invalidWire("Studio suggestion acceptance expectation");
+  }
+  const suggestionId = reviewedSuggestion.id;
+  const expectedContent =
+    baseDocument.content.slice(0, reviewedSuggestion.start_offset) +
+    reviewedSuggestion.inserted_text +
+    baseDocument.content.slice(reviewedSuggestion.end_offset);
+  const response = record(
+    await veraApiRequest<unknown>(
+      `${studioDocumentPath(projectId, documentId)}/suggestions/${safeId(suggestionId, "Studio suggestion id")}/accept`,
+      { method: "POST", json: {}, signal },
+    ),
+    "Studio suggestion acceptance",
+  );
+  exactKeys(
+    response,
+    ["suggestion", "document"],
+    "Studio suggestion acceptance",
+  );
+  const suggestion = parseVeraStudioSuggestion(response.suggestion);
+  const document = parseCurrentVeraStudioDocument(response.document);
+  if (
+    suggestion.id !== suggestionId ||
+    suggestion.project_id !== projectId ||
+    suggestion.document_id !== documentId ||
+    suggestion.status !== "accepted" ||
+    suggestion.result_version_id !== document.version.id ||
+    suggestion.project_id !== document.project_id ||
+    suggestion.document_id !== document.document_id ||
+    !sameSuggestionImmutableFields(suggestion, reviewedSuggestion) ||
+    document.version.source !== "user_accept" ||
+    document.version.version_number !==
+      baseDocument.version.version_number + 1 ||
+    document.content !== expectedContent ||
+    !sameCitationProvenance(document, baseDocument)
+  ) {
+    invalidWire("Studio suggestion acceptance binding");
+  }
+  return { suggestion, document };
+}
+
+export async function rejectVeraStudioSuggestion(
+  projectId: string,
+  documentId: string,
+  suggestionId: string,
+  signal?: AbortSignal,
+): Promise<VeraStudioSuggestionWire> {
+  const response = record(
+    await veraApiRequest<unknown>(
+      `${studioDocumentPath(projectId, documentId)}/suggestions/${safeId(suggestionId, "Studio suggestion id")}/reject`,
+      { method: "POST", json: {}, signal },
+    ),
+    "Studio suggestion rejection",
+  );
+  exactKeys(response, ["suggestion"], "Studio suggestion rejection");
+  const suggestion = parseVeraStudioSuggestion(response.suggestion);
+  if (
+    suggestion.id !== suggestionId ||
+    suggestion.project_id !== projectId ||
+    suggestion.document_id !== documentId ||
+    suggestion.status !== "rejected"
+  ) {
+    invalidWire("Studio suggestion rejection status");
+  }
+  return suggestion;
 }
 
 export async function restoreVeraStudioVersion(

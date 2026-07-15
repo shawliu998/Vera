@@ -280,6 +280,12 @@ function dependencies(
       getVersion: (_documentId: string, requestedVersionId: string) =>
         requestedVersionId === oldVersionId ? oldVersion : version,
     } as any,
+    // The injected catalog contains ordinary source documents only. Keep the
+    // Studio capability seam explicit instead of asking the intentionally
+    // structureless fake SQL adapter to emulate v12/v13 projections.
+    documentStudioRepository: {
+      getProjectDocument: () => null,
+    } as any,
     pump: pump as any,
     abortRegistry: {
       abortAll() {

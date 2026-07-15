@@ -28,13 +28,13 @@ import {
   canonicalizeStoredCredentialReference,
   CREDENTIAL_STORE_OPERATION_MODE,
   CredentialStoreCollisionError,
+  MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES,
   parseStoredCredentialReference,
   type CredentialBindingKey,
   type CredentialStorePort,
   type SynchronousCredentialStorePort,
 } from "./credentialStore";
 
-const MAX_CREDENTIAL_SECRET_BYTES = 8 * 1024;
 const MAX_CREDENTIAL_LOCATOR_ALLOCATION_ATTEMPTS = 8;
 const CREDENTIAL_LOCATOR_ALLOCATION_ERROR =
   "Credential locator allocation failed.";
@@ -51,7 +51,8 @@ const CredentialSecretSchema = z
       )
       .refine(
         (value) =>
-          Buffer.byteLength(value, "utf8") <= MAX_CREDENTIAL_SECRET_BYTES,
+          Buffer.byteLength(value, "utf8") <=
+          MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES,
         "Secret is too large.",
       ),
   })
@@ -363,7 +364,8 @@ export class ModelProfilesService {
   ): ModelProfile["capabilities"] {
     if (!available || !runtime) return DISABLED_RUNTIME_MODEL_CAPABILITIES;
     return {
-      streaming: record.capabilities.streaming && runtime.capabilities.streaming,
+      streaming:
+        record.capabilities.streaming && runtime.capabilities.streaming,
       toolCalling:
         record.capabilities.toolCalling && runtime.capabilities.toolCalling,
       structuredOutput:
@@ -919,7 +921,10 @@ export class ModelProfilesService {
           JSON.stringify(current.capabilities);
       const disableRequested = input.enabled === false && current.enabled;
       const executionBindingChanged =
-        bindingChanged || modelChanged || capabilitiesChanged || disableRequested;
+        bindingChanged ||
+        modelChanged ||
+        capabilitiesChanged ||
+        disableRequested;
       if (bindingChanged && current.credentialRef !== null) {
         this.requireSynchronousCredentialStore(
           "Credential lifecycle mutations are unavailable until the production credential bridge is completed.",
@@ -1011,7 +1016,10 @@ export class ModelProfilesService {
           JSON.stringify(current.capabilities);
       const disableRequested = input.enabled === false && current.enabled;
       const executionBindingChanged =
-        bindingChanged || modelChanged || capabilitiesChanged || disableRequested;
+        bindingChanged ||
+        modelChanged ||
+        capabilitiesChanged ||
+        disableRequested;
       if (bindingChanged && current.credentialRef !== null) {
         this.requireCredentialStore(
           "Credential lifecycle mutations are unavailable until the production credential bridge is completed.",

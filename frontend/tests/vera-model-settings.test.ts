@@ -21,6 +21,7 @@ import {
 } from "../src/app/lib/veraModelSettingsApi.ts";
 import {
   submitVeraCredentialInput,
+  VERA_CREDENTIAL_MAX_BYTES,
   VeraCredentialInputError,
 } from "../src/app/components/models/modelCredentialSubmission.ts";
 import {
@@ -332,7 +333,7 @@ test("canonical Settings and model-profile methods use only the declared routes"
     });
   };
 
-  const credential = "test-only-credential-value";
+  const credential = "x".repeat(VERA_CREDENTIAL_MAX_BYTES);
   try {
     await getVeraModelSettingsStatus();
     await getVeraWorkspaceSettings();
@@ -442,7 +443,14 @@ test("settings mutations reject unexpected or ambiguous request fields before fe
       /model capabilities are invalid/i,
     );
     await assert.rejects(
-      putVeraModelCredential(PROFILE_ID, "密".repeat(3_000)),
+      putVeraModelCredential(
+        PROFILE_ID,
+        "x".repeat(VERA_CREDENTIAL_MAX_BYTES + 1),
+      ),
+      /credential is invalid/i,
+    );
+    await assert.rejects(
+      putVeraModelCredential(PROFILE_ID, "😀".repeat(257)),
       /credential is invalid/i,
     );
     assert.equal(calls, 0);
@@ -452,6 +460,7 @@ test("settings mutations reject unexpected or ambiguous request fields before fe
 });
 
 test("uncontrolled credential submission clears the field on success, failure, and validation", async () => {
+  assert.equal(VERA_CREDENTIAL_MAX_BYTES, 1024);
   const successField = { value: "one-time-value" };
   let received = "";
   await submitVeraCredentialInput(successField, async (value) => {
@@ -460,6 +469,17 @@ test("uncontrolled credential submission clears the field on success, failure, a
   });
   assert.equal(received, "one-time-value");
   assert.equal(successField.value, "");
+
+  const boundarySecret = "😀".repeat(256);
+  assert.equal(new TextEncoder().encode(boundarySecret).byteLength, 1024);
+  const boundaryField = { value: boundarySecret };
+  let boundaryStored = false;
+  await submitVeraCredentialInput(boundaryField, async (value) => {
+    boundaryStored = true;
+    assert.equal(value, boundarySecret);
+  });
+  assert.equal(boundaryStored, true);
+  assert.equal(boundaryField.value, "");
 
   const failureField = { value: "one-time-failure" };
   await assert.rejects(
@@ -476,6 +496,17 @@ test("uncontrolled credential submission clears the field on success, failure, a
     VeraCredentialInputError,
   );
   assert.equal(invalidField.value, "");
+
+  const oversizedField = { value: "😀".repeat(257) };
+  let oversizedStoreCalled = false;
+  await assert.rejects(
+    submitVeraCredentialInput(oversizedField, async () => {
+      oversizedStoreCalled = true;
+    }),
+    VeraCredentialInputError,
+  );
+  assert.equal(oversizedStoreCalled, false);
+  assert.equal(oversizedField.value, "");
 });
 
 test("system theme applies persisted state and removes its media listener", () => {

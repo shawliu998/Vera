@@ -6,6 +6,7 @@ import {
   VeraApiError,
   type VeraApiRequestOptions,
 } from "./veraApi";
+import { VERA_MODEL_CREDENTIAL_MAX_UTF8_BYTES } from "./veraCredentialLimits";
 import { VeraRuntimeConfigurationError } from "./veraRuntime";
 
 export const VERA_MODEL_PROVIDERS = [
@@ -167,7 +168,6 @@ const STRICT_UTC_ISO_MILLISECONDS_PATTERN =
 const MAX_MODEL_CONNECTION_REVISION = 2_147_483_647;
 const MAX_MODEL_CONNECTION_TEST_LATENCY_MS = 600_000;
 const MAX_MODEL_TOKEN_LIMIT = 10_000_000;
-const MAX_CREDENTIAL_SECRET_BYTES = 8 * 1024;
 
 function invalidWire(label: string): never {
   throw new VeraApiError({
@@ -1128,7 +1128,8 @@ export async function putVeraModelCredential(
     typeof secret !== "string" ||
     secret.length === 0 ||
     /[\r\n]/.test(secret) ||
-    new TextEncoder().encode(secret).byteLength > MAX_CREDENTIAL_SECRET_BYTES
+    new TextEncoder().encode(secret).byteLength >
+      VERA_MODEL_CREDENTIAL_MAX_UTF8_BYTES
   ) {
     throw new VeraRuntimeConfigurationError(
       "The Vera model credential is invalid.",

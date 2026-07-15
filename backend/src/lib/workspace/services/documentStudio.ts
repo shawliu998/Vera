@@ -1,6 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type { BlobStore } from "../blobStore";
+import {
+  DOCUMENT_STUDIO_SUGGESTION_CONTEXT_CHARS_V14,
+  DOCUMENT_STUDIO_SUGGESTION_MAX_TEXT_CHARS_V14,
+  type DocumentStudioSuggestionPreviewPageV14,
+  type DocumentStudioSuggestionV14,
+} from "../documentStudioSuggestionContractsV14";
 import { WorkspaceApiError } from "../errors";
 import { documentStorageKey } from "../repositories/documents";
 import type {
@@ -27,6 +33,10 @@ const MAX_CITATION_ANCHORS = 200;
 export type DocumentStudioSaveSource = Extract<
   DocumentVersionSource,
   "user_upload" | "assistant_edit"
+>;
+export type DocumentStudioCommitSource = Extract<
+  DocumentVersionSource,
+  "user_upload" | "assistant_edit" | "user_accept"
 >;
 
 export type DocumentStudioCitationAnchor = {
@@ -82,7 +92,8 @@ export type DocumentStudioCreatePersistenceInput = {
   sizeBytes: number;
   contentSha256: string;
   storageKey: string;
-  source: "user_upload";
+  source: DocumentStudioSaveSource;
+  citationAnchorIds: string[];
   blobRecord: DocumentStudioStoredBlobInput;
 };
 
@@ -92,7 +103,7 @@ export type DocumentStudioCommitPersistenceInput = {
   jobId: string;
   projectId: string;
   expectedCurrentVersionId: string;
-  source: DocumentStudioSaveSource;
+  source: DocumentStudioCommitSource;
   filename: string;
   mimeType: typeof MARKDOWN_MIME_TYPE;
   sizeBytes: number;
@@ -101,6 +112,39 @@ export type DocumentStudioCommitPersistenceInput = {
   citationAnchorIds: string[];
   summary: string | null;
   blobRecord: DocumentStudioStoredBlobInput;
+};
+
+export type DocumentStudioCreateSuggestionPersistenceInput = {
+  suggestionId: string;
+  projectId: string;
+  documentId: string;
+  baseVersionId: string;
+  messageId: string;
+  changeId: string;
+  startOffset: number;
+  endOffset: number;
+  offsetScope: "raw_markdown_v1";
+  offsetUnit: "utf16_code_unit";
+  deletedText: string;
+  insertedText: string;
+  contextBefore: string;
+  contextAfter: string;
+  summary: string;
+};
+
+export type DocumentStudioAcceptSuggestionPersistenceInput =
+  DocumentStudioCommitPersistenceInput & {
+    suggestionId: string;
+    exactStartOffset: number;
+    exactEndOffset: number;
+    exactDeletedText: string;
+  };
+
+export type DocumentStudioSuggestionAcceptancePersistenceResult = {
+  suggestion: DocumentStudioSuggestionV14;
+  document: Document;
+  version: DocumentVersion;
+  job?: unknown;
 };
 
 export type DocumentStudioRestorePersistenceInput = Omit<
@@ -145,12 +189,39 @@ export interface WorkspaceDocumentStudioRepositoryPort {
     documentId: string,
     versionId: string,
   ): DocumentStudioCitationAnchor[];
+  listSuggestions(
+    projectId: string,
+    documentId: string,
+  ): DocumentStudioSuggestionV14[];
+  listSuggestionPreviews(
+    projectId: string,
+    documentId: string,
+  ): DocumentStudioSuggestionPreviewPageV14;
+  getSuggestion(
+    projectId: string,
+    documentId: string,
+    suggestionId: string,
+  ): DocumentStudioSuggestionV14 | null;
+  createSuggestion(
+    input: DocumentStudioCreateSuggestionPersistenceInput,
+  ): DocumentStudioSuggestionV14;
+  rejectSuggestion(
+    projectId: string,
+    documentId: string,
+    suggestionId: string,
+  ): DocumentStudioSuggestionV14;
+  acceptSuggestionCas(
+    input: DocumentStudioAcceptSuggestionPersistenceInput,
+  ): DocumentStudioSuggestionAcceptancePersistenceResult;
 }
 
 export type CreateDocumentStudioDraftInput = {
   projectId: string;
   folderId?: string | null;
   title: string;
+  content?: string;
+  source?: DocumentStudioSaveSource;
+  citationAnchorIds?: readonly string[];
 };
 
 export type SaveDocumentStudioDocumentInput = {
@@ -168,6 +239,26 @@ export type RestoreDocumentStudioVersionInput = {
   documentId: string;
   targetVersionId: string;
   expectedCurrentVersionId: string;
+};
+
+export type CreateDocumentStudioSuggestionFromToolInput = {
+  projectId: string;
+  documentId: string;
+  baseVersionId: string;
+  messageId: string;
+  jobId: string;
+  attempt: number;
+  toolCallId: string;
+  startOffset: number;
+  endOffset: number;
+  exactDeletedText: string;
+  insertedText: string;
+  summary: string;
+};
+
+export type DocumentStudioSuggestionAcceptance = {
+  suggestion: DocumentStudioSuggestionV14;
+  document: DocumentStudioDocument;
 };
 
 export type WorkspaceDocumentStudioServiceOptions = {
@@ -211,6 +302,13 @@ export function toDocumentStudioApiError(error: unknown): WorkspaceApiError {
       404,
       "NOT_FOUND",
       "Studio document resource was not found.",
+    );
+  }
+  if (code === "DOCUMENT_STUDIO_RETENTION_BLOCKED") {
+    return new WorkspaceApiError(
+      409,
+      "PRECONDITION_FAILED",
+      "A cited source is unavailable under its retention policy.",
     );
   }
   if (code === "DOCUMENT_STUDIO_OPERATION_CONFLICT") {
@@ -387,6 +485,73 @@ function sha256(buffer: Buffer): string {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
+function normalizeToolCallId(value: string): string {
+  if (
+    typeof value !== "string" ||
+    value.trim().length < 1 ||
+    value.length > 160 ||
+    /[\u0000-\u001f\u007f-\u009f]/u.test(value)
+  ) {
+    throw new WorkspaceApiError(
+      422,
+      "VALIDATION_ERROR",
+      "Assistant tool call id is invalid.",
+    );
+  }
+  return value;
+}
+
+function normalizeSuggestionText(value: string, label: string): string {
+  if (
+    typeof value !== "string" ||
+    value.length > DOCUMENT_STUDIO_SUGGESTION_MAX_TEXT_CHARS_V14 ||
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value) ||
+    hasUnpairedSurrogate(value)
+  ) {
+    throw new WorkspaceApiError(
+      422,
+      "VALIDATION_ERROR",
+      `${label} is invalid.`,
+    );
+  }
+  return value;
+}
+
+function highSurrogate(code: number) {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function lowSurrogate(code: number) {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+function hasUnpairedSurrogate(value: string) {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (highSurrogate(code)) {
+      if (
+        index + 1 >= value.length ||
+        !lowSurrogate(value.charCodeAt(index + 1))
+      ) {
+        return true;
+      }
+      index += 1;
+    } else if (lowSurrogate(code)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function scalarBoundary(value: string, offset: number) {
+  return !(
+    offset > 0 &&
+    offset < value.length &&
+    highSurrogate(value.charCodeAt(offset - 1)) &&
+    lowSurrogate(value.charCodeAt(offset))
+  );
+}
+
 function assertStoredRecord(
   record: WorkspaceBlobRecord | null,
   version: DocumentVersion,
@@ -426,16 +591,56 @@ export class WorkspaceDocumentStudioService {
     this.cleanupRecorder = options.cleanupRecorder;
   }
 
+  private normalizeCreateDraftInput(input: CreateDocumentStudioDraftInput) {
+    const projectId = assertUuid(input.projectId, "Project");
+    const folderId =
+      input.folderId == null ? null : assertUuid(input.folderId, "Folder");
+    const title = normalizeTitle(input.title);
+    const filename = markdownFilename(title);
+    const content = input.content ?? "";
+    const source = input.source ?? "user_upload";
+    const citationAnchorIds = normalizeCitationIds(input.citationAnchorIds);
+    if (source !== "user_upload" && source !== "assistant_edit") {
+      throw new WorkspaceApiError(
+        422,
+        "VALIDATION_ERROR",
+        "Document version source is invalid.",
+      );
+    }
+    return {
+      projectId,
+      folderId,
+      title,
+      filename,
+      content,
+      source,
+      citationAnchorIds,
+      buffer: contentBuffer(content),
+    };
+  }
+
+  validateCreateDraft(input: CreateDocumentStudioDraftInput): void {
+    try {
+      this.normalizeCreateDraftInput(input);
+    } catch (error) {
+      throw toDocumentStudioApiError(error);
+    }
+  }
+
   async createDraft(
     input: CreateDocumentStudioDraftInput,
   ): Promise<DocumentStudioDocument> {
     try {
-      const projectId = assertUuid(input.projectId, "Project");
-      const folderId =
-        input.folderId == null ? null : assertUuid(input.folderId, "Folder");
-      const title = normalizeTitle(input.title);
-      const filename = markdownFilename(title);
-      const buffer = contentBuffer("");
+      const {
+        projectId,
+        folderId,
+        title,
+        filename,
+        content,
+        source,
+        citationAnchorIds,
+        buffer,
+      } = this.normalizeCreateDraftInput(input);
       const ids = this.newWriteIds();
       const stored = this.store(ids.documentId, ids.versionId, buffer);
       let result: DocumentStudioPersistenceResult;
@@ -450,14 +655,304 @@ export class WorkspaceDocumentStudioService {
           sizeBytes: buffer.byteLength,
           contentSha256: sha256(buffer),
           storageKey: documentStorageKey(ids.documentId, ids.versionId),
-          source: "user_upload",
+          source,
+          citationAnchorIds,
           blobRecord: stored,
         });
       } catch (error) {
         this.compensate(stored.locator);
         throw error;
       }
-      return this.hydrate(projectId, result.document, result.version, "");
+      return this.hydrate(projectId, result.document, result.version, content);
+    } catch (error) {
+      throw toDocumentStudioApiError(error);
+    }
+  }
+
+  async createSuggestionFromAssistantTool(
+    input: CreateDocumentStudioSuggestionFromToolInput,
+  ): Promise<DocumentStudioSuggestionV14> {
+    try {
+      const projectId = assertUuid(input.projectId, "Project");
+      const documentId = assertUuid(input.documentId, "Document");
+      const baseVersionId = assertUuid(
+        input.baseVersionId,
+        "Suggestion base version",
+      );
+      const messageId = assertUuid(input.messageId, "Assistant message");
+      const jobId = assertUuid(input.jobId, "Assistant job");
+      if (!Number.isSafeInteger(input.attempt) || input.attempt < 1) {
+        throw new WorkspaceApiError(
+          422,
+          "VALIDATION_ERROR",
+          "Assistant generation attempt is invalid.",
+        );
+      }
+      const toolCallId = normalizeToolCallId(input.toolCallId);
+      if (
+        !Number.isSafeInteger(input.startOffset) ||
+        !Number.isSafeInteger(input.endOffset) ||
+        input.startOffset < 0 ||
+        input.endOffset < input.startOffset
+      ) {
+        throw new WorkspaceApiError(
+          422,
+          "VALIDATION_ERROR",
+          "Suggestion offsets are invalid.",
+        );
+      }
+      const deletedText = normalizeSuggestionText(
+        input.exactDeletedText,
+        "Suggestion deleted text",
+      );
+      const insertedText = normalizeSuggestionText(
+        input.insertedText,
+        "Suggestion inserted text",
+      );
+      if (
+        input.endOffset - input.startOffset !== deletedText.length ||
+        (deletedText.length === 0 && insertedText.length === 0)
+      ) {
+        throw new WorkspaceApiError(
+          409,
+          "PRECONDITION_FAILED",
+          "Suggestion range does not describe an exact Markdown change.",
+        );
+      }
+      const summary = normalizeSummary(input.summary);
+      if (!summary) {
+        throw new WorkspaceApiError(
+          422,
+          "VALIDATION_ERROR",
+          "Suggestion summary is required.",
+        );
+      }
+      const document = this.requireDocument(projectId, documentId);
+      if (document.currentVersionId !== baseVersionId) {
+        throw new WorkspaceApiError(
+          409,
+          "CONFLICT",
+          "Studio document changed before the suggestion was created.",
+        );
+      }
+      const base = await this.getDocument(projectId, documentId, baseVersionId);
+      if (
+        input.endOffset > base.content.length ||
+        !scalarBoundary(base.content, input.startOffset) ||
+        !scalarBoundary(base.content, input.endOffset) ||
+        base.content.slice(input.startOffset, input.endOffset) !== deletedText
+      ) {
+        throw new WorkspaceApiError(
+          409,
+          "PRECONDITION_FAILED",
+          "Suggestion deleted text does not exactly match the current raw Markdown.",
+        );
+      }
+      let contextStart = Math.max(
+        0,
+        input.startOffset - DOCUMENT_STUDIO_SUGGESTION_CONTEXT_CHARS_V14,
+      );
+      if (!scalarBoundary(base.content, contextStart)) contextStart -= 1;
+      let contextEnd = Math.min(
+        base.content.length,
+        input.endOffset + DOCUMENT_STUDIO_SUGGESTION_CONTEXT_CHARS_V14,
+      );
+      if (!scalarBoundary(base.content, contextEnd)) contextEnd += 1;
+      const contextBefore = base.content.slice(contextStart, input.startOffset);
+      const contextAfter = base.content.slice(input.endOffset, contextEnd);
+      const changeId = `assistant-tool:${createHash("sha256")
+        .update(`${jobId}\0${input.attempt}\0${toolCallId}`, "utf8")
+        .digest("hex")}`;
+      return this.repository.createSuggestion({
+        suggestionId: assertUuid(this.nextId(), "Generated suggestion"),
+        projectId,
+        documentId,
+        baseVersionId,
+        messageId,
+        changeId,
+        startOffset: input.startOffset,
+        endOffset: input.endOffset,
+        offsetScope: "raw_markdown_v1",
+        offsetUnit: "utf16_code_unit",
+        deletedText,
+        insertedText,
+        contextBefore,
+        contextAfter,
+        summary,
+      });
+    } catch (error) {
+      throw toDocumentStudioApiError(error);
+    }
+  }
+
+  listSuggestions(
+    projectIdInput: string,
+    documentIdInput: string,
+  ): DocumentStudioSuggestionV14[] {
+    try {
+      const projectId = assertUuid(projectIdInput, "Project");
+      const documentId = assertUuid(documentIdInput, "Document");
+      this.requireDocument(projectId, documentId);
+      return this.repository.listSuggestions(projectId, documentId);
+    } catch (error) {
+      throw toDocumentStudioApiError(error);
+    }
+  }
+
+  listSuggestionPreviews(
+    projectIdInput: string,
+    documentIdInput: string,
+  ): DocumentStudioSuggestionPreviewPageV14 {
+    try {
+      const projectId = assertUuid(projectIdInput, "Project");
+      const documentId = assertUuid(documentIdInput, "Document");
+      this.requireDocument(projectId, documentId);
+      return this.repository.listSuggestionPreviews(projectId, documentId);
+    } catch (error) {
+      throw toDocumentStudioApiError(error);
+    }
+  }
+
+  getSuggestion(
+    projectIdInput: string,
+    documentIdInput: string,
+    suggestionIdInput: string,
+  ): DocumentStudioSuggestionV14 {
+    try {
+      const projectId = assertUuid(projectIdInput, "Project");
+      const documentId = assertUuid(documentIdInput, "Document");
+      const suggestionId = assertUuid(suggestionIdInput, "Suggestion");
+      this.requireDocument(projectId, documentId);
+      const suggestion = this.repository.getSuggestion(
+        projectId,
+        documentId,
+        suggestionId,
+      );
+      if (!suggestion) {
+        throw new WorkspaceApiError(
+          404,
+          "NOT_FOUND",
+          "Studio suggestion was not found.",
+        );
+      }
+      return suggestion;
+    } catch (error) {
+      throw toDocumentStudioApiError(error);
+    }
+  }
+
+  rejectSuggestion(
+    projectIdInput: string,
+    documentIdInput: string,
+    suggestionIdInput: string,
+  ): DocumentStudioSuggestionV14 {
+    try {
+      const projectId = assertUuid(projectIdInput, "Project");
+      const documentId = assertUuid(documentIdInput, "Document");
+      const suggestionId = assertUuid(suggestionIdInput, "Suggestion");
+      this.requireDocument(projectId, documentId);
+      return this.repository.rejectSuggestion(
+        projectId,
+        documentId,
+        suggestionId,
+      );
+    } catch (error) {
+      throw toDocumentStudioApiError(error);
+    }
+  }
+
+  async acceptSuggestion(
+    projectIdInput: string,
+    documentIdInput: string,
+    suggestionIdInput: string,
+  ): Promise<DocumentStudioSuggestionAcceptance> {
+    try {
+      const projectId = assertUuid(projectIdInput, "Project");
+      const documentId = assertUuid(documentIdInput, "Document");
+      const suggestionId = assertUuid(suggestionIdInput, "Suggestion");
+      const suggestion = this.repository.getSuggestion(
+        projectId,
+        documentId,
+        suggestionId,
+      );
+      if (!suggestion) {
+        throw new WorkspaceApiError(
+          404,
+          "NOT_FOUND",
+          "Studio suggestion was not found.",
+        );
+      }
+      if (suggestion.status !== "pending") {
+        throw new WorkspaceApiError(
+          409,
+          "CONFLICT",
+          "Studio suggestion has already been resolved.",
+        );
+      }
+      const document = this.requireDocument(projectId, documentId);
+      if (document.currentVersionId !== suggestion.baseVersionId) {
+        throw new WorkspaceApiError(
+          409,
+          "CONFLICT",
+          "Studio suggestion is stale because the document changed.",
+        );
+      }
+      const base = await this.getDocument(
+        projectId,
+        documentId,
+        suggestion.baseVersionId,
+      );
+      if (
+        suggestion.endOffset > base.content.length ||
+        base.content.slice(suggestion.startOffset, suggestion.endOffset) !==
+          suggestion.deletedText
+      ) {
+        throw new WorkspaceApiError(
+          409,
+          "PRECONDITION_FAILED",
+          "Studio suggestion no longer exactly matches its immutable base Markdown.",
+        );
+      }
+      const content = `${base.content.slice(0, suggestion.startOffset)}${
+        suggestion.insertedText
+      }${base.content.slice(suggestion.endOffset)}`;
+      const buffer = contentBuffer(content);
+      const citationAnchorIds = base.version.citationAnchorIds;
+      const ids = this.newWriteIds(documentId);
+      const stored = this.store(documentId, ids.versionId, buffer);
+      let accepted: DocumentStudioSuggestionAcceptancePersistenceResult;
+      try {
+        accepted = this.repository.acceptSuggestionCas({
+          ...ids,
+          suggestionId,
+          projectId,
+          expectedCurrentVersionId: suggestion.baseVersionId,
+          source: "user_accept",
+          filename: base.version.filename,
+          mimeType: MARKDOWN_MIME_TYPE,
+          sizeBytes: buffer.byteLength,
+          contentSha256: sha256(buffer),
+          storageKey: documentStorageKey(documentId, ids.versionId),
+          citationAnchorIds,
+          summary: suggestion.summary,
+          exactStartOffset: suggestion.startOffset,
+          exactEndOffset: suggestion.endOffset,
+          exactDeletedText: suggestion.deletedText,
+          blobRecord: stored,
+        });
+      } catch (error) {
+        this.compensate(stored.locator);
+        throw error;
+      }
+      return {
+        suggestion: accepted.suggestion,
+        document: this.hydrate(
+          projectId,
+          accepted.document,
+          accepted.version,
+          content,
+        ),
+      };
     } catch (error) {
       throw toDocumentStudioApiError(error);
     }

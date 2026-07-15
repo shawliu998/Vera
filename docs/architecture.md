@@ -35,7 +35,7 @@ Vera.app (Electron main process)
   `- controlled native backup/restore/log/diagnostic operations
 
 Local persistence
-  |- SQLCipher Workspace metadata (migrations v1-v10)
+  |- SQLCipher Workspace metadata (migrations v1-v14)
   |- AES-256-GCM encrypted originals, extracted content, and exports
   |- FTS5 project/document retrieval
   |- authenticated encrypted backups and restore journal
@@ -104,18 +104,14 @@ the renderer boundary was never crossed before recovery validation failed.
 
 ```text
 relative app:      desktop/dist/mac-arm64/Vera.app
-absolute app:      /Users/a1-6/Documents/new agent/desktop/dist/mac-arm64/Vera.app
-relative DMG:      desktop/dist/Vera-1.0.1-arm64.dmg
-absolute DMG:      /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-arm64.dmg
-relative ZIP:      desktop/dist/Vera-1.0.1-arm64.zip
-absolute ZIP:      /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-arm64.zip
+relative DMG:      desktop/dist/Vera-1.0.1-arm64.dmg (198122845 bytes)
+relative ZIP:      desktop/dist/Vera-1.0.1-arm64.zip (200992113 bytes)
 relative manifest: desktop/dist/Vera-1.0.1-SHA256SUMS.txt
-absolute manifest: /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-SHA256SUMS.txt
 ```
 
 ```text
-69a2ee56379a7cf6cb7fe441685fb59c846e77512928704955e774f3d8d42dd7  Vera-1.0.1-arm64.dmg
-47fcd64f214bf9b28e6982953043c76dba68ff0f2a933107ff6ec07eb704e648  Vera-1.0.1-arm64.zip
+fd246214916b3485e25bb16c8e00bcf6e8be471ed95679190e7685a5c1c49ef8  Vera-1.0.1-arm64.dmg
+7be4a9504151ddd8518141901e3d2753a1cda2fbe13ac27fa7842a9f3d347f1b  Vera-1.0.1-arm64.zip
 ```
 
 This proves the local packaged-client boundary described above. It does not

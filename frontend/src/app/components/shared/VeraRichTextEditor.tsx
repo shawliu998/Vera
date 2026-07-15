@@ -93,7 +93,12 @@ export function VeraRichTextEditor({
   const rawTextareaRef = useRef<HTMLTextAreaElement>(null);
   const tablePickerRef = useRef<HTMLDivElement>(null);
   const [rawMode, setRawMode] = useState(false);
-  const [rawMarkdown, setRawMarkdown] = useState(value);
+  const [rawDraft, setRawDraft] = useState({
+    sourceValue: value,
+    markdown: value,
+  });
+  const rawMarkdown =
+    rawDraft.sourceValue === value ? rawDraft.markdown : value;
   const [tablePickerOpen, setTablePickerOpen] = useState(false);
   const [tablePickerSize, setTablePickerSize] = useState<{
     rows: number;
@@ -119,16 +124,16 @@ export function VeraRichTextEditor({
     content: value,
     editable: !readOnly,
     immediatelyRender: false,
-    onUpdate: ({ editor: updatedEditor }) => {
+    onUpdate: ({ editor: updatedEditor, transaction }) => {
+      if (!transaction.docChanged) return;
       const markdown = getEditorMarkdown(updatedEditor);
       lastEmittedRef.current = markdown;
-      setRawMarkdown(markdown);
+      setRawDraft({ sourceValue: value, markdown });
       onChange?.(markdown);
     },
     editorProps: {
       attributes: {
-        class:
-          "tiptap vera-rich-text-editor-content workflow-editor-content",
+        class: "tiptap vera-rich-text-editor-content workflow-editor-content",
         ...(ariaLabel ? { "aria-label": ariaLabel } : {}),
       },
     },
@@ -150,14 +155,14 @@ export function VeraRichTextEditor({
 
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
-    editor.setEditable(!readOnly);
+    editor.setEditable(!readOnly, false);
   }, [editor, readOnly]);
 
   useEffect(() => {
     if (!editor || editor.isDestroyed || value === lastEmittedRef.current)
       return;
     lastEmittedRef.current = value;
-    editor.commands.setContent(value);
+    editor.commands.setContent(value, { emitUpdate: false });
   }, [editor, value]);
 
   useEffect(() => {
@@ -183,7 +188,7 @@ export function VeraRichTextEditor({
   }, [tablePickerOpen]);
 
   function emitRaw(next: string, start?: number, end?: number) {
-    setRawMarkdown(next);
+    setRawDraft({ sourceValue: value, markdown: next });
     lastEmittedRef.current = next;
     onChange?.(next);
     if (start !== undefined) {
@@ -197,11 +202,14 @@ export function VeraRichTextEditor({
   function toggleRaw() {
     if (!editor || editor.isDestroyed) return;
     if (rawMode) {
-      editor.commands.setContent(rawMarkdown);
+      editor.commands.setContent(rawMarkdown, { emitUpdate: false });
       lastEmittedRef.current = rawMarkdown;
       onChange?.(rawMarkdown);
     } else {
-      setRawMarkdown(getEditorMarkdown(editor));
+      setRawDraft({
+        sourceValue: value,
+        markdown: getEditorMarkdown(editor),
+      });
     }
     setRawMode((current) => !current);
   }
@@ -220,12 +228,15 @@ export function VeraRichTextEditor({
     );
   }
 
-  function transformRawLines(transform: (line: string, index: number) => string) {
+  function transformRawLines(
+    transform: (line: string, index: number) => string,
+  ) {
     const textarea = rawTextareaRef.current;
     if (!textarea) return;
     const selectionStart = textarea.selectionStart;
     const selectionEnd = textarea.selectionEnd;
-    const start = rawMarkdown.lastIndexOf("\n", Math.max(0, selectionStart - 1)) + 1;
+    const start =
+      rawMarkdown.lastIndexOf("\n", Math.max(0, selectionStart - 1)) + 1;
     const foundEnd = rawMarkdown.indexOf("\n", selectionEnd);
     const end = foundEnd === -1 ? rawMarkdown.length : foundEnd;
     let item = 0;
@@ -297,7 +308,8 @@ export function VeraRichTextEditor({
         {!readOnly && editor && (
           <>
             {([1, 2, 3] as const).map((level) => {
-              const Icon = level === 1 ? Heading1 : level === 2 ? Heading2 : Heading3;
+              const Icon =
+                level === 1 ? Heading1 : level === 2 ? Heading2 : Heading3;
               const key = `heading${level}` as const;
               return (
                 <ToolbarButton
@@ -307,7 +319,8 @@ export function VeraRichTextEditor({
                   onClick={() =>
                     rawOr(
                       () => applyRawHeading(level),
-                      () => editor.chain().focus().toggleHeading({ level }).run(),
+                      () =>
+                        editor.chain().focus().toggleHeading({ level }).run(),
                     )
                   }
                 >
@@ -363,7 +376,10 @@ export function VeraRichTextEditor({
                 rawOr(
                   () =>
                     transformRawLines((line, index) =>
-                      line.replace(/^(\s*)(?:[-*+]|\d+\.)\s+/, `$1${index + 1}. `),
+                      line.replace(
+                        /^(\s*)(?:[-*+]|\d+\.)\s+/,
+                        `$1${index + 1}. `,
+                      ),
                     ),
                   () => editor.chain().focus().toggleOrderedList().run(),
                 )
@@ -393,33 +409,38 @@ export function VeraRichTextEditor({
                     }}
                   >
                     {Array.from({ length: TABLE_PICKER_MAX_ROWS }, (_, row) =>
-                      Array.from({ length: TABLE_PICKER_MAX_COLS }, (_, col) => {
-                        const rows = row + 1;
-                        const cols = col + 1;
-                        const selected =
-                          tablePickerSize !== null &&
-                          rows <= tablePickerSize.rows &&
-                          cols <= tablePickerSize.cols;
-                        return (
-                          <button
-                            key={`${rows}-${cols}`}
-                            type="button"
-                            aria-label={t(
-                              "workflows.promptEditor.insertTableSize",
-                              { rows, cols },
-                            )}
-                            onMouseEnter={() => setTablePickerSize({ rows, cols })}
-                            onFocus={() => setTablePickerSize({ rows, cols })}
-                            onMouseDown={(event) => event.preventDefault()}
-                            onClick={() => insertTable(rows, cols)}
-                            className={`h-4 w-4 rounded-[3px] border ${
-                              selected
-                                ? "border-gray-700 bg-gray-800"
-                                : "border-gray-200 bg-white"
-                            }`}
-                          />
-                        );
-                      }),
+                      Array.from(
+                        { length: TABLE_PICKER_MAX_COLS },
+                        (_, col) => {
+                          const rows = row + 1;
+                          const cols = col + 1;
+                          const selected =
+                            tablePickerSize !== null &&
+                            rows <= tablePickerSize.rows &&
+                            cols <= tablePickerSize.cols;
+                          return (
+                            <button
+                              key={`${rows}-${cols}`}
+                              type="button"
+                              aria-label={t(
+                                "workflows.promptEditor.insertTableSize",
+                                { rows, cols },
+                              )}
+                              onMouseEnter={() =>
+                                setTablePickerSize({ rows, cols })
+                              }
+                              onFocus={() => setTablePickerSize({ rows, cols })}
+                              onMouseDown={(event) => event.preventDefault()}
+                              onClick={() => insertTable(rows, cols)}
+                              className={`h-4 w-4 rounded-[3px] border ${
+                                selected
+                                  ? "border-gray-700 bg-gray-800"
+                                  : "border-gray-200 bg-white"
+                              }`}
+                            />
+                          );
+                        },
+                      ),
                     )}
                   </div>
                   <p className="mt-2 text-center text-[11px] text-gray-500">

@@ -158,6 +158,15 @@ export interface DocumentEdit {
   documentId: WorkspaceId;
   versionId: WorkspaceId;
   messageId: WorkspaceId | null;
+  changeId: string;
+  startOffset: number | null;
+  endOffset: number | null;
+  offsetScope: "raw_markdown_v1" | null;
+  offsetUnit: "utf16_code_unit" | null;
+  deletedText: string;
+  insertedText: string;
+  contextBefore: string | null;
+  contextAfter: string | null;
   status: DocumentEditStatus;
   summary: string | null;
   createdAt: IsoDateTime;

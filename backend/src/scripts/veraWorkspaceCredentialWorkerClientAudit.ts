@@ -18,6 +18,8 @@ import {
 import {
   CREDENTIAL_STORE_OPERATION_MODE,
   CredentialStoreCollisionError,
+  MAX_MODEL_CREDENTIAL_RESOLVE_SECRET_BYTES,
+  MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES,
 } from "../lib/workspace/services/credentialStore";
 
 const profileId = "00000000-0000-4000-8000-000000000931";
@@ -337,6 +339,86 @@ async function auditTimeoutDisconnectAndConcurrencyBound() {
   );
 }
 
+async function auditSecretByteBoundary() {
+  const port = new FakePort((request) =>
+    request.operation === "ping"
+      ? success(request, {
+          available: true,
+          secretReadbackToRenderer: false,
+        })
+      : success(request, { stored: true }),
+  );
+  const client = new CredentialWorkerRpcClient(port, 500);
+  await client.capabilities();
+  const boundarySecret = "😀".repeat(256);
+  assert.equal(
+    Buffer.byteLength(boundarySecret, "utf8"),
+    MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES,
+  );
+  await client.store({ reference, binding, secret: boundarySecret });
+  assert.equal(port.requests.length, 2);
+  assert.equal(port.requests[1]?.payload.secret, boundarySecret);
+
+  await assertRejectsWith(
+    client.store({
+      reference,
+      binding,
+      secret: "x".repeat(MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES + 1),
+    }),
+    CredentialWorkerProtocolError,
+  );
+  await assertRejectsWith(
+    client.store({ reference, binding, secret: "😀".repeat(257) }),
+    CredentialWorkerProtocolError,
+  );
+  assert.equal(port.requests.length, 2);
+  client.close();
+}
+
+async function auditLegacyResolveByteBoundary() {
+  const legacyBoundarySecret = "😀".repeat(2048);
+  assert.equal(
+    Buffer.byteLength(legacyBoundarySecret, "utf8"),
+    MAX_MODEL_CREDENTIAL_RESOLVE_SECRET_BYTES,
+  );
+  const compatiblePort = new FakePort((request) =>
+    request.operation === "ping"
+      ? success(request, {
+          available: true,
+          secretReadbackToRenderer: false,
+        })
+      : success(request, { secret: legacyBoundarySecret }),
+  );
+  const compatibleClient = new CredentialWorkerRpcClient(compatiblePort, 500);
+  await compatibleClient.capabilities();
+  assert.equal(
+    await compatibleClient.resolve({ reference, binding }),
+    legacyBoundarySecret,
+  );
+  assert.equal(compatibleClient.isAvailable(), true);
+  compatibleClient.close();
+
+  const oversizedLegacySecret = "x".repeat(
+    MAX_MODEL_CREDENTIAL_RESOLVE_SECRET_BYTES + 1,
+  );
+  const rejectingPort = new FakePort((request) =>
+    request.operation === "ping"
+      ? success(request, {
+          available: true,
+          secretReadbackToRenderer: false,
+        })
+      : success(request, { secret: oversizedLegacySecret }),
+  );
+  const rejectingClient = new CredentialWorkerRpcClient(rejectingPort, 500);
+  await rejectingClient.capabilities();
+  await assertRejectsWith(
+    rejectingClient.resolve({ reference, binding }),
+    CredentialWorkerProtocolError,
+  );
+  assert.equal(rejectingClient.isAvailable(), false);
+  assert.equal(rejectingPort.closed, true);
+}
+
 async function auditBootstrapBoundary() {
   assert.equal(await receiveCredentialWorkerClient({ required: false }), null);
 
@@ -415,6 +497,8 @@ async function main() {
   await auditLifecycleAndStrictResponses();
   await auditFailureClassificationAndMalformedReplies();
   await auditTimeoutDisconnectAndConcurrencyBound();
+  await auditSecretByteBoundary();
+  await auditLegacyResolveByteBoundary();
   await auditBootstrapBoundary();
   auditStaticBoundary();
   process.stdout.write(
@@ -428,7 +512,9 @@ async function main() {
           "credential-not-found isolation without worker invalidation",
           "connection-wide fail-closed handling after protocol violations",
           "bounded timeout, disconnect and concurrent requests",
-            "retrying readiness handshake and one-shot transferred-port bootstrap",
+          "1,024-byte UTF-8 secret boundary before MessagePort writes",
+          "8,192-byte bounded legacy resolve compatibility",
+          "retrying readiness handshake and one-shot transferred-port bootstrap",
           "secret-free errors and no renderer bridge",
         ],
       },

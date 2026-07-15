@@ -35,6 +35,7 @@ import {
 import {
   createWorkspaceAuthMiddleware,
   resolveWorkspaceAuthConfiguration,
+  workspaceRouteAllowed,
   type WorkspaceAuthEnvironment,
 } from "./middleware/workspaceAuth";
 import {
@@ -345,6 +346,21 @@ export function createVeraApplication(
 
   app.disable("x-powered-by");
   app.set("trust proxy", trustProxyHops);
+
+  // Set Workspace cache policy before every middleware that can terminate a
+  // request (CORS preflight, global rate limiting, draining, JSON parsing, or
+  // authentication). Keep the exact /api/v1 boundary so health and legacy
+  // Aletheia surfaces retain their existing cache semantics.
+  app.use((request, response, next) => {
+    if (workspaceRouteAllowed(request)) {
+      response.set({
+        "Cache-Control": "private, no-store",
+        Pragma: "no-cache",
+        Expires: "0",
+      });
+    }
+    next();
+  });
 
   app.use(
     helmet({

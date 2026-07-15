@@ -17,6 +17,11 @@ import {
   type SourceCitationAnchorV11,
 } from "../sourceFoundationContractsV11";
 import type { WorkspaceSourceFoundationRepository } from "../repositories/sourceFoundation";
+import { LEGAL_SOURCE_RETENTION_ACTIVATION_V13 } from "../sourceRetentionPolicyV13";
+import {
+  WorkspaceSourceRetentionServiceError,
+  type WorkspaceSourceRetentionService,
+} from "./sourceRetention";
 
 const Id = z.string().uuid();
 const IsoDateTime = z.string().datetime({ offset: true });
@@ -24,10 +29,20 @@ const Sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const MAX_PAGE_SIZE = 100;
 const MAX_ANCHORS_PER_SOURCE = 200;
 const MAX_OCR_BLOCKS_IN_LOCATOR = 32;
+const MAX_SOURCE_CONTENT_PAGE_SIZE = 20;
+const MAX_SOURCE_CHUNK_UTF8_BYTES = 64 * 1024;
+const MAX_SOURCE_CONTENT_RESPONSE_UTF8_BYTES = 256 * 1024;
 
 const CursorPayload = z
   .object({
     retrievedAt: IsoDateTime,
+    id: Id,
+  })
+  .strict();
+
+const ContentCursorPayload = z
+  .object({
+    ordinal: z.number().int().nonnegative(),
     id: Id,
   })
   .strict();
@@ -44,7 +59,51 @@ export type CaptureProjectDocumentSourceResult = {
 
 export type ProjectSourceDetail = {
   snapshot: ProjectSourceSnapshotV11;
-  anchors: SourceCitationAnchorV11[];
+  anchors: ProjectSourceCitationAnchor[];
+};
+
+export type ProjectSourceCitationAnchor = Omit<
+  SourceCitationAnchorV11,
+  "exactQuote"
+> & {
+  exactQuote: string | null;
+  quoteAvailable: boolean;
+  accessState: "available" | "tombstoned" | "lifecycle_missing";
+  retentionDenialCode: string | null;
+};
+
+export type ProjectDocumentSourceContentChunk = {
+  id: string;
+  ordinal: number;
+  text: string;
+  contentSha256: string;
+  startOffset: number;
+  endOffset: number;
+  pageStart: number | null;
+  pageEnd: number | null;
+};
+
+export type ProjectDocumentSourceContent = {
+  snapshotId: string;
+  document: {
+    documentId: string;
+    versionId: string;
+    title: string;
+    filename: string;
+    mimeType: string;
+    contentSha256: string;
+    pageCount: number | null;
+  };
+  chunks: ProjectDocumentSourceContentChunk[];
+  nextCursor: string | null;
+};
+
+export type ReadProjectDocumentSourceContentInput = {
+  projectId: string;
+  snapshotId: string;
+  chunkId?: string;
+  limit?: number;
+  cursor?: string;
 };
 
 export type CreateProjectDocumentAnchorInput = {
@@ -141,6 +200,46 @@ function decodeCursor(value: string | undefined) {
   }
 }
 
+function encodeContentCursor(chunk: ProjectDocumentSourceContentChunk): string {
+  return Buffer.from(
+    JSON.stringify({ ordinal: chunk.ordinal, id: chunk.id }),
+    "utf8",
+  ).toString("base64url");
+}
+
+function decodeContentCursor(value: string | undefined) {
+  if (value === undefined) return null;
+  if (
+    value.length < 1 ||
+    value.length > 512 ||
+    !/^[A-Za-z0-9_-]+$/.test(value)
+  ) {
+    invalid("Source content cursor is invalid.");
+  }
+  try {
+    const decoded = Buffer.from(value, "base64url").toString("utf8");
+    if (Buffer.byteLength(decoded, "utf8") > 1_024) {
+      invalid("Source content cursor is invalid.");
+    }
+    return ContentCursorPayload.parse(JSON.parse(decoded) as unknown);
+  } catch (error) {
+    if (error instanceof WorkspaceApiError) throw error;
+    invalid("Source content cursor is invalid.");
+  }
+}
+
+function boundedSourceText(value: unknown, label: string): string {
+  const text = asString(value, label);
+  if (
+    text.length < 1 ||
+    text.includes("\0") ||
+    Buffer.byteLength(text, "utf8") > MAX_SOURCE_CHUNK_UTF8_BYTES
+  ) {
+    conflict(`Persisted ${label} exceeds the safe source-view boundary.`);
+  }
+  return text;
+}
+
 function safeOcrProjection(
   metadataJson: unknown,
   pageStart: number | null,
@@ -216,8 +315,35 @@ export class WorkspaceProjectSourcesService {
     private readonly options: {
       now?: () => string;
       nextId?: () => string;
+      retention?: Pick<
+        WorkspaceSourceRetentionService,
+        | "assertSnapshotAction"
+        | "evaluateSnapshotAction"
+        | "readAnchorMetadata"
+        | "readAnchorQuote"
+      >;
     } = {},
   ) {}
+
+  private assertRetentionAction(
+    projectId: string,
+    snapshotId: string,
+    action: "quote_read" | "anchor_create",
+  ) {
+    if (!this.options.retention) return;
+    try {
+      this.options.retention.assertSnapshotAction({
+        projectId,
+        snapshotId,
+        action,
+      });
+    } catch (error) {
+      if (error instanceof WorkspaceSourceRetentionServiceError) {
+        throw new WorkspaceApiError(409, "PRECONDITION_FAILED", error.message);
+      }
+      throw error;
+    }
+  }
 
   captureProjectDocumentSnapshot(input: {
     projectId: string;
@@ -371,7 +497,7 @@ export class WorkspaceProjectSourcesService {
           "Source snapshot could not be reloaded.",
         );
       }
-      return snapshot;
+      return this.snapshotView(snapshot);
     });
     return {
       sources: snapshots,
@@ -390,18 +516,222 @@ export class WorkspaceProjectSourcesService {
     const snapshot = this.sources.getSnapshot(projectId, snapshotId);
     if (!snapshot) notFound();
     return {
-      snapshot,
-      anchors: this.sources.listCitationAnchors({
-        projectId,
-        snapshotId,
-        limit: MAX_ANCHORS_PER_SOURCE,
-      }),
+      snapshot: this.snapshotView(snapshot),
+      anchors: this.sources
+        .listCitationAnchors({
+          projectId,
+          snapshotId,
+          limit: MAX_ANCHORS_PER_SOURCE,
+        })
+        .map((anchor) => this.anchorView(anchor, snapshot.sourceKind)),
+    };
+  }
+
+  /**
+   * Returns only a bounded, authenticated projection of immutable Project
+   * document chunks. Raw storage locators and parser metadata never cross the
+   * route boundary; every row is re-bound to the snapshot and hash-checked.
+   */
+  readProjectDocumentSourceContent(
+    input: ReadProjectDocumentSourceContentInput,
+  ): ProjectDocumentSourceContent {
+    const identifiers = z
+      .object({
+        projectId: Id,
+        snapshotId: Id,
+        chunkId: Id.optional(),
+      })
+      .strict()
+      .safeParse({
+        projectId: input.projectId,
+        snapshotId: input.snapshotId,
+        chunkId: input.chunkId,
+      });
+    if (!identifiers.success)
+      invalid("Source content identifiers are invalid.");
+    if (
+      input.chunkId &&
+      (input.cursor !== undefined || input.limit !== undefined)
+    ) {
+      invalid("A direct source chunk request cannot be paginated.");
+    }
+    const limit = input.chunkId ? 1 : (input.limit ?? 10);
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > MAX_SOURCE_CONTENT_PAGE_SIZE
+    ) {
+      invalid(
+        `Source content page size must be between 1 and ${MAX_SOURCE_CONTENT_PAGE_SIZE}.`,
+      );
+    }
+    const cursor = decodeContentCursor(input.cursor);
+    this.assertProjectExists(input.projectId);
+    const snapshot = this.sources.getSnapshot(
+      input.projectId,
+      input.snapshotId,
+    );
+    if (!snapshot) notFound();
+    if (snapshot.sourceKind !== "project_document") {
+      invalid("Public source content is available only for Project documents.");
+    }
+    this.assertRetentionAction(input.projectId, input.snapshotId, "quote_read");
+    if (!snapshot.sourceVersionId) {
+      conflict("Project document source version is unavailable.");
+    }
+
+    const document = this.database
+      .prepare(
+        `SELECT document.id AS document_id,
+                version.id AS version_id,
+                version.filename,
+                version.mime_type,
+                version.content_sha256,
+                version.page_count
+           FROM documents document
+           JOIN projects project
+             ON project.id = document.project_id
+            AND project.status <> 'deleted'
+           JOIN document_versions version
+             ON version.document_id = document.id
+            AND version.id = ?
+            AND version.deleted_at IS NULL
+          WHERE document.id = ?
+            AND document.project_id = ?
+            AND document.deleted_at IS NULL`,
+      )
+      .get(snapshot.sourceVersionId, snapshot.sourceRecordId, input.projectId);
+    if (!document) notFound("Project document source version not found.");
+    const documentContentSha256 = Sha256.parse(
+      asString(document.content_sha256, "document version hash"),
+    );
+    if (documentContentSha256 !== snapshot.contentSha256) {
+      conflict("Source snapshot no longer matches the document version.");
+    }
+    const pageCount =
+      document.page_count === null
+        ? null
+        : asNonnegativeInteger(document.page_count, "document page count");
+
+    const predicates = ["chunk.document_id = ?", "chunk.version_id = ?"];
+    const parameters: unknown[] = [
+      snapshot.sourceRecordId,
+      snapshot.sourceVersionId,
+    ];
+    if (input.chunkId) {
+      predicates.push("chunk.id = ?");
+      parameters.push(input.chunkId);
+    } else if (cursor) {
+      predicates.push(
+        "(chunk.ordinal > ? OR (chunk.ordinal = ? AND chunk.id > ?))",
+      );
+      parameters.push(cursor.ordinal, cursor.ordinal, cursor.id);
+    }
+    parameters.push(limit + 1);
+    const rows = this.database
+      .prepare(
+        `SELECT chunk.id,
+                chunk.ordinal,
+                chunk.text,
+                chunk.content_sha256,
+                chunk.start_offset,
+                chunk.end_offset,
+                chunk.page_start,
+                chunk.page_end
+           FROM document_chunks chunk
+          WHERE ${predicates.join(" AND ")}
+          ORDER BY chunk.ordinal ASC, chunk.id ASC
+          LIMIT ?`,
+      )
+      .all(...parameters);
+    if (input.chunkId && rows.length === 0) {
+      notFound("Project document source chunk not found.");
+    }
+    const hasMoreRows = !input.chunkId && rows.length > limit;
+    const selected = hasMoreRows ? rows.slice(0, limit) : rows;
+    let responseTextBytes = 0;
+    let budgetTruncated = false;
+    const chunks: ProjectDocumentSourceContentChunk[] = [];
+    for (const row of selected) {
+      const text = boundedSourceText(row.text, "source chunk text");
+      const textBytes = Buffer.byteLength(text, "utf8");
+      if (
+        !input.chunkId &&
+        chunks.length > 0 &&
+        responseTextBytes + textBytes > MAX_SOURCE_CONTENT_RESPONSE_UTF8_BYTES
+      ) {
+        budgetTruncated = true;
+        break;
+      }
+      const contentSha256 = Sha256.parse(
+        asString(row.content_sha256, "source chunk hash"),
+      );
+      if (sha256(text) !== contentSha256) {
+        conflict("Document chunk integrity check failed.");
+      }
+      const startOffset = asNonnegativeInteger(
+        row.start_offset,
+        "source chunk start offset",
+      );
+      const endOffset = asNonnegativeInteger(
+        row.end_offset,
+        "source chunk end offset",
+      );
+      if (endOffset < startOffset || endOffset - startOffset < text.length) {
+        conflict("Document chunk offsets failed integrity validation.");
+      }
+      const pageStart =
+        row.page_start === null
+          ? null
+          : asNonnegativeInteger(row.page_start, "source chunk page start");
+      const pageEnd =
+        row.page_end === null
+          ? null
+          : asNonnegativeInteger(row.page_end, "source chunk page end");
+      if (
+        (pageStart === null) !== (pageEnd === null) ||
+        (pageStart !== null &&
+          pageEnd !== null &&
+          (pageStart < 1 ||
+            pageEnd < pageStart ||
+            (pageCount !== null && pageEnd > pageCount)))
+      ) {
+        conflict("Document chunk page bounds failed integrity validation.");
+      }
+      chunks.push({
+        id: Id.parse(asString(row.id, "source chunk id")),
+        ordinal: asNonnegativeInteger(row.ordinal, "source chunk ordinal"),
+        text,
+        contentSha256,
+        startOffset,
+        endOffset,
+        pageStart,
+        pageEnd,
+      });
+      responseTextBytes += textBytes;
+    }
+    return {
+      snapshotId: snapshot.id,
+      document: {
+        documentId: asString(document.document_id, "document id"),
+        versionId: asString(document.version_id, "document version id"),
+        title: snapshot.titleSnapshot,
+        filename: asString(document.filename, "document version filename"),
+        mimeType: asString(document.mime_type, "document version MIME type"),
+        contentSha256: documentContentSha256,
+        pageCount,
+      },
+      chunks,
+      nextCursor:
+        (hasMoreRows || budgetTruncated) && chunks.length > 0
+          ? encodeContentCursor(chunks[chunks.length - 1])
+          : null,
     };
   }
 
   createProjectDocumentAnchor(
     input: CreateProjectDocumentAnchorInput,
-  ): SourceCitationAnchorV11 {
+  ): ProjectSourceCitationAnchor {
     const identifiers = z
       .object({
         projectId: Id,
@@ -442,6 +772,11 @@ export class WorkspaceProjectSourcesService {
       if (snapshot.sourceKind !== "project_document") {
         invalid("Public anchors can only target Project document sources.");
       }
+      this.assertRetentionAction(
+        input.projectId,
+        input.snapshotId,
+        "anchor_create",
+      );
       if (!snapshot.sourceVersionId) {
         conflict("Project document source version is unavailable.");
       }
@@ -610,21 +945,31 @@ export class WorkspaceProjectSourcesService {
         next?.ordinal,
         "citation anchor ordinal",
       );
-      return this.sources.createCitationAnchor({
-        id: this.nextId(),
-        projectId: input.projectId,
-        snapshotId: input.snapshotId,
-        ordinal: anchorOrdinal,
-        exactQuote: input.exactQuote,
-        locator,
-        createdAt: this.now(),
-      });
+      return this.anchorView(
+        this.sources.createCitationAnchor({
+          id: this.nextId(),
+          projectId: input.projectId,
+          snapshotId: input.snapshotId,
+          ordinal: anchorOrdinal,
+          exactQuote: input.exactQuote,
+          locator,
+          createdAt: this.now(),
+        }),
+        "project_document",
+      );
     });
   }
 
   captureLegalAuthoritySnapshot(
     input: CaptureLegalAuthoritySnapshotInput,
   ): ProjectSourceSnapshotV11 {
+    if (!LEGAL_SOURCE_RETENTION_ACTIVATION_V13.open) {
+      throw new WorkspaceApiError(
+        503,
+        "PRECONDITION_FAILED",
+        "Legal source activation remains closed until retention cleanup and derived-lineage gates are complete.",
+      );
+    }
     this.assertProjectExists(input.projectId);
     const policy = SourceDataUsePolicyV11Schema.parse(input.policy);
     return this.sources.createSnapshot({
@@ -647,6 +992,92 @@ export class WorkspaceProjectSourcesService {
 
   private now() {
     return (this.options.now ?? (() => new Date().toISOString()))();
+  }
+
+  /**
+   * Legal-provider locators are intentionally opaque at persistence time and
+   * can therefore contain payload-like fields. They may cross the public
+   * boundary only while the snapshot's payload policy is currently allowed.
+   * Stable identity, hash, policy, and time fields remain visible for audit
+   * after denial; arbitrary provider JSON does not.
+   */
+  private snapshotView(
+    snapshot: ProjectSourceSnapshotV11,
+  ): ProjectSourceSnapshotV11 {
+    if (snapshot.sourceKind !== "legal_authority") return snapshot;
+    if (!this.options.retention) {
+      return this.redactedLegalSnapshotView(snapshot);
+    }
+    try {
+      const evaluation = this.options.retention.evaluateSnapshotAction({
+        projectId: snapshot.projectId,
+        snapshotId: snapshot.id,
+        action: "quote_read",
+      });
+      return evaluation.decision.allowed
+        ? snapshot
+        : this.redactedLegalSnapshotView(snapshot);
+    } catch (error) {
+      if (error instanceof WorkspaceSourceRetentionServiceError) {
+        return this.redactedLegalSnapshotView(snapshot);
+      }
+      // Unknown retention failures are safe because no snapshot is returned.
+      throw error;
+    }
+  }
+
+  private redactedLegalSnapshotView(
+    snapshot: ProjectSourceSnapshotV11,
+  ): ProjectSourceSnapshotV11 {
+    return {
+      ...snapshot,
+      locator: {},
+      retrievalMetadata: {},
+    };
+  }
+
+  private anchorView(
+    anchor: SourceCitationAnchorV11,
+    sourceKind: ProjectSourceKindV11,
+  ): ProjectSourceCitationAnchor {
+    if (!this.options.retention) {
+      if (sourceKind === "legal_authority") {
+        return {
+          ...anchor,
+          exactQuote: null,
+          locator: {},
+          quoteAvailable: false,
+          accessState: "lifecycle_missing",
+          retentionDenialCode: "source_retention_lifecycle_missing",
+        };
+      }
+      return {
+        ...anchor,
+        quoteAvailable: true,
+        accessState: "available",
+        retentionDenialCode: null,
+      };
+    }
+    const metadata = this.options.retention.readAnchorMetadata(
+      anchor.projectId,
+      anchor.id,
+    );
+    const retained = metadata.quoteAvailable
+      ? this.options.retention.readAnchorQuote(anchor.projectId, anchor.id)
+      : null;
+    return {
+      id: anchor.id,
+      projectId: anchor.projectId,
+      snapshotId: anchor.snapshotId,
+      ordinal: anchor.ordinal,
+      exactQuote: retained?.exactQuote ?? null,
+      quoteSha256: anchor.quoteSha256,
+      locator: metadata.quoteAvailable ? anchor.locator : {},
+      createdAt: anchor.createdAt,
+      quoteAvailable: metadata.quoteAvailable,
+      accessState: metadata.accessState,
+      retentionDenialCode: metadata.denialCode,
+    };
   }
 
   private nextId() {

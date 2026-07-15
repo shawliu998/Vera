@@ -18,6 +18,20 @@ import {
   type StudioVersionCommitV12,
 } from "../documentStudioContractsV12";
 import {
+  AcceptDocumentStudioSuggestionV14Schema,
+  CreateDocumentStudioSuggestionV14Schema,
+  DOCUMENT_STUDIO_SUGGESTION_PREVIEW_CHARS_V14,
+  DocumentStudioSuggestionV14Schema,
+  DocumentStudioSuggestionPreviewV14Schema,
+  RejectDocumentStudioSuggestionV14Schema,
+  type AcceptDocumentStudioSuggestionV14,
+  type CreateDocumentStudioSuggestionV14,
+  type DocumentStudioSuggestionV14,
+  type DocumentStudioSuggestionPreviewPageV14,
+  type DocumentStudioSuggestionPreviewV14,
+  type RejectDocumentStudioSuggestionV14,
+} from "../documentStudioSuggestionContractsV14";
+import {
   workspaceBlobStorageKey,
   WorkspaceBlobRecordsRepository,
   type WorkspaceBlobRecordsRepository as WorkspaceBlobRecordsRepositoryType,
@@ -31,6 +45,7 @@ export type WorkspaceDocumentStudioRepositoryErrorCode =
   | "DOCUMENT_STUDIO_VERSION_CONFLICT"
   | "DOCUMENT_STUDIO_OPERATION_CONFLICT"
   | "DOCUMENT_STUDIO_SCOPE_VIOLATION"
+  | "DOCUMENT_STUDIO_RETENTION_BLOCKED"
   | "DOCUMENT_STUDIO_PERSISTENCE_FAILED";
 
 export class WorkspaceDocumentStudioRepositoryError extends Error {
@@ -60,11 +75,7 @@ function parseInput<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
   try {
     return schema.parse(value);
   } catch (error) {
-    studioError(
-      "DOCUMENT_STUDIO_INVALID_INPUT",
-      `${label} is invalid.`,
-      error,
-    );
+    studioError("DOCUMENT_STUDIO_INVALID_INPUT", `${label} is invalid.`, error);
   }
 }
 
@@ -94,7 +105,99 @@ const VERSION_SELECT = `
   studio.created_at AS studio_created_at
 `;
 
+const SUGGESTION_SELECT = `
+  edit.id AS suggestion_id,
+  document.project_id AS project_id,
+  edit.document_id AS document_id,
+  edit.version_id AS base_version_id,
+  edit.message_id AS message_id,
+  edit.change_id AS change_id,
+  edit.start_offset AS start_offset,
+  edit.end_offset AS end_offset,
+  edit.offset_scope AS offset_scope,
+  edit.offset_unit AS offset_unit,
+  edit.deleted_text AS deleted_text,
+  edit.inserted_text AS inserted_text,
+  edit.context_before AS context_before,
+  edit.context_after AS context_after,
+  edit.summary AS summary,
+  edit.status AS status,
+  edit.created_at AS created_at,
+  edit.resolved_at AS resolved_at,
+  result.version_id AS result_version_id
+`;
+
 export class WorkspaceDocumentStudioRepository {
+  listSuggestionPreviews(
+    projectIdInput: string,
+    documentIdInput: string,
+  ): DocumentStudioSuggestionPreviewPageV14 {
+    const projectId = parseId(projectIdInput, "projectId");
+    const documentId = parseId(documentIdInput, "documentId");
+    try {
+      const rows = this.database
+        .prepare(
+          `SELECT edit.id AS suggestion_id,
+                  document.project_id AS project_id,
+                  edit.document_id AS document_id,
+                  edit.version_id AS base_version_id,
+                  edit.message_id AS message_id,
+                  edit.start_offset AS start_offset,
+                  edit.end_offset AS end_offset,
+                  edit.offset_scope AS offset_scope,
+                  edit.offset_unit AS offset_unit,
+                  substr(edit.deleted_text, 1, ?) AS deleted_preview,
+                  substr(edit.inserted_text, 1, ?) AS inserted_preview,
+                  length(edit.deleted_text) > ? AS deleted_truncated,
+                  length(edit.inserted_text) > ? AS inserted_truncated,
+                  edit.context_before AS context_before,
+                  edit.context_after AS context_after,
+                  edit.summary AS summary,
+                  edit.status AS status,
+                  edit.created_at AS created_at
+             FROM document_edits edit
+             JOIN documents document ON document.id = edit.document_id
+             JOIN document_studio_versions base
+               ON base.project_id = document.project_id
+              AND base.document_id = edit.document_id
+              AND base.version_id = edit.version_id
+            WHERE document.project_id = ?
+              AND document.id = ?
+              AND document.document_kind IN ('draft', 'template')
+              AND document.deleted_at IS NULL
+              AND edit.status = 'pending'
+              AND edit.resolved_at IS NULL
+              AND edit.start_offset IS NOT NULL
+              AND edit.end_offset IS NOT NULL
+              AND edit.offset_scope = 'raw_markdown_v1'
+              AND edit.offset_unit = 'utf16_code_unit'
+            ORDER BY edit.created_at DESC, edit.id DESC
+            LIMIT 51`,
+        )
+        .all(
+          DOCUMENT_STUDIO_SUGGESTION_PREVIEW_CHARS_V14,
+          DOCUMENT_STUDIO_SUGGESTION_PREVIEW_CHARS_V14,
+          DOCUMENT_STUDIO_SUGGESTION_PREVIEW_CHARS_V14,
+          DOCUMENT_STUDIO_SUGGESTION_PREVIEW_CHARS_V14,
+          projectId,
+          documentId,
+        );
+      return {
+        suggestions: rows
+          .slice(0, 50)
+          .map((row) => this.mapSuggestionPreview(row)),
+        hasMore: rows.length > 50,
+      };
+    } catch (error) {
+      if (error instanceof WorkspaceDocumentStudioRepositoryError) throw error;
+      studioError(
+        "DOCUMENT_STUDIO_PERSISTENCE_FAILED",
+        "Studio suggestion previews could not be listed.",
+        error,
+      );
+    }
+  }
+
   private readonly blobRecords: WorkspaceBlobRecordsRepositoryType;
   private readonly now: () => string;
 
@@ -257,6 +360,392 @@ export class WorkspaceDocumentStudioRepository {
     }
   }
 
+  listSuggestions(
+    projectId: string,
+    documentId: string,
+  ): DocumentStudioSuggestionV14[] {
+    parseId(projectId, "projectId");
+    parseId(documentId, "documentId");
+    try {
+      return this.database
+        .prepare(
+          `SELECT ${SUGGESTION_SELECT}
+             FROM document_edits edit
+             JOIN documents document
+               ON document.id = edit.document_id
+             JOIN document_studio_versions base
+               ON base.project_id = document.project_id
+              AND base.document_id = edit.document_id
+              AND base.version_id = edit.version_id
+             LEFT JOIN document_studio_versions result
+               ON result.document_id = edit.document_id
+              AND result.operation_id = 'studio-suggestion:' || edit.id
+            WHERE document.project_id = ?
+              AND document.id = ?
+              AND document.document_kind IN ('draft', 'template')
+              AND document.deleted_at IS NULL
+              AND edit.start_offset IS NOT NULL
+              AND edit.end_offset IS NOT NULL
+              AND edit.offset_scope = 'raw_markdown_v1'
+              AND edit.offset_unit = 'utf16_code_unit'
+            ORDER BY CASE edit.status WHEN 'pending' THEN 0 ELSE 1 END,
+                     edit.created_at DESC, edit.id DESC
+            LIMIT 200`,
+        )
+        .all(projectId, documentId)
+        .map((row) => this.mapSuggestion(row));
+    } catch (error) {
+      if (error instanceof WorkspaceDocumentStudioRepositoryError) throw error;
+      studioError(
+        "DOCUMENT_STUDIO_PERSISTENCE_FAILED",
+        "Studio suggestions could not be listed.",
+        error,
+      );
+    }
+  }
+
+  getSuggestion(
+    projectId: string,
+    documentId: string,
+    suggestionId: string,
+  ): DocumentStudioSuggestionV14 | null {
+    parseId(projectId, "projectId");
+    parseId(documentId, "documentId");
+    parseId(suggestionId, "suggestionId");
+    try {
+      const row = this.selectSuggestion(projectId, documentId, suggestionId);
+      return row ? this.mapSuggestion(row) : null;
+    } catch (error) {
+      if (error instanceof WorkspaceDocumentStudioRepositoryError) throw error;
+      studioError(
+        "DOCUMENT_STUDIO_PERSISTENCE_FAILED",
+        "Studio suggestion could not be read.",
+        error,
+      );
+    }
+  }
+
+  createSuggestion(
+    input: CreateDocumentStudioSuggestionV14,
+  ): DocumentStudioSuggestionV14 {
+    const parsed = parseInput(
+      CreateDocumentStudioSuggestionV14Schema,
+      input,
+      "Studio suggestion input",
+    );
+    return this.persist(() => {
+      const binding = this.database
+        .prepare(
+          `SELECT document.current_version_id
+             FROM documents document
+             JOIN projects project
+               ON project.id = document.project_id AND project.status = 'active'
+             JOIN document_studio_versions studio
+               ON studio.project_id = document.project_id
+              AND studio.document_id = document.id
+              AND studio.version_id = ?
+            WHERE document.project_id = ?
+              AND document.id = ?
+              AND document.document_kind IN ('draft', 'template')
+              AND document.deleted_at IS NULL`,
+        )
+        .get(parsed.baseVersionId, parsed.projectId, parsed.documentId);
+      if (!binding) {
+        studioError(
+          "DOCUMENT_STUDIO_NOT_FOUND",
+          "Studio suggestion base was not found.",
+        );
+      }
+      if (binding.current_version_id !== parsed.baseVersionId) {
+        studioError(
+          "DOCUMENT_STUDIO_VERSION_CONFLICT",
+          "Studio suggestion base is stale.",
+        );
+      }
+      const message = this.database
+        .prepare(
+          `SELECT message.id
+             FROM chat_messages message
+             JOIN chats chat ON chat.id = message.chat_id
+            WHERE message.id = ?
+              AND message.role = 'assistant'
+              AND message.status IN ('pending', 'streaming', 'complete')
+              AND chat.project_id = ?
+              AND chat.scope = 'project'`,
+        )
+        .get(parsed.messageId, parsed.projectId);
+      if (!message) {
+        studioError(
+          "DOCUMENT_STUDIO_NOT_FOUND",
+          "Assistant suggestion source was not found.",
+        );
+      }
+      const existing = this.database
+        .prepare(
+          `SELECT ${SUGGESTION_SELECT}
+             FROM document_edits edit
+             JOIN documents document ON document.id = edit.document_id
+             LEFT JOIN document_studio_versions result
+               ON result.document_id = edit.document_id
+              AND result.operation_id = 'studio-suggestion:' || edit.id
+            WHERE edit.version_id = ? AND edit.change_id = ?`,
+        )
+        .get(parsed.baseVersionId, parsed.changeId);
+      if (existing) {
+        const suggestion = this.mapSuggestion(existing);
+        if (
+          suggestion.status === "pending" &&
+          suggestion.projectId === parsed.projectId &&
+          suggestion.documentId === parsed.documentId &&
+          suggestion.messageId === parsed.messageId &&
+          suggestion.startOffset === parsed.startOffset &&
+          suggestion.endOffset === parsed.endOffset &&
+          suggestion.deletedText === parsed.deletedText &&
+          suggestion.insertedText === parsed.insertedText &&
+          suggestion.contextBefore === parsed.contextBefore &&
+          suggestion.contextAfter === parsed.contextAfter &&
+          suggestion.summary === parsed.summary
+        ) {
+          return suggestion;
+        }
+        studioError(
+          "DOCUMENT_STUDIO_OPERATION_CONFLICT",
+          "Assistant suggestion change id has already been used.",
+        );
+      }
+      const pendingCount = Number(
+        this.database
+          .prepare(
+            `SELECT count(*) AS total
+               FROM document_edits
+              WHERE document_id = ? AND status = 'pending'`,
+          )
+          .get(parsed.documentId)?.total,
+      );
+      if (!Number.isSafeInteger(pendingCount) || pendingCount < 0) {
+        studioError(
+          "DOCUMENT_STUDIO_PERSISTENCE_FAILED",
+          "Studio suggestion pending count is invalid.",
+        );
+      }
+      if (pendingCount >= 50) {
+        studioError(
+          "DOCUMENT_STUDIO_OPERATION_CONFLICT",
+          "Studio document already has the maximum pending suggestions.",
+        );
+      }
+      this.database
+        .prepare(
+          `INSERT INTO document_edits (
+             id, document_id, version_id, message_id, change_id,
+             deleted_text, inserted_text, context_before, context_after,
+             summary, status, created_at, resolved_at, start_offset,
+             end_offset, offset_scope, offset_unit
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL,
+                     ?, ?, 'raw_markdown_v1', 'utf16_code_unit')`,
+        )
+        .run(
+          parsed.suggestionId,
+          parsed.documentId,
+          parsed.baseVersionId,
+          parsed.messageId,
+          parsed.changeId,
+          parsed.deletedText,
+          parsed.insertedText,
+          parsed.contextBefore,
+          parsed.contextAfter,
+          parsed.summary,
+          parsed.createdAt,
+          parsed.startOffset,
+          parsed.endOffset,
+        );
+      return this.requireSuggestionInTransaction(
+        parsed.projectId,
+        parsed.documentId,
+        parsed.suggestionId,
+      );
+    });
+  }
+
+  rejectSuggestion(
+    input: RejectDocumentStudioSuggestionV14,
+  ): DocumentStudioSuggestionV14 {
+    const parsed = parseInput(
+      RejectDocumentStudioSuggestionV14Schema,
+      input,
+      "Studio suggestion rejection",
+    );
+    return this.persist(() => {
+      const suggestion = this.requireSuggestionInTransaction(
+        parsed.projectId,
+        parsed.documentId,
+        parsed.suggestionId,
+      );
+      if (suggestion.status !== "pending") {
+        studioError(
+          "DOCUMENT_STUDIO_OPERATION_CONFLICT",
+          "Studio suggestion has already been resolved.",
+        );
+      }
+      const document = this.database
+        .prepare(
+          `SELECT document.current_version_id
+             FROM documents document
+             JOIN projects project
+               ON project.id = document.project_id AND project.status = 'active'
+            WHERE document.project_id = ? AND document.id = ?
+              AND document.document_kind IN ('draft', 'template')
+              AND document.deleted_at IS NULL`,
+        )
+        .get(parsed.projectId, parsed.documentId);
+      if (!document) {
+        studioError(
+          "DOCUMENT_STUDIO_NOT_FOUND",
+          "Studio document was not found.",
+        );
+      }
+      const update = this.database
+        .prepare(
+          `UPDATE document_edits
+              SET status = 'rejected', resolved_at = ?
+            WHERE id = ? AND document_id = ? AND version_id = ?
+              AND status = 'pending' AND resolved_at IS NULL`,
+        )
+        .run(
+          parsed.resolvedAt,
+          parsed.suggestionId,
+          parsed.documentId,
+          suggestion.baseVersionId,
+        ) as { changes?: number };
+      if (Number(update.changes ?? 0) !== 1) {
+        studioError(
+          "DOCUMENT_STUDIO_OPERATION_CONFLICT",
+          "Studio suggestion could not be rejected exactly once.",
+        );
+      }
+      return this.requireSuggestionInTransaction(
+        parsed.projectId,
+        parsed.documentId,
+        parsed.suggestionId,
+      );
+    });
+  }
+
+  acceptSuggestionCas(input: AcceptDocumentStudioSuggestionV14): {
+    suggestion: DocumentStudioSuggestionV14;
+    commit: StudioVersionCommitV12;
+  } {
+    const parsed = parseInput(
+      AcceptDocumentStudioSuggestionV14Schema,
+      input,
+      "Studio suggestion acceptance",
+    );
+    return this.persist(() => {
+      const suggestion = this.requireSuggestionInTransaction(
+        parsed.commit.projectId,
+        parsed.commit.documentId,
+        parsed.suggestionId,
+      );
+      if (suggestion.status !== "pending") {
+        studioError(
+          "DOCUMENT_STUDIO_OPERATION_CONFLICT",
+          "Studio suggestion has already been resolved.",
+        );
+      }
+      const durableSource = this.database
+        .prepare(
+          `SELECT message.id
+             FROM chat_messages message
+             JOIN chats chat ON chat.id = message.chat_id
+             JOIN jobs job ON job.id = message.job_id
+            WHERE message.id = ?
+              AND message.role = 'assistant'
+              AND message.status = 'complete'
+              AND chat.project_id = ?
+              AND chat.scope = 'project'
+              AND job.type = 'assistant_generate'
+              AND job.status = 'complete'
+              AND job.resource_type = 'chat'
+              AND job.resource_id = chat.id
+              AND json_extract(job.payload_json, '$.schema') =
+                    'vera-assistant-generation-v1'
+              AND json_extract(job.payload_json, '$.chatId') = chat.id
+              AND json_extract(job.payload_json, '$.projectId') = ?
+              AND json_extract(job.payload_json, '$.outputMessageId') =
+                    message.id`,
+        )
+        .get(
+          suggestion.messageId,
+          parsed.commit.projectId,
+          parsed.commit.projectId,
+        );
+      if (!durableSource) {
+        studioError(
+          "DOCUMENT_STUDIO_OPERATION_CONFLICT",
+          "Assistant suggestion has no completed durable source message.",
+        );
+      }
+      if (
+        suggestion.baseVersionId !== parsed.commit.expectedCurrentVersionId ||
+        suggestion.startOffset !== parsed.exactStartOffset ||
+        suggestion.endOffset !== parsed.exactEndOffset ||
+        suggestion.deletedText !== parsed.exactDeletedText ||
+        parsed.commit.operationId !== `studio-suggestion:${suggestion.id}`
+      ) {
+        studioError(
+          "DOCUMENT_STUDIO_OPERATION_CONFLICT",
+          "Prepared acceptance does not match the immutable suggestion.",
+        );
+      }
+      const inheritedCitationIds = this.listCitationAnchorIdsRaw(
+        parsed.commit.projectId,
+        parsed.commit.documentId,
+        suggestion.baseVersionId,
+      );
+      if (
+        inheritedCitationIds.length !==
+          parsed.commit.citationAnchorIds.length ||
+        inheritedCitationIds.some(
+          (anchorId, index) =>
+            anchorId !== parsed.commit.citationAnchorIds[index],
+        )
+      ) {
+        studioError(
+          "DOCUMENT_STUDIO_OPERATION_CONFLICT",
+          "Prepared acceptance citations do not match the base version.",
+        );
+      }
+      const commit = this.commitMarkdownVersionInTransaction(parsed.commit);
+      const update = this.database
+        .prepare(
+          `UPDATE document_edits
+              SET status = 'accepted', resolved_at = ?
+            WHERE id = ? AND document_id = ? AND version_id = ?
+              AND status = 'pending' AND resolved_at IS NULL`,
+        )
+        .run(
+          parsed.commit.createdAt,
+          suggestion.id,
+          suggestion.documentId,
+          suggestion.baseVersionId,
+        ) as { changes?: number };
+      if (Number(update.changes ?? 0) !== 1) {
+        studioError(
+          "DOCUMENT_STUDIO_OPERATION_CONFLICT",
+          "Studio suggestion could not be accepted exactly once.",
+        );
+      }
+      return {
+        suggestion: this.requireSuggestionInTransaction(
+          parsed.commit.projectId,
+          parsed.commit.documentId,
+          suggestion.id,
+        ),
+        commit,
+      };
+    });
+  }
+
   createMarkdownDraft(input: CreateMarkdownDraftV12): StudioVersionCommitV12 {
     const parsed = parseInput(
       CreateMarkdownDraftV12Schema,
@@ -268,16 +757,11 @@ export class WorkspaceDocumentStudioRepository {
         .prepare("SELECT id FROM projects WHERE id = ? AND status = 'active'")
         .get(parsed.projectId);
       if (!project) {
-        studioError(
-          "DOCUMENT_STUDIO_NOT_FOUND",
-          "Project was not found.",
-        );
+        studioError("DOCUMENT_STUDIO_NOT_FOUND", "Project was not found.");
       }
       if (parsed.folderId !== null) {
         const folder = this.database
-          .prepare(
-            "SELECT project_id FROM project_subfolders WHERE id = ?",
-          )
+          .prepare("SELECT project_id FROM project_subfolders WHERE id = ?")
           .get(parsed.folderId);
         if (!folder || folder.project_id !== parsed.projectId) {
           studioError("DOCUMENT_STUDIO_NOT_FOUND", "Folder was not found.");
@@ -314,11 +798,12 @@ export class WorkspaceDocumentStudioRepository {
           `INSERT INTO document_versions (
              id, document_id, version_number, source, filename, mime_type,
              size_bytes, content_sha256, storage_key, created_at
-           ) VALUES (?, ?, 1, 'user_upload', ?, 'text/markdown', ?, ?, ?, ?)`,
+           ) VALUES (?, ?, 1, ?, ?, 'text/markdown', ?, ?, ?, ?)`,
         )
         .run(
           parsed.versionId,
           parsed.documentId,
+          parsed.source,
           parsed.filename,
           parsed.sizeBytes,
           parsed.contentSha256,
@@ -618,6 +1103,125 @@ export class WorkspaceDocumentStudioRepository {
       .get(projectId, documentId, versionId);
   }
 
+  private selectSuggestion(
+    projectId: string,
+    documentId: string,
+    suggestionId: string,
+  ): Row | undefined {
+    return this.database
+      .prepare(
+        `SELECT ${SUGGESTION_SELECT}
+           FROM document_edits edit
+           JOIN documents document ON document.id = edit.document_id
+           JOIN document_studio_versions base
+             ON base.project_id = document.project_id
+            AND base.document_id = edit.document_id
+            AND base.version_id = edit.version_id
+           LEFT JOIN document_studio_versions result
+             ON result.document_id = edit.document_id
+            AND result.operation_id = 'studio-suggestion:' || edit.id
+          WHERE document.project_id = ?
+            AND document.id = ?
+            AND edit.id = ?
+            AND document.document_kind IN ('draft', 'template')
+            AND document.deleted_at IS NULL
+            AND edit.start_offset IS NOT NULL
+            AND edit.end_offset IS NOT NULL
+            AND edit.offset_scope = 'raw_markdown_v1'
+            AND edit.offset_unit = 'utf16_code_unit'`,
+      )
+      .get(projectId, documentId, suggestionId);
+  }
+
+  private requireSuggestionInTransaction(
+    projectId: string,
+    documentId: string,
+    suggestionId: string,
+  ): DocumentStudioSuggestionV14 {
+    const row = this.selectSuggestion(projectId, documentId, suggestionId);
+    if (!row) {
+      studioError(
+        "DOCUMENT_STUDIO_NOT_FOUND",
+        "Studio suggestion was not found.",
+      );
+    }
+    return this.mapSuggestion(row);
+  }
+
+  private mapSuggestion(row: Row): DocumentStudioSuggestionV14 {
+    try {
+      return DocumentStudioSuggestionV14Schema.parse({
+        id: row.suggestion_id,
+        projectId: row.project_id,
+        documentId: row.document_id,
+        baseVersionId: row.base_version_id,
+        messageId: row.message_id,
+        changeId: row.change_id,
+        startOffset: Number(row.start_offset),
+        endOffset: Number(row.end_offset),
+        offsetScope: row.offset_scope,
+        offsetUnit: row.offset_unit,
+        deletedText: row.deleted_text,
+        insertedText: row.inserted_text,
+        contextBefore: row.context_before,
+        contextAfter: row.context_after,
+        summary: row.summary,
+        status: row.status,
+        createdAt: row.created_at,
+        resolvedAt: row.resolved_at,
+        resultVersionId: row.result_version_id,
+      });
+    } catch (error) {
+      studioError(
+        "DOCUMENT_STUDIO_PERSISTENCE_FAILED",
+        "Persisted Studio suggestion is invalid.",
+        error,
+      );
+    }
+  }
+
+  private mapSuggestionPreview(row: Row): DocumentStudioSuggestionPreviewV14 {
+    const deletedTruncated = Number(row.deleted_truncated);
+    const insertedTruncated = Number(row.inserted_truncated);
+    if (
+      (deletedTruncated !== 0 && deletedTruncated !== 1) ||
+      (insertedTruncated !== 0 && insertedTruncated !== 1)
+    ) {
+      studioError(
+        "DOCUMENT_STUDIO_PERSISTENCE_FAILED",
+        "Persisted Studio suggestion preview flags are invalid.",
+      );
+    }
+    try {
+      return DocumentStudioSuggestionPreviewV14Schema.parse({
+        id: row.suggestion_id,
+        projectId: row.project_id,
+        documentId: row.document_id,
+        baseVersionId: row.base_version_id,
+        messageId: row.message_id,
+        startOffset: Number(row.start_offset),
+        endOffset: Number(row.end_offset),
+        offsetScope: row.offset_scope,
+        offsetUnit: row.offset_unit,
+        deletedPreview: row.deleted_preview,
+        insertedPreview: row.inserted_preview,
+        deletedTruncated: deletedTruncated === 1,
+        insertedTruncated: insertedTruncated === 1,
+        contextBefore: row.context_before,
+        contextAfter: row.context_after,
+        summary: row.summary,
+        status: row.status,
+        createdAt: row.created_at,
+      });
+    } catch (error) {
+      studioError(
+        "DOCUMENT_STUDIO_PERSISTENCE_FAILED",
+        "Persisted Studio suggestion preview is invalid.",
+        error,
+      );
+    }
+  }
+
   private mapDocument(row: Row): StudioDocumentV12 {
     try {
       return StudioDocumentV12Schema.parse({
@@ -765,14 +1369,7 @@ export class WorkspaceDocumentStudioRepository {
              created_at
            ) VALUES (?, ?, ?, ?, ?, ?)`,
         )
-        .run(
-          projectId,
-          documentId,
-          versionId,
-          anchorId,
-          ordinal,
-          createdAt,
-        );
+        .run(projectId, documentId, versionId, anchorId, ordinal, createdAt);
     });
   }
 

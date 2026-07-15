@@ -59,6 +59,7 @@ import {
   buildStoredCredentialReference,
   CREDENTIAL_STORE_OPERATION_MODE,
   CredentialStoreCollisionError,
+  MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES,
   type CredentialDeletionInput,
   type CredentialResolutionInput,
   type CredentialStorageInput,
@@ -945,19 +946,60 @@ async function auditRouteWireAndSecretScan() {
       modelJson.credential.canonical_origin,
       configured.credential.canonicalOrigin,
     );
+    const storesBeforeOversizedRequest = store.storeCalls;
+    const oversizedRouteSecret = "x".repeat(
+      MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES + 1,
+    );
+    const oversizedCredentialPut = await fetch(
+      `${baseUrl}/workspace-model-settings/model-profiles/${profile.id}/credential`,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          secret: oversizedRouteSecret,
+        }),
+      },
+    );
+    assert.equal(oversizedCredentialPut.status, 400);
+    const oversizedCredentialText = await oversizedCredentialPut.text();
+    assert.equal(oversizedCredentialText.includes(oversizedRouteSecret), false);
+    const oversizedCredentialError = JSON.parse(oversizedCredentialText) as {
+      error: {
+        code: string;
+        details?: Array<{ path: string; message: string }>;
+      };
+    };
+    assert.equal(oversizedCredentialError.error.code, "VALIDATION_ERROR");
+    assert.equal(
+      oversizedCredentialError.error.details?.some(
+        (detail) =>
+          detail.path === "secret" && detail.message === "secret is too large",
+      ),
+      true,
+    );
+    assert.equal(store.storeCalls, storesBeforeOversizedRequest);
+    const routeBoundarySecret = "😀".repeat(256);
+    assert.equal(
+      Buffer.byteLength(routeBoundarySecret, "utf8"),
+      MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES,
+    );
     const credentialPut = await fetch(
       `${baseUrl}/workspace-model-settings/model-profiles/${profile.id}/credential`,
       {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ secret: "ignored" }),
+        body: JSON.stringify({ secret: routeBoundarySecret }),
       },
     );
     assert.equal(credentialPut.status, 200);
     assertNoSensitiveText(
       "credential mutation body",
       await credentialPut.text(),
-      ["ignored", store.lastReference ?? "", "keychain://vera/model-profile/"],
+      [
+        routeBoundarySecret,
+        store.lastReference ?? "",
+        "keychain://vera/model-profile/",
+      ],
     );
     const credentialDelete = await fetch(
       `${baseUrl}/workspace-model-settings/model-profiles/${profile.id}/credential`,
@@ -3149,6 +3191,19 @@ async function auditCredentialReplacementAndCasRollbackBindings() {
       }),
     /Model profile request is invalid/,
   );
+  const storesBeforeBoundary = store.storeCalls;
+  modelService.configureCredential(profile.id, {
+    secret: "x".repeat(MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES),
+  });
+  assert.equal(store.storeCalls, storesBeforeBoundary + 1);
+  assert.throws(
+    () =>
+      modelService.configureCredential(profile.id, {
+        secret: "x".repeat(MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES + 1),
+      }),
+    /Model profile request is invalid/,
+  );
+  assert.equal(store.storeCalls, storesBeforeBoundary + 1);
   database.close();
 }
 
@@ -4087,37 +4142,19 @@ async function auditCompiledMigrationGraphParity() {
   const outDir = path.join(parityRoot, "dist");
   const parityConfigPath = path.join(parityRoot, "tsconfig.json");
   const compiledDatabasePath = path.join(outDir, "lib/workspace/database.js");
+  const compiledMigrationsIndexPath = path.join(
+    outDir,
+    "lib/workspace/migrations/index.js",
+  );
   const compiledRuntimeDatabasePath = path.join(
     parityRoot,
     "compiled-runtime.db",
   );
-  const migrationFiles = [
-    "src/lib/workspace/migrations/v1InitialWorkspace.ts",
-    "src/lib/workspace/migrations/v2WorkspaceIntegrity.ts",
-    "src/lib/workspace/migrations/v3WorkspaceRuntime.ts",
-    "src/lib/workspace/migrations/v4ProjectOwnership.ts",
-    "src/lib/workspace/migrations/v5AssistantRuntime.ts",
-    "src/lib/workspace/migrations/v6WorkflowRuntime.ts",
-    "src/lib/workspace/migrations/v7TabularMikeSemantics.ts",
-    "src/lib/workspace/migrations/v8ModelCredentialOrigin.ts",
-    "src/lib/workspace/migrations/v9ModelConnectionReadiness.ts",
-    "src/lib/workspace/migrations/v10AssistantDurableEvents.ts",
-    "src/lib/workspace/migrations/v11ProjectSourceFoundation.ts",
-    "src/lib/workspace/migrations/v12DocumentStudio.ts",
-  ];
   const relativeParityConfigPath = path.relative(backendRoot, parityConfigPath);
   assert.ok(
     relativeParityConfigPath.startsWith(`..${path.sep}`) ||
       relativeParityConfigPath === "..",
     "parity config must stay outside backendRoot",
-  );
-  const compiledMigrationPaths = migrationFiles.map((file) =>
-    path.join(
-      outDir,
-      path
-        .relative(path.join(backendRoot, "src"), path.join(backendRoot, file))
-        .replace(/\.ts$/, ".js"),
-    ),
   );
   writeFileSync(
     parityConfigPath,
@@ -4131,7 +4168,7 @@ async function auditCompiledMigrationGraphParity() {
         },
         files: [
           path.join(backendRoot, "src/lib/workspace/database.ts"),
-          ...migrationFiles.map((file) => path.join(backendRoot, file)),
+          path.join(backendRoot, "src/lib/workspace/migrations/index.ts"),
         ],
       },
       null,
@@ -4148,7 +4185,7 @@ async function auditCompiledMigrationGraphParity() {
     } catch (error) {
       if (
         !existsSync(compiledDatabasePath) ||
-        !compiledMigrationPaths.every((file) => existsSync(file))
+        !existsSync(compiledMigrationsIndexPath)
       ) {
         throw error;
       }
@@ -4164,20 +4201,7 @@ process.env.ALETHEIA_DATABASE_ENCRYPTION = "sqlcipher_required";
 process.env.ALETHEIA_DATABASE_KEY_SOURCE = "env";
 process.env.ALETHEIA_DATABASE_KEY_BASE64 = randomBytes(32).toString("base64");
 const { WorkspaceDatabase } = require(${JSON.stringify(compiledDatabasePath)});
-const migrations = [
-  require(${JSON.stringify(path.join(outDir, "lib/workspace/migrations/v1InitialWorkspace.js"))}).INITIAL_WORKSPACE_MIGRATION,
-  require(${JSON.stringify(path.join(outDir, "lib/workspace/migrations/v2WorkspaceIntegrity.js"))}).WORKSPACE_INTEGRITY_MIGRATION,
-  require(${JSON.stringify(path.join(outDir, "lib/workspace/migrations/v3WorkspaceRuntime.js"))}).WORKSPACE_RUNTIME_MIGRATION,
-  require(${JSON.stringify(path.join(outDir, "lib/workspace/migrations/v4ProjectOwnership.js"))}).PROJECT_OWNERSHIP_MIGRATION,
-  require(${JSON.stringify(path.join(outDir, "lib/workspace/migrations/v5AssistantRuntime.js"))}).ASSISTANT_RUNTIME_MIGRATION,
-  require(${JSON.stringify(path.join(outDir, "lib/workspace/migrations/v6WorkflowRuntime.js"))}).WORKFLOW_RUNTIME_V6_MIGRATION,
-  require(${JSON.stringify(path.join(outDir, "lib/workspace/migrations/v7TabularMikeSemantics.js"))}).TABULAR_MIKE_SEMANTICS_V7_MIGRATION,
-  require(${JSON.stringify(path.join(outDir, "lib/workspace/migrations/v8ModelCredentialOrigin.js"))}).MODEL_CREDENTIAL_ORIGIN_V8_MIGRATION,
-  require(${JSON.stringify(path.join(outDir, "lib/workspace/migrations/v9ModelConnectionReadiness.js"))}).MODEL_CONNECTION_READINESS_V9_MIGRATION,
-  require(${JSON.stringify(path.join(outDir, "lib/workspace/migrations/v10AssistantDurableEvents.js"))}).ASSISTANT_DURABLE_EVENTS_V10_MIGRATION,
-  require(${JSON.stringify(path.join(outDir, "lib/workspace/migrations/v11ProjectSourceFoundation.js"))}).PROJECT_SOURCE_FOUNDATION_V11_MIGRATION,
-  require(${JSON.stringify(path.join(outDir, "lib/workspace/migrations/v12DocumentStudio.js"))}).DOCUMENT_STUDIO_V12_MIGRATION,
-];
+const { WORKSPACE_MIGRATIONS: migrations } = require(${JSON.stringify(compiledMigrationsIndexPath)});
 const database = new WorkspaceDatabase(
   ${JSON.stringify(compiledRuntimeDatabasePath)},
   { migrations },
@@ -4233,7 +4257,7 @@ try {
       checksumMaterial: migration.checksumMaterial,
     }));
     assert.deepEqual(compiledGraph.migrations, currentChecksums);
-    assert.equal(compiledGraph.runtime.currentVersion, 12);
+    assert.equal(compiledGraph.runtime.currentVersion, 14);
     assert.deepEqual(
       compiledGraph.runtime.appliedVersions,
       WORKSPACE_MIGRATIONS.map((migration) => migration.version),

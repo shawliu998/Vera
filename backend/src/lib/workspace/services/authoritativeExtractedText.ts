@@ -24,9 +24,8 @@ export type AuthoritativeExtractedTextSnapshot = Readonly<{
   textBytes: number;
 }>;
 
-export type AuthoritativeExtractedText =
-  AuthoritativeExtractedTextSnapshot &
-    Readonly<{ text: string }>;
+export type AuthoritativeExtractedText = AuthoritativeExtractedTextSnapshot &
+  Readonly<{ text: string }>;
 
 type SnapshotRow = Record<string, unknown>;
 
@@ -152,6 +151,13 @@ export class AuthoritativeExtractedTextReader {
   constructor(
     private readonly database: WorkspaceDatabaseAdapter,
     private readonly blobs: BlobStore,
+    private readonly options: {
+      assertModelUse?: (input: {
+        projectId: string;
+        documentId: string;
+        versionId: string;
+      }) => void;
+    } = {},
   ) {
     this.records = new WorkspaceBlobRecordsRepository(database);
   }
@@ -201,6 +207,11 @@ export class AuthoritativeExtractedTextReader {
       );
     }
     const snapshot = mapSnapshot(row);
+    this.options.assertModelUse?.({
+      projectId: snapshot.projectId,
+      documentId: snapshot.documentId,
+      versionId: snapshot.versionId,
+    });
     if (snapshot.textBytes > maxTextBytes) {
       throw new WorkspaceApiError(
         413,
@@ -230,6 +241,22 @@ export class AuthoritativeExtractedTextReader {
         maxTextBytes: input.maxTextBytes,
       }),
     );
+  }
+
+  /**
+   * Final synchronous model-boundary preflight. Re-load the current immutable
+   * snapshot and re-run the retention callback so a source tombstoned after
+   * its text was read cannot cross into a provider request.
+   */
+  assertCurrentModelUse(expected: AuthoritativeExtractedTextSnapshot): void {
+    const current = this.currentSnapshot({
+      projectId: expected.projectId,
+      documentId: expected.documentId,
+      maxTextBytes: Number.MAX_SAFE_INTEGER,
+    });
+    if (!sameSnapshot(expected, current)) {
+      invalidSnapshot("The document snapshot changed before model execution.");
+    }
   }
 
   read(
@@ -270,6 +297,11 @@ export class AuthoritativeExtractedTextReader {
     ) {
       corruptSnapshot("Extracted document blob failed integrity verification.");
     }
+    this.options.assertModelUse?.({
+      projectId: expected.projectId,
+      documentId: expected.documentId,
+      versionId: expected.versionId,
+    });
     return { ...expected, text: decodeStrictUtf8(bytes) };
   }
 

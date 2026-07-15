@@ -112,14 +112,14 @@ function main() {
       contains(root, "README.md", [
         "Agent Workspace",
         "Local Pilot Mode",
-        "deterministic fallback",
+        "does not substitute fallback matters",
       ]) &&
         doesNotContain(root, "README.md", ["## Mock Mode"]) &&
         doesNotContain(root, "frontend/src/app/aletheia/templates/page.tsx", [
           ': "mock"',
           ">mock<",
         ]),
-      "Product-facing copy should present local pilot/fallback language, not mock-first positioning.",
+      "Product-facing copy should present the Vera local client and legacy pilot without a mock or fallback product surface.",
     ),
     check(
       "core-validation-entrypoints",
@@ -207,7 +207,7 @@ function main() {
     check(
       "ci-validation",
       contains(root, ".github/workflows/aletheia-local-ci.yml", [
-        "Aletheia Local CI",
+        "Vera Local CI",
         "npm run test:aletheia:local",
         "npm run test:aletheia:retrieval-eval",
         "npm run check:aletheia:privacy",

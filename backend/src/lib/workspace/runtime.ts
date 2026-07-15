@@ -15,6 +15,7 @@ import type {
 } from "../../routes/workspaceDocumentStudioV1";
 import type {
   WorkspaceProjectSourceAnchorInput,
+  WorkspaceProjectSourceContentInput,
   WorkspaceProjectSourceListInput,
   WorkspaceProjectSourcesV1Port,
 } from "../../routes/workspaceProjectSourcesV1";
@@ -54,6 +55,7 @@ import { WorkspaceBlobCleanupRepository } from "./repositories/blobCleanup";
 import { WorkspaceBlobRecordsRepository } from "./repositories/blobRecords";
 import { WorkspaceDocumentStudioRepository } from "./repositories/documentStudio";
 import { WorkspaceSourceFoundationRepository } from "./repositories/sourceFoundation";
+import { WorkspaceSourceRetentionLifecycleRepository } from "./repositories/sourceRetentionLifecycle";
 import { AssistantRetrievalRepository } from "./repositories/assistantRetrieval";
 import { ChatsRepository } from "./repositories/chats";
 import {
@@ -88,13 +90,22 @@ import {
   WorkspaceDocumentStudioService,
   type WorkspaceDocumentStudioRepositoryPort,
 } from "./services/documentStudio";
+import type {
+  DocumentStudioSuggestionPreviewV14,
+  DocumentStudioSuggestionV14,
+} from "./documentStudioSuggestionContractsV14";
 import { WorkspaceDocumentStudioRepositoryAdapter } from "./services/documentStudioRepositoryAdapter";
 import {
   WorkspaceProjectSourcesService,
   type CaptureProjectDocumentSourceResult,
+  type ProjectDocumentSourceContent,
   type ProjectSourceDetail,
   type ProjectSourcePage,
 } from "./services/projectSources";
+import {
+  WorkspaceSourceRetentionService,
+  WorkspaceSourceRetentionServiceError,
+} from "./services/sourceRetention";
 import {
   type DocumentUploadResult,
   type PublicDocumentVersion,
@@ -117,7 +128,7 @@ import { createTabularCellJobHandler } from "./services/tabularRuntime";
 import { WorkspaceTabularV1RuntimeAdapter } from "./services/tabularV1RuntimeAdapter";
 import { WorkflowsService } from "./services/workflows";
 import type { ProjectLifecycleCleanupRecord } from "./services/projects";
-import type { Document, ProjectFolder } from "./types";
+import type { Document, ProjectFolder, WorkspaceJson } from "./types";
 import { WorkflowsRepository } from "./repositories/workflows";
 import { WorkflowDocumentContextRepository } from "./repositories/workflowDocumentContext";
 import {
@@ -131,7 +142,9 @@ import {
 import { RotatingModelCallDiagnostics } from "./modelCallDiagnostics";
 import { WorkspaceModelSettingsRuntime } from "./modelSettingsRuntime";
 import {
+  AssistantModelSourcesSchema,
   AssistantRuntimeService,
+  type AssistantModelSource,
   type AssistantModelPort,
   type AssistantToolPort,
 } from "./services/assistantRuntime";
@@ -223,6 +236,7 @@ export type WorkspaceRuntimeDependencies = {
   documentStudioService?: WorkspaceDocumentStudioService;
   documentStudioRepository?: WorkspaceDocumentStudioRepositoryPort;
   projectSourcesService?: WorkspaceProjectSourcesService;
+  sourceRetentionService?: WorkspaceSourceRetentionService;
   workflows?: WorkflowsService;
   workflowCrud?: MikeWorkflowCrudPortAdapter;
   seedWorkflows?: (workflows: WorkflowsService) => readonly unknown[];
@@ -293,6 +307,83 @@ function studioDocxFilename(markdownFilename: string): string {
   return `${boundedStem || "Untitled"}.docx`;
 }
 
+function studioOriginTitle(value: string, suffix: string): string {
+  const normalized = value.trim().normalize("NFC");
+  const suffixPoints = [...suffix];
+  const available = Math.max(1, 240 - suffixPoints.length);
+  const base = [...normalized].slice(0, available).join("").trim();
+  return `${base || "Untitled"}${suffix}`;
+}
+
+function invalidStudioSource(message: string): never {
+  throw new WorkspaceApiError(409, "PRECONDITION_FAILED", message);
+}
+
+function workflowRunStudioDraft(value: WorkspaceJson | null): {
+  content: string;
+  sources: AssistantModelSource[];
+} {
+  if (!value || Array.isArray(value) || typeof value !== "object") {
+    throw new WorkspaceApiError(
+      409,
+      "PRECONDITION_FAILED",
+      "Workflow run has no completed Studio-compatible output.",
+    );
+  }
+  if (value.schema !== "vera-workflow-run-result-v1") {
+    throw new WorkspaceApiError(
+      409,
+      "PRECONDITION_FAILED",
+      "Workflow run output is not a supported durable result.",
+    );
+  }
+  let content: string | null = null;
+  if (typeof value.content === "string" && value.content.trim()) {
+    content = value.content;
+  } else if (value.format === "json" && Object.hasOwn(value, "value")) {
+    const json = JSON.stringify(value.value, null, 2);
+    if (json && json !== "null") content = `\`\`\`json\n${json}\n\`\`\``;
+  }
+  if (!content) {
+    throw new WorkspaceApiError(
+      409,
+      "PRECONDITION_FAILED",
+      "Workflow run has no completed Studio-compatible output.",
+    );
+  }
+  const sources = AssistantModelSourcesSchema.safeParse(value.sources);
+  if (!sources.success) {
+    invalidStudioSource(
+      "Workflow citations are not a supported durable source record.",
+    );
+  }
+  return { content, sources: sources.data };
+}
+
+type PreparedStudioCitation = {
+  snapshotId: string;
+  chunkId: string;
+  exactQuote: string;
+  startOffset: number;
+  endOffset: number;
+  existingAnchorId: string | null;
+};
+
+function studioCitationKey(
+  citation: Pick<
+    PreparedStudioCitation,
+    "snapshotId" | "chunkId" | "exactQuote" | "startOffset" | "endOffset"
+  >,
+) {
+  return JSON.stringify([
+    citation.snapshotId,
+    citation.chunkId,
+    citation.startOffset,
+    citation.endOffset,
+    citation.exactQuote,
+  ]);
+}
+
 /**
  * The one workspace composition root. It owns exactly one WorkspaceDatabase
  * handle and is the only place that wires durable cleanup, blobs, jobs, and
@@ -323,8 +414,11 @@ export class WorkspaceRuntime
   private readonly documentStudioService: WorkspaceDocumentStudioService;
   private readonly documentStudioRepository: WorkspaceDocumentStudioRepositoryPort;
   private readonly projectSourcesService: WorkspaceProjectSourcesService;
+  private readonly sourceRetentionService: WorkspaceSourceRetentionService;
+  private readonly chatsService: ChatsService;
   private readonly blobRecords: WorkspaceBlobRecordsRepository;
   private readonly startMigrations: () => void;
+  private readonly startSourceRetention: () => void;
   private readonly startupRecovery: Pick<
     WorkspaceBlobStartupRecovery,
     "recover"
@@ -463,11 +557,17 @@ export class WorkspaceRuntime
     const sourceFoundation = new WorkspaceSourceFoundationRepository(
       this.database,
     );
+    this.sourceRetentionService =
+      dependencies.sourceRetentionService ??
+      new WorkspaceSourceRetentionService(
+        new WorkspaceSourceRetentionLifecycleRepository(this.database),
+      );
     this.documentStudioRepository =
       dependencies.documentStudioRepository ??
       new WorkspaceDocumentStudioRepositoryAdapter(
         new WorkspaceDocumentStudioRepository(this.database, { blobRecords }),
         sourceFoundation,
+        this.sourceRetentionService,
       );
     this.documentStudioService =
       dependencies.documentStudioService ??
@@ -479,7 +579,9 @@ export class WorkspaceRuntime
       );
     this.projectSourcesService =
       dependencies.projectSourcesService ??
-      new WorkspaceProjectSourcesService(this.database, sourceFoundation);
+      new WorkspaceProjectSourcesService(this.database, sourceFoundation, {
+        retention: this.sourceRetentionService,
+      });
     this.documentService =
       dependencies.documentService ??
       new WorkspaceDocumentsService(
@@ -510,12 +612,29 @@ export class WorkspaceRuntime
             },
           )
         : null);
+    const assertDocumentModelUse = (input: {
+      projectId: string;
+      documentId: string;
+      versionId: string;
+    }) =>
+      this.assertStudioVersionRetention({
+        ...input,
+        action: "model_use",
+        // Vera currently has no production-grade attestation that a selected
+        // model executes locally. Unknown therefore fails closed for sources
+        // licensed as local_only; Project user documents remain permitted.
+        modelExecution: "unknown",
+      });
     const assistantTools =
       dependencies.assistantTools ??
       new WorkspaceAssistantDocumentTools(
         this.database,
         chatsRepository,
         new AssistantRetrievalRepository(this.database),
+        {
+          studioSuggestions: this.documentStudioService,
+          assertModelUse: assertDocumentModelUse,
+        },
       );
     const assistantRuntime = assistantModel
       ? new AssistantRuntimeService(
@@ -531,7 +650,10 @@ export class WorkspaceRuntime
       (assistantModel
         ? new WorkspaceWorkflowStepExecutor(
             assistantModel,
-            new WorkflowDocumentContextRepository(this.database),
+            new WorkflowDocumentContextRepository(this.database, {
+              assertModelUse: assertDocumentModelUse,
+            }),
+            { assertModelUse: assertDocumentModelUse },
           )
         : null);
     const workflowRuntime = workflowExecutor
@@ -559,27 +681,27 @@ export class WorkspaceRuntime
         }
       },
     };
-    this.chats = new WorkspaceChatsRuntimePort(
-      new ChatsService(
-        chatsRepository,
-        projectsRepository,
-        modelProfilesRepository,
-        undefined,
-        {
-          jobs: this.jobs,
-          generationControl: this.jobs,
-          capabilities: new WorkspaceAssistantCapabilityHydrator(
-            this.database,
-            this.documentRepository,
-          ),
-          lifecycle: chatLifecycle,
-        },
-      ),
+    this.chatsService = new ChatsService(
+      chatsRepository,
+      projectsRepository,
+      modelProfilesRepository,
+      undefined,
+      {
+        jobs: this.jobs,
+        generationControl: this.jobs,
+        capabilities: new WorkspaceAssistantCapabilityHydrator(
+          this.database,
+          this.documentRepository,
+        ),
+        lifecycle: chatLifecycle,
+      },
     );
+    this.chats = new WorkspaceChatsRuntimePort(this.chatsService);
     const tabularRepository = new TabularRepository(this.database);
     const tabularSnapshots = new AuthoritativeExtractedTextReader(
       this.database,
       this.blobs,
+      { assertModelUse: assertDocumentModelUse },
     );
     const tabularModel =
       providerRegistry?.runtimeWired() === true
@@ -681,6 +803,18 @@ export class WorkspaceRuntime
       if (dependencies.runMigrations) dependencies.runMigrations(this.database);
       else this.database.runMigrations();
     };
+    this.startSourceRetention = () => {
+      // A custom migration runner is a fully injected test/integration seam;
+      // it must also inject a retention service if it wants the v13 startup
+      // lifecycle. Production uses the default contiguous registry and always
+      // executes the sweep before recovery and workers.
+      if (
+        dependencies.runMigrations &&
+        dependencies.sourceRetentionService === undefined
+      )
+        return;
+      this.sourceRetentionService.startupSweep();
+    };
     this.startupRecovery =
       dependencies.startupRecovery ??
       new WorkspaceBlobStartupRecovery(cleanupReplay, blobReconciliation);
@@ -701,6 +835,7 @@ export class WorkspaceRuntime
     if (this.closed) throw new Error("Workspace runtime is closed.");
     try {
       this.startMigrations();
+      this.startSourceRetention();
       await this.modelSettings.reconcileCredentialOrphans();
       this.seedWorkflows();
       this.startupRecovery.recover();
@@ -1028,6 +1163,191 @@ export class WorkspaceRuntime
       this.documents.move(documentId, projectId, folderId),
     );
   }
+  private validateStudioHandoffDraft(input: {
+    projectId: string;
+    title: string;
+    content: string;
+  }) {
+    const project = this.projects.get(input.projectId);
+    if (project.status !== "active") {
+      throw new WorkspaceApiError(
+        409,
+        "PRECONDITION_FAILED",
+        "Only an active Project can receive a Studio draft.",
+      );
+    }
+    this.documentStudioService.validateCreateDraft({
+      projectId: input.projectId,
+      title: input.title,
+      content: input.content,
+      source: "assistant_edit",
+    });
+  }
+  private studioCitationAnchorIds(
+    projectId: string,
+    content: string,
+    sourceInput: unknown,
+  ): string[] {
+    const parsed = AssistantModelSourcesSchema.safeParse(sourceInput);
+    if (!parsed.success) {
+      invalidStudioSource(
+        "Draft citations are not supported durable source records.",
+      );
+    }
+    if (parsed.data.length === 0) return [];
+
+    const sources = [...parsed.data].sort(
+      (left, right) => left.citationOrdinal - right.citationOrdinal,
+    );
+    const expectedNumbers = sources.map((_, index) => index + 1);
+    const markerNumbers = [
+      ...new Set(
+        [...content.matchAll(/\[(\d+)\]/g)].map((match) => Number(match[1])),
+      ),
+    ].sort((left, right) => left - right);
+    const citationMetadataIsConsistent = sources.every(
+      (source, index) =>
+        source.citationOrdinal === index &&
+        source.citationMetadata.citationNumber === index + 1,
+    );
+    if (
+      !citationMetadataIsConsistent ||
+      markerNumbers.length !== expectedNumbers.length ||
+      !markerNumbers.every(
+        (markerNumber, index) => markerNumber === expectedNumbers[index],
+      )
+    ) {
+      invalidStudioSource(
+        "Draft citation markers and durable source records do not match.",
+      );
+    }
+
+    const sourceSnapshots = new Map<
+      string,
+      {
+        snapshotId: string;
+        anchors: ProjectSourceDetail["anchors"];
+      }
+    >();
+    const prepared: PreparedStudioCitation[] = [];
+    try {
+      for (const source of sources) {
+        if (!source.chunkId) {
+          invalidStudioSource(
+            "A draft citation has no unambiguous durable source chunk.",
+          );
+        }
+        const sourceKey = `${source.documentId}\0${source.versionId}`;
+        let sourceSnapshot = sourceSnapshots.get(sourceKey);
+        if (!sourceSnapshot) {
+          const captured =
+            this.projectSourcesService.captureProjectDocumentSnapshot({
+              projectId,
+              documentId: source.documentId,
+              versionId: source.versionId,
+            });
+          const detail = this.projectSourcesService.getSnapshot(
+            projectId,
+            captured.snapshot.id,
+          );
+          sourceSnapshot = {
+            snapshotId: captured.snapshot.id,
+            anchors: detail.anchors,
+          };
+          sourceSnapshots.set(sourceKey, sourceSnapshot);
+        }
+        const sourceContent =
+          this.projectSourcesService.readProjectDocumentSourceContent({
+            projectId,
+            snapshotId: sourceSnapshot.snapshotId,
+            chunkId: source.chunkId,
+          });
+        const chunk = sourceContent.chunks[0];
+        const startOffset = source.startOffset - (chunk?.startOffset ?? 0);
+        const endOffset = source.endOffset - (chunk?.startOffset ?? 0);
+        if (
+          sourceContent.document.documentId !== source.documentId ||
+          sourceContent.document.versionId !== source.versionId ||
+          sourceContent.chunks.length !== 1 ||
+          !chunk ||
+          chunk.id !== source.chunkId ||
+          !Number.isSafeInteger(startOffset) ||
+          !Number.isSafeInteger(endOffset) ||
+          startOffset < 0 ||
+          endOffset !== startOffset + source.quote.length ||
+          endOffset > chunk.text.length ||
+          chunk.text.slice(startOffset, endOffset) !== source.quote
+        ) {
+          invalidStudioSource(
+            "A draft citation no longer matches immutable Project evidence.",
+          );
+        }
+        const existing = sourceSnapshot.anchors.find(
+          (anchor) =>
+            anchor.exactQuote === source.quote &&
+            anchor.locator.documentVersionId === source.versionId &&
+            anchor.locator.chunkId === source.chunkId &&
+            anchor.locator.startOffset === startOffset &&
+            anchor.locator.endOffset === endOffset,
+        );
+        prepared.push({
+          snapshotId: sourceSnapshot.snapshotId,
+          chunkId: source.chunkId,
+          exactQuote: source.quote,
+          startOffset,
+          endOffset,
+          existingAnchorId: existing?.id ?? null,
+        });
+      }
+
+      const missingBySnapshot = new Map<string, Set<string>>();
+      for (const citation of prepared) {
+        if (citation.existingAnchorId) continue;
+        const missing = missingBySnapshot.get(citation.snapshotId) ?? new Set();
+        missing.add(studioCitationKey(citation));
+        missingBySnapshot.set(citation.snapshotId, missing);
+      }
+      for (const snapshot of sourceSnapshots.values()) {
+        const missing = missingBySnapshot.get(snapshot.snapshotId)?.size ?? 0;
+        if (snapshot.anchors.length + missing > 200) {
+          invalidStudioSource(
+            "The immutable source has no capacity for this draft's citations.",
+          );
+        }
+      }
+
+      const created = new Map<string, string>();
+      const orderedAnchorIds: string[] = [];
+      for (const citation of prepared) {
+        const key = studioCitationKey(citation);
+        let anchorId = citation.existingAnchorId ?? created.get(key) ?? null;
+        if (!anchorId) {
+          anchorId = this.projectSourcesService.createProjectDocumentAnchor({
+            projectId,
+            snapshotId: citation.snapshotId,
+            chunkId: citation.chunkId,
+            exactQuote: citation.exactQuote,
+            startOffset: citation.startOffset,
+            endOffset: citation.endOffset,
+          }).id;
+          created.set(key, anchorId);
+        }
+        if (!orderedAnchorIds.includes(anchorId)) {
+          orderedAnchorIds.push(anchorId);
+        }
+      }
+      return orderedAnchorIds;
+    } catch (error) {
+      if (error instanceof WorkspaceApiError && error.status < 500) {
+        invalidStudioSource(
+          error.code === "PRECONDITION_FAILED"
+            ? error.message
+            : "Draft citations could not be re-verified against immutable Project evidence.",
+        );
+      }
+      throw error;
+    }
+  }
   async createStudioDocument(
     context: WorkspaceV1Context,
     projectId: string,
@@ -1042,6 +1362,161 @@ export class WorkspaceRuntime
         title: input.title,
       }),
     );
+  }
+  async createStudioDocumentFromAssistantMessage(
+    context: WorkspaceV1Context,
+    projectId: string,
+    chatId: string,
+    assistantMessageId: string,
+  ) {
+    this.requireAccess(context);
+    this.projects.get(projectId);
+    const chat = this.chatsService.get(chatId);
+    if (chat.projectId !== projectId) {
+      throw new WorkspaceApiError(
+        404,
+        "NOT_FOUND",
+        "Assistant draft source was not found in this Project.",
+      );
+    }
+    let message: ReturnType<ChatsService["message"]>;
+    try {
+      message = this.chatsService.message(chatId, assistantMessageId);
+    } catch (error) {
+      if (error instanceof WorkspaceApiError && error.status === 404) {
+        throw new WorkspaceApiError(
+          404,
+          "NOT_FOUND",
+          "Assistant draft source was not found in this Project.",
+        );
+      }
+      throw error;
+    }
+    if (
+      message.role !== "assistant" ||
+      message.status !== "complete" ||
+      !message.jobId ||
+      !message.content.trim()
+    ) {
+      throw new WorkspaceApiError(
+        409,
+        "PRECONDITION_FAILED",
+        "Only a completed durable Assistant response can create a Studio draft.",
+      );
+    }
+    const generation = this.chatsService.generationStatus(message.jobId);
+    if (
+      generation.status !== "complete" ||
+      generation.chatId !== chatId ||
+      generation.outputMessageId !== message.id
+    ) {
+      throw new WorkspaceApiError(
+        409,
+        "PRECONDITION_FAILED",
+        "Assistant response and durable generation state do not match.",
+      );
+    }
+    const title = studioOriginTitle(chat.title, " — Assistant draft");
+    this.validateStudioHandoffDraft({
+      projectId,
+      title,
+      content: message.content,
+    });
+    const citationAnchorIds = this.studioCitationAnchorIds(
+      projectId,
+      message.content,
+      this.chatsService.sources(message.id).map((source) => ({
+        documentId: source.documentId,
+        versionId: source.versionId,
+        chunkId: source.chunkId,
+        quote: source.quote,
+        startOffset: source.startOffset,
+        endOffset: source.endOffset,
+        locator: source.locator,
+        rank: source.rank,
+        score: source.score,
+        citationOrdinal: source.citationOrdinal,
+        citationMetadata: source.citationMetadata,
+      })),
+    );
+    return this.studioDocumentWire(
+      await this.documentStudioService.createDraft({
+        projectId,
+        title,
+        content: message.content,
+        source: "assistant_edit",
+        citationAnchorIds,
+      }),
+    );
+  }
+  async createStudioDocumentFromWorkflowRun(
+    context: WorkspaceV1Context,
+    projectId: string,
+    workflowRunId: string,
+  ) {
+    this.requireAccess(context);
+    this.projects.get(projectId);
+    const detail = this.workflows.getRun(workflowRunId);
+    if (detail.run.projectId !== projectId) {
+      throw new WorkspaceApiError(
+        404,
+        "NOT_FOUND",
+        "Workflow draft source was not found in this Project.",
+      );
+    }
+    if (detail.run.status !== "complete" || detail.run.completedAt === null) {
+      throw new WorkspaceApiError(
+        409,
+        "PRECONDITION_FAILED",
+        "Only a completed durable Workflow run can create a Studio draft.",
+      );
+    }
+    const workflow = this.workflows.get(detail.run.workflowId);
+    if (workflow.type !== "assistant") {
+      throw new WorkspaceApiError(
+        409,
+        "PRECONDITION_FAILED",
+        "Only an Assistant Workflow result can create a Studio draft.",
+      );
+    }
+    const draft = workflowRunStudioDraft(detail.run.output);
+    const title = studioOriginTitle(workflow.title, " — Workflow draft");
+    this.validateStudioHandoffDraft({
+      projectId,
+      title,
+      content: draft.content,
+    });
+    const citationAnchorIds = this.studioCitationAnchorIds(
+      projectId,
+      draft.content,
+      draft.sources,
+    );
+    return this.studioDocumentWire(
+      await this.documentStudioService.createDraft({
+        projectId,
+        title,
+        content: draft.content,
+        source: "assistant_edit",
+        citationAnchorIds,
+      }),
+    );
+  }
+  private assertStudioVersionRetention(input: {
+    projectId: string;
+    documentId: string;
+    versionId: string;
+    action: "model_use" | "export_exact_quote" | "export_work_product";
+    modelExecution?: "local" | "remote" | "unknown";
+    reviewedWorkProduct?: boolean;
+  }) {
+    try {
+      this.sourceRetentionService.assertStudioVersionAction(input);
+    } catch (error) {
+      if (error instanceof WorkspaceSourceRetentionServiceError) {
+        throw new WorkspaceApiError(409, "PRECONDITION_FAILED", error.message);
+      }
+      throw error;
+    }
   }
   async getStudioDocument(
     context: WorkspaceV1Context,
@@ -1058,6 +1533,78 @@ export class WorkspaceRuntime
         versionId,
       ),
     );
+  }
+  async listStudioSuggestions(
+    context: WorkspaceV1Context,
+    projectId: string,
+    documentId: string,
+  ) {
+    this.requireAccess(context);
+    this.projects.get(projectId);
+    const page = this.documentStudioService.listSuggestionPreviews(
+      projectId,
+      documentId,
+    );
+    return {
+      suggestions: page.suggestions.map((suggestion) =>
+        this.studioSuggestionPreviewWire(suggestion),
+      ),
+      has_more: page.hasMore,
+    };
+  }
+  async getStudioSuggestion(
+    context: WorkspaceV1Context,
+    projectId: string,
+    documentId: string,
+    suggestionId: string,
+  ) {
+    this.requireAccess(context);
+    this.projects.get(projectId);
+    return {
+      suggestion: this.studioSuggestionWire(
+        this.documentStudioService.getSuggestion(
+          projectId,
+          documentId,
+          suggestionId,
+        ),
+      ),
+    };
+  }
+  async acceptStudioSuggestion(
+    context: WorkspaceV1Context,
+    projectId: string,
+    documentId: string,
+    suggestionId: string,
+  ) {
+    this.requireAccess(context);
+    this.projects.get(projectId);
+    const accepted = await this.documentStudioService.acceptSuggestion(
+      projectId,
+      documentId,
+      suggestionId,
+    );
+    return {
+      suggestion: this.studioSuggestionWire(accepted.suggestion),
+      document: this.studioDocumentWire(accepted.document),
+    };
+  }
+  async rejectStudioSuggestion(
+    context: WorkspaceV1Context,
+    projectId: string,
+    documentId: string,
+    suggestionId: string,
+  ) {
+    this.requireAccess(context);
+    this.projects.get(projectId);
+    return {
+      suggestion: this.studioSuggestionWire(
+        this.documentStudioService.rejectSuggestion(
+          projectId,
+          documentId,
+          suggestionId,
+        ),
+      ),
+    };
   }
   async saveStudioDocument(
     context: WorkspaceV1Context,
@@ -1152,14 +1699,60 @@ export class WorkspaceRuntime
   ): Promise<WorkspaceDocumentStudioExportResult> {
     this.requireAccess(context);
     this.projects.get(projectId);
+    const document = this.documentStudioRepository.getProjectDocument(
+      projectId,
+      documentId,
+    );
+    if (!document) {
+      throw new WorkspaceApiError(
+        404,
+        "NOT_FOUND",
+        "Studio document was not found.",
+      );
+    }
+    const selectedVersionId = versionId ?? document.currentVersionId;
+    if (!selectedVersionId) {
+      throw new WorkspaceApiError(
+        409,
+        "PRECONDITION_FAILED",
+        "Studio document has no current version.",
+      );
+    }
+    if (
+      !this.documentStudioRepository.getVersion(
+        projectId,
+        documentId,
+        selectedVersionId,
+      )
+    ) {
+      throw new WorkspaceApiError(
+        404,
+        "NOT_FOUND",
+        "Studio document version was not found.",
+      );
+    }
+    this.assertStudioVersionRetention({
+      projectId,
+      documentId,
+      versionId: selectedVersionId,
+      action: "export_work_product",
+      reviewedWorkProduct: false,
+    });
     const selected = await this.documentStudioService.getDocument(
       projectId,
       documentId,
-      versionId,
+      selectedVersionId,
     );
     const exported = await exportDocumentStudioMarkdownToDocx({
       title: selected.document.title,
       markdown: selected.content,
+    });
+    this.assertStudioVersionRetention({
+      projectId,
+      documentId,
+      versionId: selectedVersionId,
+      action: "export_work_product",
+      reviewedWorkProduct: false,
     });
     return {
       filename: studioDocxFilename(selected.version.filename),
@@ -1206,6 +1799,23 @@ export class WorkspaceRuntime
     this.requireAccess(context);
     return this.projectSourceDetailWire(
       this.projectSourcesService.getSnapshot(projectId, snapshotId),
+    );
+  }
+  async readProjectSourceContent(
+    context: WorkspaceV1Context,
+    projectId: string,
+    snapshotId: string,
+    input: WorkspaceProjectSourceContentInput,
+  ) {
+    this.requireAccess(context);
+    return this.projectSourceContentWire(
+      this.projectSourcesService.readProjectDocumentSourceContent({
+        projectId,
+        snapshotId,
+        chunkId: input.chunkId,
+        limit: input.limit,
+        cursor: input.cursor,
+      }),
     );
   }
   async createProjectSourceAnchor(
@@ -1545,7 +2155,8 @@ export class WorkspaceRuntime
   private studioVersionWire(version: DocumentStudioVersion) {
     if (
       version.source !== "user_upload" &&
-      version.source !== "assistant_edit"
+      version.source !== "assistant_edit" &&
+      version.source !== "user_accept"
     ) {
       throw new WorkspaceApiError(
         500,
@@ -1563,6 +2174,53 @@ export class WorkspaceRuntime
       content_sha256: version.contentSha256,
       created_at: version.createdAt,
       citation_anchor_ids: [...version.citationAnchorIds],
+    };
+  }
+  private studioSuggestionWire(suggestion: DocumentStudioSuggestionV14) {
+    return {
+      id: suggestion.id,
+      project_id: suggestion.projectId,
+      document_id: suggestion.documentId,
+      base_version_id: suggestion.baseVersionId,
+      message_id: suggestion.messageId,
+      change_id: suggestion.changeId,
+      start_offset: suggestion.startOffset,
+      end_offset: suggestion.endOffset,
+      offset_scope: suggestion.offsetScope,
+      offset_unit: suggestion.offsetUnit,
+      deleted_text: suggestion.deletedText,
+      inserted_text: suggestion.insertedText,
+      context_before: suggestion.contextBefore,
+      context_after: suggestion.contextAfter,
+      summary: suggestion.summary,
+      status: suggestion.status,
+      created_at: suggestion.createdAt,
+      resolved_at: suggestion.resolvedAt,
+      result_version_id: suggestion.resultVersionId,
+    };
+  }
+  private studioSuggestionPreviewWire(
+    suggestion: DocumentStudioSuggestionPreviewV14,
+  ) {
+    return {
+      id: suggestion.id,
+      project_id: suggestion.projectId,
+      document_id: suggestion.documentId,
+      base_version_id: suggestion.baseVersionId,
+      message_id: suggestion.messageId,
+      start_offset: suggestion.startOffset,
+      end_offset: suggestion.endOffset,
+      offset_scope: suggestion.offsetScope,
+      offset_unit: suggestion.offsetUnit,
+      deleted_preview: suggestion.deletedPreview,
+      inserted_preview: suggestion.insertedPreview,
+      deleted_truncated: suggestion.deletedTruncated,
+      inserted_truncated: suggestion.insertedTruncated,
+      context_before: suggestion.contextBefore,
+      context_after: suggestion.contextAfter,
+      summary: suggestion.summary,
+      status: suggestion.status,
+      created_at: suggestion.createdAt,
     };
   }
   private studioDocumentWire(result: DocumentStudioDocument) {
@@ -1614,9 +2272,7 @@ export class WorkspaceRuntime
       ),
     };
   }
-  private projectSourceSnapshotWire(
-    snapshot: ProjectSourceDetail["snapshot"],
-  ) {
+  private projectSourceSnapshotWire(snapshot: ProjectSourceDetail["snapshot"]) {
     return {
       id: snapshot.id,
       project_id: snapshot.projectId,
@@ -1651,11 +2307,12 @@ export class WorkspaceRuntime
       quote_sha256: anchor.quoteSha256,
       locator: anchor.locator,
       created_at: anchor.createdAt,
+      quote_available: anchor.quoteAvailable,
+      access_state: anchor.accessState,
+      retention_denial_code: anchor.retentionDenialCode,
     };
   }
-  private projectSourceCaptureWire(
-    result: CaptureProjectDocumentSourceResult,
-  ) {
+  private projectSourceCaptureWire(result: CaptureProjectDocumentSourceResult) {
     return {
       snapshot: this.projectSourceSnapshotWire(result.snapshot),
       reused: result.reused,
@@ -1675,6 +2332,31 @@ export class WorkspaceRuntime
       anchors: result.anchors.map((anchor) =>
         this.projectSourceAnchorWire(anchor),
       ),
+    };
+  }
+  private projectSourceContentWire(result: ProjectDocumentSourceContent) {
+    return {
+      snapshot_id: result.snapshotId,
+      document: {
+        document_id: result.document.documentId,
+        version_id: result.document.versionId,
+        title: result.document.title,
+        filename: result.document.filename,
+        mime_type: result.document.mimeType,
+        content_sha256: result.document.contentSha256,
+        page_count: result.document.pageCount,
+      },
+      chunks: result.chunks.map((chunk) => ({
+        id: chunk.id,
+        ordinal: chunk.ordinal,
+        text: chunk.text,
+        content_sha256: chunk.contentSha256,
+        start_offset: chunk.startOffset,
+        end_offset: chunk.endOffset,
+        page_start: chunk.pageStart,
+        page_end: chunk.pageEnd,
+      })),
+      next_cursor: result.nextCursor,
     };
   }
   private documentVersionWire(version: PublicDocumentVersion) {

@@ -1,103 +1,161 @@
 #!/usr/bin/env node
-'use strict';
+"use strict";
 
-const { execFileSync, spawnSync } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const { developerIdTeam } = require('./releaseSigningPreflight');
+const fs = require("node:fs");
+const path = require("node:path");
+
+const {
+  developerIdAuthority,
+  developerIdTeam,
+} = require("./releaseSigningPreflight");
+const {
+  isMacAppOutputDirectory,
+  verifyChecksumManifest,
+  verifyReleaseZip,
+  verifySignedApp,
+  verifySignedDmg,
+} = require("./macReleaseVerification");
 
 function fail(message) {
   throw new Error(message);
 }
 
 function parseArguments(argv) {
-  const options = { apps: [], checksumManifest: undefined, expectedTeam: process.env.VERA_EXPECTED_TEAM_ID };
+  const options = {
+    apps: [],
+    dmgs: [],
+    zips: [],
+    checksumManifest: undefined,
+    expectedTeam: process.env.VERA_EXPECTED_TEAM_ID,
+    expectedIdentityQualifier: process.env.CSC_NAME,
+    expectedBundleId: process.env.VERA_EXPECTED_BUNDLE_ID,
+    expectedVersion: undefined,
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
-    if (value === '--app') {
-      options.apps.push(argv[++index]);
-    } else if (value === '--checksum-manifest') {
-      options.checksumManifest = argv[++index];
-    } else if (value === '--team') {
-      options.expectedTeam = argv[++index];
-    } else {
-      fail(`Unknown argument: ${value}`);
-    }
+    const next = () => {
+      const candidate = argv[++index];
+      if (!candidate) fail(`${value} requires a value.`);
+      return candidate;
+    };
+    if (value === "--app") options.apps.push(path.resolve(next()));
+    else if (value === "--dmg") options.dmgs.push(path.resolve(next()));
+    else if (value === "--zip") options.zips.push(path.resolve(next()));
+    else if (value === "--checksum-manifest") {
+      options.checksumManifest = path.resolve(next());
+    } else if (value === "--team") options.expectedTeam = next();
+    else if (value === "--identity") {
+      options.expectedIdentityQualifier = next();
+    } else if (value === "--bundle-id") options.expectedBundleId = next();
+    else if (value === "--version") options.expectedVersion = next();
+    else fail(`Unknown argument: ${value}`);
   }
-  if (options.apps.some((app) => !app)) fail('--app requires a path.');
-  if (options.checksumManifest === '') fail('--checksum-manifest requires a path.');
   return options;
 }
 
-function discoverApps() {
-  const dist = path.resolve(__dirname, '..', 'dist');
-  if (!fs.existsSync(dist)) return [];
-  return fs.readdirSync(dist, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && entry.name.startsWith('mac-'))
-    .map((entry) => path.join(dist, entry.name, 'Vera.app'))
-    .filter((appPath) => fs.existsSync(appPath));
+function releaseConfiguration(options) {
+  const desktopRoot = path.resolve(__dirname, "..");
+  const packageDocument = JSON.parse(
+    fs.readFileSync(path.join(desktopRoot, "package.json"), "utf8"),
+  );
+  if (!options.expectedIdentityQualifier) {
+    fail(
+      "Release verification requires CSC_NAME or --identity as the exact unprefixed Developer ID qualifier.",
+    );
+  }
+  const identityTeam = developerIdTeam(options.expectedIdentityQualifier);
+  const expectedTeam = options.expectedTeam || identityTeam;
+  if (expectedTeam !== identityTeam) {
+    fail("Expected Developer ID identity and team do not match.");
+  }
+  return {
+    desktopRoot,
+    version: options.expectedVersion || packageDocument.version,
+    bundleId: options.expectedBundleId || packageDocument.build?.appId,
+    expectedTeam,
+    expectedAuthority: developerIdAuthority(options.expectedIdentityQualifier),
+  };
 }
 
-function command(command, args, options = {}) {
-  return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...options });
+function discoverArtifacts(configuration) {
+  const dist = path.join(configuration.desktopRoot, "dist");
+  const discovered = { apps: [], dmgs: [], zips: [] };
+  if (!fs.existsSync(dist)) return discovered;
+  for (const entry of fs.readdirSync(dist, { withFileTypes: true })) {
+    const candidate = path.join(dist, entry.name);
+    if (entry.isDirectory() && isMacAppOutputDirectory(entry.name)) {
+      const app = path.join(candidate, "Vera.app");
+      if (fs.existsSync(app)) discovered.apps.push(app);
+    }
+    if (
+      entry.isFile() &&
+      entry.name.startsWith(`Vera-${configuration.version}-`)
+    ) {
+      if (entry.name.endsWith(".dmg")) discovered.dmgs.push(candidate);
+      if (entry.name.endsWith(".zip")) discovered.zips.push(candidate);
+    }
+  }
+  return discovered;
 }
 
-function signatureDetails(appPath) {
-  const result = spawnSync('codesign', ['-dvvv', appPath], { encoding: 'utf8' });
-  if (result.error || result.status !== 0) {
-    fail(`${appPath}: unable to inspect the code signature.`);
+function verifyMacRelease(options, dependencies = {}) {
+  const configuration = releaseConfiguration(options);
+  if (!/^[A-Z0-9]{10}$/.test(configuration.expectedTeam)) {
+    fail("Expected Developer ID team must be a 10-character identifier.");
   }
-  // codesign writes successful -dvvv inspection output to stderr.
-  return `${result.stdout || ''}${result.stderr || ''}`;
+  if (!configuration.bundleId || !configuration.version) {
+    fail("Release bundle identifier and version are required.");
+  }
+  const discovered = discoverArtifacts(configuration);
+  const apps = options.apps.length ? options.apps : discovered.apps;
+  const dmgs = options.dmgs.length ? options.dmgs : discovered.dmgs;
+  const zips = options.zips.length ? options.zips : discovered.zips;
+  if (!apps.length || !dmgs.length || !zips.length) {
+    fail("Release verification requires Vera.app, DMG, and ZIP artifacts.");
+  }
+  if (!options.checksumManifest) {
+    fail("Release verification requires --checksum-manifest.");
+  }
+  const verificationOptions = {
+    bundleId: configuration.bundleId,
+    version: configuration.version,
+    expectedTeam: configuration.expectedTeam,
+    expectedAuthority: configuration.expectedAuthority,
+  };
+  const verified = {
+    apps: apps.map((appPath) =>
+      verifySignedApp(appPath, verificationOptions, dependencies),
+    ),
+    dmgs: dmgs.map((dmgPath) =>
+      verifySignedDmg(dmgPath, verificationOptions, dependencies),
+    ),
+    zips: zips.map((zipPath) =>
+      verifyReleaseZip(zipPath, verificationOptions, dependencies),
+    ),
+  };
+  verifyChecksumManifest(
+    options.checksumManifest,
+    [...dmgs, ...zips],
+    dependencies,
+  );
+  return verified;
 }
 
-function inspectSignature(appPath, expectedTeam) {
-  command('codesign', ['--verify', '--deep', '--strict', '--verbose=2', appPath]);
-  const details = signatureDetails(appPath);
-  const authority = details.match(/^Authority=(.+)$/m)?.[1] || '';
-  const teamId = details.match(/^TeamIdentifier=(.+)$/m)?.[1] || '';
-  if (!authority.startsWith('Developer ID Application:') || /adhoc|ad-hoc/i.test(authority)) {
-    fail(`${appPath}: missing a non-ad-hoc Developer ID Application authority.`);
+if (require.main === module) {
+  try {
+    const verified = verifyMacRelease(parseArguments(process.argv.slice(2)));
+    console.log(
+      `macOS release verification passed signed=true notarized=true apps=${verified.apps.length} dmgs=${verified.dmgs.length} zips=${verified.zips.length}.`,
+    );
+  } catch (error) {
+    console.error(`macOS release verification failed: ${error.message}`);
+    process.exitCode = 1;
   }
-  if (!/^[A-Z0-9]{10}$/.test(teamId)) {
-    fail(`${appPath}: missing a valid Developer ID team identifier.`);
-  }
-  if (expectedTeam && teamId !== expectedTeam) {
-    fail(`${appPath}: signature team does not match the expected release team.`);
-  }
-  command('spctl', ['--assess', '--type', 'execute', '--verbose=4', appPath]);
-  command('xcrun', ['stapler', 'validate', appPath]);
-  console.log(`verified app=${appPath} authority=Developer ID Application team=${teamId}`);
 }
 
-function verifyChecksumManifest(manifestPath) {
-  const absoluteManifest = path.resolve(manifestPath);
-  if (!fs.statSync(absoluteManifest).isFile()) {
-    fail('Checksum manifest was not found.');
-  }
-  const contents = fs.readFileSync(absoluteManifest, 'utf8').trim();
-  if (!contents) fail('Checksum manifest is empty.');
-  command('shasum', ['-a', '256', '-c', path.basename(absoluteManifest)], { cwd: path.dirname(absoluteManifest) });
-  console.log(`verified checksums=${absoluteManifest}`);
-}
-
-function expectedTeamFromEnvironment() {
-  if (process.env.VERA_EXPECTED_TEAM_ID) return process.env.VERA_EXPECTED_TEAM_ID;
-  if (process.env.CSC_NAME) return developerIdTeam(process.env.CSC_NAME.trim());
-  return undefined;
-}
-
-try {
-  const options = parseArguments(process.argv.slice(2));
-  const apps = options.apps.length ? options.apps.map((app) => path.resolve(app)) : discoverApps();
-  if (!apps.length) fail('No Vera.app bundle found; pass --app explicitly.');
-  for (const appPath of apps) {
-    inspectSignature(appPath, options.expectedTeam || expectedTeamFromEnvironment());
-  }
-  if (!options.checksumManifest) fail('Release verification requires --checksum-manifest.');
-  verifyChecksumManifest(options.checksumManifest);
-  console.log('macOS release verification passed signed=true notarized=true.');
-} catch (error) {
-  console.error(`macOS release verification failed: ${error.message}`);
-  process.exitCode = 1;
-}
+module.exports = {
+  discoverArtifacts,
+  parseArguments,
+  releaseConfiguration,
+  verifyMacRelease,
+};

@@ -347,7 +347,9 @@ export type CitationAnnotation =
 
 const PAGE_BREAK_SENTINEL = "[[PAGE_BREAK]]";
 
-function expandDocumentQuoteEntry(entry: DocumentCitationQuote): CitationQuote[] {
+function expandDocumentQuoteEntry(
+  entry: DocumentCitationQuote,
+): CitationQuote[] {
   const rangeMatch =
     typeof entry.page === "string"
       ? entry.page.match(/^(\d+)\s*-\s*(\d+)$/)
@@ -389,6 +391,24 @@ export function expandCitationToEntries(
 ): CitationQuote[] {
   if (a.kind === "case") return [];
   return getDocumentCitationQuotes(a).flatMap(expandDocumentQuoteEntry);
+}
+
+/**
+ * Select the one exact page-bound excerpt that the source viewer can verify.
+ * Multi-page citations remain available in the citation summary, but must not
+ * be merged and mislabeled as if all quoted text belonged to the first page.
+ */
+export function firstDocumentCitationViewerEntry(
+  a: DocumentCitationAnnotation,
+): CitationQuote | null {
+  return (
+    expandCitationToEntries(a).find(
+      (entry) =>
+        Number.isSafeInteger(entry.page) &&
+        Number(entry.page) > 0 &&
+        entry.quote.trim().length > 0,
+    ) ?? null
+  );
 }
 
 /** Format the page(s) of a citation for display, e.g. "Page 3" or "Page 41-42". */

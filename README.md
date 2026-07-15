@@ -28,13 +28,13 @@ Workflows, and Tabular Review—plus Settings as the fifth local control surface
 The desktop opens `/assistant` and exposes exactly these five first-level
 destinations:
 
-| Navigation | Route | Local capability |
-|---|---|---|
-| Assistant | `/assistant` | Durable streaming chat, stop, retry, regenerate, Project documents, and citations |
-| Projects | `/projects` | Generic containers for documents, conversations, workflows, and Tabular Reviews |
-| Tabular Review | `/tabular-review` | Multi-document, multi-column generation, cell retry/cancel, citations, CSV, and XLSX export |
-| Workflows | `/workflows` | Mike-derived local workflow templates, editing, bounded execution, cancellation, retry, and run history |
-| Settings | `/settings` | Language/theme, model profiles, Keychain credentials, local data, backup, restore, logs, and diagnostics |
+| Navigation     | Route             | Local capability                                                                                         |
+| -------------- | ----------------- | -------------------------------------------------------------------------------------------------------- |
+| Assistant      | `/assistant`      | Durable streaming chat, stop, retry, regenerate, Project documents, and citations                        |
+| Projects       | `/projects`       | Generic containers for documents, conversations, workflows, and Tabular Reviews                          |
+| Tabular Review | `/tabular-review` | Multi-document, multi-column generation, cell retry/cancel, citations, CSV, and XLSX export              |
+| Workflows      | `/workflows`      | Mike-derived local workflow templates, editing, bounded execution, cancellation, retry, and run history  |
+| Settings       | `/settings`       | Language/theme, model profiles, Keychain credentials, local data, backup, restore, logs, and diagnostics |
 
 Inside a Project, the active tabs are Documents, Assistant, Workflows, and
 Tabular Reviews. `Project` is the general-purpose container; the new product
@@ -74,25 +74,21 @@ desktop/dist/Vera-<version>-<arch>.zip
 desktop/dist/Vera-<version>-SHA256SUMS.txt
 ```
 
-The accepted fresh arm64 package from 2026-07-15 is recorded at both its
-repository-relative and build-machine absolute locations:
+The accepted fresh arm64 package from 2026-07-15 is recorded using
+repository-relative locations:
 
 ```text
 app:      desktop/dist/mac-arm64/Vera.app
-          /Users/a1-6/Documents/new agent/desktop/dist/mac-arm64/Vera.app
-dmg:      desktop/dist/Vera-1.0.1-arm64.dmg
-          /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-arm64.dmg
-zip:      desktop/dist/Vera-1.0.1-arm64.zip
-          /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-arm64.zip
+dmg:      desktop/dist/Vera-1.0.1-arm64.dmg (198122845 bytes)
+zip:      desktop/dist/Vera-1.0.1-arm64.zip (200992113 bytes)
 manifest: desktop/dist/Vera-1.0.1-SHA256SUMS.txt
-          /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-SHA256SUMS.txt
 ```
 
 The verified manifest entries are:
 
 ```text
-69a2ee56379a7cf6cb7fe441685fb59c846e77512928704955e774f3d8d42dd7  Vera-1.0.1-arm64.dmg
-47fcd64f214bf9b28e6982953043c76dba68ff0f2a933107ff6ec07eb704e648  Vera-1.0.1-arm64.zip
+fd246214916b3485e25bb16c8e00bcf6e8be471ed95679190e7685a5c1c49ef8  Vera-1.0.1-arm64.dmg
+7be4a9504151ddd8518141901e3d2753a1cda2fbe13ac27fa7842a9f3d347f1b  Vera-1.0.1-arm64.zip
 ```
 
 The default build is intentionally unsigned and unnotarized. It is
@@ -117,7 +113,9 @@ git diff --check
 
 The authoritative migration status and Mike provenance are recorded in
 [the P0 migration plan](docs/p0_mike_desktop_migration.md) and
-[the controlled port manifest](docs/mike_port_manifest.md).
+[the controlled port manifest](docs/mike_port_manifest.md). Packaged OCR,
+legal-source retention controls, and Document Studio suggestions are recorded
+in [the P1 implementation record](docs/p1_ocr_legal_document_studio.md).
 
 ## Legacy Vera history
 

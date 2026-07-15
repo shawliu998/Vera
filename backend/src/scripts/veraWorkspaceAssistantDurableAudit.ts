@@ -231,7 +231,9 @@ async function withServer(
 async function terminalUpgradeReplay(root: string) {
   const databasePath = path.join(root, "terminal-upgrade.db");
   const database = new WorkspaceDatabase(databasePath, {
-    migrations: WORKSPACE_MIGRATIONS.filter((migration) => migration.version <= 9),
+    migrations: WORKSPACE_MIGRATIONS.filter(
+      (migration) => migration.version <= 9,
+    ),
   });
   const chatId = randomUUID();
   const promptMessageId = randomUUID();
@@ -294,15 +296,11 @@ async function terminalUpgradeReplay(root: string) {
          current_version_only,retrieval_limit,created_at)
        VALUES (?,?,?,?,?,1,40,?)`,
     )
-    .run(
-      jobId,
-      chatId,
-      promptMessageId,
-      outputMessageId,
-      modelProfileId,
-      NOW,
-    );
-  jobs.transitionJobInCurrentTransaction(jobId, { type: "start", at: CLAIM_AT });
+    .run(jobId, chatId, promptMessageId, outputMessageId, modelProfileId, NOW);
+  jobs.transitionJobInCurrentTransaction(jobId, {
+    type: "start",
+    at: CLAIM_AT,
+  });
   jobs.transitionJobInCurrentTransaction(jobId, {
     type: "complete",
     at: "2026-07-15T01:02:00.000Z",
@@ -323,7 +321,7 @@ async function terminalUpgradeReplay(root: string) {
 
   const upgraded = new WorkspaceDatabase(databasePath);
   try {
-    assert.equal(upgraded.migration?.currentVersion, 12);
+    assert.equal(upgraded.migration?.currentVersion, 14);
     const replay = new ChatsRepository(upgraded).listGenerationEvents(jobId);
     assert.equal(replay.terminal, true);
     assert.deepEqual(
@@ -454,7 +452,7 @@ async function run() {
   let database: WorkspaceDatabase | null = new WorkspaceDatabase(databasePath);
   let observer: WorkspaceDatabase | null = null;
   try {
-    assert.equal(database.migration?.currentVersion, 12);
+    assert.equal(database.migration?.currentVersion, 14);
     const profileId = seedEnabledProfile(database);
     const activeControllers = new Map<string, AbortController>();
     const setup = createServices(database, {
@@ -588,7 +586,10 @@ async function run() {
         `${baseUrl}/assistant/jobs?chat_id=${live.chat.id}`,
       );
       assert.equal(listed.status, 200);
-      assert.equal((await listed.json() as { items: unknown[] }).items.length, 1);
+      assert.equal(
+        ((await listed.json()) as { items: unknown[] }).items.length,
+        1,
+      );
 
       const firstPage = setup.service.generationEvents(live.generation.jobId, {
         limit: 3,
@@ -609,7 +610,10 @@ async function run() {
       const ids = [...resumedText.matchAll(/^id: (\d+)$/gm)].map((match) =>
         Number(match[1]),
       );
-      assert.equal(ids.every((id) => id > cursor), true);
+      assert.equal(
+        ids.every((id) => id > cursor),
+        true,
+      );
       assert.equal(new Set(ids).size, ids.length);
       assert.match(resumedText, /data: \[DONE\]/);
 
@@ -711,7 +715,8 @@ async function run() {
         attempt: failedClaim.attempt,
         signal: new AbortController().signal,
       }),
-      (error) => error instanceof WorkspaceApiError && error.code === "JOB_FAILED",
+      (error) =>
+        error instanceof WorkspaceApiError && error.code === "JOB_FAILED",
     );
     setup.chats.appendGenerationEvent = originalAppend;
     const failedStatus = setup.service.generationStatus(
@@ -719,7 +724,9 @@ async function run() {
     );
     assert.equal(failedStatus.status, "failed");
     assert.equal(failedStatus.retryable, true);
-    const failedReplay = setup.service.generationEvents(failed.generation.jobId);
+    const failedReplay = setup.service.generationEvents(
+      failed.generation.jobId,
+    );
     assert.equal(failedReplay.events.at(-1)?.event.type, "error");
     assert.doesNotMatch(
       JSON.stringify(failedReplay),
@@ -757,7 +764,10 @@ async function run() {
       attempt: retryClaim.attempt,
       signal: new AbortController().signal,
     });
-    assert.equal(setup.service.generationStatus(failed.generation.jobId).status, "complete");
+    assert.equal(
+      setup.service.generationStatus(failed.generation.jobId).status,
+      "complete",
+    );
 
     const running = acceptedGeneration(setup.service, profileId);
     const runningClaim = claim(setup.jobs, "cancel-worker");
@@ -849,9 +859,15 @@ async function run() {
       live.generation.jobId,
     );
     assert.notEqual(regenerated.jobId, live.generation.jobId);
-    assert.notEqual(regenerated.outputMessageId, live.generation.outputMessageId);
+    assert.notEqual(
+      regenerated.outputMessageId,
+      live.generation.outputMessageId,
+    );
     assert.equal(regenerated.chatId, live.chat.id);
-    setup.service.cancelGeneration(regenerated.jobId, "Regeneration audit cleanup.");
+    setup.service.cancelGeneration(
+      regenerated.jobId,
+      "Regeneration audit cleanup.",
+    );
 
     observer.close();
     observer = null;
@@ -872,7 +888,10 @@ async function run() {
           .join(""),
         "first delta second delta",
       );
-      assert.equal(reopened.prepare("PRAGMA foreign_key_check").all().length, 0);
+      assert.equal(
+        reopened.prepare("PRAGMA foreign_key_check").all().length,
+        0,
+      );
     } finally {
       reopened.close();
     }
@@ -889,7 +908,7 @@ async function run() {
 
 void run().catch((error) => {
   console.error(
-    error instanceof Error ? error.stack ?? error.message : String(error),
+    error instanceof Error ? (error.stack ?? error.message) : String(error),
   );
   process.exitCode = 1;
 });

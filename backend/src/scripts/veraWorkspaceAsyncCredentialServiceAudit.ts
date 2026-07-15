@@ -9,6 +9,7 @@ import { ModelProfilesRepository } from "../lib/workspace/repositories/modelProf
 import {
   CREDENTIAL_STORE_OPERATION_MODE,
   CredentialStoreCollisionError,
+  MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES,
   type CredentialDeletionInput,
   type CredentialResolutionInput,
   type CredentialStorageInput,
@@ -128,7 +129,22 @@ async function main() {
       runtimeWired: true,
     });
 
-    const firstSecret = "async-first-secret";
+    const callsBeforeOversizedSecrets = store.storeCalls.length;
+    for (const oversizedSecret of [
+      "x".repeat(MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES + 1),
+      "😀".repeat(257),
+    ]) {
+      await assert.rejects(
+        service.configureCredentialAsync(profile.id, {
+          secret: oversizedSecret,
+        }),
+        (error: unknown) => assertSafeFailure(error, oversizedSecret),
+      );
+    }
+    assert.equal(store.storeCalls.length, callsBeforeOversizedSecrets);
+
+    const firstSecret = "x".repeat(MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES);
+    assert.equal(Buffer.byteLength(firstSecret, "utf8"), 1024);
     assert.throws(
       () => service.configureCredential(profile.id, { secret: firstSecret }),
       (error: unknown) => {

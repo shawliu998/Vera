@@ -131,6 +131,7 @@ const zhCN = {
     open: "打开工作室",
     back: "返回项目文档",
     editorLabel: "文档正文",
+    detailsPanel: "文档工作室详情",
     currentVersion: "当前版本 {version}",
     historicalVersion: "历史版本 {version}",
     versions: "版本记录",
@@ -145,6 +146,39 @@ const zhCN = {
     saved: "已保存",
     saving: "正在保存…",
     sourceSnapshot: "来源快照 {id}",
+    sourceViewer: {
+      open: "查看",
+      openCitation: "查看并定位引用来源",
+      page: "第 {page} 页",
+      originalPdf: "原始 PDF 引用页",
+      originalDocument: "原始文档版本",
+      verifiedExcerpt: "已校验来源片段",
+      integrityNote:
+        "Vera 已复核 Project、文档版本、chunk 与引用哈希，并按保存的 UTF-16 偏移高亮原文。",
+      assistantIntegrityNote:
+        "此引用来自当前 Project 的持久化助手消息；Vera 仅打开消息中保存的真实文档版本和页码，不猜测未记录的位置。",
+      snapshot: "来源快照",
+      chunk: "来源片段",
+      version: "文档版本",
+      error:
+        "无法安全打开此引用。来源未通过范围或完整性校验，当前不会显示猜测内容。",
+    },
+    suggestions: {
+      title: "AI 修改建议",
+      empty: "暂无待处理建议。",
+      error: "无法安全读取或处理修改建议，请刷新后重试。",
+      range: "原始 Markdown UTF-16 范围 {start}–{end}",
+      loadingDetail: "正在读取完整精确差异…",
+      exactDiff: "完整精确差异",
+      accept: "接受并创建版本",
+      reject: "拒绝",
+      acceptedStatus: "已接受修改建议，并创建新的不可变版本。",
+      rejectedStatus: "已拒绝修改建议。",
+      stale: "文档版本已变化；此建议不能接受，但仍可拒绝清理。",
+      unsavedBlocked: "请先保存或放弃本地更改，再接受建议。",
+      historicalBlocked: "返回当前版本后才能接受建议。",
+      more: "还有更多待处理建议；请先处理当前列表。",
+    },
     copyLocal: "复制本地草稿",
     reloadLatest: "载入最新版本",
     reloadConfirm: {
@@ -212,6 +246,8 @@ const zhCN = {
     caseFallback: "案例 {id}",
     cancelled: "生成已取消。",
     copyAnswer: "复制回答",
+    createStudioDraft: "在文档工作室中建稿",
+    creatingStudioDraft: "正在建稿…",
     regenerate: "重新生成",
     history: {
       title: "助手历史",
@@ -269,6 +305,8 @@ const zhCN = {
       readDocument: "读取文档",
       fetchDocuments: "读取文档内容",
       findInDocument: "在文档中查找",
+      readStudioDocument: "读取 Studio 原始 Markdown",
+      suggestStudioEdit: "创建待审阅的 Studio 修改建议",
       listWorkflows: "读取工作流目录",
       readWorkflow: "读取工作流",
       readingDocument: "正在读取 {filename}",
@@ -288,6 +326,9 @@ const zhCN = {
       stream: "生成任务仍由本地服务管理，但事件连接已中断；可以继续接收。",
       failed: "生成任务失败。请检查模型状态后重试。",
       interrupted: "Vera 上次退出时生成被中断，可以重试。",
+      citationSource:
+        "无法在当前 Project 中安全打开此引用；文档版本或引用范围未通过校验。",
+      studioDraft: "无法从这条已完成回答创建文档草稿；项目内容没有改变。",
     },
   },
   workflows: {
@@ -396,6 +437,7 @@ const zhCN = {
       save: "无法保存工作流。现有内容未被覆盖。",
       run: "无法更新工作流运行状态。运行不会由界面伪造。",
       retry: "无法从失败点重试此运行。",
+      studioDraft: "无法从此运行结果创建文档草稿；项目内容没有改变。",
     },
     deleteConfirm: {
       title: "删除工作流？",
@@ -432,6 +474,8 @@ const zhCN = {
       retryRun: "重试运行",
       cancel: "取消运行",
       output: "运行结果",
+      createDraft: "在文档工作室中建稿",
+      creatingDraft: "正在建稿…",
       attempt: "第 {attempt} 次尝试",
       stepInput: "步骤输入",
       stepOutput: "步骤输出",
@@ -778,7 +822,7 @@ const zhCN = {
         placeholder: "粘贴新的 API 密钥",
         store: "安全保存",
         description:
-          "密钥仅提交一次并由桌面安全存储处理；Vera 不会回显已保存的完整密钥。",
+          "密钥最多 1,024 个 UTF-8 字节，仅提交一次并由桌面安全存储处理；Vera 不会回显已保存的完整密钥。",
         saved: "凭据已由本地服务安全保存。",
         clear: "清除凭据",
         unavailable:
@@ -834,6 +878,8 @@ const zhCN = {
           credentialReferenceMissing: "部署未配置凭据引用。",
           credentialUnavailable: "尚未保存可用的本地密钥。",
           secretStorageUnavailable: "本地加密密钥存储当前不可用。",
+          activationGateClosed:
+            "Vera 已启用逻辑 TTL 与访问拦截，但法律原文物理清理和完整派生链路尚未闭环，因此生产外呼保持关闭。",
         },
       },
       readiness: {
@@ -884,7 +930,7 @@ const zhCN = {
         notDeclaredWarning:
           "至少一项策略未声明。Vera 不会据此推断全文保留、导出或模型使用权限。",
         ttlDeclarationWarning:
-          "全文 TTL 当前仅是部署契约声明；在所有读取、引用、导出和模型上下文入口完成到期拦截前，不代表 Vera 已执行自动删除。",
+          "Vera 会在到期后执行单向逻辑 tombstone 并阻止引用、导出和模型使用；旧版精确引文仍无法单独物理清除，因此这不代表原文已从加密数据库删除。",
         values: {
           notDeclared: "未声明",
           deploymentContract: "部署契约",
@@ -1179,6 +1225,7 @@ const enUS = {
     open: "Open Studio",
     back: "Back to Project documents",
     editorLabel: "Document body",
+    detailsPanel: "Document Studio details",
     currentVersion: "Current version {version}",
     historicalVersion: "Historical version {version}",
     versions: "Version history",
@@ -1193,6 +1240,42 @@ const enUS = {
     saved: "Saved",
     saving: "Saving…",
     sourceSnapshot: "Source snapshot {id}",
+    sourceViewer: {
+      open: "View",
+      openCitation: "View and locate citation source",
+      page: "Page {page}",
+      originalPdf: "Original PDF citation page",
+      originalDocument: "Original document version",
+      verifiedExcerpt: "Verified source excerpt",
+      integrityNote:
+        "Vera rechecked the Project, document version, chunk, and citation hashes, then highlighted the saved UTF-16 range.",
+      assistantIntegrityNote:
+        "This citation comes from a durable Assistant message in the current Project. Vera opens only its recorded document version and page, without guessing a missing location.",
+      snapshot: "Source snapshot",
+      chunk: "Source chunk",
+      version: "Document version",
+      error:
+        "This citation could not be opened safely. Its scope or integrity check failed, so Vera will not display guessed content.",
+    },
+    suggestions: {
+      title: "AI edit suggestions",
+      empty: "No pending suggestions.",
+      error:
+        "Suggestions could not be read or resolved safely. Refresh and try again.",
+      range: "Raw Markdown UTF-16 range {start}–{end}",
+      loadingDetail: "Loading the complete exact diff…",
+      exactDiff: "Complete exact diff",
+      accept: "Accept and create version",
+      reject: "Reject",
+      acceptedStatus:
+        "The suggestion was accepted and a new immutable version was created.",
+      rejectedStatus: "The suggestion was rejected.",
+      stale:
+        "The document has changed. This suggestion cannot be accepted, but it can still be rejected.",
+      unsavedBlocked: "Save or discard local edits before accepting.",
+      historicalBlocked: "Return to the current version before accepting.",
+      more: "More pending suggestions exist. Resolve items in this list first.",
+    },
     copyLocal: "Copy local draft",
     reloadLatest: "Load latest version",
     reloadConfirm: {
@@ -1268,6 +1351,8 @@ const enUS = {
     caseFallback: "Case {id}",
     cancelled: "Generation cancelled.",
     copyAnswer: "Copy answer",
+    createStudioDraft: "Create draft in Document Studio",
+    creatingStudioDraft: "Creating draft…",
     regenerate: "Regenerate",
     history: {
       title: "Assistant history",
@@ -1327,6 +1412,8 @@ const enUS = {
       readDocument: "Reading document",
       fetchDocuments: "Reading document contents",
       findInDocument: "Searching document",
+      readStudioDocument: "Reading raw Studio Markdown",
+      suggestStudioEdit: "Creating a reviewable Studio edit suggestion",
       listWorkflows: "Reading workflow index",
       readWorkflow: "Reading workflow",
       readingDocument: "Reading {filename}",
@@ -1348,6 +1435,10 @@ const enUS = {
       failed: "The generation job failed. Check the model state and try again.",
       interrupted:
         "Generation was interrupted when Vera last exited. You can retry it.",
+      citationSource:
+        "This citation could not be opened safely in the current Project. Its document version or scope did not pass validation.",
+      studioDraft:
+        "A document draft could not be created from this completed response. The Project was not changed.",
     },
   },
   workflows: {
@@ -1458,6 +1549,8 @@ const enUS = {
       save: "The workflow could not be saved. Existing content was not overwritten.",
       run: "The workflow run state could not be updated. The interface will not fabricate progress.",
       retry: "This run could not be retried from its failed step.",
+      studioDraft:
+        "A document draft could not be created from this run result. The Project was not changed.",
     },
     deleteConfirm: {
       title: "Delete workflow?",
@@ -1497,6 +1590,8 @@ const enUS = {
       retryRun: "Retry run",
       cancel: "Cancel run",
       output: "Run result",
+      createDraft: "Create draft in Document Studio",
+      creatingDraft: "Creating draft…",
       attempt: "Attempt {attempt}",
       stepInput: "Step input",
       stepOutput: "Step output",
@@ -1864,7 +1959,7 @@ const enUS = {
         placeholder: "Paste a new API key",
         store: "Store securely",
         description:
-          "The key is submitted once to desktop secure storage. Vera never returns the complete stored key.",
+          "Keys are limited to 1,024 UTF-8 bytes and submitted once to desktop secure storage. Vera never returns the complete stored key.",
         saved: "The credential was stored by the local service.",
         clear: "Clear credential",
         unavailable:
@@ -1923,6 +2018,8 @@ const enUS = {
           credentialUnavailable: "No usable local secret has been stored.",
           secretStorageUnavailable:
             "Local encrypted secret storage is unavailable.",
+          activationGateClosed:
+            "Vera enforces logical TTL and access denial, but production egress remains closed until legal-text physical cleanup and complete derived lineage are implemented.",
         },
       },
       readiness: {
@@ -1976,7 +2073,7 @@ const enUS = {
         notDeclaredWarning:
           "At least one policy is not declared. Vera does not infer full-text retention, export, or model-use rights.",
         ttlDeclarationWarning:
-          "Full-text TTL is currently a deployment-contract declaration only. It does not mean Vera enforces automatic deletion until expiry gates cover every read, citation, export, and model-context path.",
+          "At expiry Vera applies a one-way logical tombstone and blocks citation, export, and model use. Legacy exact quotes cannot yet be physically erased independently, so this does not mean the text was deleted from the encrypted database.",
         values: {
           notDeclared: "Not declared",
           deploymentContract: "Deployment contract",

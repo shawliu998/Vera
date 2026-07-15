@@ -191,6 +191,18 @@ async function main() {
     databasePath: path.join(directory, "aletheia.db"),
     cipher,
   });
+  let providerSecretReads = 0;
+  const originalProviderSecretForUse =
+    repository.providerSecretForUse.bind(repository);
+  Object.defineProperty(repository, "providerSecretForUse", {
+    configurable: true,
+    value: (
+      ...args: Parameters<LocalControlRepository["providerSecretForUse"]>
+    ) => {
+      providerSecretReads += 1;
+      return originalProviderSecretForUse(...args);
+    },
+  });
   const originalListProviderStatuses =
     repository.listProviderStatuses.bind(repository);
   Object.defineProperty(repository, "listProviderStatuses", {
@@ -314,7 +326,7 @@ async function main() {
       assert.equal(status.hasSecret, false);
       assert.deepEqual(status.connectionStatus, {
         state: "unavailable",
-        reason: "credential_unavailable",
+        reason: "activation_gate_closed",
         connectionTested: false,
       });
     }
@@ -359,8 +371,8 @@ async function main() {
       assert.equal(savedStatus.hasSecret, true);
       assert.equal(savedStatus.deploymentReady, true);
       assert.deepEqual(savedStatus.connectionStatus, {
-        state: "configured_unverified",
-        reason: null,
+        state: "unavailable",
+        reason: "activation_gate_closed",
         connectionTested: false,
       });
       const serialized = JSON.stringify(saved.body);
@@ -398,8 +410,8 @@ async function main() {
       assert.equal(status.allowlisted, true);
       assert.equal(status.credentialReferenceConfigured, true);
       assert.deepEqual(status.connectionStatus, {
-        state: "configured_unverified",
-        reason: null,
+        state: "unavailable",
+        reason: "activation_gate_closed",
         connectionTested: false,
       });
 
@@ -435,8 +447,8 @@ async function main() {
       (await request(base, "GET", "/aletheia/providers/pkulaw/status")).body,
     );
     assert.deepEqual(historicalFailure.connectionStatus, {
-      state: "configured_unverified",
-      reason: null,
+      state: "unavailable",
+      reason: "activation_gate_closed",
       connectionTested: false,
     });
 
@@ -459,7 +471,7 @@ async function main() {
       assert.equal(status.encryptionEnabled, false);
       assert.deepEqual(status.connectionStatus, {
         state: "unavailable",
-        reason: "secret_storage_unavailable",
+        reason: "activation_gate_closed",
         connectionTested: false,
       });
     }
@@ -477,30 +489,44 @@ async function main() {
     );
     cipher.setEncryptionAvailable(true);
 
+    assert.equal(
+      providerSecretReads,
+      0,
+      "the closed activation gate must not decrypt credentials for status or mutation projections",
+    );
+
     for (const [provider, secret] of Object.entries(secrets)) {
       assert.equal(
         readLocalLegalSourceCredential(repository, userId, provider),
         secret,
       );
     }
+    assert.equal(providerSecretReads, 2);
     assertLocalControlError(
       () => readLocalLegalSourceCredential(repository, userId, "unsupported"),
       "INVALID_INPUT",
     );
+    assert.equal(providerSecretReads, 2);
 
     cipher.failFor(userId, "pkulaw");
     assertLocalControlError(
       () => readLocalLegalSourceCredential(repository, userId, "pkulaw"),
       "SECRET_STORAGE_UNAVAILABLE",
     );
+    assert.equal(providerSecretReads, 3);
     const corruptedCredential = assertStrictStatus(
       (await request(base, "GET", "/aletheia/providers/pkulaw/status")).body,
+    );
+    assert.equal(
+      providerSecretReads,
+      3,
+      "closed-gate status reads must not probe a corrupt credential",
     );
     assert.equal(corruptedCredential.hasSecret, true);
     assert.equal(corruptedCredential.encryptionEnabled, true);
     assert.deepEqual(corruptedCredential.connectionStatus, {
       state: "unavailable",
-      reason: "secret_storage_unavailable",
+      reason: "activation_gate_closed",
       connectionTested: false,
     });
     assert.equal(
@@ -553,7 +579,7 @@ async function main() {
     for (const provider of assertProviderListResponse(afterRemoval.body)) {
       assert.deepEqual(provider.connectionStatus, {
         state: "unavailable",
-        reason: "credential_unavailable",
+        reason: "activation_gate_closed",
         connectionTested: false,
       });
     }
@@ -566,11 +592,7 @@ async function main() {
         throw new Error(internalFailureMaterial);
       },
     });
-    const internalFailure = await request(
-      base,
-      "GET",
-      "/aletheia/providers",
-    );
+    const internalFailure = await request(base, "GET", "/aletheia/providers");
     assert.equal(internalFailure.status, 500);
     assert.deepEqual(internalFailure.body, {
       code: "LOCAL_CONTROL_ERROR",
@@ -589,7 +611,8 @@ async function main() {
           "save",
           "strict-secret-free-wire",
           "provider-contract-projection",
-          "truthful-configured-unverified-status",
+          "truthful-code-owned-activation-gate-status",
+          "closed-gate status projections perform zero credential decryptions",
           "historical-test-state-ignored",
           "unavailable-reason-precedence",
           "authentication-and-deployment-gates",

@@ -3,6 +3,8 @@ import { randomBytes } from "node:crypto";
 import {
   CREDENTIAL_STORE_OPERATION_MODE,
   CredentialStoreCollisionError,
+  MAX_MODEL_CREDENTIAL_RESOLVE_SECRET_BYTES,
+  MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES,
   type AsynchronousCredentialStorePort,
   type CredentialBindingKey,
   type CredentialDeletionInput,
@@ -15,7 +17,6 @@ const CREDENTIAL_PORT_READY = "vera-credential-port-ready-v1";
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_PORT_TIMEOUT_MS = 15_000;
 const MAX_IN_FLIGHT_REQUESTS = 32;
-const MAX_SECRET_BYTES = 8 * 1024;
 
 type PortEvent = { data?: unknown; ports?: unknown[] } | unknown;
 
@@ -278,6 +279,15 @@ export class CredentialWorkerRpcClient implements AsynchronousCredentialStorePor
   }
 
   async store(input: CredentialStorageInput): Promise<void> {
+    if (
+      typeof input.secret !== "string" ||
+      input.secret.length === 0 ||
+      /[\r\n]/.test(input.secret) ||
+      Buffer.byteLength(input.secret, "utf8") >
+        MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES
+    ) {
+      throw new CredentialWorkerProtocolError();
+    }
     const result = await this.request("store", {
       reference: input.reference,
       binding: input.binding,
@@ -306,7 +316,8 @@ export class CredentialWorkerRpcClient implements AsynchronousCredentialStorePor
       typeof result.secret !== "string" ||
       result.secret.length === 0 ||
       /[\r\n]/.test(result.secret) ||
-      Buffer.byteLength(result.secret, "utf8") > MAX_SECRET_BYTES
+      Buffer.byteLength(result.secret, "utf8") >
+        MAX_MODEL_CREDENTIAL_RESOLVE_SECRET_BYTES
     ) {
       throw this.protocolViolation();
     }

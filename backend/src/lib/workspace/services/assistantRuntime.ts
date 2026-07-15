@@ -33,6 +33,8 @@ const AssistantToolNameSchema = z.enum([
   "read_document",
   "fetch_documents",
   "find_in_document",
+  "read_studio_document",
+  "suggest_studio_edit",
   "list_workflows",
   "read_workflow",
 ]);
@@ -46,7 +48,7 @@ const TOOL_EVENT_TYPES = new Set([
 
 export type AssistantToolName = z.infer<typeof AssistantToolNameSchema>;
 
-const ModelSourceSchema = z
+export const AssistantModelSourceSchema = z
   .object({
     documentId: Id,
     versionId: Id,
@@ -129,6 +131,10 @@ const ModelToolCallSchema = z
   })
   .strict();
 
+export const AssistantModelSourcesSchema = z
+  .array(AssistantModelSourceSchema)
+  .max(200);
+
 const ModelTurnSchema = z
   .object({
     content: z.string().max(MAX_ASSISTANT_CONTENT_CHARS).default(""),
@@ -136,7 +142,7 @@ const ModelTurnSchema = z
       .array(ModelToolCallSchema)
       .max(MAX_TOOL_CALLS_PER_ROUND)
       .default([]),
-    sources: z.array(ModelSourceSchema).max(200).default([]),
+    sources: AssistantModelSourcesSchema.default([]),
   })
   .strict();
 
@@ -150,6 +156,7 @@ const ModelRegistrationSchema = z
   .strict();
 
 export type AssistantModelTurn = z.infer<typeof ModelTurnSchema>;
+export type AssistantModelSource = z.infer<typeof AssistantModelSourceSchema>;
 export type AssistantModelToolCall = z.infer<typeof ModelToolCallSchema>;
 
 export type AssistantModelMessage =
@@ -195,6 +202,8 @@ export interface AssistantModelPort {
 
 export type AssistantToolContext = Readonly<{
   jobId: string;
+  /** Durable fenced jobs.attempt for this exact model execution. */
+  attempt: number;
   chatId: string;
   projectId: string | null;
   modelProfileId: string;
@@ -202,6 +211,8 @@ export type AssistantToolContext = Readonly<{
 }>;
 
 export interface AssistantToolPort {
+  /** Revalidates snapshot payload-use policy immediately before model input. */
+  assertModelUse?(context: AssistantToolContext): void | Promise<void>;
   registeredTools(context: AssistantToolContext): Promise<{
     adapterId: string;
     tools: readonly AssistantToolDefinition[];
@@ -682,6 +693,7 @@ export class AssistantRuntimeService {
       assertMikeSafePayload(modelRegistration);
       const toolContext: AssistantToolContext = {
         jobId: input.jobId,
+        attempt: input.attempt,
         chatId: snapshot.chatId,
         projectId: snapshot.payload.projectId,
         modelProfileId: snapshot.modelProfileId,
@@ -723,6 +735,9 @@ export class AssistantRuntimeService {
       let fullText = "";
 
       for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+        throwIfAborted(input.signal);
+        this.assertClaim(snapshot, input);
+        await this.options.tools.assertModelUse?.(toolContext);
         throwIfAborted(input.signal);
         this.assertClaim(snapshot, input);
         let roundDeltaChars = 0;

@@ -570,7 +570,7 @@ export function RemoteMatterPage({ matterId }: { matterId: string }) {
             "Produce a concise local matter analysis with uncertainties and source needs clearly stated.",
           ].join("\n\n"),
           systemPrompt:
-            "You are Aletheia's local legal-analysis runtime. Do not claim facts beyond the supplied matter context.",
+            "You are Vera's local legal-analysis runtime. Do not claim facts beyond the supplied matter context.",
         });
         setSaveMessage("Local model run queued.");
       } else {

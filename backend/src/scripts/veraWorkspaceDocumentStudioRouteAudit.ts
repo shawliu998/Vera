@@ -23,8 +23,14 @@ import PizZip from "pizzip";
 import type { WorkspaceBlobCodec } from "../lib/workspace/blobStore";
 import { LocalWorkspaceBlobStore } from "../lib/workspace/localWorkspaceBlobStore";
 import { WORKSPACE_LOCAL_PRINCIPAL_ID } from "../lib/workspace/principal";
+import { ChatsRepository } from "../lib/workspace/repositories/chats";
+import { ModelConnectionTestsRepository } from "../lib/workspace/repositories/modelConnectionTests";
+import { ModelProfilesRepository } from "../lib/workspace/repositories/modelProfiles";
+import { ProjectsRepository } from "../lib/workspace/repositories/projects";
 import { WorkspaceSourceFoundationRepository } from "../lib/workspace/repositories/sourceFoundation";
 import { WorkspaceRuntime } from "../lib/workspace/runtime";
+import { ChatsService } from "../lib/workspace/services/chats";
+import type { WorkspaceDocumentStudioService } from "../lib/workspace/services/documentStudio";
 import {
   DOCUMENT_STUDIO_DOCX_MIME_TYPE,
   DOCUMENT_STUDIO_MAX_DOCX_BYTES,
@@ -254,8 +260,7 @@ async function uploadDocx(
   );
   return fetch(`${baseUrl}${urlPath}`, {
     method: "POST",
-    headers:
-      options.authenticated === false ? {} : authHeaders(false),
+    headers: options.authenticated === false ? {} : authHeaders(false),
     body,
   });
 }
@@ -471,6 +476,167 @@ async function main() {
         docx_import: true,
         docx_export: true,
       });
+
+      const suggestionDraftResponse = await fetch(
+        `${baseUrl}/api/v1/projects/${projectId}/studio/documents`,
+        {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify({ title: "Suggestion acceptance wire audit" }),
+        },
+      );
+      assert.equal(suggestionDraftResponse.status, 201);
+      const suggestionDraft = record(
+        (await responseJson(suggestionDraftResponse)).value,
+        "suggestion Studio document",
+      );
+      const suggestionDocumentId = String(suggestionDraft.document_id);
+      const suggestionBaseVersionId = String(
+        record(suggestionDraft.version, "suggestion base version").id,
+      );
+      const suggestionProfileId = randomUUID();
+      const profiles = new ModelProfilesRepository(runtime.database);
+      const connectionTests = new ModelConnectionTestsRepository(
+        runtime.database,
+      );
+      profiles.create({
+        id: suggestionProfileId,
+        name: "Suggestion route audit model",
+        provider: "openai",
+        model: "audit-model",
+        baseUrl: null,
+        credentialOrigin: null,
+        credentialState: "missing",
+        contextWindowTokens: 16_000,
+        maxOutputTokens: 2_000,
+        enabled: false,
+        isDefault: false,
+        capabilities: {
+          streaming: true,
+          toolCalling: true,
+          structuredOutput: true,
+          vision: false,
+        },
+        now: NOW,
+      });
+      const storedProfile = profiles.requireStored(suggestionProfileId);
+      assert.equal(
+        connectionTests.storeIfCurrent({
+          profileId: suggestionProfileId,
+          expectedConnectionRevision: storedProfile.connectionRevision,
+          status: "passed",
+          errorCode: null,
+          retryable: false,
+          latencyMs: 1,
+          testedAt: NOW,
+        }).stored,
+        true,
+      );
+      profiles.update(suggestionProfileId, { enabled: true, now: NOW });
+      const chatsRepository = new ChatsRepository(runtime.database);
+      const chats = new ChatsService(
+        chatsRepository,
+        new ProjectsRepository(runtime.database),
+        profiles,
+        () => new Date(NOW),
+        { jobs: runtime.jobs, generationControl: runtime.jobs },
+      );
+      const suggestionChat = chats.create({
+        projectId,
+        title: "Suggestion wire audit",
+        modelProfileId: suggestionProfileId,
+      });
+      const suggestionGeneration = chats.requestGeneration({
+        chatId: suggestionChat.id,
+        prompt: "Insert the reviewed text.",
+        modelProfileId: suggestionProfileId,
+        allowedDocumentIds: [suggestionDocumentId],
+        attachmentDocumentIds: [suggestionDocumentId],
+        retrievalLimit: 10,
+      });
+      const suggestionSnapshot = chatsRepository.generationSnapshot(
+        suggestionGeneration.jobId,
+      );
+      const suggestionLeaseOwner = "studio-route-suggestion-audit";
+      const suggestionClaimed = runtime.jobs.repository.claimNextQueuedForTypes(
+        NOW,
+        ["assistant_generate"],
+        suggestionLeaseOwner,
+        new Date(Date.parse(NOW) + 60_000).toISOString(),
+      );
+      assert.equal(suggestionClaimed?.id, suggestionGeneration.jobId);
+      assert(suggestionClaimed);
+      const suggestionClaim = {
+        jobId: suggestionGeneration.jobId,
+        leaseOwner: suggestionLeaseOwner,
+        attempt: suggestionClaimed.attempt,
+        at: NOW,
+      };
+      chatsRepository.beginGenerationAttempt({
+        snapshot: suggestionSnapshot,
+        claim: suggestionClaim,
+        claims: runtime.jobs.repository,
+        now: NOW,
+      });
+      const studioService = (
+        runtime as unknown as {
+          documentStudioService: WorkspaceDocumentStudioService;
+        }
+      ).documentStudioService;
+      const pendingSuggestion =
+        await studioService.createSuggestionFromAssistantTool({
+          projectId,
+          documentId: suggestionDocumentId,
+          baseVersionId: suggestionBaseVersionId,
+          messageId: suggestionSnapshot.outputMessageId,
+          jobId: suggestionGeneration.jobId,
+          attempt: suggestionClaimed.attempt,
+          toolCallId: "accept-through-runtime-wire",
+          startOffset: 0,
+          endOffset: 0,
+          exactDeletedText: "",
+          insertedText: "Accepted through the authenticated route.\n",
+          summary: "Exercise the user_accept runtime wire contract",
+        });
+      chatsRepository.commitGenerationComplete({
+        snapshot: suggestionSnapshot,
+        claim: suggestionClaim,
+        claims: runtime.jobs.repository,
+        content: "Suggestion ready for explicit acceptance.",
+        sources: [],
+        now: NOW,
+      });
+      const acceptSuggestionResponse = await fetch(
+        `${baseUrl}/api/v1/projects/${projectId}/studio/documents/${suggestionDocumentId}/suggestions/${pendingSuggestion.id}/accept`,
+        {
+          method: "POST",
+          headers: authHeaders(),
+          body: "{}",
+        },
+      );
+      assert.equal(acceptSuggestionResponse.status, 201);
+      const acceptedSuggestionPayload = record(
+        (await responseJson(acceptSuggestionResponse)).value,
+        "accepted suggestion response",
+      );
+      const acceptedSuggestionDocument = record(
+        acceptedSuggestionPayload.document,
+        "accepted document",
+      );
+      assert.equal(
+        record(acceptedSuggestionDocument.version, "accepted user version")
+          .source,
+        "user_accept",
+      );
+      assert.equal(
+        record(acceptedSuggestionPayload.suggestion, "accepted suggestion")
+          .status,
+        "accepted",
+      );
+      assert.equal(
+        acceptedSuggestionDocument.content,
+        "Accepted through the authenticated route.\n",
+      );
 
       const sourceUpload = await uploadMarkdown(
         baseUrl,
@@ -780,6 +946,15 @@ async function main() {
       assert.equal(finalList.current_version_id, restoredVersionId);
       assert.equal(array(finalList.versions, "final versions").length, 4);
 
+      await assertSafeError(
+        await fetch(
+          `${baseUrl}/api/v1/projects/${projectId}/studio/documents/${documentId}/export-docx?version_id=${restoredVersionId}`,
+          { headers: authHeaders(false) },
+        ),
+        409,
+        "PRECONDITION_FAILED",
+      );
+
       const createDocxResponse = await fetch(
         `${baseUrl}/api/v1/projects/${projectId}/studio/documents`,
         {
@@ -813,7 +988,7 @@ async function main() {
             expected_version_id: docxInitialVersionId,
             content: baselineMarkdown,
             source: "assistant_edit",
-            citation_anchor_ids: [anchor.id],
+            citation_anchor_ids: [],
           }),
         },
       );
@@ -828,7 +1003,7 @@ async function main() {
       assert.deepEqual(
         record(baselineSaved.version, "DOCX baseline version")
           .citation_anchor_ids,
-        [anchor.id],
+        [],
       );
 
       const sourceDocx = await exportDocumentStudioMarkdownToDocx({
@@ -1014,8 +1189,14 @@ async function main() {
         );
         assert.equal(unsafePayload.text.includes("secret.invalid"), false);
         assert.equal(unsafePayload.text.includes("tracked secret"), false);
-        assert.equal(unsafePayload.text.includes("DOCX_EXTERNAL_RELATIONSHIP"), false);
-        assert.equal(unsafePayload.text.includes("DOCX_TRACKED_CHANGES"), false);
+        assert.equal(
+          unsafePayload.text.includes("DOCX_EXTERNAL_RELATIONSHIP"),
+          false,
+        );
+        assert.equal(
+          unsafePayload.text.includes("DOCX_TRACKED_CHANGES"),
+          false,
+        );
         assert.equal(unsafePayload.text.includes("DOCX_ACTIVE_CONTENT"), false);
       }
       await assertSafeError(
@@ -1086,7 +1267,7 @@ async function main() {
       const importedVersionId = String(importedVersion.id);
       assert.equal(importedVersion.version_number, 3);
       assert.equal(importedVersion.source, "user_upload");
-      assert.deepEqual(importedVersion.citation_anchor_ids, [anchor.id]);
+      assert.deepEqual(importedVersion.citation_anchor_ids, []);
       assert.equal(
         String(importedDocument.content).includes("Payment must be made"),
         true,
@@ -1155,9 +1336,9 @@ async function main() {
         true,
       );
       assert.equal(
-        historicalWarningHeader.split(",").includes(
-          "MARKDOWN_BLOCKQUOTE_SIMPLIFIED",
-        ),
+        historicalWarningHeader
+          .split(",")
+          .includes("MARKDOWN_BLOCKQUOTE_SIMPLIFIED"),
         true,
       );
       assert.equal(
@@ -1174,7 +1355,10 @@ async function main() {
       const historicalRoundTrip = await importDocumentStudioDocxToMarkdown({
         bytes: historicalExportBytes,
       });
-      assert.equal(historicalRoundTrip.markdown.includes("Saved baseline"), true);
+      assert.equal(
+        historicalRoundTrip.markdown.includes("Saved baseline"),
+        true,
+      );
 
       const currentExport = await fetch(
         `${baseUrl}/api/v1/projects/${projectId}/studio/documents/${docxDocumentId}/export-docx?version_id=${importedVersionId}`,
@@ -1339,6 +1523,7 @@ async function main() {
             "generic version upload cannot split Studio lineage",
             "generic rename preserves Studio editability and save path",
             "strict response serializer rejects storage/credential fields",
+            "authenticated suggestion acceptance serializes the user_accept version through the real runtime",
             "strict DOCX multipart auth, upload rate, UUID, field, extension, MIME and 10 MB limits",
             "malicious external, tracked-change and active-content DOCX rejection without error leaks",
             "DOCX import creates one CAS version while preserving citations and old immutable content",

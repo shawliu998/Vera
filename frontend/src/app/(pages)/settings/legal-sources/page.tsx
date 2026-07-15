@@ -27,9 +27,9 @@ import {
 import { ConfirmPopup } from "@/app/components/shared/ConfirmPopup";
 import {
   submitVeraCredentialInput,
-  VERA_CREDENTIAL_MAX_BYTES,
   VeraCredentialInputError,
 } from "@/app/components/models/modelCredentialSubmission";
+import { VERA_LEGAL_SOURCE_CREDENTIAL_MAX_CHARACTERS } from "@/app/lib/veraCredentialLimits";
 import {
   VeraLegalSourceApiError,
   listVeraLegalSourceProviders,
@@ -91,6 +91,8 @@ const UNAVAILABLE_REASON_KEYS = {
     "settings.legalSources.status.reasons.endpointNotAllowlisted",
   credential_reference_missing:
     "settings.legalSources.status.reasons.credentialReferenceMissing",
+  activation_gate_closed:
+    "settings.legalSources.status.reasons.activationGateClosed",
   credential_unavailable:
     "settings.legalSources.status.reasons.credentialUnavailable",
   secret_storage_unavailable:
@@ -188,8 +190,12 @@ export default function LegalSourceSettingsPage() {
     setProviderFailure(null);
     setFeedback(null);
     try {
-      await submitVeraCredentialInput(field, (secret) =>
-        saveVeraLegalSourceSecret(provider.provider, secret),
+      await submitVeraCredentialInput(
+        field,
+        (secret) => saveVeraLegalSourceSecret(provider.provider, secret),
+        {
+          maxCharacters: VERA_LEGAL_SOURCE_CREDENTIAL_MAX_CHARACTERS,
+        },
       );
       const refreshed = await loadProviders(false);
       if (!mounted.current) return;
@@ -597,7 +603,7 @@ function ProviderCard({
                 autoComplete="off"
                 autoCapitalize="none"
                 spellCheck={false}
-                maxLength={VERA_CREDENTIAL_MAX_BYTES}
+                maxLength={VERA_LEGAL_SOURCE_CREDENTIAL_MAX_CHARACTERS}
                 disabled={saveDisabled}
                 aria-describedby={`${inputId}-description ${inputId}-gate`}
                 className={`${accountGlassInputClassName} h-9 w-full pl-9 text-sm`}

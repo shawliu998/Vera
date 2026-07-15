@@ -155,7 +155,29 @@ function boundedFtsQueries(query: string) {
  * paths, arbitrary files, network resources, or historical document versions.
  */
 export class WorkflowDocumentContextRepository {
-  constructor(private readonly database: WorkspaceDatabaseAdapter) {}
+  constructor(
+    private readonly database: WorkspaceDatabaseAdapter,
+    private readonly options: {
+      assertModelUse?: (input: {
+        projectId: string;
+        documentId: string;
+        versionId: string;
+      }) => void;
+    } = {},
+  ) {}
+
+  private assertModelUse(
+    projectId: string,
+    documents: readonly WorkflowDocumentSnapshot[],
+  ) {
+    for (const document of documents) {
+      this.options.assertModelUse?.({
+        projectId,
+        documentId: document.documentId,
+        versionId: document.versionId,
+      });
+    }
+  }
 
   retrieve(input: {
     projectId: string;
@@ -236,6 +258,7 @@ export class WorkflowDocumentContextRepository {
       }
       documents = requested.map((id) => byId.get(id)!);
     }
+    this.assertModelUse(projectId, documents);
 
     const query = input.query
       .trim()
@@ -344,6 +367,7 @@ export class WorkflowDocumentContextRepository {
       }
       throw error;
     }
+    this.assertModelUse(projectId, documents);
     return { documents, evidence };
   }
 

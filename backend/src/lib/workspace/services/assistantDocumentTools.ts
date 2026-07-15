@@ -15,6 +15,10 @@ import {
 import type { WorkspaceDocumentsRepository } from "../repositories/documents";
 import type { AssistantCapabilityHydratorPort } from "./chats";
 import type {
+  CreateDocumentStudioSuggestionFromToolInput,
+  WorkspaceDocumentStudioService,
+} from "./documentStudio";
+import type {
   AssistantModelToolCall,
   AssistantToolContext,
   AssistantToolDefinition,
@@ -25,6 +29,8 @@ const MAX_READ_DOCUMENTS = 8;
 const MAX_READ_CHUNKS = 512;
 const MAX_READ_TEXT_CHARS = 150_000;
 const MAX_TOOL_JSON_CHARS = 180_000;
+const MAX_STUDIO_TOOL_EDIT_FIELD_CHARS = 20_000;
+const MAX_STUDIO_TOOL_EDIT_INPUT_JSON_CHARS = 90_000;
 const MAX_FIND_RESULTS = 40;
 const MAX_FIND_CONTEXT_CHARS = 1_000;
 const MAX_FIND_EXCERPT_CHARS = 4_000;
@@ -55,6 +61,45 @@ const FindInput = z
       .min(0)
       .max(MAX_FIND_CONTEXT_CHARS)
       .default(80),
+  })
+  .strict();
+const SuggestStudioEditInput = z
+  .object({
+    doc_id: DocLabel,
+    start_offset: z.number().int().nonnegative(),
+    end_offset: z.number().int().nonnegative(),
+    exact_deleted: z.string().max(MAX_STUDIO_TOOL_EDIT_FIELD_CHARS),
+    inserted_text: z.string().max(MAX_STUDIO_TOOL_EDIT_FIELD_CHARS),
+    summary: z.string().trim().min(1).max(500),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (JSON.stringify(value).length > MAX_STUDIO_TOOL_EDIT_INPUT_JSON_CHARS) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Studio edit input exceeds the safe tool-call budget.",
+      });
+    }
+    if (value.end_offset - value.start_offset !== value.exact_deleted.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["end_offset"],
+        message: "Edit offsets must span exact_deleted UTF-16 text.",
+      });
+    }
+    if (value.exact_deleted.length === 0 && value.inserted_text.length === 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["inserted_text"],
+        message: "Edit suggestion must change the raw Markdown.",
+      });
+    }
+  });
+const ReadStudioDocumentInput = z
+  .object({
+    doc_id: DocLabel,
+    start_offset: z.number().int().nonnegative().default(0),
+    max_chars: z.number().int().min(1).max(100_000).default(100_000),
   })
   .strict();
 
@@ -135,6 +180,71 @@ const FIND_DOCUMENT_TOOL: AssistantToolDefinition = Object.freeze({
     additionalProperties: false,
   }),
 });
+const SUGGEST_STUDIO_EDIT_TOOL: AssistantToolDefinition = Object.freeze({
+  name: "suggest_studio_edit",
+  description:
+    "Create a pending, user-reviewable edit suggestion against the current raw Markdown of an attached Vera Document Studio draft. Offsets are UTF-16 code units in raw Markdown. This never edits the document; the user must explicitly accept or reject the suggestion.",
+  inputSchema: Object.freeze({
+    type: "object",
+    properties: Object.freeze({
+      doc_id: Object.freeze({
+        type: "string",
+        pattern: "^doc-(?:0|[1-9]\\d?)$",
+      }),
+      start_offset: Object.freeze({ type: "integer", minimum: 0 }),
+      end_offset: Object.freeze({ type: "integer", minimum: 0 }),
+      exact_deleted: Object.freeze({
+        type: "string",
+        maxLength: MAX_STUDIO_TOOL_EDIT_FIELD_CHARS,
+      }),
+      inserted_text: Object.freeze({
+        type: "string",
+        maxLength: MAX_STUDIO_TOOL_EDIT_FIELD_CHARS,
+      }),
+      summary: Object.freeze({
+        type: "string",
+        minLength: 1,
+        maxLength: 500,
+      }),
+    }),
+    required: Object.freeze([
+      "doc_id",
+      "start_offset",
+      "end_offset",
+      "exact_deleted",
+      "inserted_text",
+      "summary",
+    ]),
+    additionalProperties: false,
+  }),
+});
+const READ_STUDIO_DOCUMENT_TOOL: AssistantToolDefinition = Object.freeze({
+  name: "read_studio_document",
+  description:
+    "Read a bounded exact range from an attached Vera Document Studio draft's current raw Markdown. Returned offsets are UTF-16 code units in raw_markdown_v1 and can be passed to suggest_studio_edit. Page through long Markdown with start_offset; never derive edit offsets from parsed chunks.",
+  inputSchema: Object.freeze({
+    type: "object",
+    properties: Object.freeze({
+      doc_id: Object.freeze({
+        type: "string",
+        pattern: "^doc-(?:0|[1-9]\\d?)$",
+      }),
+      start_offset: Object.freeze({
+        type: "integer",
+        minimum: 0,
+        default: 0,
+      }),
+      max_chars: Object.freeze({
+        type: "integer",
+        minimum: 1,
+        maximum: 100_000,
+        default: 100_000,
+      }),
+    }),
+    required: Object.freeze(["doc_id"]),
+    additionalProperties: false,
+  }),
+});
 
 const DOCUMENT_TOOLS = Object.freeze([
   LIST_DOCUMENTS_TOOL,
@@ -142,6 +252,18 @@ const DOCUMENT_TOOLS = Object.freeze([
   FETCH_DOCUMENTS_TOOL,
   FIND_DOCUMENT_TOOL,
 ]);
+
+export type AssistantDocumentToolsOptions = Readonly<{
+  studioSuggestions?: Pick<
+    WorkspaceDocumentStudioService,
+    "createSuggestionFromAssistantTool" | "getDocument"
+  >;
+  assertModelUse?: (input: {
+    projectId: string;
+    documentId: string;
+    versionId: string;
+  }) => void;
+}>;
 
 type Row = Record<string, unknown>;
 
@@ -222,6 +344,8 @@ function sameContext(
 ) {
   return (
     context.jobId === snapshot.jobId &&
+    Number.isSafeInteger(context.attempt) &&
+    context.attempt >= 1 &&
     context.chatId === snapshot.chatId &&
     context.projectId === snapshot.payload.projectId &&
     context.modelProfileId === snapshot.modelProfileId &&
@@ -304,12 +428,30 @@ function toolEventFilename(value: string) {
  */
 export class WorkspaceAssistantDocumentTools implements AssistantToolPort {
   private readonly reads = new Map<string, Set<string>>();
+  private readonly studioReads = new Map<
+    string,
+    Map<string, Array<{ startOffset: number; endOffset: number }>>
+  >();
 
   constructor(
     private readonly database: WorkspaceDatabaseAdapter,
     private readonly chats: ChatsRepository,
     private readonly retrieval = new AssistantRetrievalRepository(database),
+    private readonly options: AssistantDocumentToolsOptions = {},
   ) {}
+
+  private assertSnapshotModelUse(snapshot: AssistantGenerationSnapshot) {
+    if (!this.options.assertModelUse || snapshot.payload.projectId === null) {
+      return;
+    }
+    for (const document of snapshot.documents) {
+      this.options.assertModelUse({
+        projectId: snapshot.payload.projectId,
+        documentId: document.documentId,
+        versionId: document.versionId,
+      });
+    }
+  }
 
   private snapshot(context: AssistantToolContext) {
     const snapshot = this.chats.generationSnapshot(context.jobId);
@@ -318,8 +460,90 @@ export class WorkspaceAssistantDocumentTools implements AssistantToolPort {
         "Assistant generation snapshot changed before document access.",
       );
     }
+    this.assertSnapshotModelUse(snapshot);
     this.chats.assertGenerationDocumentsCurrent(context.jobId);
     return snapshot;
+  }
+
+  assertModelUse(context: AssistantToolContext) {
+    this.snapshot(context);
+  }
+
+  private hasStudioSuggestionTarget(snapshot: AssistantGenerationSnapshot) {
+    if (
+      !this.options.studioSuggestions ||
+      snapshot.payload.projectId === null ||
+      snapshot.documents.length === 0
+    ) {
+      return false;
+    }
+    return snapshot.documents.some((document) =>
+      this.isStudioSuggestionTarget(snapshot.payload.projectId!, document),
+    );
+  }
+
+  private isStudioSuggestionTarget(
+    projectId: string,
+    document: { documentId: string; versionId: string },
+  ) {
+    return Boolean(
+      this.database
+        .prepare(
+          `SELECT 1 AS present
+             FROM documents document
+             JOIN document_studio_versions studio
+               ON studio.project_id = document.project_id
+              AND studio.document_id = document.id
+              AND studio.version_id = document.current_version_id
+            WHERE document.project_id = ?
+              AND document.id = ?
+              AND document.current_version_id = ?
+              AND document.document_kind IN ('draft', 'template')
+              AND document.deleted_at IS NULL`,
+        )
+        .get(projectId, document.documentId, document.versionId),
+    );
+  }
+
+  private recordStudioRead(
+    executionId: string,
+    document: { documentId: string; versionId: string },
+    range: { startOffset: number; endOffset: number },
+  ) {
+    const byDocument = this.studioReads.get(executionId) ?? new Map();
+    const key = `${document.documentId}\0${document.versionId}`;
+    const ranges = byDocument.get(key) ?? [];
+    if (ranges.length >= 32) {
+      throw new AssistantDocumentToolError(
+        "Assistant Studio read range limit was reached.",
+      );
+    }
+    ranges.push(range);
+    byDocument.set(key, ranges);
+    this.studioReads.delete(executionId);
+    this.studioReads.set(executionId, byDocument);
+    while (this.studioReads.size > MAX_TRACKED_JOBS) {
+      const oldest = this.studioReads.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.studioReads.delete(oldest);
+    }
+  }
+
+  private hasExactStudioRead(
+    executionId: string,
+    document: { documentId: string; versionId: string },
+    startOffset: number,
+    endOffset: number,
+  ) {
+    const ranges = this.studioReads
+      .get(executionId)
+      ?.get(`${document.documentId}\0${document.versionId}`);
+    return Boolean(
+      ranges?.some(
+        (range) =>
+          startOffset >= range.startOffset && endOffset <= range.endOffset,
+      ),
+    );
   }
 
   private resolveDocument(
@@ -439,11 +663,18 @@ export class WorkspaceAssistantDocumentTools implements AssistantToolPort {
   }
 
   async registeredTools(context: AssistantToolContext) {
-    this.snapshot(context);
+    const snapshot = this.snapshot(context);
     this.reads.delete(context.jobId);
+    this.studioReads.delete(`${context.jobId}\0${context.attempt}`);
     return {
       adapterId: "vera-local-document-tools-mike-e32daad-v1",
-      tools: DOCUMENT_TOOLS,
+      tools: this.hasStudioSuggestionTarget(snapshot)
+        ? [
+            ...DOCUMENT_TOOLS,
+            READ_STUDIO_DOCUMENT_TOOL,
+            SUGGEST_STUDIO_EDIT_TOOL,
+          ]
+        : DOCUMENT_TOOLS,
     };
   }
 
@@ -606,6 +837,119 @@ export class WorkspaceAssistantDocumentTools implements AssistantToolPort {
         ],
         sourceContext: results,
       };
+    }
+
+    if (call.name === "read_studio_document") {
+      const parsed = ReadStudioDocumentInput.parse(call.input);
+      const document = this.resolveDocument(snapshot, parsed.doc_id);
+      if (
+        snapshot.payload.projectId === null ||
+        !this.options.studioSuggestions ||
+        !this.isStudioSuggestionTarget(snapshot.payload.projectId, document)
+      ) {
+        throw new AssistantDocumentToolError(
+          "Raw Document Studio Markdown is unavailable for this generation.",
+        );
+      }
+      const studio = await this.options.studioSuggestions.getDocument(
+        snapshot.payload.projectId,
+        document.documentId,
+        document.versionId,
+      );
+      if (parsed.start_offset > studio.content.length) {
+        throw new AssistantDocumentToolError(
+          "Studio read offset is outside the raw Markdown.",
+        );
+      }
+      const endOffset = Math.min(
+        studio.content.length,
+        parsed.start_offset + parsed.max_chars,
+      );
+      const text = studio.content.slice(parsed.start_offset, endOffset);
+      this.recordStudioRead(
+        `${snapshot.jobId}\0${input.context.attempt}`,
+        document,
+        {
+          startOffset: parsed.start_offset,
+          endOffset,
+        },
+      );
+      const content = safeJson({
+        document: {
+          document_id: document.documentId,
+          version_id: document.versionId,
+          offset_scope: "raw_markdown_v1",
+          offset_unit: "utf16_code_unit",
+          content_length: studio.content.length,
+        },
+        range: {
+          start_offset: parsed.start_offset,
+          end_offset: endOffset,
+          text,
+          complete: endOffset === studio.content.length,
+        },
+      });
+      this.snapshot(input.context);
+      throwIfAborted(input.signal);
+      return { content, sourceContext: [] };
+    }
+
+    if (call.name === "suggest_studio_edit") {
+      const parsed = SuggestStudioEditInput.parse(call.input);
+      const document = this.resolveDocument(snapshot, parsed.doc_id);
+      if (
+        snapshot.payload.projectId === null ||
+        !this.options.studioSuggestions ||
+        !this.isStudioSuggestionTarget(snapshot.payload.projectId, document)
+      ) {
+        throw new AssistantDocumentToolError(
+          "Document Studio suggestions are unavailable for this generation.",
+        );
+      }
+      if (
+        !this.hasExactStudioRead(
+          `${snapshot.jobId}\0${input.context.attempt}`,
+          document,
+          parsed.start_offset,
+          parsed.end_offset,
+        )
+      ) {
+        throw new AssistantDocumentToolError(
+          "Studio suggestion range was not read from exact raw Markdown in this generation.",
+        );
+      }
+      const suggestion =
+        await this.options.studioSuggestions.createSuggestionFromAssistantTool({
+          projectId: snapshot.payload.projectId,
+          documentId: document.documentId,
+          baseVersionId: document.versionId,
+          messageId: snapshot.outputMessageId,
+          jobId: snapshot.jobId,
+          attempt: input.context.attempt,
+          toolCallId: call.id,
+          startOffset: parsed.start_offset,
+          endOffset: parsed.end_offset,
+          exactDeletedText: parsed.exact_deleted,
+          insertedText: parsed.inserted_text,
+          summary: parsed.summary,
+        } satisfies CreateDocumentStudioSuggestionFromToolInput);
+      const content = safeJson({
+        suggestion: {
+          id: suggestion.id,
+          document_id: suggestion.documentId,
+          base_version_id: suggestion.baseVersionId,
+          status: suggestion.status,
+          offset_scope: suggestion.offsetScope,
+          offset_unit: suggestion.offsetUnit,
+          start_offset: suggestion.startOffset,
+          end_offset: suggestion.endOffset,
+        },
+        requires_explicit_user_acceptance: true,
+        document_content_changed: false,
+      });
+      this.snapshot(input.context);
+      throwIfAborted(input.signal);
+      return { content, sourceContext: [] };
     }
 
     throw new AssistantDocumentToolError(

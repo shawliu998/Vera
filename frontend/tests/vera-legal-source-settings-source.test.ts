@@ -3,7 +3,12 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
+import {
+  submitVeraCredentialInput,
+  VeraCredentialInputError,
+} from "../src/app/components/models/modelCredentialSubmission.ts";
 import { translateMessage } from "../src/app/i18n/messages.ts";
+import { VERA_LEGAL_SOURCE_CREDENTIAL_MAX_CHARACTERS } from "../src/app/lib/veraCredentialLimits.ts";
 
 const FRONTEND_ROOT = path.resolve(__dirname, "..");
 
@@ -54,15 +59,50 @@ test("legal-source secrets remain write-only DOM values", () => {
   assert.match(page, /useRef<HTMLInputElement>\(null\)/);
   assert.match(input, /type="password"/);
   assert.match(input, /autoComplete="off"/);
-  assert.match(input, /maxLength=\{VERA_CREDENTIAL_MAX_BYTES\}/);
+  assert.match(
+    input,
+    /maxLength=\{VERA_LEGAL_SOURCE_CREDENTIAL_MAX_CHARACTERS\}/,
+  );
+  assert.match(
+    page,
+    /maxCharacters: VERA_LEGAL_SOURCE_CREDENTIAL_MAX_CHARACTERS/,
+  );
   assert.doesNotMatch(input, /\bvalue=|\bdefaultValue=|\bname=/);
   assert.doesNotMatch(page, /useState[^\n]*(secret|credentialValue|apiKey)/i);
   assert.doesNotMatch(page, /Eye|showPassword|reveal/i);
-  assert.match(page, /submitVeraCredentialInput\(field/);
+  assert.match(page, /submitVeraCredentialInput\(\s*field/);
   assert.match(page, /finally \{\s*field\.value = "";/);
   assert.match(page, /if \(saveDisabled && inputRef\.current\)/);
   assert.match(submission, /const secret = field\.value;\s*field\.value = "";/);
   assert.match(submission, /finally\s*\{\s*field\.value = "";/);
+});
+
+test("legal-source credential limit remains independent from the Keychain model limit", async () => {
+  assert.equal(VERA_LEGAL_SOURCE_CREDENTIAL_MAX_CHARACTERS, 32_768);
+  const boundary = {
+    value: "x".repeat(VERA_LEGAL_SOURCE_CREDENTIAL_MAX_CHARACTERS),
+  };
+  let stored = false;
+  await submitVeraCredentialInput(
+    boundary,
+    async () => {
+      stored = true;
+    },
+    { maxCharacters: VERA_LEGAL_SOURCE_CREDENTIAL_MAX_CHARACTERS },
+  );
+  assert.equal(stored, true);
+  assert.equal(boundary.value, "");
+
+  const oversized = {
+    value: "x".repeat(VERA_LEGAL_SOURCE_CREDENTIAL_MAX_CHARACTERS + 1),
+  };
+  await assert.rejects(
+    submitVeraCredentialInput(oversized, async () => undefined, {
+      maxCharacters: VERA_LEGAL_SOURCE_CREDENTIAL_MAX_CHARACTERS,
+    }),
+    VeraCredentialInputError,
+  );
+  assert.equal(oversized.value, "");
 });
 
 test("save fails closed on readiness while removal remains available for an existing secret", () => {

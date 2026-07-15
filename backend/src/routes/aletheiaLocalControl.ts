@@ -20,6 +20,7 @@ import {
   legalResearchProviderDescriptor,
   projectLegalResearchProviderConnectionStatus,
 } from "../lib/aletheia/legalResearchProvider";
+import { LEGAL_SOURCE_RETENTION_ACTIVATION_V13 } from "../lib/workspace/sourceRetentionPolicyV13";
 import { localModelScheduler } from "../lib/aletheia/localModelRuntime";
 import { requireAuth } from "../middleware/auth";
 
@@ -109,7 +110,11 @@ function legalSourceStatusProjection(
       deployment.credentialReferenceConfigured;
     let secretStorageAvailable = encryptionEnabled;
     let credentialAvailable = false;
-    if (item.configured && encryptionEnabled) {
+    if (
+      LEGAL_SOURCE_RETENTION_ACTIVATION_V13.open &&
+      item.configured &&
+      encryptionEnabled
+    ) {
       try {
         // Local decryptability is a credential-availability check, not a
         // vendor connection test. The plaintext is neither returned nor
@@ -141,6 +146,7 @@ function legalSourceStatusProjection(
           deployment,
           credentialRequired: true,
           credentialAvailable,
+          activationGateClosed: !LEGAL_SOURCE_RETENTION_ACTIVATION_V13.open,
           secretStorageAvailable,
           // Historical rows came from a retired, unsupported test action.
           // This request performs no network probe, so they cannot establish

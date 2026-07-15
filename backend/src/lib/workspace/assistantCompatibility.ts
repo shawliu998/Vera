@@ -475,6 +475,8 @@ export const MikeAssistantStreamEventSchema = z.discriminatedUnion("type", [
         "read_document",
         "fetch_documents",
         "find_in_document",
+        "read_studio_document",
+        "suggest_studio_edit",
         "list_workflows",
         "read_workflow",
       ]),

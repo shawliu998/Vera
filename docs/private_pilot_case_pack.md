@@ -23,7 +23,8 @@
 读写，例如 `chmod 600`；目录建议为 `chmod 700`。
 
 ```bash
-cd "/Users/a1-6/Documents/new agent/backend"
+export REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT/backend"
 VERA_PILOT_CASE_DIR="/absolute/path/to/anonymized-case" \
   npm run check:vera:pilot-case-pack
 ```

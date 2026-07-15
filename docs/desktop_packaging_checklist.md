@@ -1,7 +1,11 @@
 # Desktop Packaging Checklist
 
-This checklist is for a private local Aletheia desktop/workstation build. It is
-not a release process yet; it defines what must be true before packaging.
+This checklist is for the Vera local desktop client. The default build is a
+private, unsigned local artifact; the final section defines the additional
+gates for a distributable release. Commands, environment variables, storage
+paths, tables, and routes containing `aletheia` are retained compatibility
+interfaces for legacy data and regression coverage. They are not current Vera
+product or user-interface branding.
 
 ## Required Local Capabilities
 
@@ -62,13 +66,14 @@ not a release process yet; it defines what must be true before packaging.
   without bundling client data.
 - `npm run test:aletheia:package` fails if required build output, deployment
   docs, attribution notices, or demo evidence docs are missing.
-- Documents, exports, SQLite DB, and indexes stay under `.data/aletheia`.
+- Legacy records, exports, SQLite DB, and indexes stay under the retained
+  `.data/aletheia` compatibility storage root.
 - Audit Pack, Feedback Dataset, and Final Memo exports require approved
   checkpoints.
 - Matter Memory remains matter-scoped.
 - Playbook updates require human approval.
 
-## Data Directory
+## Legacy Compatibility Data Directory
 
 Default:
 
@@ -80,15 +85,16 @@ Default:
   index/
 ```
 
-Packaging should allow an operator to choose a data directory. Do not silently
-store client data inside a public synced folder.
+This path remains supported for legacy local records. Current packaged Vera
+data lives under its controlled application data boundary. Packaging must not
+silently place client data inside a public synced folder.
 
 ## Process Model
 
 Minimum local process set:
 
 ```text
-Aletheia launcher
+Vera launcher
 -> backend process
 -> frontend process
 -> optional MCP process started by MCP client
@@ -121,7 +127,7 @@ Restore should verify:
 - the restore source stays inside the expected local data boundary;
 - backup content does not contain symlinks that escape the workspace;
 - SQLite `quick_check` passes;
-- core Aletheia tables exist;
+- legacy compatibility tables exist;
 - matters load;
 - documents can be searched;
 - evidence items retain source chunk IDs;
@@ -171,7 +177,16 @@ npm run pack:mac
 npm run test:packaged-app
 ```
 
-Manual browser check:
+Manual Vera browser check:
+
+- open `/assistant`;
+- open `/projects` and a Project;
+- verify Documents, Assistant, Workflows, and Tabular Reviews remain inside the
+  generic Project container;
+- open `/tabular-review`, `/workflows`, and `/settings`;
+- verify Vera is the only visible product name.
+
+Legacy compatibility browser audit (regression only):
 
 - open `/aletheia`;
 - open the seeded matter URL;
@@ -206,22 +221,79 @@ artifact to Apple.
 Developer ID signing and notarization are blocked until real Apple credentials
 are provided outside this repository. There is no claim that Vera is notarized
 today. A distributable build must use `VERA_RELEASE_SIGNING=true` and pass
-`npm run signing:preflight` before any application build begins. It requires a
-non-ad-hoc `CSC_NAME="Developer ID Application: ... (TEAMID)"` plus exactly one
+`npm run signing:preflight` before any application build begins. It requires an
+exact, non-ad-hoc Electron Builder qualifier
+`CSC_NAME="Certificate Name (TEAMID)"` (without the
+`Developer ID Application:` prefix) plus exactly one
 complete, team-matched method:
 
 - `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID`; or
 - `APPLE_API_KEY` (readable `.p8` file), `APPLE_API_KEY_ID`,
   `APPLE_API_ISSUER`, and `APPLE_TEAM_ID`.
 
+The checked-in GitHub workflow is deliberately local-only: it references no
+repository Apple secrets and pins `VERA_RELEASE_SIGNING=false`. Its desktop
+dependency install exists only so the offline audit can exercise the locked
+Electron Builder identity parser. A future release workflow must use a
+protected GitHub environment/manual approval before receiving Apple secrets;
+those secrets must never be exposed to pull-request jobs.
+
 When `CSC_LINK` is not used, the release CLI preflight also runs
 `security find-identity -v -p codesigning` and requires an exact match for
-`CSC_NAME` in the macOS keychain. Preflight reports requirements only; actual
+the reconstructed `Developer ID Application: ${CSC_NAME}` authority in the
+macOS keychain. Preflight reports requirements only; actual
 `signed=true notarized=true` is emitted solely after release verification.
 
-Release packaging notarizes in `afterSign`, validates the stapled ticket, then
-requires `codesign --verify --deep --strict`, Developer ID authority/team
-inspection, `spctl --assess`, `xcrun stapler validate`, and SHA-256 manifest
-verification. Run `npm run test:signing-pipeline` to audit credential
-classification and static linkage offline; it uses fixtures only and performs
-no network call.
+Electron Builder's implicit notarization is explicitly disabled. Release
+packaging checks the exact Developer ID authority/team before `afterSign`
+notarizes/staples the app, signs the DMG with Developer ID, then uses the
+release-only `afterAllArtifactBuild` hook to
+verify the final DMG's Developer ID/team, notarize, staple, and validate it.
+That pre-submit signature check prevents an unsigned container from being sent
+to Apple. Local mode skips both hooks without contacting Apple. Verification
+then requires explicit inner-to-outer nested-code verification before the outer
+app, final `codesign --verify --deep --strict`, Developer ID authority/team and
+hardened-runtime inspection, `spctl --assess`, `xcrun stapler validate`, and
+SHA-256 manifest verification. Final DMG verification also attaches the image
+read-only with browsing/automatic opening disabled, requires exactly one
+top-level `Vera.app`, applies the complete App verification to it, and always
+detaches with a force fallback before returning. The checked-in main entitlement
+plist grants
+only Electron/V8 JIT; the inherited plist adds the nested Plugin Helper's
+unsigned-executable-memory requirement. Both reject `get-task-allow`, sandbox,
+library-validation disablement, and additional network, file, device, or
+personal-information entitlements.
+
+Use the non-mutating readiness report before requesting release authority:
+
+```bash
+cd desktop
+npm run signing:readiness -- --no-artifacts
+npm run signing:readiness
+```
+
+Readiness checks bundle ID/version, hardened runtime and entitlement structure,
+the complete local toolchain (`codesign`, `security`, `spctl`, `xcrun`,
+`notarytool`, `stapler`, `plutil`, `hdiutil`, `ditto`, `zipinfo`, `unzip`, and
+`shasum`), Developer ID identity availability, credential-variable
+presence, and any built app/DMG/ZIP. It prints credential names only as
+`present` or `missing`; it never prints values, signs code, changes the
+Keychain, or contacts Apple. Its default exit status remains successful for an
+ordinary local build while reporting `UNSIGNED`, `NOT_NOTARIZED`, and concrete
+blockers. `--strict-release` is reserved for a credentialed, already-built
+release and exits nonzero unless every release gate passes.
+
+App verification covers `codesign`, Gatekeeper execute assessment, and the
+stapled ticket. DMG verification covers structure, Developer ID container
+signature, Gatekeeper open assessment, and its stapled ticket. ZIP is not a
+codesign/stapler container; those checks are explicitly `not_applicable`, and
+the ZIP receives a bounded pre-extraction entry/type/symbolic-link audit. It
+must contain exactly one application named `Vera.app`; that extracted app then
+receives the full app checks. `dmg.sign=true` is a release requirement but still
+skips signing when the local build deliberately exposes no identity. DMG
+blockmap generation is disabled because final ticket stapling changes the DMG
+bytes after Electron Builder's target phase; Vera uses the post-staple SHA-256
+manifest as its release integrity record. A missing final DMG ticket remains a
+release blocker even if the app inside it was notarized. Run
+`npm run test:signing-pipeline` to audit this behavior entirely with fixtures;
+it performs no Keychain write, signing, notarization, or Apple network call.

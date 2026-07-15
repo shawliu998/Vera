@@ -43,6 +43,26 @@ const SourceListQuery = z
   })
   .strict();
 
+const SourceContentQuery = z
+  .object({
+    chunk_id: Id.optional(),
+    cursor: z.string().min(1).max(512).optional(),
+    limit: z.coerce.number().int().min(1).max(20).optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      value.chunk_id !== undefined &&
+      (value.cursor !== undefined || value.limit !== undefined)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["chunk_id"],
+        message: "A direct source chunk request cannot be paginated.",
+      });
+    }
+  });
+
 const CreateAnchorRequest = z
   .object({
     chunk_id: Id,
@@ -131,10 +151,26 @@ const CitationAnchorResponse = z
     project_id: Id,
     snapshot_id: Id,
     ordinal: z.number().int().nonnegative(),
-    exact_quote: OpaqueQuote,
+    exact_quote: OpaqueQuote.nullable(),
     quote_sha256: Sha256,
     locator: TransportSafeSourceMetadataV11Schema,
     created_at: IsoDateTime,
+    quote_available: z.boolean().default(true),
+    access_state: z
+      .enum(["available", "tombstoned", "lifecycle_missing"])
+      .default("available"),
+    retention_denial_code: z
+      .enum([
+        "source_retention_lifecycle_missing",
+        "source_retention_lifecycle_invalid",
+        "source_retention_tombstoned",
+        "source_retention_expired",
+        "source_retention_policy_prohibited",
+        "source_retention_local_model_required",
+        "source_retention_review_required",
+      ])
+      .nullable()
+      .default(null),
   })
   .strict();
 
@@ -159,6 +195,73 @@ const SourceDetailResponse = z
   })
   .strict();
 
+const SourceContentDocumentResponse = z
+  .object({
+    document_id: Id,
+    version_id: Id,
+    title: OpaqueTitle,
+    filename: z
+      .string()
+      .min(1)
+      .max(240)
+      .refine((value) => !/[\u0000-\u001f\u007f\\/]/u.test(value)),
+    mime_type: z
+      .string()
+      .min(1)
+      .max(255)
+      .refine((value) => !/[\u0000-\u001f\u007f]/u.test(value)),
+    content_sha256: Sha256,
+    page_count: z.number().int().nonnegative().nullable(),
+  })
+  .strict();
+
+const SourceContentChunkResponse = z
+  .object({
+    id: Id,
+    ordinal: z.number().int().nonnegative(),
+    text: z
+      .string()
+      .min(1)
+      .max(65_536)
+      .refine((value) => !value.includes("\0")),
+    content_sha256: Sha256,
+    start_offset: z.number().int().nonnegative(),
+    end_offset: z.number().int().nonnegative(),
+    page_start: z.number().int().positive().nullable(),
+    page_end: z.number().int().positive().nullable(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.end_offset < value.start_offset) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["end_offset"],
+        message: "Source chunk end offset is invalid.",
+      });
+    }
+    if (
+      (value.page_start === null) !== (value.page_end === null) ||
+      (value.page_start !== null &&
+        value.page_end !== null &&
+        value.page_end < value.page_start)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["page_end"],
+        message: "Source chunk page bounds are invalid.",
+      });
+    }
+  });
+
+const SourceContentResponse = z
+  .object({
+    snapshot_id: Id,
+    document: SourceContentDocumentResponse,
+    chunks: z.array(SourceContentChunkResponse).max(20),
+    next_cursor: z.string().min(1).max(512).nullable(),
+  })
+  .strict();
+
 const CreateAnchorResponse = z
   .object({
     anchor: CitationAnchorResponse,
@@ -178,6 +281,12 @@ export type WorkspaceProjectSourceAnchorInput = {
   endOffset: number | null;
 };
 
+export type WorkspaceProjectSourceContentInput = {
+  chunkId?: string;
+  limit?: number;
+  cursor?: string;
+};
+
 /** Dedicated Project source seam; every implementation must recheck scope. */
 export interface WorkspaceProjectSourcesV1Port {
   captureProjectDocumentSource(
@@ -195,6 +304,12 @@ export interface WorkspaceProjectSourcesV1Port {
     context: WorkspaceV1Context,
     projectId: string,
     snapshotId: string,
+  ): Promise<unknown>;
+  readProjectSourceContent(
+    context: WorkspaceV1Context,
+    projectId: string,
+    snapshotId: string,
+    input: WorkspaceProjectSourceContentInput,
   ): Promise<unknown>;
   createProjectSourceAnchor(
     context: WorkspaceV1Context,
@@ -308,6 +423,15 @@ export function createWorkspaceProjectSourcesV1Router(
 ): Router {
   const router = Router();
 
+  router.use((_request, response, next) => {
+    response.set({
+      "Cache-Control": "private, no-store",
+      Pragma: "no-cache",
+      Expires: "0",
+    });
+    next();
+  });
+
   router.post(
     "/projects/:projectId/sources/document-snapshots",
     asyncRoute(async (request, response) => {
@@ -356,6 +480,28 @@ export function createWorkspaceProjectSourcesV1Router(
             contextFor(request, options),
             idParam(request, "projectId"),
             idParam(request, "snapshotId"),
+          ),
+        ),
+      );
+    }),
+  );
+
+  router.get(
+    "/projects/:projectId/sources/:snapshotId/content",
+    asyncRoute(async (request, response) => {
+      const query = SourceContentQuery.parse(request.query);
+      response.json(
+        safePayload(
+          SourceContentResponse,
+          await port.readProjectSourceContent(
+            contextFor(request, options),
+            idParam(request, "projectId"),
+            idParam(request, "snapshotId"),
+            {
+              chunkId: query.chunk_id,
+              limit: query.limit,
+              cursor: query.cursor,
+            },
           ),
         ),
       );

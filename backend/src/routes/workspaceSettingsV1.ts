@@ -3,6 +3,7 @@ import { ZodError, z } from "zod";
 
 import { WorkspaceApiError } from "../lib/workspace/errors";
 import { MODEL_CONNECTION_TEST_ERROR_CODES } from "../lib/workspace/modelConnectionReadiness";
+import { MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES } from "../lib/workspace/services/credentialStore";
 
 const Uuid = z.string().uuid();
 const StrictUtcTimestamp = z
@@ -64,7 +65,9 @@ const CredentialBody = z
       .min(1)
       .refine((value) => !/[\r\n]/.test(value), "secret is invalid")
       .refine(
-        (value) => Buffer.byteLength(value, "utf8") <= 8 * 1024,
+        (value) =>
+          Buffer.byteLength(value, "utf8") <=
+          MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES,
         "secret is too large",
       ),
   })

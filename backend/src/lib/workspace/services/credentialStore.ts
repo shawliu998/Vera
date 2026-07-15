@@ -1,6 +1,12 @@
 import { WorkspaceApiError } from "../errors";
 import type { ModelProvider } from "../modelCompatibility";
 
+/** UTF-8 byte limit shared by every new model-credential store boundary. */
+export const MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES = 1024;
+
+/** Read-only upgrade compatibility for credentials stored by older Vera builds. */
+export const MAX_MODEL_CREDENTIAL_RESOLVE_SECRET_BYTES = 8 * 1024;
+
 export type CredentialBindingKey = {
   profileId: string;
   provider: ModelProvider;

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
@@ -76,6 +77,9 @@ const HIGH_CONFIDENCE_SECRET_PATTERNS = [
   },
 ];
 
+const PUBLIC_FIXTURE_MARKER = "privacy-preflight-public-fixture-sha256:";
+const PUBLIC_TOKEN_FIXTURE_MARKER = "privacy-preflight-public-token-sha256:";
+
 function repoRoot() {
   return path.resolve(process.cwd(), "..");
 }
@@ -151,10 +155,37 @@ function envAssignment(line: string) {
   return { name: match[1], value: match[2] };
 }
 
+function reviewedPrivateKeyHeaderLines(text: string, lines: string[]) {
+  const reviewed = new Set<number>();
+  const blocks =
+    /-----BEGIN ([A-Z ]*PRIVATE KEY)-----[\s\S]*?-----END \1-----/g;
+  for (const match of text.matchAll(blocks)) {
+    if (match.index === undefined) continue;
+    const lineNumber = text.slice(0, match.index).split(/\r?\n/).length;
+    const marker = lines[lineNumber - 2]?.trim().replace(/^\/\/\s*/, "");
+    const digest = createHash("sha256").update(match[0]).digest("hex");
+    if (marker === `${PUBLIC_FIXTURE_MARKER}${digest}`) {
+      reviewed.add(lineNumber);
+    }
+  }
+  return reviewed;
+}
+
+function isReviewedPublicToken(
+  lines: string[],
+  lineNumber: number,
+  token: string,
+) {
+  const marker = lines[lineNumber - 2]?.trim().replace(/^\/\/\s*/, "");
+  const digest = createHash("sha256").update(token).digest("hex");
+  return marker === `${PUBLIC_TOKEN_FIXTURE_MARKER}${digest}`;
+}
+
 function scanFile(root: string, relativePath: string): Finding[] {
   const findings: Finding[] = [];
   const text = readText(root, relativePath);
   const lines = text.split(/\r?\n/);
+  const reviewedPrivateKeyLines = reviewedPrivateKeyHeaderLines(text, lines);
 
   lines.forEach((line, index) => {
     const lineNumber = index + 1;
@@ -170,15 +201,22 @@ function scanFile(root: string, relativePath: string): Finding[] {
     }
 
     HIGH_CONFIDENCE_SECRET_PATTERNS.forEach((pattern) => {
-      if (pattern.pattern.test(line)) {
-        findings.push({
-          id: pattern.id,
-          severity: "critical",
-          file: relativePath,
-          line: lineNumber,
-          detail: pattern.detail,
-        });
+      if (
+        pattern.id === "private-key-block" &&
+        reviewedPrivateKeyLines.has(lineNumber)
+      ) {
+        return;
       }
+      const matchedToken = line.match(pattern.pattern)?.[0];
+      if (!matchedToken) return;
+      if (isReviewedPublicToken(lines, lineNumber, matchedToken)) return;
+      findings.push({
+        id: pattern.id,
+        severity: "critical",
+        file: relativePath,
+        line: lineNumber,
+        detail: pattern.detail,
+      });
     });
   });
 

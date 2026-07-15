@@ -62,17 +62,25 @@ function runProvisioning(options) {
 }
 
 function assertNoOverwrite(calls) {
-  const addCall = calls.find((call) => call.args[0] === "add-generic-password");
-  if (!addCall) return;
-  assert.equal(
-    addCall.args.includes("-U"),
-    false,
-    "Provisioning must never use overwrite mode.",
-  );
+  for (const call of calls) {
+    assert.equal(
+      call.args.includes("-U"),
+      false,
+      "Provisioning must never use overwrite mode.",
+    );
+    assert.equal(
+      /(^|\s)-U(?:\s|$)/.test(String(call.options.input ?? "")),
+      false,
+      "Provisioning must never send overwrite mode to security -i.",
+    );
+  }
 }
 
-function promptedPasswordInput(secret) {
-  return `${secret}\n${secret}\n`;
+function nonPromptingPasswordInput(service, account, secret) {
+  return `add-generic-password -s ${service} -a ${account} -X ${Buffer.from(
+    secret,
+    "utf8",
+  ).toString("hex")}\n`;
 }
 
 function assertSharedSecurityOptions(options, stdinMode) {
@@ -99,10 +107,15 @@ function auditMissingCreatesNewKey() {
       },
     },
     {
-      args: ["add-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"],
-      assert({ options }) {
+      args: ["-i"],
+      assert({ args, options }) {
         assertSharedSecurityOptions(options, "pipe");
-        assert.equal(options.input, promptedPasswordInput(encoded));
+        assert.equal(
+          options.input,
+          nonPromptingPasswordInput(SERVICE, ACCOUNT, encoded),
+        );
+        assert.equal(args.includes(encoded), false);
+        assert.equal(options.input.includes(encoded), false);
       },
     },
     {
@@ -251,10 +264,13 @@ function auditVerifyFailureFailsClosed() {
       },
     },
     {
-      args: ["add-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"],
+      args: ["-i"],
       assert({ options }) {
         assertSharedSecurityOptions(options, "pipe");
-        assert.equal(options.input, promptedPasswordInput(encoded));
+        assert.equal(
+          options.input,
+          nonPromptingPasswordInput(SERVICE, ACCOUNT, encoded),
+        );
       },
     },
     {
@@ -262,6 +278,46 @@ function auditVerifyFailureFailsClosed() {
       stdout: `${other}\n`,
       assert({ options }) {
         assertSharedSecurityOptions(options, "ignore");
+      },
+    },
+  ]);
+  assert.throws(
+    () =>
+      runProvisioning({
+        execFileSyncImpl: mock.execFileSyncImpl,
+        randomBytesImpl: () => generated,
+      }),
+    /Unable to access the Vera application encryption key in macOS Keychain/,
+  );
+  mock.assertComplete();
+  assertNoOverwrite(mock.calls);
+}
+
+function auditCreateCollisionFailsClosed() {
+  const generated = Buffer.alloc(32, 13);
+  const encoded = generated.toString("base64");
+  const mock = securityMock([
+    {
+      args: ["find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"],
+      error: securityError({
+        status: 44,
+        stderr:
+          "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.\n",
+      }),
+    },
+    {
+      args: ["-i"],
+      error: securityError({
+        status: 45,
+        stderr:
+          "security: SecKeychainAddGenericPassword: errSecDuplicateItem\n",
+      }),
+      assert({ options }) {
+        assertSharedSecurityOptions(options, "pipe");
+        assert.equal(
+          options.input,
+          nonPromptingPasswordInput(SERVICE, ACCOUNT, encoded),
+        );
       },
     },
   ]);
@@ -383,6 +439,7 @@ auditTimeoutFailsClosed();
 auditUnexpectedCommandErrorFailsClosed();
 auditInvalidExistingFailsClosed();
 auditVerifyFailureFailsClosed();
+auditCreateCollisionFailsClosed();
 auditNotFoundClassifier();
 const realFreshProvisioning = auditRealFreshKeyProvisioning();
 auditStaticIntegration();
@@ -397,9 +454,10 @@ console.log(
         "valid existing 32-byte base64 key is reused",
         "permission denial, timeout, and command errors fail closed",
         "invalid existing key material fails closed without replacement",
-      "post-create verification mismatch fails closed without overwrite",
-      `real fresh base64 key create/direct-read/reuse/delete round trip: ${realFreshProvisioning}`,
-      "static desktop wiring and package inclusion stay intact",
+        "non-prompting security -i writes keep key material out of argv",
+        "create collisions and post-create verification mismatches fail closed without overwrite",
+        `real fresh base64 key create/direct-read/reuse/delete round trip: ${realFreshProvisioning}`,
+        "static desktop wiring and package inclusion stay intact",
       ],
     },
     null,

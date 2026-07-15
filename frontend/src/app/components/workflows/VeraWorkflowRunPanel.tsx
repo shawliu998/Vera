@@ -19,6 +19,7 @@ import {
   ChevronRight,
   Circle,
   Clock3,
+  FilePenLine,
   Loader2,
   Play,
   RefreshCw,
@@ -31,6 +32,7 @@ import {
 import { useVeraSettings } from "@/app/contexts/VeraSettingsContext";
 import { useI18n } from "@/app/i18n";
 import { listVeraProjects, VeraApiError } from "@/app/lib/veraApi";
+import { createVeraStudioDraftFromWorkflow } from "@/app/lib/veraDocumentStudioApi";
 import type { VeraProjectWire } from "@/app/lib/veraWireTypes";
 import {
   cancelVeraWorkflowRun,
@@ -177,7 +179,8 @@ function StatusIcon({
   const className = "h-3.5 w-3.5 shrink-0";
   if (status === "complete") return <CheckCircle2 className={className} />;
   if (status === "failed") return <XCircle className={className} />;
-  if (status === "running") return <Loader2 className={`${className} animate-spin`} />;
+  if (status === "running")
+    return <Loader2 className={`${className} animate-spin`} />;
   if (status === "queued" || status === "waiting") {
     return <Clock3 className={className} />;
   }
@@ -244,10 +247,11 @@ export function VeraWorkflowRunPanel({
   const [loading, setLoading] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [busyAction, setBusyAction] = useState<
-    "run" | "cancel" | "retry" | null
+    "run" | "cancel" | "retry" | "draft" | null
   >(null);
   const [loadFailure, setLoadFailure] = useState<unknown>(null);
   const [operationFailure, setOperationFailure] = useState<unknown>(null);
+  const [draftFailure, setDraftFailure] = useState(false);
   const pollRef = useRef<ReturnType<
     typeof createVeraWorkflowRunPollCoordinator
   > | null>(null);
@@ -272,7 +276,10 @@ export function VeraWorkflowRunPanel({
       );
       return;
     }
-    if (selectedModelId && readyModels.some((item) => item.id === selectedModelId)) {
+    if (
+      selectedModelId &&
+      readyModels.some((item) => item.id === selectedModelId)
+    ) {
       return;
     }
     const preferred = readyModels.find(
@@ -312,7 +319,10 @@ export function VeraWorkflowRunPanel({
               ? boundProjectId
               : "";
           }
-          if (current && activeProjects.some((project) => project.id === current)) {
+          if (
+            current &&
+            activeProjects.some((project) => project.id === current)
+          ) {
             return current;
           }
           const preferredProjectId = initialProjectId;
@@ -364,6 +374,7 @@ export function VeraWorkflowRunPanel({
       current?.run.id === selectedRunId ? current : null,
     );
     setOperationFailure(null);
+    setDraftFailure(false);
     const coordinator = createVeraWorkflowRunPollCoordinator({
       load: (signal) => getVeraWorkflowRun(selectedRunId, signal),
       apply: applyDetail,
@@ -419,7 +430,8 @@ export function VeraWorkflowRunPanel({
   }
 
   async function cancelRun() {
-    if (!detail || busyAction || !ACTIVE_RUN_STATUSES.has(detail.run.status)) return;
+    if (!detail || busyAction || !ACTIVE_RUN_STATUSES.has(detail.run.status))
+      return;
     setBusyAction("cancel");
     setOperationFailure(null);
     try {
@@ -444,10 +456,7 @@ export function VeraWorkflowRunPanel({
     setOperationFailure(null);
     try {
       acceptPrepared(
-        await retryVeraWorkflowRun(
-          detail.run.id,
-          idempotencyKey("retry"),
-        ),
+        await retryVeraWorkflowRun(detail.run.id, idempotencyKey("retry")),
       );
     } catch (error) {
       setOperationFailure(error);
@@ -477,6 +486,33 @@ export function VeraWorkflowRunPanel({
       setOperationFailure(error);
     } finally {
       setHistoryLoading(false);
+    }
+  }
+
+  async function createStudioDraft() {
+    if (
+      !detail ||
+      busyAction ||
+      detail.run.status !== "complete" ||
+      !detail.run.project_id ||
+      detail.run.output === null
+    ) {
+      return;
+    }
+    setBusyAction("draft");
+    setDraftFailure(false);
+    try {
+      const draft = await createVeraStudioDraftFromWorkflow(
+        detail.run.project_id,
+        { workflow_run_id: detail.run.id },
+      );
+      router.push(
+        `/projects/${draft.project_id}/documents/${draft.document_id}/studio`,
+      );
+    } catch {
+      setDraftFailure(true);
+    } finally {
+      setBusyAction(null);
     }
   }
 
@@ -548,7 +584,7 @@ export function VeraWorkflowRunPanel({
     busyAction === null;
   const configuredModelUnavailable = Boolean(
     configuredModelProfileId &&
-      !readyModels.some((model) => model.id === configuredModelProfileId),
+    !readyModels.some((model) => model.id === configuredModelProfileId),
   );
   const selectedOutput = extractContent(detail?.run.output ?? null);
 
@@ -691,7 +727,9 @@ export function VeraWorkflowRunPanel({
                       : "hover:bg-gray-50"
                   }`}
                 >
-                  <span className={`rounded-full p-1 ${statusTone(run.status)}`}>
+                  <span
+                    className={`rounded-full p-1 ${statusTone(run.status)}`}
+                  >
                     <StatusIcon status={run.status} />
                   </span>
                   <span className="min-w-0 flex-1">
@@ -712,7 +750,9 @@ export function VeraWorkflowRunPanel({
                   onClick={() => void loadMoreRuns()}
                   className="flex w-full items-center justify-center gap-1.5 py-2 text-xs font-medium text-gray-500 hover:text-gray-800 disabled:opacity-40"
                 >
-                  {historyLoading && <Loader2 className="h-3 w-3 animate-spin" />}
+                  {historyLoading && (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  )}
                   {t("workflows.execution.loadMore")}
                 </button>
               )}
@@ -800,9 +840,34 @@ export function VeraWorkflowRunPanel({
 
               {detail.run.output !== null && (
                 <div>
-                  <h4 className="text-xs font-semibold text-gray-600">
-                    {t("workflows.execution.output")}
-                  </h4>
+                  <div className="flex items-center justify-between gap-3">
+                    <h4 className="text-xs font-semibold text-gray-600">
+                      {t("workflows.execution.output")}
+                    </h4>
+                    {detail.run.status === "complete" &&
+                      detail.run.project_id && (
+                        <button
+                          type="button"
+                          disabled={busyAction !== null}
+                          onClick={() => void createStudioDraft()}
+                          className="inline-flex items-center gap-1 rounded-full border border-gray-200 px-2.5 py-1.5 text-[11px] font-medium text-gray-600 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          {busyAction === "draft" ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <FilePenLine className="h-3 w-3" />
+                          )}
+                          {busyAction === "draft"
+                            ? t("workflows.execution.creatingDraft")
+                            : t("workflows.execution.createDraft")}
+                        </button>
+                      )}
+                  </div>
+                  {draftFailure && (
+                    <p role="alert" className="mt-2 text-[11px] text-red-600">
+                      {t("workflows.errors.studioDraft")}
+                    </p>
+                  )}
                   <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-gray-950 px-3 py-3 text-[11px] leading-5 text-gray-100">
                     {selectedOutput ??
                       boundedJson(
@@ -866,9 +931,9 @@ function WorkflowStepRow({ step }: { step: VeraWorkflowStepRun }) {
               <p className="text-[10px] font-semibold uppercase tracking-wide text-red-400">
                 {t("workflows.execution.stepError")}
               </p>
-            <p className="text-[11px] leading-5 text-red-700">
-              {errorMessage({ code: step.error.code })}
-            </p>
+              <p className="text-[11px] leading-5 text-red-700">
+                {errorMessage({ code: step.error.code })}
+              </p>
             </div>
           ) : step.output !== null ? (
             <div>
@@ -876,10 +941,7 @@ function WorkflowStepRow({ step }: { step: VeraWorkflowStepRun }) {
                 {t("workflows.execution.stepOutput")}
               </p>
               <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words text-[10px] leading-5 text-gray-600">
-                {boundedJson(
-                  step.output,
-                  t("workflows.execution.truncated"),
-                )}
+                {boundedJson(step.output, t("workflows.execution.truncated"))}
               </pre>
             </div>
           ) : (

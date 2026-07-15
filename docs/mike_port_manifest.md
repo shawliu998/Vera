@@ -59,7 +59,7 @@ Mike UI 的使用已经获得授权。仓库仍按 AGPL-3.0-only 基线保留来
 ## 2. 当前工作树事实快照
 
 - 固定 Mike commit 已在本地 Git 对象库中，移植文件保留 source-lock/provenance。
-- `backend/src/lib/workspace/` 已收敛到 additive SQLCipher migrations v1-v10、repositories/services、加密 Blob、下载 capability、FTS、持久 jobs/events 和统一 runtime。
+- `backend/src/lib/workspace/` 已收敛到 additive SQLCipher migrations v1-v14、repositories/services、加密 Blob、下载 capability、FTS、持久 jobs/events 和统一 runtime。
 - `backend/src/index.ts` 是薄入口；`backend/src/veraApplication.ts` 是唯一 composition root。Legacy `/aletheia` 保留，Workspace API 只在 `/api/v1` 挂载一次。
 - 同一个持久 job pump 执行 `document_parse`、`assistant_generate`、`workflow_run` 和 `tabular_cell`；没有第二套前端假执行器或内存任务状态机。
 - Assistant、Projects、Tabular Review、Workflows、Settings 的活动页面与真实本地 API 已接通；主导航不再进入 `/aletheia/*`。
@@ -70,105 +70,105 @@ Mike UI 的使用已经获得授权。仓库仍按 AGPL-3.0-only 基线保留来
 
 状态词含义：
 
-| 状态 | 含义 |
-|---|---|
-| `source-complete` | 活动源码、真实本地纵向链路和对应 source gates 已完成 |
-| `packaged-complete` | 当前源码产生的全新 Vera 包已通过跨重启及打包验收 |
-| `excluded` | 明确不进入 P0 |
-| `legacy` | 为兼容与回归保留，不属于 Mike-derived 主产品路径 |
+| 状态                | 含义                                                 |
+| ------------------- | ---------------------------------------------------- |
+| `source-complete`   | 活动源码、真实本地纵向链路和对应 source gates 已完成 |
+| `packaged-complete` | 当前源码产生的全新 Vera 包已通过跨重启及打包验收     |
+| `excluded`          | 明确不进入 P0                                        |
+| `legacy`            | 为兼容与回归保留，不属于 Mike-derived 主产品路径     |
 
 ## 3. Shell 与主导航
 
-| Mike 固定基线路径/区域 | Vera 活动实现 | 方式 | 状态 |
-|---|---|---|---|
-| `(pages)/layout.tsx`、`AppSidebar.tsx` | `(pages)/layout.tsx`、`components/vera-shell/VeraShell.tsx`、`VeraSidebar.tsx` | adapt | `source-complete`：五项导航为 Assistant、Projects、Tabular Review、Workflows、Settings；Settings 按 runtime capability 启用 |
-| `PageChromeContext.tsx`、`SidebarContext.tsx` | 同名 contexts | direct/adapt | `source-complete` |
-| `ChatHistoryContext.tsx`、`SidebarChatItem.tsx` | 本地 chat history、全局与 Project chat 路由同步 | adapt | `source-complete` |
-| `PageHeader.tsx`、共享 primitives | Mike-derived active shared components | direct/adapt | `source-complete` |
-| logo/icon/产品文案 | `VeraSiteLogo.tsx` 与 Vera i18n/metadata | adapt | `source-complete` |
-| 根路径 | `frontend/src/app/page.tsx` 跳转 `/assistant` | rewrite | `source-complete` |
-| 桌面默认入口 | `desktop/main.js`：`WORKSPACE_PATH = "/assistant"` | adapt existing Vera | `source-complete; packaged-complete` |
-| 旧 `/aletheia/*` | 保留编译和回归，主导航隐藏 | retain | `legacy; packaged regression complete` |
+| Mike 固定基线路径/区域                          | Vera 活动实现                                                                  | 方式                | 状态                                                                                                                        |
+| ----------------------------------------------- | ------------------------------------------------------------------------------ | ------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `(pages)/layout.tsx`、`AppSidebar.tsx`          | `(pages)/layout.tsx`、`components/vera-shell/VeraShell.tsx`、`VeraSidebar.tsx` | adapt               | `source-complete`：五项导航为 Assistant、Projects、Tabular Review、Workflows、Settings；Settings 按 runtime capability 启用 |
+| `PageChromeContext.tsx`、`SidebarContext.tsx`   | 同名 contexts                                                                  | direct/adapt        | `source-complete`                                                                                                           |
+| `ChatHistoryContext.tsx`、`SidebarChatItem.tsx` | 本地 chat history、全局与 Project chat 路由同步                                | adapt               | `source-complete`                                                                                                           |
+| `PageHeader.tsx`、共享 primitives               | Mike-derived active shared components                                          | direct/adapt        | `source-complete`                                                                                                           |
+| logo/icon/产品文案                              | `VeraSiteLogo.tsx` 与 Vera i18n/metadata                                       | adapt               | `source-complete`                                                                                                           |
+| 根路径                                          | `frontend/src/app/page.tsx` 跳转 `/assistant`                                  | rewrite             | `source-complete`                                                                                                           |
+| 桌面默认入口                                    | `desktop/main.js`：`WORKSPACE_PATH = "/assistant"`                             | adapt existing Vera | `source-complete; packaged-complete`                                                                                        |
+| 旧 `/aletheia/*`                                | 保留编译和回归，主导航隐藏                                                     | retain              | `legacy; packaged regression complete`                                                                                      |
 
 ## 4. Projects 与 Documents
 
-| 能力 | Vera 活动实现 | 方式 | 状态 |
-|---|---|---|---|
-| Projects 总览、新建、编辑、归档 | `(pages)/projects/page.tsx`、`ProjectsOverview.tsx`、`NewProjectModal.tsx` | adapt | `source-complete` |
-| Project 通用容器 | `(pages)/projects/[id]/layout.tsx`、`ProjectWorkspace.tsx`、`ProjectPageParts.tsx` | adapt | `source-complete`：文档、对话、工作流和表格审阅均以 `project_id` 归属或限定上下文 |
-| 文件夹、文档、版本和预览 | `ProjectDocumentsView.tsx`、`DocumentSidePanel.tsx`、shared directory/views | direct/adapt | `source-complete` |
-| 本地 Projects/Documents API | `/api/v1/projects` 及其 nested documents/folders/version/retry routes | rewrite | `source-complete` |
-| 持久化、解析与加密存储 | Workspace repositories/services、`localWorkspaceBlobStore.ts`、统一 job pump | reuse/rewrite | `source-complete; packaged-complete` |
+| 能力                            | Vera 活动实现                                                                      | 方式          | 状态                                                                              |
+| ------------------------------- | ---------------------------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------- |
+| Projects 总览、新建、编辑、归档 | `(pages)/projects/page.tsx`、`ProjectsOverview.tsx`、`NewProjectModal.tsx`         | adapt         | `source-complete`                                                                 |
+| Project 通用容器                | `(pages)/projects/[id]/layout.tsx`、`ProjectWorkspace.tsx`、`ProjectPageParts.tsx` | adapt         | `source-complete`：文档、对话、工作流和表格审阅均以 `project_id` 归属或限定上下文 |
+| 文件夹、文档、版本和预览        | `ProjectDocumentsView.tsx`、`DocumentSidePanel.tsx`、shared directory/views        | direct/adapt  | `source-complete`                                                                 |
+| 本地 Projects/Documents API     | `/api/v1/projects` 及其 nested documents/folders/version/retry routes              | rewrite       | `source-complete`                                                                 |
+| 持久化、解析与加密存储          | Workspace repositories/services、`localWorkspaceBlobStore.ts`、统一 job pump       | reuse/rewrite | `source-complete; packaged-complete`                                              |
 
 ## 5. Assistant
 
-| 能力 | Vera 活动实现 | 方式 | 状态 |
-|---|---|---|---|
-| 全局 Assistant | `(pages)/assistant/page.tsx`、`assistant/chat/[id]/page.tsx` | adapt | `source-complete` |
-| Project-scoped Assistant | `(pages)/projects/[id]/assistant/**` | adapt | `source-complete` |
-| 对话、引用、停止、重试、重新生成 | `components/assistant/**`、typed SSE/client | adapt/rewrite | `source-complete` |
-| Chat 与持久 generation API | `workspaceChatsV1.ts`：`/chat`、`/assistant/jobs/**` | rewrite | `source-complete` |
-| FTS retrieval、文档工具、模型调用 | `assistantRuntime.ts`、`assistantDocumentTools.ts`、`assistantModelAdapter.ts`、`modelGateway.ts` | reuse/rewrite | `source-complete` |
-| 跨重启消息与事件恢复 | migration v10 durable assistant events + repositories | rewrite | `source-complete; packaged-complete` |
+| 能力                              | Vera 活动实现                                                                                     | 方式          | 状态                                 |
+| --------------------------------- | ------------------------------------------------------------------------------------------------- | ------------- | ------------------------------------ |
+| 全局 Assistant                    | `(pages)/assistant/page.tsx`、`assistant/chat/[id]/page.tsx`                                      | adapt         | `source-complete`                    |
+| Project-scoped Assistant          | `(pages)/projects/[id]/assistant/**`                                                              | adapt         | `source-complete`                    |
+| 对话、引用、停止、重试、重新生成  | `components/assistant/**`、typed SSE/client                                                       | adapt/rewrite | `source-complete`                    |
+| Chat 与持久 generation API        | `workspaceChatsV1.ts`：`/chat`、`/assistant/jobs/**`                                              | rewrite       | `source-complete`                    |
+| FTS retrieval、文档工具、模型调用 | `assistantRuntime.ts`、`assistantDocumentTools.ts`、`assistantModelAdapter.ts`、`modelGateway.ts` | reuse/rewrite | `source-complete`                    |
+| 跨重启消息与事件恢复              | migration v10 durable assistant events + repositories                                             | rewrite       | `source-complete; packaged-complete` |
 
 ## 6. Workflows
 
-| 能力 | Vera 活动实现 | 方式 | 状态 |
-|---|---|---|---|
-| 全局/Project workflow 列表 | `(pages)/workflows/page.tsx`、`projects/[id]/workflows/page.tsx`、`VeraWorkflowList.tsx` | adapt | `source-complete` |
-| definition/editor/run UI | `(pages)/workflows/[workflowId]/page.tsx`、`VeraWorkflowDefinitionEditor.tsx`、`VeraWorkflowRunPanel.tsx` | adapt | `source-complete`；统一详情路由是有意的本地适配 |
-| CRUD、隐藏和 capabilities | `/api/v1/workflows/**` | rewrite | `source-complete` |
-| runs、cancel 和 retry | `/api/v1/workflow-runs/**` 与 persisted `workflow_runs`/step runs/jobs | rewrite | `source-complete; packaged-complete` |
-| Mike system workflow seed | `mikeSystemWorkflows.e32daad.ts` + checksum/source-lock；启动时固定验证 21 个模板 | direct/adapt | `source-complete` |
+| 能力                       | Vera 活动实现                                                                                             | 方式         | 状态                                            |
+| -------------------------- | --------------------------------------------------------------------------------------------------------- | ------------ | ----------------------------------------------- |
+| 全局/Project workflow 列表 | `(pages)/workflows/page.tsx`、`projects/[id]/workflows/page.tsx`、`VeraWorkflowList.tsx`                  | adapt        | `source-complete`                               |
+| definition/editor/run UI   | `(pages)/workflows/[workflowId]/page.tsx`、`VeraWorkflowDefinitionEditor.tsx`、`VeraWorkflowRunPanel.tsx` | adapt        | `source-complete`；统一详情路由是有意的本地适配 |
+| CRUD、隐藏和 capabilities  | `/api/v1/workflows/**`                                                                                    | rewrite      | `source-complete`                               |
+| runs、cancel 和 retry      | `/api/v1/workflow-runs/**` 与 persisted `workflow_runs`/step runs/jobs                                    | rewrite      | `source-complete; packaged-complete`            |
+| Mike system workflow seed  | `mikeSystemWorkflows.e32daad.ts` + checksum/source-lock；启动时固定验证 21 个模板                         | direct/adapt | `source-complete`                               |
 
 ## 7. Tabular Review
 
-| 能力 | Vera 活动实现 | 方式 | 状态 |
-|---|---|---|---|
-| 全局 review 列表/详情 | `(pages)/tabular-review/**` | adapt | `source-complete`；单数路由为有意适配 |
-| Project-scoped reviews | `(pages)/projects/[id]/tabular-reviews/**` | adapt | `source-complete` |
-| 列、cell retry/cancel、citations | `components/tabular/**` + typed Workspace client | direct/adapt | `source-complete` |
-| persistence/generation | `/api/v1/tabular-review/**`、`tabularRuntime.ts`、统一 job pump | rewrite | `source-complete; packaged-complete` |
-| XLSX/CSV export | `tabularExport.ts` + 短期 download capability | adapt/rewrite | `source-complete; packaged-complete` |
-| review chat | capability response `chat: false`；UI 不呈现假能力 | exclude from P0 | `excluded` |
+| 能力                             | Vera 活动实现                                                   | 方式            | 状态                                  |
+| -------------------------------- | --------------------------------------------------------------- | --------------- | ------------------------------------- |
+| 全局 review 列表/详情            | `(pages)/tabular-review/**`                                     | adapt           | `source-complete`；单数路由为有意适配 |
+| Project-scoped reviews           | `(pages)/projects/[id]/tabular-reviews/**`                      | adapt           | `source-complete`                     |
+| 列、cell retry/cancel、citations | `components/tabular/**` + typed Workspace client                | direct/adapt    | `source-complete`                     |
+| persistence/generation           | `/api/v1/tabular-review/**`、`tabularRuntime.ts`、统一 job pump | rewrite         | `source-complete; packaged-complete`  |
+| XLSX/CSV export                  | `tabularExport.ts` + 短期 download capability                   | adapt/rewrite   | `source-complete; packaged-complete`  |
+| review chat                      | capability response `chat: false`；UI 不呈现假能力              | exclude from P0 | `excluded`                            |
 
 ## 8. Settings、模型与本地桌面控制
 
-| 能力 | Vera 活动实现 | 方式 | 状态 |
-|---|---|---|---|
-| Settings 页面 | `(pages)/settings/**`，含 General/Appearance、Models、Local Data/Diagnostics | adapt/rewrite | `source-complete` |
-| model profile/selector/status | `components/models/**`、`ModelToggle.tsx`、`/api/v1/model-profiles/**` | adapt/rewrite | `source-complete` |
-| provider gateway | OpenAI、DeepSeek、Anthropic、Gemini 和 hardened OpenAI-compatible adapters；用户显式配置 | reuse/rewrite | `source-complete` |
-| 凭据存取 | `credentialWorker.js` + credential worker client + macOS Keychain | adapt existing Vera | `source-complete; packaged-complete` |
-| backup/restore/logs/diagnostics | 受控 preload/native bridge 与 Settings UI | adapt existing Vera | `source-complete; packaged-complete` |
-| SaaS account/security/connectors/API-key 页面 | 不进入本地 P0 | exclude | `excluded` |
+| 能力                                          | Vera 活动实现                                                                            | 方式                | 状态                                 |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------- | ------------------------------------ |
+| Settings 页面                                 | `(pages)/settings/**`，含 General/Appearance、Models、Local Data/Diagnostics             | adapt/rewrite       | `source-complete`                    |
+| model profile/selector/status                 | `components/models/**`、`ModelToggle.tsx`、`/api/v1/model-profiles/**`                   | adapt/rewrite       | `source-complete`                    |
+| provider gateway                              | OpenAI、DeepSeek、Anthropic、Gemini 和 hardened OpenAI-compatible adapters；用户显式配置 | reuse/rewrite       | `source-complete`                    |
+| 凭据存取                                      | `credentialWorker.js` + credential worker client + macOS Keychain                        | adapt existing Vera | `source-complete; packaged-complete` |
+| backup/restore/logs/diagnostics               | 受控 preload/native bridge 与 Settings UI                                                | adapt existing Vera | `source-complete; packaged-complete` |
+| SaaS account/security/connectors/API-key 页面 | 不进入本地 P0                                                                            | exclude             | `excluded`                           |
 
 ## 9. Auth、API composition 与 preload
 
-| 边界 | Vera 活动实现 | 状态 |
-|---|---|---|
-| 本地鉴权 | loopback-only backend + 每次启动随机 bearer + fixed local principal | `source-complete; packaged-complete` |
-| API composition | `veraApplication.ts` 在 `/api/v1` 只挂载一次，先 auth/mutation/upload policy，再挂 Settings、Assistant、Tabular、Workflows 和 Workspace routers | `source-complete` |
-| renderer transport | `veraRuntime.ts`、`veraApi.ts`、`veraSse.ts`、`veraWireTypes.ts`；token 由 preload 提供 | `source-complete` |
-| preload | 只暴露必要 token、backup/restore、日志、凭据和受控 native 能力；`window.aletheiaDesktop` 名称仅作为 Legacy 兼容边界 | `source-complete; packaged-complete` |
-| downloads | `/api/v1/downloads/:token` + 短期 capability | `source-complete; packaged-complete` |
-| schema | additive SQLCipher migrations v1-v10；不导入 Mike Postgres/RLS schema | `source-complete` |
+| 边界               | Vera 活动实现                                                                                                                                   | 状态                                 |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| 本地鉴权           | loopback-only backend + 每次启动随机 bearer + fixed local principal                                                                             | `source-complete; packaged-complete` |
+| API composition    | `veraApplication.ts` 在 `/api/v1` 只挂载一次，先 auth/mutation/upload policy，再挂 Settings、Assistant、Tabular、Workflows 和 Workspace routers | `source-complete`                    |
+| renderer transport | `veraRuntime.ts`、`veraApi.ts`、`veraSse.ts`、`veraWireTypes.ts`；token 由 preload 提供                                                         | `source-complete`                    |
+| preload            | 只暴露必要 token、backup/restore、日志、凭据和受控 native 能力；`window.aletheiaDesktop` 名称仅作为 Legacy 兼容边界                             | `source-complete; packaged-complete` |
+| downloads          | `/api/v1/downloads/:token` + 短期 capability                                                                                                    | `source-complete; packaged-complete` |
+| schema             | additive SQLCipher migrations v1-v14；不导入 Mike Postgres/RLS schema                                                                           | `source-complete`                    |
 
 ## 10. 明确排除的云端和多用户依赖
 
 以下 `excluded` 是架构决定，不是延期后默认启用：
 
-| Mike 能力 | Vera P0 替代/说明 | 状态 |
-|---|---|---|
-| Supabase Auth/Postgres/RLS | SQLCipher repositories + fixed local principal | `excluded` |
-| Cloudflare R2/S3 | encrypted Workspace BlobStore | `excluded` |
-| 登录、注册、MFA | 单用户桌面启动鉴权，无登录页 | `excluded` |
-| organisations、people、分享和 user lookup | P0 不共享；Project 是单用户通用容器 | `excluded` |
-| 数据库中的 provider secret | macOS Keychain-only credential store | `excluded` |
-| MCP/OAuth/connectors | P0 不提供 | `excluded` |
-| CourtListener/case-law chat tools | P0 只使用用户本地文档 | `excluded` |
-| workflow 发布/open-source submission/share | 本地 workflow CRUD/run，无发布/分享 | `excluded` |
-| Cloudflare/browser deployment | 不进入 P0 desktop runtime | `excluded` |
+| Mike 能力                                  | Vera P0 替代/说明                              | 状态       |
+| ------------------------------------------ | ---------------------------------------------- | ---------- |
+| Supabase Auth/Postgres/RLS                 | SQLCipher repositories + fixed local principal | `excluded` |
+| Cloudflare R2/S3                           | encrypted Workspace BlobStore                  | `excluded` |
+| 登录、注册、MFA                            | 单用户桌面启动鉴权，无登录页                   | `excluded` |
+| organisations、people、分享和 user lookup  | P0 不共享；Project 是单用户通用容器            | `excluded` |
+| 数据库中的 provider secret                 | macOS Keychain-only credential store           | `excluded` |
+| MCP/OAuth/connectors                       | P0 不提供                                      | `excluded` |
+| CourtListener/case-law chat tools          | P0 只使用用户本地文档                          | `excluded` |
+| workflow 发布/open-source submission/share | 本地 workflow CRUD/run，无发布/分享            | `excluded` |
+| Cloudflare/browser deployment              | 不进入 P0 desktop runtime                      | `excluded` |
 
 ## 11. 阶段依赖与完成定义
 
@@ -250,20 +250,16 @@ npm run test:packaged-restore-fail-closed --prefix desktop
 
 ```text
 relative app:      desktop/dist/mac-arm64/Vera.app
-absolute app:      /Users/a1-6/Documents/new agent/desktop/dist/mac-arm64/Vera.app
-relative DMG:      desktop/dist/Vera-1.0.1-arm64.dmg
-absolute DMG:      /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-arm64.dmg
-relative ZIP:      desktop/dist/Vera-1.0.1-arm64.zip
-absolute ZIP:      /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-arm64.zip
+relative DMG:      desktop/dist/Vera-1.0.1-arm64.dmg (198122845 bytes)
+relative ZIP:      desktop/dist/Vera-1.0.1-arm64.zip (200992113 bytes)
 relative manifest: desktop/dist/Vera-1.0.1-SHA256SUMS.txt
-absolute manifest: /Users/a1-6/Documents/new agent/desktop/dist/Vera-1.0.1-SHA256SUMS.txt
 ```
 
 实际并已复核的 manifest 内容：
 
 ```text
-69a2ee56379a7cf6cb7fe441685fb59c846e77512928704955e774f3d8d42dd7  Vera-1.0.1-arm64.dmg
-47fcd64f214bf9b28e6982953043c76dba68ff0f2a933107ff6ec07eb704e648  Vera-1.0.1-arm64.zip
+fd246214916b3485e25bb16c8e00bcf6e8be471ed95679190e7685a5c1c49ef8  Vera-1.0.1-arm64.dmg
+7be4a9504151ddd8518141901e3d2753a1cda2fbe13ac27fa7842a9f3d347f1b  Vera-1.0.1-arm64.zip
 ```
 
 该产物的发布边界仍为 `signed=false notarized=false distribution=local-only`。

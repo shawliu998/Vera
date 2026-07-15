@@ -564,6 +564,30 @@ export class WorkspaceJobsRepository {
     }
   }
 
+  private rejectPendingAssistantDocumentEditsInCurrentTransaction(
+    current: WorkspaceJobStoredRecord,
+    next: WorkspaceJobRecord,
+    resolvedAt: string,
+  ) {
+    if (
+      current.type !== "assistant_generate" ||
+      next.status === "running" ||
+      next.status === "complete"
+    ) {
+      return;
+    }
+    this.database
+      .prepare(
+        `UPDATE document_edits
+            SET status='rejected',resolved_at=?
+          WHERE status='pending' AND resolved_at IS NULL
+            AND message_id IN (
+              SELECT id FROM chat_messages WHERE job_id=?
+            )`,
+      )
+      .run(resolvedAt, current.id);
+  }
+
   private assertClaimInCurrentTransactionWithPolicy(
     input: AssertWorkspaceJobClaimInput,
     allowCancellationRequested: boolean,
@@ -612,6 +636,11 @@ export class WorkspaceJobsRepository {
           current.cancellation?.reason ??
           "Workspace job cancellation requested.",
       });
+      this.rejectPendingAssistantDocumentEditsInCurrentTransaction(
+        current,
+        cancelled,
+        at,
+      );
       return this.updateStoredJob(current, cancelled, {
         queuedAt: current.queuedAt,
         leaseOwner: null,
@@ -634,6 +663,11 @@ export class WorkspaceJobsRepository {
         type: "retry",
         at,
       });
+      this.rejectPendingAssistantDocumentEditsInCurrentTransaction(
+        current,
+        retried,
+        at,
+      );
       return this.updateStoredJob(current, retried, {
         queuedAt: retried.queuedAt,
         leaseOwner: null,
@@ -642,6 +676,11 @@ export class WorkspaceJobsRepository {
         cancellationReason: null,
       });
     }
+    this.rejectPendingAssistantDocumentEditsInCurrentTransaction(
+      current,
+      interrupted,
+      at,
+    );
     return this.updateStoredJob(current, interrupted, {
       queuedAt: current.queuedAt,
       leaseOwner: null,
@@ -768,6 +807,11 @@ export class WorkspaceJobsRepository {
     if (!row) invariant(`Workspace job ${id} was not found.`);
     const current = this.rowToRecord(row);
     const next = transitionWorkspaceJob(current, event);
+    this.rejectPendingAssistantDocumentEditsInCurrentTransaction(
+      current,
+      next,
+      event.at,
+    );
     const cancelRequestedAt =
       event.type === "cancel"
         ? (current.cancelRequestedAt ??
@@ -884,6 +928,11 @@ export class WorkspaceJobsRepository {
         const previous = current.find((job) => job.id === next.id);
         if (!previous)
           invariant(`Recovered job ${next.id} missing original state.`);
+        this.rejectPendingAssistantDocumentEditsInCurrentTransaction(
+          previous,
+          next,
+          timestamp,
+        );
         return this.updateStoredJob(previous, next, {
           queuedAt: previous.queuedAt,
           leaseOwner: null,
@@ -970,6 +1019,11 @@ export class WorkspaceJobsRepository {
     allowCancellationRequested: boolean,
   ): WorkspaceJobStoredRecord {
     const next = transitionWorkspaceJob(current, input.event);
+    this.rejectPendingAssistantDocumentEditsInCurrentTransaction(
+      current,
+      next,
+      at,
+    );
     const cancelRequestedAt =
       input.event.type === "cancel"
         ? (current.cancelRequestedAt ?? next.cancellation?.requestedAt ?? at)

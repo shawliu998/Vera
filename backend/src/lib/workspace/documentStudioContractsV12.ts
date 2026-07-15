@@ -12,12 +12,11 @@ export const DOCUMENT_STUDIO_KINDS_V12 = ["draft", "template"] as const;
 export const DOCUMENT_STUDIO_VERSION_SOURCES_V12 = [
   "user_upload",
   "assistant_edit",
+  "user_accept",
 ] as const;
 
 export const DocumentKindV12Schema = z.enum(DOCUMENT_KINDS_V12);
-export const DocumentStudioKindV12Schema = z.enum(
-  DOCUMENT_STUDIO_KINDS_V12,
-);
+export const DocumentStudioKindV12Schema = z.enum(DOCUMENT_STUDIO_KINDS_V12);
 export const DocumentStudioVersionSourceV12Schema = z.enum(
   DOCUMENT_STUDIO_VERSION_SOURCES_V12,
 );
@@ -118,6 +117,7 @@ export const CreateMarkdownDraftV12Schema = z
     documentKind: DocumentStudioKindV12Schema,
     title: TitleSchema,
     filename: SafeMarkdownFilenameSchema,
+    source: z.enum(["user_upload", "assistant_edit"]).default("user_upload"),
     summary: SummarySchema,
     operationId: OperationIdSchema,
     citationAnchorIds: CitationAnchorIdsSchema,
@@ -239,9 +239,7 @@ export const StudioDocumentVersionV12Schema = z
   .strict();
 
 export type DocumentKindV12 = z.infer<typeof DocumentKindV12Schema>;
-export type DocumentStudioKindV12 = z.infer<
-  typeof DocumentStudioKindV12Schema
->;
+export type DocumentStudioKindV12 = z.infer<typeof DocumentStudioKindV12Schema>;
 export type CreateMarkdownDraftV12 = z.input<
   typeof CreateMarkdownDraftV12Schema
 >;

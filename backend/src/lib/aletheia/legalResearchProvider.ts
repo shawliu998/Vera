@@ -18,6 +18,7 @@ import {
   type OfficialLegalSourceAdapterConfig,
   type OfficialPublicLegalSourceAdapterConfig,
 } from "./legalSourceAdapter";
+import { LEGAL_SOURCE_RETENTION_ACTIVATION_V13 } from "../workspace/sourceRetentionPolicyV13";
 
 export const LEGAL_RESEARCH_PROVIDER_CONTRACT_VERSION =
   "vera-legal-research-provider-v1" as const;
@@ -377,7 +378,8 @@ function environmentCredentialProbe(
  * content has an enforced lifecycle. Direct injected constructors remain
  * available for protocol audits without creating a production bypass.
  */
-const ENVIRONMENT_PROVIDER_ACTIVATION_GATE_CLOSED = true;
+const ENVIRONMENT_PROVIDER_ACTIVATION_GATE_CLOSED =
+  !LEGAL_SOURCE_RETENTION_ACTIVATION_V13.open;
 
 function environmentProvider(
   provider: LegalSourceProvider,

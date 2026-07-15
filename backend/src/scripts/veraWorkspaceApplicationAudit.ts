@@ -415,6 +415,22 @@ function testEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   };
 }
 
+function assertWorkspaceNoStore(response: Response) {
+  assert.match(response.headers.get("cache-control") ?? "", /private/);
+  assert.match(response.headers.get("cache-control") ?? "", /no-store/);
+  assert.equal(response.headers.get("pragma"), "no-cache");
+  assert.equal(response.headers.get("expires"), "0");
+}
+
+function assertWorkspaceNoStoreAbsent(response: Response) {
+  assert.doesNotMatch(
+    response.headers.get("cache-control") ?? "",
+    /(?:private|no-store)/,
+  );
+  assert.notEqual(response.headers.get("pragma"), "no-cache");
+  assert.notEqual(response.headers.get("expires"), "0");
+}
+
 async function auditApplicationSurface(): Promise<void> {
   let listProjectCalls = 0;
   const runtime = fakeRuntime({
@@ -441,6 +457,7 @@ async function auditApplicationSurface(): Promise<void> {
     });
     assert.equal(projects.status, 200);
     assert.equal(listProjectCalls, 1, "/api/v1 must dispatch exactly once");
+    assertWorkspaceNoStore(projects);
     assert.equal(
       projects.headers.get("access-control-allow-origin"),
       "http://127.0.0.1:3000",
@@ -448,6 +465,7 @@ async function auditApplicationSurface(): Promise<void> {
 
     const health = await fetch(`${baseUrl}/health`);
     assert.equal(health.status, 200);
+    assertWorkspaceNoStoreAbsent(health);
     const healthText = await health.text();
     assert(!healthText.includes("secret-key-id"));
     assert(!healthText.includes("workspace.db"));
@@ -473,6 +491,7 @@ async function auditApplicationSurface(): Promise<void> {
       body: "{not-json",
     });
     assert.equal(malformed.status, 400);
+    assertWorkspaceNoStore(malformed);
     assert.deepEqual(await malformed.json(), {
       detail: "The request body is not valid JSON.",
       code: "VALIDATION_ERROR",
@@ -506,6 +525,7 @@ async function auditApplicationSurface(): Promise<void> {
           401,
           "workspace capability routes require a valid token",
         );
+        assertWorkspaceNoStore(response);
       }
     }
     const headers = {
@@ -626,6 +646,7 @@ async function auditApplicationSurface(): Promise<void> {
         route.status,
         `${route.method} ${route.path} matches composed capabilities`,
       );
+      assertWorkspaceNoStore(response);
     }
   });
 
@@ -651,6 +672,7 @@ async function auditApplicationSurface(): Promise<void> {
         401,
         "authentication runs before the mutation audit guard",
       );
+      assertWorkspaceNoStore(unauthenticated);
       const blocked = await fetch(url, {
         method: "POST",
         headers: {
@@ -660,6 +682,7 @@ async function auditApplicationSurface(): Promise<void> {
         body: "{}",
       });
       assert.equal(blocked.status, 503);
+      assertWorkspaceNoStore(blocked);
     }
   });
 
@@ -701,12 +724,62 @@ async function auditApplicationSurface(): Promise<void> {
   await withHttpServer(drainingApp, async (baseUrl) => {
     const request = await fetch(`${baseUrl}/api/v1/projects`);
     assert.equal(request.status, 503);
+    assertWorkspaceNoStore(request);
     const health = await fetch(`${baseUrl}/health`);
     assert.equal(health.status, 503);
+    assertWorkspaceNoStoreAbsent(health);
     const body = (await health.json()) as {
       vera: { workspace: { draining: boolean } };
     };
     assert.equal(body.vera.workspace.draining, true);
+  });
+
+  const invalidAuthApp = createVeraApplication({
+    runtime: fakeRuntime(),
+    env: testEnvironment({
+      ALETHEIA_AUTH_MODE: "private_token",
+      ALETHEIA_PRIVATE_AUTH_TOKEN: "short",
+    }),
+    auditAnchorStatus: () => ({ enabled: false, healthy: true }),
+  });
+  await withHttpServer(invalidAuthApp, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/v1/projects`);
+    assert.equal(response.status, 500);
+    assertWorkspaceNoStore(response);
+  });
+
+  const rateLimitedApp = createVeraApplication({
+    runtime: fakeRuntime(),
+    env: testEnvironment({ RATE_LIMIT_GENERAL_MAX: "1" }),
+    auditAnchorStatus: () => ({ enabled: false, healthy: true }),
+  });
+  await withHttpServer(rateLimitedApp, async (baseUrl) => {
+    const first = await fetch(`${baseUrl}/api/v1/projects`);
+    assert.equal(first.status, 200);
+    assertWorkspaceNoStore(first);
+    const limited = await fetch(`${baseUrl}/api/v1/projects`);
+    assert.equal(limited.status, 429);
+    assertWorkspaceNoStore(limited);
+  });
+
+  const preflightApp = createVeraApplication({
+    runtime: fakeRuntime(),
+    env: testEnvironment(),
+    auditAnchorStatus: () => ({ enabled: false, healthy: true }),
+  });
+  await withHttpServer(preflightApp, async (baseUrl) => {
+    const preflight = await fetch(`${baseUrl}/api/v1/projects`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "http://127.0.0.1:3000",
+        "access-control-request-method": "GET",
+      },
+    });
+    assert.equal(preflight.status, 204);
+    assertWorkspaceNoStore(preflight);
+    const prefixBypass = await fetch(`${baseUrl}/api/v1evil`);
+    assert.equal(prefixBypass.status, 404);
+    assertWorkspaceNoStoreAbsent(prefixBypass);
   });
 
   const id = "00000000-0000-4000-8000-000000000001";
@@ -949,6 +1022,22 @@ async function auditStaticOwnership(): Promise<void> {
     1,
     "Workspace API prefix must be mounted exactly once",
   );
+  const workspaceNoStoreIndex = applicationSource.indexOf(
+    "if (workspaceRouteAllowed(request))",
+  );
+  assert.notEqual(workspaceNoStoreIndex, -1);
+  for (const terminatingBoundary of [
+    "app.use(generalLimiter)",
+    "express.json({ limit:",
+    "workspaceApi.use(createWorkspaceAuthMiddleware(env))",
+  ]) {
+    const boundaryIndex = applicationSource.indexOf(terminatingBoundary);
+    assert.notEqual(boundaryIndex, -1);
+    assert.ok(
+      workspaceNoStoreIndex < boundaryIndex,
+      `Workspace no-store policy must precede ${terminatingBoundary}`,
+    );
+  }
   assert.match(
     applicationSource,
     /workspaceApi\.use\(createWorkspaceAuthMiddleware\(env\)\);[\s\S]*?workspaceApi\.use\(mutationGuard\);/,

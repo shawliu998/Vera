@@ -29,6 +29,8 @@ export function ChatView({
   availableDocuments,
   projectName,
   documentToAttach,
+  projectId,
+  chatId,
 }: {
   messages: Message[];
   isResponseLoading: boolean;
@@ -41,6 +43,8 @@ export function ChatView({
   availableDocuments?: readonly VeraDocumentWire[];
   projectName?: string | null;
   documentToAttach?: VeraDocumentWire | null;
+  projectId?: string;
+  chatId?: string;
 }) {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -54,7 +58,9 @@ export function ChatView({
   useEffect(() => {
     const input = inputContainerRef.current;
     if (!input) return;
-    const observer = new ResizeObserver(() => setInputHeight(input.offsetHeight));
+    const observer = new ResizeObserver(() =>
+      setInputHeight(input.offsetHeight),
+    );
     observer.observe(input);
     setInputHeight(input.offsetHeight);
     return () => observer.disconnect();
@@ -95,7 +101,9 @@ export function ChatView({
     return () => window.cancelAnimationFrame(frame);
   }, [isResponseLoading, messages]);
 
-  const latestUserIndex = messages.map((message) => message.role).lastIndexOf("user");
+  const latestUserIndex = messages
+    .map((message) => message.role)
+    .lastIndexOf("user");
   const latestAssistantIndex = messages
     .map((message) => message.role)
     .lastIndexOf("assistant");
@@ -126,7 +134,10 @@ export function ChatView({
                 ref={index === latestUserIndex ? latestUserRef : undefined}
               >
                 {message.role === "user" ? (
-                  <UserMessage content={message.content} files={message.files} />
+                  <UserMessage
+                    content={message.content}
+                    files={message.files}
+                  />
                 ) : (
                   <AssistantMessage
                     message={message}
@@ -136,6 +147,19 @@ export function ChatView({
                     isLatest={index === latestAssistantIndex}
                     onRetry={retry}
                     onRegenerate={regenerate}
+                    studioHandoff={
+                      projectId && chatId ? { projectId, chatId } : undefined
+                    }
+                    citationScope={
+                      projectId
+                        ? {
+                            projectId,
+                            documentIds: (availableDocuments ?? []).map(
+                              (document) => document.id,
+                            ),
+                          }
+                        : undefined
+                    }
                   />
                 )}
               </div>
@@ -152,7 +176,9 @@ export function ChatView({
         >
           <button
             type="button"
-            onClick={() => endRef.current?.scrollIntoView({ behavior: "smooth" })}
+            onClick={() =>
+              endRef.current?.scrollIntoView({ behavior: "smooth" })
+            }
             className="rounded-full bg-white/30 p-2 shadow-[0_5px_16px_rgba(15,23,42,0.13),inset_0_1px_0_rgba(255,255,255,0.75)] backdrop-blur-xl transition-all hover:bg-white/50"
             aria-label={t("assistant.scrollBottom")}
           >

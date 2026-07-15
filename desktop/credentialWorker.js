@@ -2,6 +2,7 @@
 
 const {
   MacOsKeychainItemCollisionError,
+  MAX_KEYCHAIN_SECRET_UTF8_BYTES: MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES,
   WORKSPACE_MODEL_CREDENTIAL_SERVICE,
   readGenericPassword,
   workspaceModelCredentialLocator,
@@ -14,7 +15,6 @@ const CREDENTIAL_PORT_BOOTSTRAP = "vera-credential-port-v1";
 const CREDENTIAL_PORT_READY = "vera-credential-port-ready-v1";
 const CREDENTIAL_AVAILABILITY_PROBE_ACCOUNT =
   "vera-keychain-availability-probe-v1";
-const MAX_SECRET_BYTES = 8 * 1024;
 const MAX_REQUEST_ID_LENGTH = 80;
 const PROVIDERS = new Set([
   "openai",
@@ -102,7 +102,8 @@ function parseLocatorPayload(value, includeSecret) {
       typeof value.secret !== "string" ||
       value.secret.length === 0 ||
       /[\r\n]/.test(value.secret) ||
-      Buffer.byteLength(value.secret, "utf8") > MAX_SECRET_BYTES
+      Buffer.byteLength(value.secret, "utf8") >
+        MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES
     ) {
       throw new CredentialWorkerProtocolError();
     }
@@ -319,6 +320,7 @@ module.exports = {
   CREDENTIAL_PORT_BOOTSTRAP,
   CREDENTIAL_PORT_READY,
   CREDENTIAL_RPC_SCHEMA,
+  MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES,
   CredentialWorkerProtocolError,
   attachCredentialWorkerParentPort,
   attachCredentialWorkerPort,

@@ -1,4 +1,4 @@
-name: Aletheia Local CI
+name: Vera Local CI
 
 on:
   push:
@@ -96,7 +96,7 @@ jobs:
         working-directory: frontend
         run: npm run lint
 
-      - name: Run Aletheia UI smoke
+      - name: Run legacy compatibility UI smoke
         working-directory: frontend
         run: npm run test:aletheia:ui
 
@@ -127,8 +127,20 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
       - name: Audit desktop legal-source configuration
         run: node desktop/scripts/productRenameAudit.js
+
+      - name: Audit macOS release readiness offline
+        working-directory: desktop
+        env:
+          VERA_RELEASE_SIGNING: "false"
+        run: |
+          npm run test:signing-pipeline
+          npm run signing:readiness -- --no-artifacts
 
       - name: Build and validate local-only Vera package
         env:

@@ -2,12 +2,15 @@
 
 Date: 2026-07-15
 
-Status: the core local-client slices and bounded packaged acceptance are
-complete for OCR/Project Sources, truthful legal-source readiness Settings,
-and Project Document Studio/DOCX. This is not a claim that the full Gate C/D
-convergence is complete: packaged citation-anchor recovery, source reopening,
-Assistant/Workflow draft actions, and AI suggestion UX remain follow-on. Real
-legal connectors remain deliberately disabled.
+Status: the integrated local-client implementation is complete for local OCR,
+Project Sources, the shared citation viewer, OCR-page reopening,
+Assistant/Workflow-to-Studio actions, Document Studio/DOCX, and explicit AI
+suggestion review. The v13 retention lifecycle and fail-closed model/export
+checks are also implemented. Real legal connectors remain deliberately
+disabled because their production activation gate still requires physical
+legacy-content cleanup and complete derived-lineage enforcement. The final
+rebuilt arm64 client passed packaged acceptance; its hashes and truthful
+unsigned release state are recorded below.
 
 Product decision: `Project` remains Vera's generic container. OCR, legal
 sources, and Document Studio are Project capabilities; none becomes a sixth
@@ -22,9 +25,9 @@ security, storage, or document foundations:
 - truthful readiness and credential controls for explicitly configured
   legal-source providers; durable legal-authority snapshots remain behind the
   retention activation gate;
-- a Project-scoped Document Studio with versioned drafts, citations, and safe
-  DOCX interchange; Assistant/Workflow draft actions and AI suggestion UX are
-  reserved for the follow-on convergence slice.
+- a Project-scoped Document Studio with versioned drafts, citations, safe DOCX
+  interchange, bounded Assistant/Workflow draft actions, and explicit
+  accept/reject AI suggestions.
 
 The end-to-end target is:
 
@@ -133,15 +136,23 @@ accept `legal_authority` snapshot or anchor writes.
 
 ### Retention activation gate
 
-A real legal connector must remain disabled, and the legal-source track must
-not be described as completely launched, until all of the following are
-implemented with fail-closed tests for `full_text_ttl`:
+The v13 lifecycle now fails closed for expired and tombstoned legal snapshots
+and anchors. Read, new-anchor creation, Studio binding, Studio export, and
+configured-model use are rechecked at their final boundary. Assistant,
+Workflow, and Tabular execution repeat the check immediately before each model
+call so a source tombstoned after an earlier read cannot escape through a
+TOCTOU window. Public Project Source projections redact prohibited legal
+payloads, and local-only policies never reach a configured model.
 
-- an expired snapshot cannot be read or used to create a new citation anchor;
-- an expired snapshot or anchor cannot be bound to a Document Studio version;
-- export and configured-model use reject expired or policy-prohibited content;
-- tombstone behaviour and physical cleanup timing are defined consistently
-  across snapshots, anchors, Studio bindings, backups, and restart recovery.
+Production activation remains code-owned and closed. The remaining blockers
+are not UI work: legacy v11 rows can still physically contain exact quotes or
+full text pending a verified cleanup lifecycle; every derived artifact must
+retain legal-source lineage; and every future model/export callsite must prove
+it uses the same final-boundary gate. In particular, a legal source must not be
+laundered through one Studio document into a later Assistant message or Studio
+document as an ordinary Project source. Until these conditions are proven,
+configured providers report `activation_gate_closed`, credentials are not
+read, and provider calls remain zero.
 
 This gate applies to retained legal-provider content. Current Project document
 snapshots are user-provided and use `full_text_permitted` with no TTL, so their
@@ -166,9 +177,16 @@ Delivered local-client slice:
 - remain fully readable and editable after desktop restart while model or legal
   providers are offline.
 
-Assistant/Workflow-to-Studio creation, a shared source-reopen viewer, and AI
-changes as explicit accept/reject suggestions are the next convergence slice;
-the current UI does not claim those actions exist.
+Assistant and completed Workflow outputs can create immutable Studio drafts by
+durable identity; the server reloads and revalidates the completed source
+rather than accepting renderer-supplied content. Project citations use one
+shared source viewer, including verified PDF-page navigation. AI changes are
+durable, bounded suggestions: the model must read the current document before
+suggesting an edit, the user reviews the exact diff, and accept/reject is an
+explicit operation. Acceptance verifies the reviewed suggestion, base version,
+exact splice, citation provenance, source execution, and retention policy
+before atomically creating a `user_accept` version. The model never overwrites
+the document autonomously.
 
 Pixel-perfect Word fidelity, Word Add-in, collaborative editing, cloud sync,
 arbitrary HTML, and autonomous overwrite are not P1 requirements.
@@ -194,10 +212,14 @@ explicit. They must not each create competing provenance or credential models.
 
 ### Gate C: convergence
 
-- Project document and legal-authority citations use the same source viewer;
-- Assistant and Workflow can create a Studio draft through a bounded action;
-- OCR-derived citations reopen the original PDF page;
-- legal-source licence policy is enforced during model use and export.
+- Project-document citations use the shared source viewer; the same contract is
+  reserved for legal authorities when provider activation becomes safe;
+- Assistant and Workflow create a Studio draft through bounded identity-only
+  actions backed by durable completed output;
+- OCR-derived citations reopen the verified original PDF page;
+- legal-source retention and licence policy is enforced during enabled model
+  and export paths, while provider activation remains closed for the blockers
+  documented above.
 
 ### Gate D: packaged acceptance
 
@@ -206,13 +228,12 @@ release its ports on exit, and recover the same encrypted Project, jobs,
 citations, draft, and versions on restart. No fixture provider may satisfy this
 gate.
 
-The current release has passed the bounded core of this gate through the real
-packaged Apple Vision helper, Project Source snapshot, Studio, DOCX, encrypted
-restart, and port-release path. It does not yet claim the citation portion of
-the full Gate D: the packaged audit deliberately creates no anchor because the
-client has no public safe chunk/source-viewer path. Anchor binding and restart
-integrity are covered at the backend P1 convergence layer until that public
-client path exists.
+The packaged acceptance audit now exercises the real Apple Vision helper,
+Project Source snapshot and exact citation anchor, Studio citation binding,
+encrypted restart, renderer source-viewer action, and verified PDF-page
+navigation. It uses a generated image-only PDF and the packaged client rather
+than a fixture provider. Final artifact hashes are accepted only after this
+audit and the packaging/security gates pass against the newly built app.
 
 ## 8. Quality gates
 
@@ -284,7 +305,7 @@ Completed:
 - a code-owned production activation gate on every environment-backed legal
   Provider: even fully configured endpoint/allowlist/credential environments
   return `activation_gate_closed`, do not read the credential, and perform no
-  outbound fetch until retention enforcement is implemented;
+  outbound fetch until every remaining activation blocker is closed;
 - a Mike-layout `/settings/legal-sources` page with strict local status reads,
   write-only locally encrypted credential entry, removal, responsive
   empty/error states, and no renderer-side provider call or synthetic
@@ -309,71 +330,79 @@ Completed:
   canonical duplicate/path rejection, CRC verification, ZIP64/multi-disk and
   active-content rejection, strict support for standard signed/unsigned ZIP
   data descriptors, and bounded DEFLATE expansion before downstream parsing.
+- a Project-scoped source viewer that reloads bounded authoritative content,
+  verifies snapshot/version/chunk/quote hashes and page bounds, and opens PDF
+  citations at the exact verified page rather than trusting renderer locators;
+- identity-only Assistant and Workflow entry actions that reload completed
+  durable output, reject cross-Project or incomplete sources, reuse validated
+  provenance, and create immutable `assistant_edit` Studio versions;
+- v13 legal-source lifecycle state with monotonic expiry/tombstone handling,
+  final-boundary model/export checks, public-payload redaction, and TOCTOU
+  audits proving a tombstoned source causes zero provider calls;
+- v14 durable Studio suggestions with read-before-suggest, bounded previews and
+  exact detail reads, a maximum of 50 pending suggestions per document,
+  lease/retry/cancel cleanup, stale-version rejection, Unicode-safe splices,
+  and atomic accept/reject semantics;
+- strict renderer binding between the reviewed suggestion and the accepted
+  document: identity, Project scope, base/current version, exact diff/content,
+  `user_accept` source, citation provenance, and poisoned responses all fail
+  closed;
+- explicit unsigned and Developer ID release modes. The signed path verifies
+  exact authority and Team ID, hardened runtime, every nested executable, the
+  final DMG's mounted Vera.app, notarization, and stapling. Offline audits stub
+  all signing/notary/keychain/network operations and cannot publish artifacts.
 
 Intentionally deferred gates and follow-on work:
 
-- keep real legal connectors disabled until the retention activation gate is
-  implemented and tested;
-- follow-on convergence, outside this release gate: a shared source viewer,
-  OCR-page reopen actions, Assistant/Workflow-to-Studio bounded actions, and
-  explicit AI suggestion accept/reject UX;
-- extend the packaged audit to create, reopen, and recover citation anchors
-  once the bounded public source-viewer/chunk path exists, thereby closing the
-  remaining full Gate D citation requirement.
+- keep real legal connectors disabled until legacy legal exact-quote/full-text
+  rows have a proven physical-cleanup lifecycle, derived artifacts preserve
+  legal lineage end to end, and all model/export callsites are covered by the
+  final-boundary gate;
+- keep public release readiness false until a real Developer ID Application
+  identity and Apple notarization credentials are supplied and the signed
+  artifacts pass the strict online verification path;
+- pixel-perfect Word fidelity, Word Add-in support, collaborative editing,
+  cloud sync, arbitrary HTML, and autonomous overwrite remain outside this
+  local-client scope.
 
-Bounded core packaged acceptance passed on arm64 with the official local-only
-unsigned build path. The isolated-client audit used a real image-only PDF and
-the packaged Apple Vision helper, verified recognized text and OCR review
-metadata, captured an immutable Project document snapshot, performed Studio
-create/CAS save/DOCX export-import, relaunched the same encrypted profile with
-the same keys, and revalidated Project text/source data, all three Studio
-versions, historical reads/exports, disabled legal-source state, and released
-ports. The generated DMG and ZIP both passed the published SHA-256 manifest.
-This is `signed=false`, `notarized=false`, and local-only; it is not a public
-release artifact or evidence that full Gate D is closed.
+Final packaged acceptance passed on arm64. The audit used the real packaged
+Apple Vision helper and an image-only PDF; created a Project snapshot, bounded
+chunk, exact quote anchor, and Studio citation binding; performed the DOCX
+export/import round trip; restarted the same SQLCipher/AES-GCM profile; and
+reloaded the original immutable source version. The renderer then opened the
+shared citation viewer, requested the exact historical `version_id`, verified
+`application/pdf`, highlighted the exact quote, and opened PDF page 1. Studio
+remained saved throughout, both app launches closed without a browser dialog,
+and all local ports were released.
+
+The package script built into an isolated staging directory, ran startup,
+migration, Workspace, backup, interrupted-restore, package-hygiene, and native
+OCR acceptance before atomically replacing `desktop/dist`. Failure or signal
+interruption restores the previous artifacts. The resulting release state is
+truthfully `signed=false`, `notarized=false`, and `releaseReady=false`; these are
+complete local-client artifacts, not public release candidates.
 
 Acceptance artifacts:
 
 - `desktop/dist/mac-arm64/Vera.app`;
-- `desktop/dist/Vera-1.0.1-arm64.dmg`, SHA-256
-  `ba906b9d418528ff2e7a2e708cb5cb895685fc4a54192a44133aa22dd230a17a`;
-- `desktop/dist/Vera-1.0.1-arm64.zip`, SHA-256
-  `6d53e2bdeacb08618cc18fc2118141ef994e70571e26633a439dc8c7d2a27097`;
-- `desktop/dist/Vera-1.0.1-SHA256SUMS.txt`, reverified after the packaged P1
-  audit.
+- `desktop/dist/Vera-1.0.1-arm64.dmg` (198,122,845 bytes), SHA-256
+  `fd246214916b3485e25bb16c8e00bcf6e8be471ed95679190e7685a5c1c49ef8`;
+- `desktop/dist/Vera-1.0.1-arm64.zip` (200,992,113 bytes), SHA-256
+  `7be4a9504151ddd8518141901e3d2753a1cda2fbe13ac27fa7842a9f3d347f1b`;
+- `desktop/dist/Vera-1.0.1-SHA256SUMS.txt`, reverified with both artifacts
+  reporting `OK`.
 
 Verified commands:
 
 ```text
-cd backend && npm run test:workspace:migrations
-cd backend && npm run test:workspace:source-foundation
-cd backend && npm run test:workspace:ocr-provenance
-cd backend && npm run test:workspace:ocr-summary
-cd backend && npm run test:workspace:project-sources-route
-cd backend && npm run test:workspace:document-studio
-cd backend && npm run test:workspace:document-studio-route
-cd backend && npm run test:workspace:document-studio-docx
-cd backend && npm run test:workspace:p1-convergence
-cd backend && npm run test:aletheia:document-parse-retry
-cd backend && npm run test:aletheia:document-roundtrip
-cd backend && npm run check:aletheia:legal-source-control
-cd backend && npm run test:vera:legal-research-provider
-cd backend && npm run test:vera:legal-research-gate
-cd backend && npm run test:vera:legal-research-broker
 cd backend && npm run test:workspace:p0-client
 cd frontend && npm run test:p0-client
-cd frontend && npm run test:legal-sources
-cd frontend && npm run test:legal-sources:ui
-cd frontend && npm run test:studio
-cd frontend && npm run test:ocr-review
-cd frontend && npm run build
-cd desktop && npm run test:native-ocr
+cd backend && npm run build
+cd frontend && npm run lint
+cd frontend && NEXT_PUBLIC_ALETHEIA_LOCAL_CLIENT=true npm run build
 cd desktop && npm run test:p0-source
-env -u ALETHEIA_PACKAGED_APP_PATH VERA_RELEASE_SIGNING=false \
-  ./scripts/package-desktop-mac.sh
-cd desktop && ALETHEIA_PACKAGED_APP_PATH="$PWD/dist/mac-arm64/Vera.app" \
-  ALETHEIA_DESKTOP_FRONTEND_PORT=45360 \
-  ALETHEIA_DESKTOP_BACKEND_PORT=45361 \
-  npm run test:packaged-p1-convergence
+cd desktop && npm run test:signing-pipeline
+VERA_RELEASE_SIGNING=false ./scripts/package-desktop-mac.sh
+cd desktop/dist && shasum -a 256 -c Vera-1.0.1-SHA256SUMS.txt
 git diff --check
 ```

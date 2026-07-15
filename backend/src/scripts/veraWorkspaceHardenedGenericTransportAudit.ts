@@ -12,6 +12,7 @@ import {
   pinnedGenericRequestOptions,
 } from "../lib/workspace/providers/hardenedGenericTransport";
 
+// privacy-preflight-public-fixture-sha256:ad1437e0a2ba423522d191f5111054363d5a7efbbcdac149bcb9d43b629cba5c
 const TEST_KEY = `-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDLf14jazEdTC+o
 +owV2Cb4hxGSlxngIxVuRcSQ/5kC9q/JRoXn6WJiEgbNJ3y6j1R9l4w5pmw2oFUP
@@ -76,8 +77,7 @@ async function close(server: http.Server | https.Server) {
 
 function policyCode(code: HardenedGenericTransportPolicyError["code"]) {
   return (error: unknown) =>
-    error instanceof HardenedGenericTransportPolicyError &&
-    error.code === code;
+    error instanceof HardenedGenericTransportPolicyError && error.code === code;
 }
 
 async function auditAddressPolicy() {
@@ -173,10 +173,9 @@ async function auditDnsAndStreaming() {
     },
   });
   try {
-    const first = await transport.fetchImpl(
-      `http://localhost:${port}/stream`,
-      { redirect: "manual" },
-    );
+    const first = await transport.fetchImpl(`http://localhost:${port}/stream`, {
+      redirect: "manual",
+    });
     assert.match(await first.text(), /\[DONE\]/);
     const second = await transport.fetchImpl(
       `http://localhost:${port}/models`,

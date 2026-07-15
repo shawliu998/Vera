@@ -68,6 +68,12 @@ const CreateDraft = z
   })
   .strict();
 
+const CreateDraftFromAssistant = z
+  .object({ chat_id: Id, assistant_message_id: Id })
+  .strict();
+const CreateDraftFromWorkflow = z.object({ workflow_run_id: Id }).strict();
+const EmptySuggestionDecision = z.object({}).strict();
+
 const ReadDocumentQuery = z
   .object({
     version_id: Id.optional(),
@@ -173,7 +179,7 @@ const StudioVersionResponse = z
   .object({
     id: Id,
     version_number: z.number().int().positive(),
-    source: z.enum(["user_upload", "assistant_edit"]),
+    source: z.enum(["user_upload", "assistant_edit", "user_accept"]),
     filename: SafeFilename,
     mime_type: z.literal("text/markdown"),
     size_bytes: z.number().int().nonnegative().max(4_000_000),
@@ -242,6 +248,75 @@ const StudioVersionListResponse = z
     versions: z.array(StudioVersionResponse).max(10_000),
   })
   .strict();
+const StudioSuggestionResponse = z
+  .object({
+    id: Id,
+    project_id: Id,
+    document_id: Id,
+    base_version_id: Id,
+    message_id: Id.nullable(),
+    change_id: z.string().min(1).max(160),
+    start_offset: z.number().int().nonnegative(),
+    end_offset: z.number().int().nonnegative(),
+    offset_scope: z.literal("raw_markdown_v1"),
+    offset_unit: z.literal("utf16_code_unit"),
+    deleted_text: z.string().max(200_000),
+    inserted_text: z.string().max(200_000),
+    context_before: z.string().max(241),
+    context_after: z.string().max(241),
+    summary: Summary,
+    status: z.enum(["pending", "accepted", "rejected"]),
+    created_at: IsoDateTime,
+    resolved_at: IsoDateTime.nullable(),
+    result_version_id: Id.nullable(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.end_offset - value.start_offset !== value.deleted_text.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["end_offset"],
+        message: "Suggestion offsets do not match deleted text.",
+      });
+    }
+  });
+const StudioSuggestionPreviewResponse = z
+  .object({
+    id: Id,
+    project_id: Id,
+    document_id: Id,
+    base_version_id: Id,
+    message_id: Id.nullable(),
+    start_offset: z.number().int().nonnegative(),
+    end_offset: z.number().int().nonnegative(),
+    offset_scope: z.literal("raw_markdown_v1"),
+    offset_unit: z.literal("utf16_code_unit"),
+    deleted_preview: z.string().max(320),
+    inserted_preview: z.string().max(320),
+    deleted_truncated: z.boolean(),
+    inserted_truncated: z.boolean(),
+    context_before: z.string().max(241),
+    context_after: z.string().max(241),
+    summary: Summary,
+    status: z.literal("pending"),
+    created_at: IsoDateTime,
+  })
+  .strict();
+const StudioSuggestionListResponse = z
+  .object({
+    suggestions: z.array(StudioSuggestionPreviewResponse).max(50),
+    has_more: z.boolean(),
+  })
+  .strict();
+const StudioSuggestionDecisionResponse = z
+  .object({ suggestion: StudioSuggestionResponse })
+  .strict();
+const StudioSuggestionAcceptanceResponse = z
+  .object({
+    suggestion: StudioSuggestionResponse,
+    document: StudioDocumentResponse,
+  })
+  .strict();
 
 export type WorkspaceDocumentStudioCreateInput = {
   title: string;
@@ -289,6 +364,17 @@ export interface WorkspaceDocumentStudioV1Port {
     projectId: string,
     input: WorkspaceDocumentStudioCreateInput,
   ): Promise<unknown>;
+  createStudioDocumentFromAssistantMessage?(
+    context: WorkspaceV1Context,
+    projectId: string,
+    chatId: string,
+    assistantMessageId: string,
+  ): Promise<unknown>;
+  createStudioDocumentFromWorkflowRun?(
+    context: WorkspaceV1Context,
+    projectId: string,
+    workflowRunId: string,
+  ): Promise<unknown>;
   getStudioDocument(
     context: WorkspaceV1Context,
     projectId: string,
@@ -325,6 +411,29 @@ export interface WorkspaceDocumentStudioV1Port {
     documentId: string,
     versionId?: string,
   ): Promise<WorkspaceDocumentStudioExportResult>;
+  listStudioSuggestions?(
+    context: WorkspaceV1Context,
+    projectId: string,
+    documentId: string,
+  ): Promise<unknown>;
+  getStudioSuggestion?(
+    context: WorkspaceV1Context,
+    projectId: string,
+    documentId: string,
+    suggestionId: string,
+  ): Promise<unknown>;
+  acceptStudioSuggestion?(
+    context: WorkspaceV1Context,
+    projectId: string,
+    documentId: string,
+    suggestionId: string,
+  ): Promise<unknown>;
+  rejectStudioSuggestion?(
+    context: WorkspaceV1Context,
+    projectId: string,
+    documentId: string,
+    suggestionId: string,
+  ): Promise<unknown>;
 }
 
 export type WorkspaceDocumentStudioV1RouterOptions = {
@@ -396,7 +505,10 @@ async function withUploadedDocx<T>(
   let cleaned = false;
   try {
     materialized = await materializeUploadedFile(file);
-    if (!Buffer.isBuffer(materialized.buffer) || materialized.buffer.length < 1) {
+    if (
+      !Buffer.isBuffer(materialized.buffer) ||
+      materialized.buffer.length < 1
+    ) {
       throw new WorkspaceApiError(
         422,
         "VALIDATION_ERROR",
@@ -439,7 +551,9 @@ function parseUploadedDocx(
       "The uploaded file must have a safe .docx filename.",
     );
   }
-  const mimeType = String(file.mimetype ?? "").trim().toLowerCase();
+  const mimeType = String(file.mimetype ?? "")
+    .trim()
+    .toLowerCase();
   if (
     mimeType !== "" &&
     mimeType !== "application/octet-stream" &&
@@ -488,6 +602,44 @@ function safeJson<T>(
     );
   }
   response.status(status).json(parsed.data);
+}
+
+function requireDraftOriginMethod<T>(method: T | undefined): T {
+  if (method === undefined) {
+    throw new WorkspaceApiError(
+      503,
+      "PRECONDITION_FAILED",
+      "Studio draft handoff is unavailable.",
+    );
+  }
+  return method;
+}
+
+function requireSuggestionMethod<T>(method: T | undefined): T {
+  if (method === undefined) {
+    throw new WorkspaceApiError(
+      503,
+      "PRECONDITION_FAILED",
+      "Document Studio suggestions are unavailable.",
+    );
+  }
+  return method;
+}
+
+function sendCreatedDraft(response: Response, payload: unknown) {
+  const parsed = StudioDocumentResponse.safeParse(payload);
+  if (!parsed.success) {
+    throw new WorkspaceApiError(
+      500,
+      "INTERNAL_ERROR",
+      "Studio draft handoff response could not be serialized safely.",
+    );
+  }
+  response.set(
+    "Location",
+    `/api/v1/projects/${parsed.data.project_id}/studio/documents/${parsed.data.document_id}`,
+  );
+  safeJson(response, StudioDocumentResponse, parsed.data, 201);
 }
 
 function safeDocxExport(payload: unknown) {
@@ -631,6 +783,14 @@ export function createWorkspaceDocumentStudioV1Router(
   options: WorkspaceDocumentStudioV1RouterOptions = {},
 ): Router {
   const router = Router();
+  router.use((_request, response, next) => {
+    response.set({
+      "Cache-Control": "private, no-store",
+      Pragma: "no-cache",
+      Expires: "0",
+    });
+    next();
+  });
   const authenticateDocxUpload: RequestHandler = (request, _response, next) => {
     try {
       contextFor(request, options);
@@ -671,6 +831,45 @@ export function createWorkspaceDocumentStudioV1Router(
     }),
   );
 
+  router.post(
+    "/projects/:projectId/studio/drafts/from-assistant",
+    asyncRoute(async (request, response) => {
+      const input = CreateDraftFromAssistant.parse(request.body ?? {});
+      const method = requireDraftOriginMethod(
+        port.createStudioDocumentFromAssistantMessage,
+      );
+      sendCreatedDraft(
+        response,
+        await method.call(
+          port,
+          contextFor(request, options),
+          idParam(request, "projectId"),
+          input.chat_id,
+          input.assistant_message_id,
+        ),
+      );
+    }),
+  );
+
+  router.post(
+    "/projects/:projectId/studio/drafts/from-workflow",
+    asyncRoute(async (request, response) => {
+      const input = CreateDraftFromWorkflow.parse(request.body ?? {});
+      const method = requireDraftOriginMethod(
+        port.createStudioDocumentFromWorkflowRun,
+      );
+      sendCreatedDraft(
+        response,
+        await method.call(
+          port,
+          contextFor(request, options),
+          idParam(request, "projectId"),
+          input.workflow_run_id,
+        ),
+      );
+    }),
+  );
+
   router.get(
     "/projects/:projectId/studio/documents/:documentId",
     asyncRoute(async (request, response) => {
@@ -683,6 +882,24 @@ export function createWorkspaceDocumentStudioV1Router(
           idParam(request, "projectId"),
           idParam(request, "documentId"),
           query.version_id,
+        ),
+      );
+    }),
+  );
+
+  router.get(
+    "/projects/:projectId/studio/documents/:documentId/suggestions/:suggestionId",
+    asyncRoute(async (request, response) => {
+      const method = requireSuggestionMethod(port.getStudioSuggestion);
+      safeJson(
+        response,
+        StudioSuggestionDecisionResponse,
+        await method.call(
+          port,
+          contextFor(request, options),
+          idParam(request, "projectId"),
+          idParam(request, "documentId"),
+          idParam(request, "suggestionId"),
         ),
       );
     }),
@@ -772,6 +989,62 @@ export function createWorkspaceDocumentStudioV1Router(
           contextFor(request, options),
           idParam(request, "projectId"),
           idParam(request, "documentId"),
+        ),
+      );
+    }),
+  );
+
+  router.get(
+    "/projects/:projectId/studio/documents/:documentId/suggestions",
+    asyncRoute(async (request, response) => {
+      const method = requireSuggestionMethod(port.listStudioSuggestions);
+      safeJson(
+        response,
+        StudioSuggestionListResponse,
+        await method.call(
+          port,
+          contextFor(request, options),
+          idParam(request, "projectId"),
+          idParam(request, "documentId"),
+        ),
+      );
+    }),
+  );
+
+  router.post(
+    "/projects/:projectId/studio/documents/:documentId/suggestions/:suggestionId/accept",
+    asyncRoute(async (request, response) => {
+      EmptySuggestionDecision.parse(request.body ?? {});
+      const method = requireSuggestionMethod(port.acceptStudioSuggestion);
+      safeJson(
+        response,
+        StudioSuggestionAcceptanceResponse,
+        await method.call(
+          port,
+          contextFor(request, options),
+          idParam(request, "projectId"),
+          idParam(request, "documentId"),
+          idParam(request, "suggestionId"),
+        ),
+        201,
+      );
+    }),
+  );
+
+  router.post(
+    "/projects/:projectId/studio/documents/:documentId/suggestions/:suggestionId/reject",
+    asyncRoute(async (request, response) => {
+      EmptySuggestionDecision.parse(request.body ?? {});
+      const method = requireSuggestionMethod(port.rejectStudioSuggestion);
+      safeJson(
+        response,
+        StudioSuggestionDecisionResponse,
+        await method.call(
+          port,
+          contextFor(request, options),
+          idParam(request, "projectId"),
+          idParam(request, "documentId"),
+          idParam(request, "suggestionId"),
         ),
       );
     }),

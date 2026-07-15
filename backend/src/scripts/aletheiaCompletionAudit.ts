@@ -509,7 +509,7 @@ function main() {
         packageScript(root, "frontend/package.json", "build"),
         packageScript(root, "frontend/package.json", "test:aletheia:ui"),
         contains(root, ".github/workflows/aletheia-local-ci.yml", [
-          "Aletheia Local CI",
+          "Vera Local CI",
           "npm run check:aletheia:doctor",
           "npm run check:aletheia:backup",
           "npm run check:aletheia:restore",

@@ -6,6 +6,8 @@ const { execFileSync } = require("node:child_process");
 const SECURITY_PATH = "/usr/bin/security";
 const SECURITY_TIMEOUT_MS = 10_000;
 const SECURITY_MAX_BUFFER_BYTES = 64 * 1024;
+const MAX_KEYCHAIN_SECRET_UTF8_BYTES = 1024;
+const SECURITY_INTERACTIVE_MAX_COMMAND_BYTES = 4094;
 const ITEM_NOT_FOUND_MESSAGE =
   "The specified item could not be found in the keychain.";
 const DUPLICATE_ITEM_STATUS = 45;
@@ -152,6 +154,35 @@ function runSecurityCommand(args, options = {}) {
   );
 }
 
+function isSecurityInteractiveCommandWithinLimit(
+  command,
+  maximumBytes = SECURITY_INTERACTIVE_MAX_COMMAND_BYTES,
+) {
+  return (
+    Number.isSafeInteger(maximumBytes) &&
+    maximumBytes >= 1 &&
+    maximumBytes <= SECURITY_INTERACTIVE_MAX_COMMAND_BYTES &&
+    typeof command === "string" &&
+    /^[\x20-\x7e]+$/.test(command) &&
+    Buffer.byteLength(command, "utf8") <= maximumBytes
+  );
+}
+
+function runBoundedSecurityInteractiveCommand(
+  command,
+  execFileSyncImpl,
+  maximumBytes,
+) {
+  if (!isSecurityInteractiveCommandWithinLimit(command, maximumBytes)) {
+    throw genericKeychainFailure("write");
+  }
+  return runSecurityCommand(["-i"], {
+    execFileSyncImpl,
+    input: `${command}\n`,
+    stdin: "pipe",
+  });
+}
+
 function findGenericPassword({ service, account, execFileSyncImpl }) {
   try {
     const storedValue = runSecurityCommand(
@@ -187,46 +218,40 @@ function writeGenericPassword({
   account,
   secret,
   execFileSyncImpl = execFileSync,
+  interactiveCommandMaxBytes = SECURITY_INTERACTIVE_MAX_COMMAND_BYTES,
 }) {
   if (
     typeof secret !== "string" ||
-    /[\r\n]/.test(secret)
+    /[\r\n]/.test(secret) ||
+    Buffer.byteLength(secret, "utf8") > MAX_KEYCHAIN_SECRET_UTF8_BYTES
   ) {
     throw genericKeychainFailure("write");
   }
   try {
-    if (service === WORKSPACE_MODEL_CREDENTIAL_SERVICE) {
-      if (
-        !SECURITY_INTERACTIVE_TOKEN_PATTERN.test(service) ||
-        typeof account !== "string" ||
-        !SECURITY_INTERACTIVE_TOKEN_PATTERN.test(account)
-      ) {
-        throw genericKeychainFailure("write");
-      }
-      // The prompted `-w` form truncates long password input at 128
-      // characters. The model-only envelope can exceed that, so send exact
-      // UTF-8 bytes as hex through `security -i` stdin. The deterministic
-      // service/account tokens are validated above and no secret enters argv.
-      const storedSecret = encodeKeychainSecretEnvelope(secret);
-      const secretHex = Buffer.from(storedSecret, "utf8").toString("hex");
-      runSecurityCommand(["-i"], {
-        execFileSyncImpl,
-        input: `add-generic-password -s ${service} -a ${account} -X ${secretHex}\n`,
-        stdin: "pipe",
-      });
-      return;
+    if (
+      typeof service !== "string" ||
+      !SECURITY_INTERACTIVE_TOKEN_PATTERN.test(service) ||
+      typeof account !== "string" ||
+      !SECURITY_INTERACTIVE_TOKEN_PATTERN.test(account)
+    ) {
+      throw genericKeychainFailure("write");
     }
-    // A trailing `-w` prompts for both the password and its confirmation. One
-    // input line causes `security` to retry on EOF and create an empty item
-    // while still exiting zero. Application and database keys are bounded
-    // base64 values, so send the same value twice over the private stdin pipe.
-    runSecurityCommand(
-      ["add-generic-password", "-s", service, "-a", account, "-w"],
-      {
-        execFileSyncImpl,
-        input: `${secret}\n${secret}\n`,
-        stdin: "pipe",
-      },
+    // A trailing `-w` is intentionally interactive and reads from the
+    // controlling terminal when the parent has a PTY, bypassing the private
+    // stdin pipe. Use the non-prompting interpreter form for every secret so
+    // packaged builds behave identically with and without a TTY. Exact UTF-8
+    // bytes travel as hex on bounded stdin; validated tokens prevent command
+    // injection and no secret enters argv.
+    const storedSecret =
+      service === WORKSPACE_MODEL_CREDENTIAL_SERVICE
+        ? encodeKeychainSecretEnvelope(secret)
+        : secret;
+    const secretHex = Buffer.from(storedSecret, "utf8").toString("hex");
+    const command = `add-generic-password -s ${service} -a ${account} -X ${secretHex}`;
+    runBoundedSecurityInteractiveCommand(
+      command,
+      execFileSyncImpl,
+      interactiveCommandMaxBytes,
     );
   } catch (error) {
     if (isMacOsKeychainItemCollision(error)) {
@@ -376,9 +401,11 @@ function ensureMacOsKeychainKey({
 }
 
 module.exports = {
+  MAX_KEYCHAIN_SECRET_UTF8_BYTES,
   SECURITY_PATH,
   SECURITY_TIMEOUT_MS,
   SECURITY_MAX_BUFFER_BYTES,
+  SECURITY_INTERACTIVE_MAX_COMMAND_BYTES,
   WORKSPACE_MODEL_CREDENTIAL_SERVICE,
   WORKSPACE_MODEL_CREDENTIAL_ACCOUNT_PREFIX,
   MacOsKeychainItemCollisionError,
@@ -389,6 +416,7 @@ module.exports = {
   ensureMacOsKeychainKey,
   isMacOsKeychainItemNotFound,
   isMacOsKeychainItemCollision,
+  isSecurityInteractiveCommandWithinLimit,
   readGenericPassword,
   strict32ByteBase64,
   stripSingleTrailingNewline,

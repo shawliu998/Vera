@@ -383,8 +383,7 @@ export interface AssistantJobEnqueuerPort {
   }): { id: string; type: string; status: string };
 }
 
-export interface AssistantGenerationJobControlPort
-  extends AssistantJobEnqueuerPort {
+export interface AssistantGenerationJobControlPort extends AssistantJobEnqueuerPort {
   getJob(id: string): {
     id: string;
     type: string;
@@ -685,11 +684,7 @@ export class ChatsRepository {
     eventType: MikeAssistantStreamEvent["type"];
     status?: string;
   }) {
-    const parameters: unknown[] = [
-      input.jobId,
-      input.attempt,
-      input.eventType,
-    ];
+    const parameters: unknown[] = [input.jobId, input.attempt, input.eventType];
     const statusClause = input.status
       ? "AND json_extract(event_json,'$.status')=?"
       : "";
@@ -868,6 +863,35 @@ export class ChatsRepository {
       }));
   }
 
+  private rejectPendingDocumentEditsForMessageInCurrentTransaction(
+    messageId: string,
+    resolvedAt: string,
+  ) {
+    this.database
+      .prepare(
+        `UPDATE document_edits
+            SET status='rejected',resolved_at=?
+          WHERE message_id=? AND status='pending' AND resolved_at IS NULL`,
+      )
+      .run(resolvedAt, messageId);
+  }
+
+  private rejectPendingDocumentEditsForChatInCurrentTransaction(
+    chatId: string,
+    resolvedAt: string,
+  ) {
+    this.database
+      .prepare(
+        `UPDATE document_edits
+            SET status='rejected',resolved_at=?
+          WHERE status='pending' AND resolved_at IS NULL
+            AND message_id IN (
+              SELECT id FROM chat_messages WHERE chat_id=?
+            )`,
+      )
+      .run(resolvedAt, chatId);
+  }
+
   assertNoActiveGeneration(chatId: string) {
     this.require(chatId);
     const active = this.database
@@ -905,6 +929,10 @@ export class ChatsRepository {
           "Chat deletion is blocked while generation jobs are active.",
         );
       }
+      this.rejectPendingDocumentEditsForChatInCurrentTransaction(
+        id,
+        new Date().toISOString(),
+      );
       this.database
         .prepare(
           `DELETE FROM jobs
@@ -1053,6 +1081,17 @@ export class ChatsRepository {
       )
       .all(chatId)
       .map(mapMessage);
+  }
+
+  message(chatId: string, messageId: string) {
+    this.require(chatId);
+    const row = this.database
+      .prepare("SELECT * FROM chat_messages WHERE id=? AND chat_id=?")
+      .get(messageId, chatId);
+    if (!row) {
+      throw new WorkspaceApiError(404, "NOT_FOUND", "Message not found.");
+    }
+    return mapMessage(row);
   }
 
   private assertSourceRelationship(input: {
@@ -2048,6 +2087,10 @@ export class ChatsRepository {
       } else if (outputStatus !== expected) {
         corrupt("Assistant job and output message terminal states diverged.");
       }
+      this.rejectPendingDocumentEditsForMessageInCurrentTransaction(
+        status.outputMessageId,
+        now,
+      );
     }
     if (
       !this.database
@@ -2112,7 +2155,10 @@ export class ChatsRepository {
         const status = this.generationStatusInCurrentTransaction(
           requiredString(row.job_id, "generation job id"),
         );
-        return this.reconcileGenerationTerminalInCurrentTransaction(status, now);
+        return this.reconcileGenerationTerminalInCurrentTransaction(
+          status,
+          now,
+        );
       });
     });
   }
@@ -2211,7 +2257,10 @@ export class ChatsRepository {
           attempt: requiredInteger(row.attempt, "Assistant event attempt"),
           event,
           terminal: terminal === 1,
-          createdAt: requiredString(row.created_at, "Assistant event createdAt"),
+          createdAt: requiredString(
+            row.created_at,
+            "Assistant event createdAt",
+          ),
         });
       }
       return {
@@ -2245,7 +2294,9 @@ export class ChatsRepository {
         { type: "cancel", at: input.now, reason: input.reason },
       );
       if (cancelled.status !== "cancelled") {
-        corrupt("Assistant queued cancellation did not reach a terminal state.");
+        corrupt(
+          "Assistant queued cancellation did not reach a terminal state.",
+        );
       }
       const updated = this.database
         .prepare(
@@ -2258,8 +2309,14 @@ export class ChatsRepository {
         changes?: unknown;
       };
       if (Number(updated?.changes ?? 0) !== 1) {
-        corrupt("Assistant queued cancellation did not update its output message.");
+        corrupt(
+          "Assistant queued cancellation did not update its output message.",
+        );
       }
+      this.rejectPendingDocumentEditsForMessageInCurrentTransaction(
+        status.outputMessageId,
+        input.now,
+      );
       const terminalStatus = this.generationStatusInCurrentTransaction(
         input.jobId,
       );
@@ -2292,6 +2349,10 @@ export class ChatsRepository {
           "Assistant generation is not eligible for retry.",
         );
       }
+      this.rejectPendingDocumentEditsForMessageInCurrentTransaction(
+        status.outputMessageId,
+        input.now,
+      );
       const retried = input.jobs.transitionJobInCurrentTransaction(
         input.jobId,
         { type: "retry", at: input.now },
@@ -2380,7 +2441,9 @@ export class ChatsRepository {
         },
       );
       if (cancelled.status !== "cancelled") {
-        corrupt("Assistant claimed cancellation did not reach a terminal state.");
+        corrupt(
+          "Assistant claimed cancellation did not reach a terminal state.",
+        );
       }
       const updated = this.database
         .prepare(
@@ -2397,8 +2460,14 @@ export class ChatsRepository {
           input.claim.jobId,
         ) as { changes?: unknown };
       if (Number(updated?.changes ?? 0) !== 1) {
-        corrupt("Assistant claimed cancellation did not update its output message.");
+        corrupt(
+          "Assistant claimed cancellation did not update its output message.",
+        );
       }
+      this.rejectPendingDocumentEditsForMessageInCurrentTransaction(
+        input.snapshot.outputMessageId,
+        input.now,
+      );
       const terminalStatus = this.generationStatusInCurrentTransaction(
         input.claim.jobId,
       );
@@ -2555,6 +2624,10 @@ export class ChatsRepository {
           input.snapshot.outputMessageId,
           input.claim.jobId,
         );
+      this.rejectPendingDocumentEditsForMessageInCurrentTransaction(
+        input.snapshot.outputMessageId,
+        input.now,
+      );
       input.claims.finishClaimInCurrentTransaction({
         id: claimInput.id,
         type: claimInput.type,

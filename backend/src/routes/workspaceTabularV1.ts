@@ -301,7 +301,7 @@ function streamSink(response: Response): WorkspaceTabularStreamSink {
     started = true;
     response.set({
       "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache",
+      "Cache-Control": "private, no-cache, no-store",
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
     });

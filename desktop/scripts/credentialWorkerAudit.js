@@ -11,6 +11,7 @@ const {
   CREDENTIAL_PORT_BOOTSTRAP,
   CREDENTIAL_PORT_READY,
   CREDENTIAL_RPC_SCHEMA,
+  MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES,
   attachCredentialWorkerParentPort,
   attachCredentialWorkerPort,
   createCredentialWorkerHandler,
@@ -198,7 +199,11 @@ function auditStrictProtocolAndUnavailablePlatform() {
     request("unknown", {}),
     request("ping", { extra: true }),
     request("store", { reference, binding, secret: "line\nbreak" }),
-    request("store", { reference, binding, secret: "x".repeat(8193) }),
+    request("store", {
+      reference,
+      binding,
+      secret: "x".repeat(MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES + 1),
+    }),
     request("resolve", {
       reference,
       binding: { ...binding, profileId: crypto.randomUUID() },
@@ -218,6 +223,41 @@ function auditStrictProtocolAndUnavailablePlatform() {
     assert.deepEqual(response.error, { code: "INVALID_REQUEST" });
     assert.equal(JSON.stringify(response).includes(secret), false);
   }
+}
+
+function auditSecretByteBoundary() {
+  const boundarySecret = "😀".repeat(256);
+  assert.equal(
+    Buffer.byteLength(boundarySecret, "utf8"),
+    MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES,
+  );
+  let writeCalls = 0;
+  const handler = createCredentialWorkerHandler({
+    platform: "darwin",
+    writeGenericPassword(input) {
+      writeCalls += 1;
+      assert.equal(input.secret, boundarySecret);
+    },
+    readGenericPassword() {
+      return boundarySecret;
+    },
+  });
+  assert.deepEqual(
+    handler(request("store", { reference, binding, secret: boundarySecret }))
+      .result,
+    { stored: true },
+  );
+  assert.equal(writeCalls, 1);
+  for (const oversized of [
+    "x".repeat(MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES + 1),
+    "😀".repeat(257),
+  ]) {
+    const response = handler(
+      request("store", { reference, binding, secret: oversized }),
+    );
+    assert.deepEqual(response.error, { code: "INVALID_REQUEST" });
+  }
+  assert.equal(writeCalls, 1);
 }
 
 function auditMessagePortBoundary() {
@@ -286,6 +326,7 @@ function auditStaticNoLoggingBoundary() {
 auditLifecycleAndRedaction();
 auditKeychainAvailabilityProbe();
 auditStrictProtocolAndUnavailablePlatform();
+auditSecretByteBoundary();
 auditMessagePortBoundary();
 auditParentReadinessHandshake();
 auditStaticNoLoggingBoundary();
@@ -297,12 +338,13 @@ console.log(
       suite: "vera-credential-worker-v1",
       checks: [
         "strict request schema and origin-bound locators",
+        "1,024-byte UTF-8 secret boundary before Keychain writes",
         "create-only collision and unavailable Keychain classification",
         "real read-only Keychain availability probe",
         "secret-free error envelopes and no logging bridge",
-          "non-darwin fail-closed capability",
-          "retrying parent-port readiness handshake",
-          "dedicated message-port request boundary",
+        "non-darwin fail-closed capability",
+        "retrying parent-port readiness handshake",
+        "dedicated message-port request boundary",
       ],
     },
     null,

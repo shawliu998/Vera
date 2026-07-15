@@ -11,8 +11,11 @@ const {
   deleteWorkspaceModelCredential,
   encodeKeychainSecretEnvelope,
   isMacOsKeychainItemCollision,
+  isSecurityInteractiveCommandWithinLimit,
   MacOsKeychainItemCollisionError,
+  MAX_KEYCHAIN_SECRET_UTF8_BYTES,
   readGenericPassword,
+  SECURITY_INTERACTIVE_MAX_COMMAND_BYTES,
   SECURITY_MAX_BUFFER_BYTES,
   SECURITY_PATH,
   SECURITY_TIMEOUT_MS,
@@ -68,12 +71,22 @@ function interactiveWorkspaceCommand(service, account, secret) {
   ).toString("hex")}\n`;
 }
 
+function interactiveGenericCommand(service, account, secret) {
+  return `add-generic-password -s ${service} -a ${account} -X ${Buffer.from(
+    secret,
+    "utf8",
+  ).toString("hex")}\n`;
+}
+
 function auditSecretEnvelope() {
   const secret = "Vera 凭据 !@#$%^&*()";
   const encoded = encodeKeychainSecretEnvelope(secret);
   assert.equal(encoded.includes(secret), false);
   assert.equal(decodeKeychainSecretEnvelope(encoded), secret);
-  assert.equal(decodeKeychainSecretEnvelope("legacy-plain-secret"), "legacy-plain-secret");
+  assert.equal(
+    decodeKeychainSecretEnvelope("legacy-plain-secret"),
+    "legacy-plain-secret",
+  );
   assert.throws(
     () => decodeKeychainSecretEnvelope(`${encoded.slice(0, -1)}A`),
     /Unable to decode the requested macOS Keychain item/,
@@ -144,6 +157,143 @@ function auditWriteUsesBoundedRedactedCommand() {
     execFileSyncImpl: mock.execFileSyncImpl,
   });
   mock.assertComplete();
+}
+
+function auditSecretAndCommandByteBoundaries() {
+  assert.equal(MAX_KEYCHAIN_SECRET_UTF8_BYTES, 1024);
+  assert.equal(SECURITY_INTERACTIVE_MAX_COMMAND_BYTES, 4094);
+
+  const service = `s${"a".repeat(511)}`;
+  const account = `a${"b".repeat(511)}`;
+  const boundarySecret = "😀".repeat(256);
+  assert.equal(Buffer.byteLength(service, "ascii"), 512);
+  assert.equal(Buffer.byteLength(account, "ascii"), 512);
+  assert.equal(Buffer.byteLength(boundarySecret, "utf8"), 1024);
+  const boundaryInput = interactiveGenericCommand(
+    service,
+    account,
+    boundarySecret,
+  );
+  assert.ok(
+    Buffer.byteLength(boundaryInput.slice(0, -1), "ascii") <=
+      SECURITY_INTERACTIVE_MAX_COMMAND_BYTES,
+  );
+  assert.ok(
+    Buffer.byteLength(boundaryInput, "ascii") <=
+      SECURITY_INTERACTIVE_MAX_COMMAND_BYTES + 1,
+  );
+  const boundaryMock = securityMock([
+    {
+      args: ["-i"],
+      assert({ args, options }) {
+        assertSecurityOptions(options, "pipe");
+        assert.deepEqual(args, ["-i"]);
+        assert.equal(options.input, boundaryInput);
+      },
+    },
+  ]);
+  writeGenericPassword({
+    service,
+    account,
+    secret: boundarySecret,
+    execFileSyncImpl: boundaryMock.execFileSyncImpl,
+  });
+  boundaryMock.assertComplete();
+
+  const modelBoundaryInput = interactiveWorkspaceCommand(
+    WORKSPACE_MODEL_CREDENTIAL_SERVICE,
+    account,
+    boundarySecret,
+  );
+  assert.ok(
+    Buffer.byteLength(modelBoundaryInput.slice(0, -1), "ascii") <=
+      SECURITY_INTERACTIVE_MAX_COMMAND_BYTES,
+  );
+  const modelBoundaryMock = securityMock([
+    {
+      args: ["-i"],
+      assert({ options }) {
+        assert.equal(options.input, modelBoundaryInput);
+      },
+    },
+  ]);
+  writeGenericPassword({
+    service: WORKSPACE_MODEL_CREDENTIAL_SERVICE,
+    account,
+    secret: boundarySecret,
+    execFileSyncImpl: modelBoundaryMock.execFileSyncImpl,
+  });
+  modelBoundaryMock.assertComplete();
+
+  let rejectedExecCalls = 0;
+  const rejectExec = () => {
+    rejectedExecCalls += 1;
+    throw new Error("security must not run for rejected input");
+  };
+  for (const oversizedSecret of [
+    "x".repeat(MAX_KEYCHAIN_SECRET_UTF8_BYTES + 1),
+    "😀".repeat(257),
+  ]) {
+    assert.throws(
+      () =>
+        writeGenericPassword({
+          service,
+          account,
+          secret: oversizedSecret,
+          execFileSyncImpl: rejectExec,
+        }),
+      /Unable to write the requested macOS Keychain item/,
+    );
+  }
+
+  for (const [invalidService, invalidAccount] of [
+    ["unsafe service", account],
+    ["unsafe\nservice", account],
+    [service, "unsafe account"],
+    [service, "unsafe\naccount"],
+  ]) {
+    assert.throws(
+      () =>
+        writeGenericPassword({
+          service: invalidService,
+          account: invalidAccount,
+          secret: "safe-secret",
+          execFileSyncImpl: rejectExec,
+        }),
+      /Unable to write the requested macOS Keychain item/,
+    );
+  }
+  assert.equal(rejectedExecCalls, 0);
+
+  assert.equal(
+    isSecurityInteractiveCommandWithinLimit(
+      "x".repeat(SECURITY_INTERACTIVE_MAX_COMMAND_BYTES),
+    ),
+    true,
+  );
+  assert.equal(
+    isSecurityInteractiveCommandWithinLimit(
+      "x".repeat(SECURITY_INTERACTIVE_MAX_COMMAND_BYTES + 1),
+    ),
+    false,
+  );
+  const ordinarySecret = "bounded-command";
+  const ordinaryCommandBytes = Buffer.byteLength(
+    interactiveGenericCommand(service, account, ordinarySecret).slice(0, -1),
+    "utf8",
+  );
+  assert.throws(
+    () =>
+      writeGenericPassword({
+        service,
+        account,
+        secret: ordinarySecret,
+        execFileSyncImpl: rejectExec,
+        interactiveCommandMaxBytes: ordinaryCommandBytes - 1,
+      }),
+    /Unable to write the requested macOS Keychain item/,
+  );
+  assert.equal(rejectedExecCalls, 0);
 }
 
 function auditCreateOnlyCollisionClassification() {
@@ -529,6 +679,7 @@ function auditStaticIntegration() {
 auditAccountNaming();
 auditSecretEnvelope();
 auditWriteUsesBoundedRedactedCommand();
+auditSecretAndCommandByteBoundaries();
 auditCreateOnlyCollisionClassification();
 auditReadAndDeleteBehaviors();
 auditRestartSafeBoundCredentialDeletion();
@@ -546,6 +697,7 @@ console.log(
         "model-profile account naming is deterministic and origin-bound without exposing raw origin",
         "versioned UTF-8 secret envelopes round-trip non-ASCII values while retaining legacy plain-value reads",
         "model credential writes are create-only without -U and use validated security interactive tokens with an exact UTF-8 envelope only on bounded stdin",
+        "1,024-byte UTF-8 secrets and 4,094-byte security command bodies fail closed before exec",
         "duplicate-item failures are classified as definite no-write collisions without exposing account or secret material",
         "generic password reads and deletes stay bounded and classify missing items safely",
         `real macOS Keychain write/read/collision/delete round trip: ${realRoundTrip}`,
