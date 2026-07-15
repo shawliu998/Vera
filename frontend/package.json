@@ -18,7 +18,8 @@
     "test:ocr-review": "tsx --test tests/vera-ocr-review.test.ts",
     "test:tabular": "tsx --test tests/vera-tabular.test.ts",
     "test:models-settings": "tsx --test tests/vera-model-settings.test.ts tests/vera-settings-source.test.ts",
-    "test:p0-client": "npm run lint && npm run test:assistant && npm run test:workflows && npm run test:tabular && npm run test:models-settings && npm run test:legal-sources && npm run test:studio && npm run test:ocr-review && npm run test:shell-source",
+    "test:matters": "tsx --test tests/vera-matter-workspace.test.ts",
+    "test:p0-client": "npm run lint && npm run test:assistant && npm run test:workflows && npm run test:tabular && npm run test:models-settings && npm run test:legal-sources && npm run test:studio && npm run test:ocr-review && npm run test:matters && npm run test:shell-source",
     "test:desktop-csp-runtime": "node tests/vera-desktop-csp-runtime.mjs",
     "test:aletheia:ui": "playwright test --config=playwright.config.ts",
     "test:aletheia:ui:install": "playwright install chromium"

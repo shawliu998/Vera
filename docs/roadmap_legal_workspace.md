@@ -38,10 +38,10 @@ Three commits predate this revised roadmap:
 | `edf26827` | Retain unchanged. It provides the required default-off Legacy route/runtime flags and lazy loading.                                                    |
 | `408333d7` | Retain as an additive, already-committed v15 foundation. Its narrow `matter_type` is transitional and must not become the new public product taxonomy. |
 
-Migration v15 is treated as immutable. Gate 1 therefore adds a v16
-classification migration rather than changing the v15 checksum. Uncommitted
-Matter API/UI work created against the earlier plan is not product evidence and
-must be adapted before it can land.
+Migration v15 is treated as immutable. Gate 1's schema slice adds v16 rather
+than changing the v15 checksum. The Matter API/UI work was adapted to this
+contract, independently security-reviewed, and accepted only with its focused
+and retained-product regression evidence.
 
 ## 3. Gate sequence
 
@@ -82,14 +82,15 @@ Already implemented by `edf26827`:
 
 #### 1B. Matter classification migration
 
-Add v16 without editing v15:
+Migration v16 adds the following without editing v15:
 
 - `workspace_type`: `general_legal`, `transaction`, `dispute`,
   `investigation`, `compliance`, or `research`;
 - bounded optional `jurisdiction`;
 - existing v15 rows remain readable with an explicit
   `classification_required` capability until the user selects a value;
-- new Matter creation requires `workspace_type`;
+- new Matter creation requires `workspace_type` at the database boundary;
+- a classified row cannot be changed back to an unclassified row;
 - no automatic mapping guesses from the older v15 `matter_type` values.
 
 Because v15 made `matter_type` required, the v16 compatibility writer stores
@@ -319,8 +320,8 @@ license, native packaging, saved-audio recovery, and model-weight reviews.
 
 ## 4. Provisional migration order
 
-Only v15 is committed. Later numbers are planning reservations and can be split
-before their migration lands:
+Migrations v15 and v16 are committed. Versions v17 and later remain planning
+reservations and can be split before their migration lands:
 
 | Version | Domain                                                                       |
 | ------- | ---------------------------------------------------------------------------- |
@@ -367,7 +368,10 @@ claims change only after the corresponding real vertical acceptance passes.
 
 ## 6. Immediate next slice
 
-After Gate 0 is committed, Gate 1 resumes with v16 and the corrected Matter
-public contract. The already-created uncommitted API and UI files are reviewed
-line by line and adapted; they are not accepted merely because focused tests
-for the earlier contract once passed.
+Gate 1's v16 schema, corrected Matter API, interim inference boundary, and
+Matter UI slices are implemented and have passed the backend/security review.
+The remaining Gate 1 acceptance item is a current packaged macOS cross-restart
+run. After that release evidence is recorded, Gate 2 begins with one real
+Document Studio suggestion projected through the Proposal Contract into the
+Review Center, including authoritative accept/reject and stale/source
+revalidation.

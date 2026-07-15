@@ -263,6 +263,10 @@ test("Mike-pinned Tabular client is wired to Vera routes without simulated execu
     path.join(root, "src/app/components/projects/ProjectWorkspace.tsx"),
     "utf8",
   );
+  const legacyRoute = await readFile(
+    path.join(root, "src/app/(pages)/tabular-review/page.tsx"),
+    "utf8",
+  );
 
   assert.match(api, /\/tabular-review\/\$\{safeId\(reviewId/);
   assert.match(api, /streamVeraSse/);
@@ -276,6 +280,7 @@ test("Mike-pinned Tabular client is wired to Vera routes without simulated execu
   assert.match(view, /clearConfirmDocumentIds/);
   assert.match(view, /projectChanged/);
   assert.doesNotMatch(view, /setTimeout|mockData|TRChatPanel|Promise\.allSettled/);
-  assert.match(sidebar, /href: "\/tabular-review"/);
+  assert.doesNotMatch(sidebar, /href: "\/tabular-review"/);
+  assert.match(legacyRoute, /<TabularReviewsList \/>/);
   assert.match(projectWorkspace, /\/tabular-reviews/);
 });
