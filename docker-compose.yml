@@ -40,11 +40,14 @@ services:
       ALETHEIA_SEMANTIC_INDEX_ENABLED: "false"
       ALETHEIA_SEMANTIC_INDEX_DRIVER: disabled
       ALETHEIA_SEMANTIC_INDEX_DIR: /data/aletheia/index/semantic-local
-      # Configuration and locally resolvable credential references only. API
-      # secrets are never injected through Compose.
+      # Configuration and locally resolvable credential references only.
+      # Provider API/MCP secrets are never injected through Compose.
       VERA_PKULAW_API_ENDPOINT: ${VERA_PKULAW_API_ENDPOINT:-}
       VERA_PKULAW_API_ALLOWED_HOSTS: ${VERA_PKULAW_API_ALLOWED_HOSTS:-}
       VERA_PKULAW_API_CREDENTIAL_REF: ${VERA_PKULAW_API_CREDENTIAL_REF:-}
+      VERA_YUANDIAN_API_ENDPOINT: ${VERA_YUANDIAN_API_ENDPOINT:-}
+      VERA_YUANDIAN_API_ALLOWED_HOSTS: ${VERA_YUANDIAN_API_ALLOWED_HOSTS:-}
+      VERA_YUANDIAN_API_CREDENTIAL_REF: ${VERA_YUANDIAN_API_CREDENTIAL_REF:-}
       VERA_WOLTERS_API_ENDPOINT: ${VERA_WOLTERS_API_ENDPOINT:-}
       VERA_WOLTERS_API_ALLOWED_HOSTS: ${VERA_WOLTERS_API_ALLOWED_HOSTS:-}
       VERA_WOLTERS_API_CREDENTIAL_REF: ${VERA_WOLTERS_API_CREDENTIAL_REF:-}

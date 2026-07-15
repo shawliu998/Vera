@@ -15,9 +15,10 @@ import {
   normalizeMcpAuthConfig,
   refreshLocalMcpConnector,
 } from "../lib/aletheia/localMcpConnectorClient";
-import { legalSourceDeploymentStatus } from "../lib/aletheia/legalSourceAdapter";
 import {
-  legalResearchProviderDescriptor,
+  hasDeclaredDeploymentDataUsePolicy,
+  legalResearchProviderDeploymentStatus,
+  legalResearchProviderDescriptorFromEnvironment,
   projectLegalResearchProviderConnectionStatus,
 } from "../lib/aletheia/legalResearchProvider";
 import { LEGAL_SOURCE_RETENTION_ACTIVATION_V13 } from "../lib/workspace/sourceRetentionPolicyV13";
@@ -102,8 +103,11 @@ function legalSourceStatusProjection(
   return repo.listProviderStatuses(userId).flatMap((item) => {
     const provider = normalizeLegalSourceProvider(item.provider);
     if (!provider) return [];
-    const deployment = legalSourceDeploymentStatus(provider);
-    const descriptor = legalResearchProviderDescriptor(provider);
+    const deployment = legalResearchProviderDeploymentStatus(provider);
+    const descriptor = legalResearchProviderDescriptorFromEnvironment(provider);
+    const dataUsePolicyReady = hasDeclaredDeploymentDataUsePolicy(
+      descriptor.dataUsePolicy,
+    );
     const deploymentReady =
       deployment.endpointConfigured &&
       deployment.allowlisted &&
@@ -112,6 +116,7 @@ function legalSourceStatusProjection(
     let credentialAvailable = false;
     if (
       LEGAL_SOURCE_RETENTION_ACTIVATION_V13.open &&
+      dataUsePolicyReady &&
       item.configured &&
       encryptionEnabled
     ) {
@@ -147,6 +152,7 @@ function legalSourceStatusProjection(
           credentialRequired: true,
           credentialAvailable,
           activationGateClosed: !LEGAL_SOURCE_RETENTION_ACTIVATION_V13.open,
+          dataUsePolicyReady,
           secretStorageAvailable,
           // Historical rows came from a retired, unsupported test action.
           // This request performs no network probe, so they cannot establish
@@ -259,7 +265,7 @@ export function createAletheiaLocalControlRouter(
   router.get("/providers", auth, (_req, res) => {
     try {
       res.json({
-        schemaVersion: "vera-legal-source-provider-status-v1",
+        schemaVersion: "vera-legal-source-provider-status-v2",
         localOnly: true,
         providers: legalSourceStatusProjection(repo, userId(res)),
         detail:
@@ -308,7 +314,7 @@ export function createAletheiaLocalControlRouter(
       }
       const legalProvider = normalizeLegalSourceProvider(provider);
       if (legalProvider) {
-        const deployment = legalSourceDeploymentStatus(legalProvider);
+        const deployment = legalResearchProviderDeploymentStatus(legalProvider);
         if (
           !deployment.endpointConfigured ||
           !deployment.allowlisted ||

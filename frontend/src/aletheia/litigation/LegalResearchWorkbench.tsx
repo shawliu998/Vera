@@ -385,7 +385,7 @@ export function LegalResearchWorkbench({ matterId }: { matterId: string }) {
       setUnavailable(apiError?.code === "legal_source_unavailable");
       setError(
         apiError?.code === "legal_source_unavailable"
-          ? "授权法律数据源当前不可用：尚未配置 API，或本地加密凭据不可读取。未发送任何备用请求。"
+          ? "受控法律数据源当前不可用：授权 API/MCP、端点允许列表、机构数据使用政策、本地凭据或生产门禁尚未就绪。未发送任何备用请求。"
           : mutationError instanceof Error
             ? mutationError.message
             : "操作失败。",
@@ -818,7 +818,7 @@ export function LegalResearchWorkbench({ matterId }: { matterId: string }) {
                   <div className="min-w-0 border-t-2 border-gray-950 bg-gray-50 p-3"><div className="text-[11px] font-semibold text-gray-700">拟出站检索词 · 精确文本</div><textarea className={`${fieldClass} mt-2 min-h-24 resize-y font-mono text-xs`} value={query} maxLength={600} onChange={(e) => setQuery(e.target.value)} placeholder="仅填写公开法律概念，不粘贴案件事实" /></div>
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-[160px_minmax(0,1fr)_auto] sm:items-end">
-                  <label><span className={labelClass}>授权数据源</span><select className={fieldClass} value={provider} onChange={(e) => setProvider(e.target.value as LegalResearchProvider)}><option value="pkulaw">北大法宝 API</option><option value="wolters">威科先行 API</option><option value="official">官方法律来源 API</option></select></label>
+                  <label><span className={labelClass}>授权数据源</span><select className={fieldClass} value={provider} onChange={(e) => setProvider(e.target.value as LegalResearchProvider)}><option value="pkulaw">北大法宝 MCP 法规检索（全文需企业授权接口）</option><option value="yuandian">元典 REST API</option><option value="wolters">威科先行（需机构私有接口与内容授权；当前不可用）</option><option value="official">官方来源（仅明确授权的来源专属接口）</option></select></label>
                   <label><span className={labelClass}>需脱敏词（逗号或换行分隔）</span><input className={fieldClass} value={protectedTerms} onChange={(e) => setProtectedTerms(e.target.value)} placeholder="当事人、项目代号、案号" /></label>
                   <button type="button" disabled={!query.trim() || !issueTreeId || issueLoading || busy === "preview"} onClick={() => void previewQuery()} className={secondaryButton}><ShieldCheck className="h-3.5 w-3.5" />生成脱敏预览</button>
                 </div>

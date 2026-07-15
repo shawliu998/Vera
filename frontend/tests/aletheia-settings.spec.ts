@@ -363,7 +363,7 @@ test("legal source secrets fail closed and remain local to the settings form", a
   let pkulawHasSecret = false;
   let providersUnavailable = false;
   const providerStatus = (
-    provider: "pkulaw" | "wolters",
+    provider: "pkulaw" | "yuandian" | "wolters",
     options: { hasSecret: boolean; endpointConfigured?: boolean },
   ) => {
     const endpointConfigured = options.endpointConfigured ?? true;
@@ -379,8 +379,8 @@ test("legal source secrets fail closed and remain local to the settings form", a
       credentialReferenceConfigured,
       hasSecret: options.hasSecret,
       encryptionEnabled: true,
-      contractVersion: "vera-legal-research-provider-v1",
-      integration: "authorized_json_gateway",
+      contractVersion: "vera-legal-research-provider-v2",
+      integration: "authorized_provider_adapter",
       capabilities: {
         search: true,
         fetchFullText: true,
@@ -400,17 +400,11 @@ test("legal source secrets fail closed and remain local to the settings form", a
         modelUse: "not_declared",
       },
       connectionStatus: deploymentReady
-        ? options.hasSecret
-          ? {
-              state: "configured_unverified",
-              reason: null,
-              connectionTested: false,
-            }
-          : {
-              state: "unavailable",
-              reason: "credential_unavailable",
-              connectionTested: false,
-            }
+        ? {
+            state: "unavailable",
+            reason: "data_use_policy_undeclared",
+            connectionTested: false,
+          }
         : {
             state: "unavailable",
             reason: "endpoint_missing",
@@ -440,11 +434,12 @@ test("legal source secrets fail closed and remain local to the settings form", a
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
-          schemaVersion: "vera-legal-source-provider-status-v1",
+          schemaVersion: "vera-legal-source-provider-status-v2",
           localOnly: true,
           detail: "Authorized legal-source status.",
           providers: [
             providerStatus("pkulaw", { hasSecret: pkulawHasSecret }),
+            providerStatus("yuandian", { hasSecret: false }),
             providerStatus("wolters", {
               hasSecret: false,
               endpointConfigured: false,
@@ -477,6 +472,7 @@ test("legal source secrets fail closed and remain local to the settings form", a
   const section = page.getByTestId("legal-source-settings");
   await expect(section).toContainText("法律数据源");
   await expect(section).toContainText("北大法宝");
+  await expect(section).toContainText("元典");
   await expect(section).toContainText("威科先行");
   await expect(section).toContainText("未保存本地密钥");
   const pkulawInput = page.getByLabel("北大法宝本地密钥");
@@ -552,6 +548,7 @@ test("legal source secrets fail closed and remain local to the settings form", a
   await page.getByRole("button", { name: "Tools & Keys" }).click();
   await expect(section).toContainText("法律数据源配置不可用");
   await expect(page.getByLabel("北大法宝本地密钥")).toBeDisabled();
+  await expect(page.getByLabel("元典本地密钥")).toBeDisabled();
   await expect(page.getByLabel("威科先行本地密钥")).toBeDisabled();
 });
 

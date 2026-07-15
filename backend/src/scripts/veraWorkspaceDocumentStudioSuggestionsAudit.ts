@@ -39,9 +39,12 @@ import {
   type WorkspaceDocumentStudioV1Port,
 } from "../routes/workspaceDocumentStudioV1";
 
-const NOW = "2026-07-15T14:00:00.000Z";
-const LEASE_EXPIRES = "2026-07-15T15:00:00.000Z";
-const AFTER_LEASE = "2026-07-15T16:00:00.000Z";
+// The v13 lifecycle trigger anchors new rows to SQLite wall time. Keep this
+// audit clock safely ahead of wall time so its explicit tombstone cannot move
+// lifecycle time backwards as the calendar advances.
+const NOW = "2099-07-15T14:00:00.000Z";
+const LEASE_EXPIRES = "2099-07-15T15:00:00.000Z";
+const AFTER_LEASE = "2099-07-15T16:00:00.000Z";
 const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
 const FOREIGN_PROJECT_ID = "22222222-2222-4222-8222-222222222222";
 const PROFILE_ID = "33333333-3333-4333-8333-333333333333";
@@ -971,7 +974,7 @@ async function run() {
       AFTER_LEASE,
       ["assistant_generate"],
       "suggestion-audit-recovery-2",
-      "2026-07-15T17:00:00.000Z",
+      "2099-07-15T17:00:00.000Z",
     );
     assert.equal(recoveredClaimed?.id, recoveredRun.generation.jobId);
     assert(recoveredClaimed);

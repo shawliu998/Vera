@@ -123,6 +123,10 @@ async function main() {
         throw new Error("ALETHEIA_DATA_DIR is required for OCR UI seed.");
       const db = new LocalDatabase(path.join(dataDir, "aletheia.db"));
       try {
+        // Playwright starts the local backend before global setup. Give its
+        // WAL writer a bounded window to finish instead of making this direct
+        // fixture update fail immediately with SQLITE_BUSY.
+        db.exec("pragma busy_timeout = 5000");
         db.prepare(
           "update aletheia_document_chunks set metadata = ? where id = ? and matter_id = ? and user_id = ?",
         ).run(

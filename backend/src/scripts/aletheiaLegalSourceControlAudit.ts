@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -101,18 +101,22 @@ function assertStrictStatus(value: unknown) {
     Object.keys(status).sort(),
     [...PROVIDER_STATUS_KEYS].sort(),
   );
-  assert(status.provider === "pkulaw" || status.provider === "wolters");
+  assert(
+    status.provider === "pkulaw" ||
+      status.provider === "yuandian" ||
+      status.provider === "wolters",
+  );
   assert.equal(typeof status.deploymentReady, "boolean");
   assert.equal(typeof status.endpointConfigured, "boolean");
   assert.equal(typeof status.allowlisted, "boolean");
   assert.equal(typeof status.credentialReferenceConfigured, "boolean");
   assert.equal(typeof status.hasSecret, "boolean");
   assert.equal(typeof status.encryptionEnabled, "boolean");
-  assert.equal(status.contractVersion, "vera-legal-research-provider-v1");
-  assert.equal(status.integration, "authorized_json_gateway");
+  assert.equal(status.contractVersion, "vera-legal-research-provider-v2");
+  assert.equal(status.integration, "authorized_provider_adapter");
   assert.deepEqual(status.capabilities, {
     search: true,
-    fetchFullText: true,
+    fetchFullText: status.provider !== "pkulaw",
     pagination: false,
     getByCitation: false,
     jurisdictionFilter: false,
@@ -120,7 +124,10 @@ function assertStrictStatus(value: unknown) {
     structuredFilters: false,
     dynamicToolInvocation: false,
     requiresExplicitEgressApproval: true,
-    documentKinds: ["statute", "judicial_interpretation", "case", "other"],
+    documentKinds:
+      status.provider === "pkulaw"
+        ? ["statute", "judicial_interpretation", "other"]
+        : ["statute", "judicial_interpretation", "case", "other"],
   });
   assert.deepEqual(status.dataUsePolicy, {
     basis: "not_declared",
@@ -150,11 +157,11 @@ function assertProviderListResponse(value: unknown) {
     "providers",
     "schemaVersion",
   ]);
-  assert.equal(response.schemaVersion, "vera-legal-source-provider-status-v1");
+  assert.equal(response.schemaVersion, "vera-legal-source-provider-status-v2");
   assert.equal(response.localOnly, true);
   assert.equal(typeof response.detail, "string");
   assert(Array.isArray(response.providers));
-  assert.equal(response.providers.length, 2);
+  assert.equal(response.providers.length, 3);
   return response.providers.map(assertStrictStatus);
 }
 
@@ -168,6 +175,21 @@ function assertLocalControlError(
 }
 
 async function main() {
+  const localControlSource = readFileSync(
+    path.resolve(process.cwd(), "src/routes/aletheiaLocalControl.ts"),
+    "utf8",
+  );
+  assert.match(
+    localControlSource,
+    /LEGAL_SOURCE_RETENTION_ACTIVATION_V13\.open &&\s+dataUsePolicyReady &&\s+item\.configured/u,
+    "a future-open retention gate must still block credential decryption until a deployment policy is declared",
+  );
+  assert.match(
+    localControlSource,
+    /projectLegalResearchProviderConnectionStatus\(\{[\s\S]*?dataUsePolicyReady,[\s\S]*?\}\)/u,
+    "local status must project the same data-use-policy gate as provider execution",
+  );
+
   const directory = mkdtempSync(
     path.join(os.tmpdir(), "aletheia-legal-source-control-audit-"),
   );
@@ -177,9 +199,13 @@ async function main() {
   process.env.ALETHEIA_MASTER_KEY_BASE64 = Buffer.alloc(32, 91).toString(
     "base64",
   );
-  process.env.VERA_PKULAW_API_ENDPOINT = "https://api.pkulaw.example/research";
-  process.env.VERA_PKULAW_API_ALLOWED_HOSTS = "api.pkulaw.example";
+  process.env.VERA_PKULAW_API_ENDPOINT =
+    "https://apim-gw.pkulaw.com/vera_law_semantic_01/mcp";
+  process.env.VERA_PKULAW_API_ALLOWED_HOSTS = "apim-gw.pkulaw.com";
   process.env.VERA_PKULAW_API_CREDENTIAL_REF = "pkulaw-local-credential";
+  process.env.VERA_YUANDIAN_API_ENDPOINT = "https://open.chineselaw.com";
+  process.env.VERA_YUANDIAN_API_ALLOWED_HOSTS = "open.chineselaw.com";
+  process.env.VERA_YUANDIAN_API_CREDENTIAL_REF = "yuandian-local-credential";
   process.env.VERA_WOLTERS_API_ENDPOINT =
     "https://api.wolters.example/research";
   process.env.VERA_WOLTERS_API_ALLOWED_HOSTS = "api.wolters.example";
@@ -244,6 +270,7 @@ async function main() {
 
   const secrets = {
     pkulaw: "pkulaw-local-credential-audit-1234",
+    yuandian: "yuandian-local-credential-audit-9012",
     wolters: "wolters-local-credential-audit-5678",
   } as const;
 
@@ -383,6 +410,9 @@ async function main() {
     repository.recordProviderTest(userId, "pkulaw", {
       status: "passed",
     });
+    repository.recordProviderTest(userId, "yuandian", {
+      status: "passed",
+    });
     repository.recordProviderTest(userId, "wolters", {
       status: "unsupported",
       error: secrets.wolters,
@@ -394,9 +424,11 @@ async function main() {
     for (const secret of Object.values(secrets)) {
       assert.equal(listJson.includes(secret), false);
     }
-    assert.equal(listJson.includes("api.pkulaw.example"), false);
+    assert.equal(listJson.includes("apim-gw.pkulaw.com"), false);
+    assert.equal(listJson.includes("open.chineselaw.com"), false);
     assert.equal(listJson.includes("api.wolters.example"), false);
     assert.equal(listJson.includes("pkulaw-local-credential"), false);
+    assert.equal(listJson.includes("yuandian-local-credential"), false);
     assert.equal(listJson.includes("wolters-local-credential"), false);
     assert.equal(listJson.includes("must-not-cross-wire"), false);
     const providers = assertProviderListResponse(listed.body);
@@ -501,25 +533,25 @@ async function main() {
         secret,
       );
     }
-    assert.equal(providerSecretReads, 2);
+    assert.equal(providerSecretReads, 3);
     assertLocalControlError(
       () => readLocalLegalSourceCredential(repository, userId, "unsupported"),
       "INVALID_INPUT",
     );
-    assert.equal(providerSecretReads, 2);
+    assert.equal(providerSecretReads, 3);
 
     cipher.failFor(userId, "pkulaw");
     assertLocalControlError(
       () => readLocalLegalSourceCredential(repository, userId, "pkulaw"),
       "SECRET_STORAGE_UNAVAILABLE",
     );
-    assert.equal(providerSecretReads, 3);
+    assert.equal(providerSecretReads, 4);
     const corruptedCredential = assertStrictStatus(
       (await request(base, "GET", "/aletheia/providers/pkulaw/status")).body,
     );
     assert.equal(
       providerSecretReads,
-      3,
+      4,
       "closed-gate status reads must not probe a corrupt credential",
     );
     assert.equal(corruptedCredential.hasSecret, true);
@@ -606,13 +638,14 @@ async function main() {
     console.log(
       JSON.stringify({
         ok: true,
-        suite: "aletheia-legal-source-control-audit-v1",
+        suite: "aletheia-legal-source-control-audit-v2",
         checks: [
           "save",
           "strict-secret-free-wire",
           "provider-contract-projection",
           "truthful-code-owned-activation-gate-status",
           "closed-gate status projections perform zero credential decryptions",
+          "future-open-gate-undeclared-policy-zero-credential-boundary",
           "historical-test-state-ignored",
           "unavailable-reason-precedence",
           "authentication-and-deployment-gates",

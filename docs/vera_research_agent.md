@@ -45,8 +45,8 @@ It does not fall back to another source.
    invalidates the old plan rather than allowing it to run under changed issues.
 3. Create a redacted outbound query plan. The lawyer sees the exact text and
    approves or rejects it before any request is dispatched.
-4. Research Broker searches a configured Pkulaw or Wolters authorized API and
-   saves returned candidates locally.
+4. Research Broker searches a configured Pkulaw, YuanDian, Wolters, or
+   authorized official source adapter and saves returned candidates locally.
 5. The lawyer chooses a candidate and separately approves its download. The
    Broker stores the full result as an encrypted local source workpaper with
    URL, retrieval time, SHA-256 content hash, source version, effective dates,
@@ -75,10 +75,12 @@ It does not fall back to another source.
   workpaper exports.
 * Authorized-source credentials: encrypted local control repository. API
   status endpoints return only masked state, never the secret.
-* Current adapters: Pkulaw and Wolters are provider-neutral API contracts.
-  They require a vendor-issued endpoint, allowlisted host list, and local
-  credential. An official-public API adapter uses the same bounded contract but
-  no credential. No commercial database scraping is implemented or planned.
+* Current adapters: YuanDian has a source-specific deterministic REST adapter;
+  Pkulaw has a fixed-tool Streamable HTTP MCP adapter plus an enterprise API
+  compatibility path; Wolters remains an enterprise-contract compatibility
+  slot until an authorized China API or data feed is supplied. An
+  official-public API adapter uses the bounded compatibility contract without a
+  credential. No commercial database scraping is implemented or planned.
 * Lawyer-imported material is available in the Matter research workbench as a
   local-only fallback when no authorized API is configured. It accepts only a
   bounded legal-material record, derives its identity and hash on the server,

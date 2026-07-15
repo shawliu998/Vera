@@ -13,10 +13,10 @@ import {
 const TOKEN = "legal-source-client-audit-token";
 const API_BASE = "http://127.0.0.1:43123";
 
-function capabilities() {
+function capabilities(fetchFullText = true) {
   return {
     search: true,
-    fetchFullText: true,
+    fetchFullText,
     pagination: false,
     getByCitation: false,
     jurisdictionFilter: false,
@@ -24,7 +24,9 @@ function capabilities() {
     structuredFilters: false,
     dynamicToolInvocation: false,
     requiresExplicitEgressApproval: true,
-    documentKinds: ["statute", "judicial_interpretation", "case", "other"],
+    documentKinds: fetchFullText
+      ? ["statute", "judicial_interpretation", "case", "other"]
+      : ["statute", "judicial_interpretation", "other"],
   };
 }
 
@@ -40,6 +42,15 @@ function dataUsePolicy(
   };
 }
 
+function declaredDataUsePolicy(): Record<string, unknown> {
+  return {
+    basis: "deployment_contract",
+    retention: "full_text_ttl",
+    export: "exact_quotes_only",
+    modelUse: "local_only",
+  };
+}
+
 type ProviderOptions = {
   hasSecret?: boolean;
   encryptionEnabled?: boolean;
@@ -48,11 +59,19 @@ type ProviderOptions = {
   credentialReferenceConfigured?: boolean;
   connectionStatus?: Record<string, unknown>;
   dataUsePolicy?: Record<string, unknown>;
+  fetchFullText?: boolean;
 };
 
 function expectedReason(
   options: Required<
-    Omit<ProviderOptions, "connectionStatus" | "dataUsePolicy">
+    Pick<
+      ProviderOptions,
+      | "hasSecret"
+      | "encryptionEnabled"
+      | "endpointConfigured"
+      | "allowlisted"
+      | "credentialReferenceConfigured"
+    >
   >,
 ) {
   if (!options.endpointConfigured) return "endpoint_missing";
@@ -66,7 +85,7 @@ function expectedReason(
 }
 
 function provider(
-  providerId: "pkulaw" | "wolters" = "pkulaw",
+  providerId: "pkulaw" | "yuandian" | "wolters" = "pkulaw",
   input: ProviderOptions = {},
 ) {
   const options = {
@@ -84,10 +103,10 @@ function provider(
       options.allowlisted &&
       options.credentialReferenceConfigured,
     ...options,
-    contractVersion: "vera-legal-research-provider-v1",
-    integration: "authorized_json_gateway",
-    capabilities: capabilities(),
-    dataUsePolicy: input.dataUsePolicy ?? dataUsePolicy(),
+    contractVersion: "vera-legal-research-provider-v2",
+    integration: "authorized_provider_adapter",
+    capabilities: capabilities(input.fetchFullText ?? true),
+    dataUsePolicy: input.dataUsePolicy ?? declaredDataUsePolicy(),
     connectionStatus:
       input.connectionStatus ??
       (reason
@@ -101,11 +120,12 @@ function provider(
 }
 
 function closedGateProvider(
-  providerId: "pkulaw" | "wolters" = "pkulaw",
+  providerId: "pkulaw" | "yuandian" | "wolters" = "pkulaw",
   input: ProviderOptions = {},
 ) {
   return provider(providerId, {
     ...input,
+    dataUsePolicy: input.dataUsePolicy ?? dataUsePolicy(),
     connectionStatus: {
       state: "unavailable",
       reason: "activation_gate_closed",
@@ -116,11 +136,12 @@ function closedGateProvider(
 
 function response() {
   return {
-    schemaVersion: "vera-legal-source-provider-status-v1",
+    schemaVersion: "vera-legal-source-provider-status-v2",
     localOnly: true,
     detail: "Authorized legal-source deployment and local credential status.",
     providers: [
-      closedGateProvider("pkulaw"),
+      closedGateProvider("pkulaw", { fetchFullText: false }),
+      closedGateProvider("yuandian"),
       closedGateProvider("wolters", { hasSecret: false }),
     ],
   };
@@ -136,9 +157,9 @@ function invalidResponse(error: unknown) {
 
 test("legal-source parser preserves the complete truthful provider-neutral wire", () => {
   const parsed = parseAletheiaLegalSourceProvidersResponse(response());
-  assert.equal(parsed.schemaVersion, "vera-legal-source-provider-status-v1");
+  assert.equal(parsed.schemaVersion, "vera-legal-source-provider-status-v2");
   assert.equal(parsed.localOnly, true);
-  assert.equal(parsed.providers.length, 2);
+  assert.equal(parsed.providers.length, 3);
   assert.deepEqual(parsed.providers[0]?.connectionStatus, {
     state: "unavailable",
     reason: "activation_gate_closed",
@@ -149,7 +170,35 @@ test("legal-source parser preserves the complete truthful provider-neutral wire"
     reason: "activation_gate_closed",
     connectionTested: false,
   });
+  assert.deepEqual(parsed.providers[2]?.connectionStatus, {
+    state: "unavailable",
+    reason: "activation_gate_closed",
+    connectionTested: false,
+  });
   assert.equal(parsed.providers[0]?.capabilities.search, true);
+  assert.equal(parsed.providers[0]?.capabilities.fetchFullText, false);
+  assert.equal(parsed.providers[1]?.capabilities.fetchFullText, true);
+
+  const pkulawEnterpriseJson = parseAletheiaLegalSourceProvider(
+    provider("pkulaw", { fetchFullText: true }),
+  );
+  assert.equal(pkulawEnterpriseJson.capabilities.fetchFullText, true);
+
+  const policyBlocked = parseAletheiaLegalSourceProvider(
+    provider("pkulaw", {
+      hasSecret: false,
+      dataUsePolicy: dataUsePolicy(),
+      connectionStatus: {
+        state: "unavailable",
+        reason: "data_use_policy_undeclared",
+        connectionTested: false,
+      },
+    }),
+  );
+  assert.equal(
+    policyBlocked.connectionStatus.reason,
+    "data_use_policy_undeclared",
+  );
 
   const declaredPolicy = parseAletheiaLegalSourceProvider(
     provider("pkulaw", {
@@ -258,6 +307,7 @@ test("legal-source parser rejects leaks, unknown providers, and contradictory le
         ...response(),
         providers: [
           provider("pkulaw"),
+          provider("yuandian"),
           { ...provider("wolters"), provider: "unknown" },
         ],
       }),
@@ -370,7 +420,7 @@ test("legal-source API authenticates list/save/remove and never returns or accep
 
   try {
     const listed = await listAletheiaLegalSourceProviders();
-    assert.equal(listed.providers.length, 2);
+    assert.equal(listed.providers.length, 3);
     const secret = "client-secret-sent-once";
     assert.equal(
       await saveAletheiaLegalSourceSecret("pkulaw", secret),

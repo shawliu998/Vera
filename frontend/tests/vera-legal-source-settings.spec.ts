@@ -7,6 +7,7 @@ type ProviderOptions = {
   credentialReferenceConfigured?: boolean;
   encryptionEnabled?: boolean;
   declaredPolicy?: boolean;
+  fetchFullText?: boolean;
 };
 
 function deferred() {
@@ -18,7 +19,7 @@ function deferred() {
 }
 
 function providerStatus(
-  provider: "pkulaw" | "wolters",
+  provider: "pkulaw" | "yuandian" | "wolters",
   input: ProviderOptions,
 ) {
   const endpointConfigured = input.endpointConfigured ?? true;
@@ -34,11 +35,13 @@ function providerStatus(
       ? "endpoint_not_allowlisted"
       : !credentialReferenceConfigured
         ? "credential_reference_missing"
-        : !encryptionEnabled
-          ? "secret_storage_unavailable"
-          : !input.hasSecret
-            ? "credential_unavailable"
-            : null;
+        : !input.declaredPolicy
+          ? "data_use_policy_undeclared"
+          : !encryptionEnabled
+            ? "secret_storage_unavailable"
+            : !input.hasSecret
+              ? "credential_unavailable"
+              : null;
   return {
     provider,
     deploymentReady,
@@ -47,11 +50,11 @@ function providerStatus(
     credentialReferenceConfigured,
     hasSecret: input.hasSecret,
     encryptionEnabled,
-    contractVersion: "vera-legal-research-provider-v1",
-    integration: "authorized_json_gateway",
+    contractVersion: "vera-legal-research-provider-v2",
+    integration: "authorized_provider_adapter",
     capabilities: {
       search: true,
-      fetchFullText: true,
+      fetchFullText: input.fetchFullText ?? true,
       pagination: false,
       getByCitation: false,
       jurisdictionFilter: false,
@@ -59,7 +62,10 @@ function providerStatus(
       structuredFilters: false,
       dynamicToolInvocation: false,
       requiresExplicitEgressApproval: true,
-      documentKinds: ["statute", "judicial_interpretation", "case", "other"],
+      documentKinds:
+        input.fetchFullText === false
+          ? ["statute", "judicial_interpretation", "other"]
+          : ["statute", "judicial_interpretation", "case", "other"],
     },
     dataUsePolicy: input.declaredPolicy
       ? {
@@ -86,13 +92,17 @@ function providerStatus(
 
 function providerResponse(pkulawHasSecret: boolean, woltersHasSecret: boolean) {
   return {
-    schemaVersion: "vera-legal-source-provider-status-v1",
+    schemaVersion: "vera-legal-source-provider-status-v2",
     localOnly: true,
     detail: "Authorized legal-source deployment and credential status.",
     providers: [
       providerStatus("pkulaw", {
         hasSecret: pkulawHasSecret,
         declaredPolicy: true,
+        fetchFullText: false,
+      }),
+      providerStatus("yuandian", {
+        hasSecret: false,
       }),
       providerStatus("wolters", {
         hasSecret: woltersHasSecret,
@@ -125,7 +135,7 @@ test("Mike Legal Sources is write-only, truthful, removable while deployment is 
 
   page.on("request", (request) => {
     const url = new URL(request.url());
-    if (/pkulaw|wolters/i.test(url.hostname)) {
+    if (/pkulaw|yuandian|chineselaw|wolters/i.test(url.hostname)) {
       providerHostRequests.push(request.url());
     }
   });
@@ -194,10 +204,16 @@ test("Mike Legal Sources is write-only, truthful, removable while deployment is 
   await expect(page.getByRole("button", { name: /测试连接/ })).toHaveCount(0);
 
   const pkulaw = page.getByTestId("legal-source-provider-pkulaw");
+  const yuandian = page.getByTestId("legal-source-provider-yuandian");
   const wolters = page.getByTestId("legal-source-provider-wolters");
   await expect(pkulaw).toContainText("不可用");
   await expect(pkulaw).toContainText("全文限时保留");
-  await expect(pkulaw).toContainText("当前仅是部署契约声明");
+  await expect(pkulaw).toContainText("以下内容来自部署契约");
+  await expect(pkulaw).toContainText("仅检索，不取回全文");
+  await expect(pkulaw).toContainText("法律法规、司法解释、其他");
+  await expect(yuandian).toContainText("元典");
+  await expect(yuandian).toContainText("可检索并取回全文");
+  await expect(yuandian).toContainText("案例");
   await expect(wolters).toContainText("部署未配置授权端点");
 
   const pkulawInput = pkulaw.getByLabel("新密钥");

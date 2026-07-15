@@ -286,7 +286,7 @@ async function main() {
     assert.equal(providerList.status, 200);
     assert.deepEqual(
       providerList.body.providers.map((provider: any) => provider.provider),
-      ["pkulaw", "wolters"],
+      ["pkulaw", "yuandian", "wolters"],
     );
     assert.equal(
       providerList.body.providers.every(

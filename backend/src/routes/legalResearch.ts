@@ -21,6 +21,7 @@ import {
   createOfficialPublicLegalResearchProviderFromEnvironment,
   createPkulawLegalResearchProviderFromEnvironment,
   createWoltersLegalResearchProviderFromEnvironment,
+  createYuanDianLegalResearchProviderFromEnvironment,
 } from "../lib/aletheia/legalResearchProvider";
 import {
   LocalControlError,
@@ -749,7 +750,10 @@ function caseContextBindingFromContent(content: Record<string, unknown>) {
 }
 
 function researchSourceProvider(value: unknown): LegalSourceProvider | null {
-  return value === "pkulaw" || value === "wolters" || value === "official"
+  return value === "pkulaw" ||
+    value === "yuandian" ||
+    value === "wolters" ||
+    value === "official"
     ? value
     : null;
 }
@@ -945,9 +949,13 @@ function productionAdapter(args: { provider: LegalSourceProvider; userId: string
     return createOfficialPublicLegalResearchProviderFromEnvironment();
   }
   const resolveCredential = async () => readLocalLegalSourceCredential(controls(), args.userId, args.provider);
-  return args.provider === "pkulaw"
-    ? createPkulawLegalResearchProviderFromEnvironment({ resolveCredential })
-    : createWoltersLegalResearchProviderFromEnvironment({ resolveCredential });
+  if (args.provider === "pkulaw") {
+    return createPkulawLegalResearchProviderFromEnvironment({ resolveCredential });
+  }
+  if (args.provider === "yuandian") {
+    return createYuanDianLegalResearchProviderFromEnvironment({ resolveCredential });
+  }
+  return createWoltersLegalResearchProviderFromEnvironment({ resolveCredential });
 }
 
 function routeError(res: { status: (status: number) => { json: (body: unknown) => void } }, error: unknown) {
@@ -1262,7 +1270,7 @@ export function createLegalResearchRouter(options: LegalResearchRouterOptions = 
         typeof body.issueTreeId === "string" ? body.issueTreeId.trim() : "",
       );
       const provider = researchSourceProvider(body.provider);
-      if (!provider) throw new LegalResearchRouteError("provider must be official, pkulaw, or wolters.", 400, "invalid_input");
+      if (!provider) throw new LegalResearchRouteError("provider must be official, pkulaw, yuandian, or wolters.", 400, "invalid_input");
       const preview = previewResearchQuery({
         query: requiredText(body.query, "query", 600),
         protectedTerms: optionalTextArray(body.protectedTerms, "protectedTerms", 30, 240),
@@ -1514,6 +1522,12 @@ export function createLegalResearchRouter(options: LegalResearchRouterOptions = 
       });
       if (!approved) return void res.status(409).json({ code: "approval_required", detail: "An approved source-specific external-source checkpoint is required." });
       const document = await adapterFor({ provider: plan.provider, userId: ctx.userId }).fetch({ documentId: req.params.documentId });
+      if (document.documentId !== req.params.documentId) {
+        throw new LegalSourceAdapterError(
+          "Authorized legal-source document ID does not match the approved source.",
+          "response_invalid",
+        );
+      }
       const sourceIdentity = `${plan.provider}:${document.documentId}`;
       const sourceDomain = new URL(document.snapshot.url).hostname;
       const result = await repo.createWorkProduct(ctx, req.params.matterId, {

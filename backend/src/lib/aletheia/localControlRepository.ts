@@ -26,11 +26,16 @@ export const PROVIDERS = [
   "openrouter",
   "courtlistener",
   "pkulaw",
+  "yuandian",
   "wolters",
 ] as const;
 
 export type ProviderId = (typeof PROVIDERS)[number];
-export const LEGAL_SOURCE_PROVIDERS = ["pkulaw", "wolters"] as const;
+export const LEGAL_SOURCE_PROVIDERS = [
+  "pkulaw",
+  "yuandian",
+  "wolters",
+] as const;
 export type LegalSourceProviderId = (typeof LEGAL_SOURCE_PROVIDERS)[number];
 export type LocalClientSettings = {
   theme: "System" | "Light" | "Dark";

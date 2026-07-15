@@ -711,7 +711,7 @@ export function AletheiaSettings() {
   const [newMcpUrl, setNewMcpUrl] = useState("");
   const [providerSecrets, setProviderSecrets] = useState<
     Record<AletheiaLegalSourceProviderId, string>
-  >({ pkulaw: "", wolters: "" });
+  >({ pkulaw: "", yuandian: "", wolters: "" });
   const [legalSourceProviders, setLegalSourceProviders] = useState<
     LoadState<AletheiaLegalSourceProvider[]>
   >({ data: null, loading: true, error: null });
@@ -2085,6 +2085,7 @@ export function AletheiaSettings() {
     if (activeSection === "tools") {
       const providerLabels: Record<AletheiaLegalSourceProviderId, string> = {
         pkulaw: "北大法宝",
+        yuandian: "元典",
         wolters: "威科先行",
       };
       return (
@@ -2096,11 +2097,11 @@ export function AletheiaSettings() {
           <div data-testid="legal-source-settings">
             <SettingRow
               label="法律数据源"
-              detail="端点、白名单与凭据引用由受控部署配置提供；Vera 仅管理本机加密密钥，不在设置页连接外部数据源。"
+              detail="授权适配器、端点允许列表与凭据引用由受控配置提供；Vera 仅管理本机加密密钥，不在设置页连接外部数据源，也不把候选供应商标记为已授权。"
               layout="stack"
             >
               <div className="grid min-w-0 gap-4">
-                {(["pkulaw", "wolters"] as const).map((providerId) => {
+                {(["pkulaw", "yuandian", "wolters"] as const).map((providerId) => {
                   const provider = legalSourceProviders.data?.find(
                     (item) => item.provider === providerId,
                   );

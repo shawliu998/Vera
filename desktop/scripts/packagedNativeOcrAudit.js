@@ -22,6 +22,9 @@ const LEGAL_PROVIDER_ENV_KEYS = [
   "VERA_PKULAW_API_ENDPOINT",
   "VERA_PKULAW_API_ALLOWED_HOSTS",
   "VERA_PKULAW_API_CREDENTIAL_REF",
+  "VERA_YUANDIAN_API_ENDPOINT",
+  "VERA_YUANDIAN_API_ALLOWED_HOSTS",
+  "VERA_YUANDIAN_API_CREDENTIAL_REF",
   "VERA_WOLTERS_API_ENDPOINT",
   "VERA_WOLTERS_API_ALLOWED_HOSTS",
   "VERA_WOLTERS_API_CREDENTIAL_REF",
@@ -285,12 +288,13 @@ function assertOcrSummary(document) {
 
 function assertLegalProvidersRemainDisabled(value) {
   const payload = record(value, "legal provider status");
-  assert.equal(payload.schemaVersion, "vera-legal-source-provider-status-v1");
+  assert.equal(payload.schemaVersion, "vera-legal-source-provider-status-v2");
   assert.equal(payload.localOnly, true);
   const providers = array(payload.providers, "legal providers");
   assert.deepEqual(providers.map((provider) => provider.provider).sort(), [
     "pkulaw",
     "wolters",
+    "yuandian",
   ]);
   for (const provider of providers) {
     assert.equal(provider.deploymentReady, false);

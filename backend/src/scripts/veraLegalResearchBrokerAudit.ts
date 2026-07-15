@@ -39,6 +39,7 @@ async function main() {
 
   const outboundQueries: string[] = [];
   const fetchedDocumentIds: string[] = [];
+  let returnMismatchedDocumentId = false;
   const sourceText = "民法典第五百六十三条：当事人一方迟延履行债务或者有其他违约行为致使不能实现合同目的的，当事人可以解除合同。";
   const adapter: LegalSourceAdapter = {
     provider: "pkulaw",
@@ -62,7 +63,7 @@ async function main() {
       fetchedDocumentIds.push(documentId);
       assert.equal(documentId, "civil-code-563");
       return {
-        documentId,
+        documentId: returnMismatchedDocumentId ? "civil-code-564" : documentId,
         title: "中华人民共和国民法典第五百六十三条",
         content: sourceText,
         snapshot: {
@@ -693,12 +694,55 @@ async function main() {
       decision: "approved",
       comment: "律师确认下载该法规来源。",
     });
-    const fetched = await request(baseUrl, `${root}/query-plans/${queryPlanId}/search-results/${searchResultId}/sources/civil-code-563/fetch`, {
-      method: "POST",
-      body: { approvalCheckpointId: sourceCheckpointId },
+    const externalSourcesBeforeMismatch = (
+      (await repo.getMatterDetail(ctx, matter.id)) as Record<string, any>
+    ).workProducts.filter(
+      (product: Record<string, unknown>) =>
+        product.kind === "external_source_workpaper",
+    ).length;
+    returnMismatchedDocumentId = true;
+    const mismatchedFetch = await request(
+      baseUrl,
+      `${root}/query-plans/${queryPlanId}/search-results/${searchResultId}/sources/civil-code-563/fetch`,
+      {
+        method: "POST",
+        body: { approvalCheckpointId: sourceCheckpointId },
+      },
+    );
+    assert.equal(mismatchedFetch.response.status, 502);
+    assert.equal(mismatchedFetch.body.code, "legal_source_response_rejected");
+    assert.equal(
+      (
+        (await repo.getMatterDetail(ctx, matter.id)) as Record<string, any>
+      ).workProducts.filter(
+        (product: Record<string, unknown>) =>
+          product.kind === "external_source_workpaper",
+      ).length,
+      externalSourcesBeforeMismatch,
+      "a mismatched provider document must not be persisted",
+    );
+    returnMismatchedDocumentId = false;
+    const retrySourceApproval = await request(
+      baseUrl,
+      `${root}/query-plans/${queryPlanId}/search-results/${searchResultId}/sources/civil-code-563/approval`,
+      { method: "POST" },
+    );
+    assert.equal(retrySourceApproval.response.status, 201);
+    const retrySourceCheckpointId = retrySourceApproval.body.id as string;
+    await repo.decideApproval(ctx, matter.id, retrySourceCheckpointId, {
+      decision: "approved",
+      comment: "律师重新确认下载同一法规来源。",
     });
+    const fetched = await request(
+      baseUrl,
+      `${root}/query-plans/${queryPlanId}/search-results/${searchResultId}/sources/civil-code-563/fetch`,
+      {
+        method: "POST",
+        body: { approvalCheckpointId: retrySourceCheckpointId },
+      },
+    );
     assert.equal(fetched.response.status, 201);
-    assert.deepEqual(fetchedDocumentIds, ["civil-code-563"]);
+    assert.deepEqual(fetchedDocumentIds, ["civil-code-563", "civil-code-563"]);
     const snapshotId = fetched.body.id as string;
     assert.equal(fetched.body.content.snapshot.contentHash, hash(sourceText));
     assert.equal(fetched.body.content.content, sourceText);
@@ -934,6 +978,7 @@ async function main() {
         "issue-tree-bound query plan and stale-tree block",
         "approval-required API search",
         "approval-required API source fetch",
+        "approved-source response ID binding",
         "allowlisted-adapter-only source capture",
         "immutable local source snapshot and hash",
         "lawyer-confirmed exact excerpt",

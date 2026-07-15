@@ -64,8 +64,20 @@ type ProviderFailure = {
 
 const PROVIDER_NAME_KEYS = {
   pkulaw: "settings.legalSources.providers.pkulaw",
+  yuandian: "settings.legalSources.providers.yuandian",
   wolters: "settings.legalSources.providers.wolters",
 } as const satisfies Record<VeraLegalSourceProviderId, MessageKey>;
+
+const DOCUMENT_KIND_KEYS = {
+  statute: "settings.legalSources.capabilities.kinds.statute",
+  judicial_interpretation:
+    "settings.legalSources.capabilities.kinds.judicialInterpretation",
+  case: "settings.legalSources.capabilities.kinds.case",
+  other: "settings.legalSources.capabilities.kinds.other",
+} as const satisfies Record<
+  VeraLegalSourceProvider["capabilities"]["documentKinds"][number],
+  MessageKey
+>;
 
 type DataUseValue =
   VeraLegalSourceDataUsePolicy[keyof VeraLegalSourceDataUsePolicy];
@@ -93,6 +105,8 @@ const UNAVAILABLE_REASON_KEYS = {
     "settings.legalSources.status.reasons.credentialReferenceMissing",
   activation_gate_closed:
     "settings.legalSources.status.reasons.activationGateClosed",
+  data_use_policy_undeclared:
+    "settings.legalSources.status.reasons.dataUsePolicyUndeclared",
   credential_unavailable:
     "settings.legalSources.status.reasons.credentialUnavailable",
   secret_storage_unavailable:
@@ -460,6 +474,9 @@ function ProviderCard({
   const hasUndeclaredPolicy = Object.values(provider.dataUsePolicy).includes(
     "not_declared",
   );
+  const documentKinds = provider.capabilities.documentKinds
+    .map((kind) => t(DOCUMENT_KIND_KEYS[kind]))
+    .join(t("settings.legalSources.capabilities.kindSeparator"));
 
   return (
     <AccountSection
@@ -509,6 +526,29 @@ function ProviderCard({
               ready={provider.encryptionEnabled}
             />
           </ul>
+        </div>
+
+        <div className="mt-5">
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+            {t("settings.legalSources.capabilities.title")}
+          </h4>
+          <p className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+            {t("settings.legalSources.capabilities.description")}
+          </p>
+          <dl className="mt-3 grid gap-x-5 gap-y-3 sm:grid-cols-2">
+            <PolicyItem
+              label={t("settings.legalSources.capabilities.retrieval")}
+              value={t(
+                provider.capabilities.fetchFullText
+                  ? "settings.legalSources.capabilities.fullText"
+                  : "settings.legalSources.capabilities.searchOnly",
+              )}
+            />
+            <PolicyItem
+              label={t("settings.legalSources.capabilities.documentKinds")}
+              value={documentKinds}
+            />
+          </dl>
         </div>
       </div>
 

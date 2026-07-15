@@ -77,7 +77,10 @@ jobs:
           npm run check:aletheia:audit-integrity
           npm run check:aletheia:operator
           npm run check:aletheia:legal-source-control
-          npx tsx src/scripts/legalSourceAdapterAudit.ts
+          npm run test:vera:legal-source-adapter
+          npm run test:vera:legal-research-provider
+          npm run test:vera:pkulaw-mcp-adapter
+          npm run test:vera:yuandian-adapter
           npm run test:vera:legal-research-broker
           npm run test:aletheia:local
           npm run test:desktop-backup
@@ -95,6 +98,10 @@ jobs:
       - name: Lint frontend
         working-directory: frontend
         run: npm run lint
+
+      - name: Run legal-source contract tests
+        working-directory: frontend
+        run: npm run test:legal-sources
 
       - name: Run legacy compatibility UI smoke
         working-directory: frontend

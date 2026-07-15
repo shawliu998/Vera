@@ -9,11 +9,21 @@ import {
   createPkulawLegalResearchProviderFromEnvironment,
   createWoltersLegalResearchProvider,
   createWoltersLegalResearchProviderFromEnvironment,
+  createYuanDianLegalResearchProviderFromEnvironment,
+  hasDeclaredDeploymentDataUsePolicy,
+  legalResearchProviderDeploymentStatus,
+  legalResearchProviderDescriptorFromEnvironment,
   projectLegalResearchProviderConnectionStatus,
 } from "../lib/aletheia/legalResearchProvider";
 
 const endpoint = "https://api.pkulaw.example/v1/legal";
 const credentialRef = "PKULAW_OFFICIAL_API";
+const declaredDataUsePolicy = {
+  basis: "deployment_contract",
+  retention: "full_text_permitted",
+  export: "exact_quotes_only",
+  modelUse: "local_only",
+} as const;
 
 function config() {
   return {
@@ -39,6 +49,9 @@ const environmentKeys = [
   "VERA_PKULAW_API_ENDPOINT",
   "VERA_PKULAW_API_ALLOWED_HOSTS",
   "VERA_PKULAW_API_CREDENTIAL_REF",
+  "VERA_YUANDIAN_API_ENDPOINT",
+  "VERA_YUANDIAN_API_ALLOWED_HOSTS",
+  "VERA_YUANDIAN_API_CREDENTIAL_REF",
   "VERA_WOLTERS_API_ENDPOINT",
   "VERA_WOLTERS_API_ALLOWED_HOSTS",
   "VERA_WOLTERS_API_CREDENTIAL_REF",
@@ -92,6 +105,19 @@ function assertEnvironmentRestored(saved: EnvironmentSnapshot) {
 }
 
 async function main() {
+  assert.equal(hasDeclaredDeploymentDataUsePolicy(declaredDataUsePolicy), true);
+  for (const incompletePolicy of [
+    {
+      ...declaredDataUsePolicy,
+      basis: "not_declared" as const,
+    },
+    { ...declaredDataUsePolicy, retention: "not_declared" as const },
+    { ...declaredDataUsePolicy, export: "not_declared" as const },
+    { ...declaredDataUsePolicy, modelUse: "not_declared" as const },
+  ]) {
+    assert.equal(hasDeclaredDeploymentDataUsePolicy(incompletePolicy), false);
+  }
+
   const requests: Array<Record<string, string>> = [];
   const provider = createPkulawLegalResearchProvider(
     config(),
@@ -140,8 +166,8 @@ async function main() {
     },
   );
 
-  assert.equal(provider.contractVersion, "vera-legal-research-provider-v1");
-  assert.equal(provider.integration, "authorized_json_gateway");
+  assert.equal(provider.contractVersion, "vera-legal-research-provider-v2");
+  assert.equal(provider.integration, "authorized_provider_adapter");
   assert.deepEqual(provider.capabilities, {
     search: true,
     fetchFullText: true,
@@ -181,6 +207,125 @@ async function main() {
     { operation: "search", query: "contract performance" },
     { operation: "fetch", documentId: "civil-code-509" },
   ]);
+
+  const savedPkulawModes = snapshotEnvironment();
+  let modeCredentialReads = 0;
+  let modeFetches = 0;
+  const modeDependencies = {
+    resolveCredential: async () => {
+      modeCredentialReads += 1;
+      return "must-not-be-read-while-activation-gate-is-closed";
+    },
+    fetch: async () => {
+      modeFetches += 1;
+      return jsonResponse({ results: [] });
+    },
+  };
+  try {
+    process.env.VERA_PKULAW_API_ENDPOINT =
+      "https://apim-gw.pkulaw.com/vera_law_semantic_01/mcp";
+    process.env.VERA_PKULAW_API_ALLOWED_HOSTS = "apim-gw.pkulaw.com";
+    process.env.VERA_PKULAW_API_CREDENTIAL_REF = "PKULAW_MCP_GATE_AUDIT";
+
+    assert.deepEqual(legalResearchProviderDeploymentStatus("pkulaw"), {
+      endpointConfigured: true,
+      allowlisted: true,
+      credentialReferenceConfigured: true,
+    });
+    assert.equal(
+      legalResearchProviderDescriptorFromEnvironment("pkulaw").capabilities
+        .fetchFullText,
+      false,
+    );
+    assert.deepEqual(
+      legalResearchProviderDescriptorFromEnvironment("pkulaw").capabilities
+        .documentKinds,
+      ["statute", "judicial_interpretation", "other"],
+    );
+    const mcpEnvironmentProvider =
+      createPkulawLegalResearchProviderFromEnvironment(modeDependencies);
+    assert.equal(mcpEnvironmentProvider.capabilities.fetchFullText, false);
+    assert.deepEqual(mcpEnvironmentProvider.capabilities.documentKinds, [
+      "statute",
+      "judicial_interpretation",
+      "other",
+    ]);
+    assert.deepEqual(await mcpEnvironmentProvider.connectionStatus(), {
+      state: "unavailable",
+      reason: "activation_gate_closed",
+      connectionTested: false,
+    });
+    await assert.rejects(
+      () => mcpEnvironmentProvider.search({ query: "MCP gate audit" }),
+      adapterError("configuration_error"),
+    );
+    const declaredMcpEnvironmentProvider =
+      createPkulawLegalResearchProviderFromEnvironment(modeDependencies, {
+        dataUsePolicy: declaredDataUsePolicy,
+      });
+    assert.deepEqual(
+      await declaredMcpEnvironmentProvider.connectionStatus(),
+      {
+        state: "unavailable",
+        reason: "activation_gate_closed",
+        connectionTested: false,
+      },
+      "the code-owned activation gate must remain higher priority than a declared policy",
+    );
+    await assert.rejects(
+      () =>
+        mcpEnvironmentProvider.fetch({
+          documentId: "pkulaw:mcp:" + "a".repeat(64),
+        }),
+      adapterError("configuration_error"),
+    );
+
+    process.env.VERA_PKULAW_API_ALLOWED_HOSTS = "pkulaw.com";
+    assert.deepEqual(legalResearchProviderDeploymentStatus("pkulaw"), {
+      endpointConfigured: true,
+      allowlisted: false,
+      credentialReferenceConfigured: true,
+    });
+
+    process.env.VERA_PKULAW_API_ENDPOINT =
+      "https://apim-gateway.pkulaw.com/mcp-case-search-service";
+    process.env.VERA_PKULAW_API_ALLOWED_HOSTS = "apim-gateway.pkulaw.com";
+    const invalidMcpProvider =
+      createPkulawLegalResearchProviderFromEnvironment(modeDependencies);
+    assert.equal(invalidMcpProvider.capabilities.fetchFullText, false);
+    assert.deepEqual(await invalidMcpProvider.connectionStatus(), {
+      state: "unavailable",
+      reason: "endpoint_not_allowlisted",
+      connectionTested: false,
+    });
+
+    process.env.VERA_PKULAW_API_ENDPOINT =
+      "https://api.pkulaw.example/v1/legal";
+    process.env.VERA_PKULAW_API_ALLOWED_HOSTS = "pkulaw.example";
+    assert.equal(
+      legalResearchProviderDescriptorFromEnvironment("pkulaw").capabilities
+        .fetchFullText,
+      true,
+    );
+    assert.deepEqual(
+      legalResearchProviderDescriptorFromEnvironment("pkulaw").capabilities
+        .documentKinds,
+      ["statute", "judicial_interpretation", "case", "other"],
+    );
+    const jsonEnvironmentProvider =
+      createPkulawLegalResearchProviderFromEnvironment(modeDependencies);
+    assert.equal(jsonEnvironmentProvider.capabilities.fetchFullText, true);
+    assert.deepEqual(await jsonEnvironmentProvider.connectionStatus(), {
+      state: "unavailable",
+      reason: "activation_gate_closed",
+      connectionTested: false,
+    });
+    assert.equal(modeCredentialReads, 0);
+    assert.equal(modeFetches, 0);
+  } finally {
+    restoreEnvironment(savedPkulawModes);
+  }
+  assertEnvironmentRestored(savedPkulawModes);
 
   let officialAuthorization: string | null = null;
   const configuredOfficial = createOfficialPublicLegalResearchProvider(
@@ -295,6 +440,9 @@ async function main() {
       "https://api.pkulaw.example/v1/legal";
     process.env.VERA_PKULAW_API_ALLOWED_HOSTS = "pkulaw.example";
     process.env.VERA_PKULAW_API_CREDENTIAL_REF = "PKULAW_GATE_AUDIT";
+    process.env.VERA_YUANDIAN_API_ENDPOINT = "https://open.chineselaw.com";
+    process.env.VERA_YUANDIAN_API_ALLOWED_HOSTS = "open.chineselaw.com";
+    process.env.VERA_YUANDIAN_API_CREDENTIAL_REF = "YUANDIAN_GATE_AUDIT";
     process.env.VERA_WOLTERS_API_ENDPOINT =
       "https://api.wolters.example/v1/legal";
     process.env.VERA_WOLTERS_API_ALLOWED_HOSTS = "wolters.example";
@@ -315,6 +463,9 @@ async function main() {
     };
     const environmentProviders = [
       createPkulawLegalResearchProviderFromEnvironment(environmentDependencies),
+      createYuanDianLegalResearchProviderFromEnvironment(
+        environmentDependencies,
+      ),
       createWoltersLegalResearchProviderFromEnvironment(
         environmentDependencies,
       ),
@@ -366,6 +517,7 @@ async function main() {
   for (const gatedConstructor of [
     "createOfficialPublicLegalResearchProviderFromEnvironment",
     "createPkulawLegalResearchProviderFromEnvironment",
+    "createYuanDianLegalResearchProviderFromEnvironment",
     "createWoltersLegalResearchProviderFromEnvironment",
   ]) {
     assert.equal(productionAdapterSource.includes(gatedConstructor), true);
@@ -383,6 +535,130 @@ async function main() {
       "createOfficialPublicLegalResearchProvider(",
     ),
     false,
+  );
+
+  const providerFactorySource = readFileSync(
+    resolve(process.cwd(), "src/lib/aletheia/legalResearchProvider.ts"),
+    "utf8",
+  );
+  const environmentProviderStart = providerFactorySource.indexOf(
+    "function environmentProvider",
+  );
+  const environmentProviderEnd = providerFactorySource.indexOf(
+    "\nexport function createPkulawLegalResearchProviderFromEnvironment",
+    environmentProviderStart,
+  );
+  assert.ok(
+    environmentProviderStart >= 0 &&
+      environmentProviderEnd > environmentProviderStart,
+  );
+  const environmentProviderSource = providerFactorySource.slice(
+    environmentProviderStart,
+    environmentProviderEnd,
+  );
+  assert.equal(
+    environmentProviderSource.includes("createPkulawMcpLegalSourceAdapter("),
+    true,
+  );
+  assert.equal(
+    environmentProviderSource.includes(
+      "createPkulawLegalSourceAdapterFromEnvironment(",
+    ),
+    true,
+  );
+  assert.equal(
+    environmentProviderSource.includes("requireDeclaredDataUsePolicy: true"),
+    true,
+  );
+  assert.match(
+    environmentProviderSource,
+    /!ENVIRONMENT_PROVIDER_ACTIVATION_GATE_CLOSED &&\s+dataUsePolicyReady &&\s+deployment\.endpointConfigured/u,
+    "an undeclared environment policy must block adapter construction as well as execution",
+  );
+  assert.match(
+    providerFactorySource,
+    /input\.activationGateClosed !== true &&\s+dataUsePolicyReady &&\s+input\.credentialRequired/u,
+  );
+
+  const localControlSource = readFileSync(
+    resolve(process.cwd(), "src/routes/aletheiaLocalControl.ts"),
+    "utf8",
+  );
+  assert.equal(
+    localControlSource.includes(
+      "legalResearchProviderDescriptorFromEnvironment(provider)",
+    ),
+    true,
+  );
+  assert.equal(
+    localControlSource.includes(
+      "legalResearchProviderDeploymentStatus(provider)",
+    ),
+    true,
+  );
+  assert.match(
+    localControlSource,
+    /LEGAL_SOURCE_RETENTION_ACTIVATION_V13\.open &&\s+dataUsePolicyReady &&\s+item\.configured/u,
+  );
+  assert.match(
+    localControlSource,
+    /hasDeclaredDeploymentDataUsePolicy\(\s*descriptor\.dataUsePolicy,?\s*\)/u,
+  );
+
+  const readyDeployment = {
+    endpointConfigured: true,
+    allowlisted: true,
+    credentialReferenceConfigured: true,
+  };
+  assert.deepEqual(
+    projectLegalResearchProviderConnectionStatus({
+      deployment: readyDeployment,
+      credentialRequired: true,
+      credentialAvailable: false,
+      activationGateClosed: true,
+      dataUsePolicyReady: false,
+      secretStorageAvailable: false,
+    }),
+    {
+      state: "unavailable",
+      reason: "activation_gate_closed",
+      connectionTested: false,
+    },
+    "the current code-owned gate must retain priority over policy and credential state",
+  );
+  assert.deepEqual(
+    projectLegalResearchProviderConnectionStatus({
+      deployment: readyDeployment,
+      credentialRequired: true,
+      credentialAvailable: false,
+      activationGateClosed: false,
+      dataUsePolicyReady: false,
+      secretStorageAvailable: false,
+    }),
+    {
+      state: "unavailable",
+      reason: "data_use_policy_undeclared",
+      connectionTested: false,
+    },
+    "a future open gate must fail before credential access when policy is undeclared",
+  );
+  assert.deepEqual(
+    projectLegalResearchProviderConnectionStatus({
+      deployment: {
+        ...readyDeployment,
+        allowlisted: false,
+      },
+      credentialRequired: true,
+      credentialAvailable: false,
+      activationGateClosed: false,
+      dataUsePolicyReady: false,
+    }),
+    {
+      state: "unavailable",
+      reason: "endpoint_not_allowlisted",
+      connectionTested: false,
+    },
+    "deployment failures must retain priority over the policy gate",
   );
 
   assert.deepEqual(
@@ -406,16 +682,24 @@ async function main() {
   process.stdout.write(
     `${JSON.stringify({
       ok: true,
-      suite: "vera-legal-research-provider-audit-v1",
+      suite: "vera-legal-research-provider-audit-v2",
       checks: [
         "legacy-adapter-compatible-provider-contract",
         "credentialless-official-provider-wrapper",
         "capability-and-data-use-policy-projection",
+        "environment-only-declared-data-use-policy-guard",
+        "future-open-gate-undeclared-policy-zero-credential-boundary",
+        "direct-provider-poc-policy-guard-exemption",
         "configured-unverified-and-unavailable-status",
         "endpoint-credential-redaction",
         "missing-endpoint-does-not-read-credential",
         "official-missing-configuration-boundary",
         "configured-environment-activation-gate-blocks-credential-and-fetch",
+        "pkulaw-mcp-and-json-capability-projection",
+        "pkulaw-mcp-document-kind-projection",
+        "pkulaw-mcp-exact-host-and-invalid-path-fail-closed",
+        "pkulaw-mcp-production-constructor-wiring",
+        "local-control-uses-environment-aware-provider-projection",
         "production-route-uses-only-gated-environment-providers",
         "secret-storage-unavailable-boundary",
       ],

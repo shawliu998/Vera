@@ -99,10 +99,18 @@ single legal-opinion DOCX path. Contract lifecycle, generic chat, due diligence,
 team collaboration, arbitrary browsing, commercial-database scraping, and
 additional Agents are frozen.
 
-**Available now:** the backend has a source-specific API workflow for official
-public, Pkulaw, and Wolters adapters. A request stays local; an exact redacted query requires
+**Available now:** the backend has source-specific provider workflows for
+official public sources, Pkulaw and YuanDian, plus a disabled Wolters enterprise
+compatibility slot/provider projection. Wolters China has no public or verified
+machine interface in this build and Vera does not scrape it. YuanDian uses its
+documented REST API, the audited Pkulaw MCP adapter exposes only a fixed tool,
+and the controlled JSON gateway remains an enterprise compatibility mode.
+Pkulaw MCP is search-only in this build; it does not claim case coverage or
+full-text download. A request stays local unless the production activation gate
+is deliberately opened; an exact redacted query requires
 a single-use `external_source_use` approval before search; each candidate source
-requires a separate single-use approval before download. Provider credentials
+from a full-text-capable adapter requires a separate single-use approval before
+download. Provider credentials
 are encrypted locally and the Broker accepts only the explicit query or document
 ID, never Matter facts or documents. It rejects non-HTTPS/non-allowlisted
 endpoints, redirects, invalid provider responses, missing credentials, response
@@ -118,6 +126,10 @@ research memo. Missing support yields
 `依据不足`; unverified case citations and out-of-date authority fail the
 deterministic gate; source byte changes mark pending memos stale and block final
 research approval. Focused builds and audits pass.
+
+The local provider wire is `vera-legal-research-provider-v2`; the status wire is
+`vera-legal-source-provider-status-v2`, using `authorized_provider_adapter`.
+Clients reject older or unknown shapes fail-closed.
 
 The Matter `法律研究` workbench and backend now support a strictly local lawyer
 manual-source import at
@@ -171,17 +183,18 @@ rather than using synthetic output. No anonymized real Matter or lawyer study
 is present. The current documentation and automated tests are evidence of
 failure handling, not proof of legal-source coverage or legal correctness.
 
-The desktop launcher and Docker Compose now forward only the eight non-secret
+The desktop launcher and Docker Compose now forward only the eleven non-secret
 legal-source configuration fields (endpoint, allowlisted hosts, and a local
 credential reference) through explicit allowlists. They do not forward vendor
-API secrets; Pkulaw and Wolters credentials remain encrypted in local storage.
+API/MCP secrets; Pkulaw, YuanDian, and Wolters credentials remain encrypted in
+local storage.
 This makes an authorized deployment configuration reachable by the backend, but
 does not turn the generic adapter contract into a verified vendor integration.
 The required gateway contract and production acceptance steps are documented in
 `docs/authorized_legal_source_gateway.md`.
 
 The existing `Tools & Keys` settings group now includes a minimal `法律数据源`
-section for Pkulaw and Wolters. It receives only four fail-closed readiness
+section for Pkulaw, YuanDian, and Wolters. It receives only four fail-closed readiness
 booleans from the local backend: encrypted-secret storage, endpoint, host
 allowlist, and credential reference. It does not receive or show deployment
 values, endpoint URLs, hostnames, credential references, or saved secrets. A
@@ -230,7 +243,7 @@ memo. Sol passed the desktop and 393px states; see
 docs/legal_research_memo_docx_sol_review.md and
 docs/screenshots/ui-audit-2026-07-13-research-memo-docx/.
 
-**Next:** configure one authorized legal-source API and prove live controlled
+**Next:** configure one authorized legal-source API/MCP and prove live controlled
 retrieval against its license; add an offline anonymized demo Matter; then run
 a measured evaluation set. The dedicated legal-opinion DOCX has already had
 page-by-page render QA, but neither live legal-source coverage nor legal

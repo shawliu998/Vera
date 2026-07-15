@@ -80,11 +80,11 @@ export function getAletheiaSecurityPolicy() {
   return apiRequest<AletheiaSecurityPolicy>("/aletheia/security-policy");
 }
 
-export type AletheiaLegalSourceProviderId = "pkulaw" | "wolters";
+export type AletheiaLegalSourceProviderId = "pkulaw" | "yuandian" | "wolters";
 
 export type AletheiaLegalSourceProviderCapabilities = {
   search: true;
-  fetchFullText: true;
+  fetchFullText: boolean;
   pagination: false;
   getByCitation: false;
   jurisdictionFilter: false;
@@ -92,7 +92,9 @@ export type AletheiaLegalSourceProviderCapabilities = {
   structuredFilters: false;
   dynamicToolInvocation: false;
   requiresExplicitEgressApproval: true;
-  documentKinds: ["statute", "judicial_interpretation", "case", "other"];
+  documentKinds:
+    | ["statute", "judicial_interpretation", "case", "other"]
+    | ["statute", "judicial_interpretation", "other"];
 };
 
 export type AletheiaLegalSourceDataUsePolicy = {
@@ -117,6 +119,7 @@ export type AletheiaLegalSourceUnavailableReason =
   | "endpoint_not_allowlisted"
   | "credential_reference_missing"
   | "activation_gate_closed"
+  | "data_use_policy_undeclared"
   | "credential_unavailable"
   | "secret_storage_unavailable";
 
@@ -140,15 +143,15 @@ export type AletheiaLegalSourceProvider = {
   endpointConfigured: boolean;
   allowlisted: boolean;
   credentialReferenceConfigured: boolean;
-  contractVersion: "vera-legal-research-provider-v1";
-  integration: "authorized_json_gateway";
+  contractVersion: "vera-legal-research-provider-v2";
+  integration: "authorized_provider_adapter";
   capabilities: AletheiaLegalSourceProviderCapabilities;
   dataUsePolicy: AletheiaLegalSourceDataUsePolicy;
   connectionStatus: AletheiaLegalSourceConnectionStatus;
 };
 
 export type AletheiaLegalSourceProvidersResponse = {
-  schemaVersion: "vera-legal-source-provider-status-v1";
+  schemaVersion: "vera-legal-source-provider-status-v2";
   localOnly: true;
   providers: AletheiaLegalSourceProvider[];
   detail: string;
@@ -199,9 +202,22 @@ function parseLegalSourceCapabilities(
     "requiresExplicitEgressApproval",
     "documentKinds",
   ]);
+  const fullTextDocumentKinds =
+    Array.isArray(raw.documentKinds) &&
+    raw.documentKinds.length === 4 &&
+    raw.documentKinds[0] === "statute" &&
+    raw.documentKinds[1] === "judicial_interpretation" &&
+    raw.documentKinds[2] === "case" &&
+    raw.documentKinds[3] === "other";
+  const searchOnlyDocumentKinds =
+    Array.isArray(raw.documentKinds) &&
+    raw.documentKinds.length === 3 &&
+    raw.documentKinds[0] === "statute" &&
+    raw.documentKinds[1] === "judicial_interpretation" &&
+    raw.documentKinds[2] === "other";
   if (
     raw.search !== true ||
-    raw.fetchFullText !== true ||
+    typeof raw.fetchFullText !== "boolean" ||
     raw.pagination !== false ||
     raw.getByCitation !== false ||
     raw.jurisdictionFilter !== false ||
@@ -209,18 +225,13 @@ function parseLegalSourceCapabilities(
     raw.structuredFilters !== false ||
     raw.dynamicToolInvocation !== false ||
     raw.requiresExplicitEgressApproval !== true ||
-    !Array.isArray(raw.documentKinds) ||
-    raw.documentKinds.length !== 4 ||
-    raw.documentKinds[0] !== "statute" ||
-    raw.documentKinds[1] !== "judicial_interpretation" ||
-    raw.documentKinds[2] !== "case" ||
-    raw.documentKinds[3] !== "other"
+    (raw.fetchFullText ? !fullTextDocumentKinds : !searchOnlyDocumentKinds)
   ) {
     return invalidLegalSourceWire();
   }
   return {
     search: true,
-    fetchFullText: true,
+    fetchFullText: raw.fetchFullText,
     pagination: false,
     getByCitation: false,
     jurisdictionFilter: false,
@@ -228,7 +239,9 @@ function parseLegalSourceCapabilities(
     structuredFilters: false,
     dynamicToolInvocation: false,
     requiresExplicitEgressApproval: true,
-    documentKinds: ["statute", "judicial_interpretation", "case", "other"],
+    documentKinds: raw.fetchFullText
+      ? ["statute", "judicial_interpretation", "case", "other"]
+      : ["statute", "judicial_interpretation", "other"],
   };
 }
 
@@ -292,21 +305,37 @@ function parseLegalSourceDataUsePolicy(
   };
 }
 
-function configuredUnavailableReason(input: {
+function deploymentUnavailableReason(input: {
   endpointConfigured: boolean;
   allowlisted: boolean;
   credentialReferenceConfigured: boolean;
-  encryptionEnabled: boolean;
-  hasSecret: boolean;
 }): AletheiaLegalSourceUnavailableReason | null {
   if (!input.endpointConfigured) return "endpoint_missing";
   if (!input.allowlisted) return "endpoint_not_allowlisted";
   if (!input.credentialReferenceConfigured) {
     return "credential_reference_missing";
   }
+  return null;
+}
+
+function credentialUnavailableReason(input: {
+  encryptionEnabled: boolean;
+  hasSecret: boolean;
+}): AletheiaLegalSourceUnavailableReason | null {
   if (!input.encryptionEnabled) return "secret_storage_unavailable";
   if (!input.hasSecret) return "credential_unavailable";
   return null;
+}
+
+function hasDeclaredDeploymentDataUsePolicy(
+  policy: AletheiaLegalSourceDataUsePolicy,
+): boolean {
+  return (
+    policy.basis === "deployment_contract" &&
+    policy.retention !== "not_declared" &&
+    policy.export !== "not_declared" &&
+    policy.modelUse !== "not_declared"
+  );
 }
 
 function parseLegalSourceConnectionStatus(
@@ -318,6 +347,7 @@ function parseLegalSourceConnectionStatus(
     | "credentialReferenceConfigured"
     | "encryptionEnabled"
     | "hasSecret"
+    | "dataUsePolicy"
   >,
 ): AletheiaLegalSourceConnectionStatus {
   const raw = exactLegalSourceObject(value, [
@@ -344,14 +374,44 @@ function parseLegalSourceConnectionStatus(
       connectionTested: false,
     };
   }
-  const expectedReason = configuredUnavailableReason(provider);
-  if (expectedReason) {
-    if (raw.state !== "unavailable" || raw.reason !== expectedReason) {
+  const expectedDeploymentReason = deploymentUnavailableReason(provider);
+  if (expectedDeploymentReason) {
+    if (
+      raw.state !== "unavailable" ||
+      raw.reason !== expectedDeploymentReason
+    ) {
       return invalidLegalSourceWire();
     }
     return {
       state: "unavailable",
-      reason: expectedReason,
+      reason: expectedDeploymentReason,
+      connectionTested: false,
+    };
+  }
+  if (!hasDeclaredDeploymentDataUsePolicy(provider.dataUsePolicy)) {
+    if (
+      raw.state !== "unavailable" ||
+      raw.reason !== "data_use_policy_undeclared"
+    ) {
+      return invalidLegalSourceWire();
+    }
+    return {
+      state: "unavailable",
+      reason: "data_use_policy_undeclared",
+      connectionTested: false,
+    };
+  }
+  const expectedCredentialReason = credentialUnavailableReason(provider);
+  if (expectedCredentialReason) {
+    if (
+      raw.state !== "unavailable" ||
+      raw.reason !== expectedCredentialReason
+    ) {
+      return invalidLegalSourceWire();
+    }
+    return {
+      state: "unavailable",
+      reason: expectedCredentialReason,
       connectionTested: false,
     };
   }
@@ -394,12 +454,16 @@ export function parseAletheiaLegalSourceProvider(
     "dataUsePolicy",
     "connectionStatus",
   ]);
-  if (raw.provider !== "pkulaw" && raw.provider !== "wolters") {
+  if (
+    raw.provider !== "pkulaw" &&
+    raw.provider !== "yuandian" &&
+    raw.provider !== "wolters"
+  ) {
     return invalidLegalSourceWire();
   }
   if (
-    raw.contractVersion !== "vera-legal-research-provider-v1" ||
-    raw.integration !== "authorized_json_gateway"
+    raw.contractVersion !== "vera-legal-research-provider-v2" ||
+    raw.integration !== "authorized_provider_adapter"
   ) {
     return invalidLegalSourceWire();
   }
@@ -425,18 +489,19 @@ export function parseAletheiaLegalSourceProvider(
     hasSecret,
     encryptionEnabled,
   };
+  const dataUsePolicy = parseLegalSourceDataUsePolicy(raw.dataUsePolicy);
   return {
     provider: raw.provider,
     deploymentReady,
     ...statusBasis,
-    contractVersion: "vera-legal-research-provider-v1",
-    integration: "authorized_json_gateway",
+    contractVersion: "vera-legal-research-provider-v2",
+    integration: "authorized_provider_adapter",
     capabilities: parseLegalSourceCapabilities(raw.capabilities),
-    dataUsePolicy: parseLegalSourceDataUsePolicy(raw.dataUsePolicy),
-    connectionStatus: parseLegalSourceConnectionStatus(
-      raw.connectionStatus,
-      statusBasis,
-    ),
+    dataUsePolicy,
+    connectionStatus: parseLegalSourceConnectionStatus(raw.connectionStatus, {
+      ...statusBasis,
+      dataUsePolicy,
+    }),
   };
 }
 
@@ -450,27 +515,28 @@ export function parseAletheiaLegalSourceProvidersResponse(
     "detail",
   ]);
   if (
-    raw.schemaVersion !== "vera-legal-source-provider-status-v1" ||
+    raw.schemaVersion !== "vera-legal-source-provider-status-v2" ||
     raw.localOnly !== true ||
     typeof raw.detail !== "string" ||
     !raw.detail ||
     raw.detail.length > 500 ||
     /[\u0000-\u001f\u007f-\u009f]/u.test(raw.detail) ||
     !Array.isArray(raw.providers) ||
-    raw.providers.length !== 2
+    raw.providers.length !== 3
   ) {
     return invalidLegalSourceWire();
   }
   const providers = raw.providers.map(parseAletheiaLegalSourceProvider);
   if (
-    new Set(providers.map((provider) => provider.provider)).size !== 2 ||
+    new Set(providers.map((provider) => provider.provider)).size !== 3 ||
     !providers.some((provider) => provider.provider === "pkulaw") ||
+    !providers.some((provider) => provider.provider === "yuandian") ||
     !providers.some((provider) => provider.provider === "wolters")
   ) {
     return invalidLegalSourceWire();
   }
   return {
-    schemaVersion: "vera-legal-source-provider-status-v1",
+    schemaVersion: "vera-legal-source-provider-status-v2",
     localOnly: true,
     providers,
     detail: raw.detail,
@@ -1291,7 +1357,8 @@ export async function downloadAletheiaLegalResearchMemoDocx(
   return response.blob();
 }
 
-export type LegalResearchProvider = "pkulaw" | "wolters" | "official";
+export type LegalResearchProvider =
+  "pkulaw" | "yuandian" | "wolters" | "official";
 
 export interface LegalResearchRequestInput {
   title: string;

@@ -139,6 +139,54 @@ async function main() {
   assert.deepEqual(await official.search({ query: "civil code" }), []);
   assert.equal(officialAuthorization, null);
 
+  const mismatchedDocumentResponse = () =>
+    jsonResponse({
+      document: {
+        id: "different-document",
+        title: "Unexpected document",
+        content: "This response was not approved by document ID.",
+        url: "https://api.audit.example/documents/different-document",
+      },
+    });
+  const mismatchedAdapters = [
+    createPkulawLegalSourceAdapter(
+      {
+        endpoint: "https://api.audit.example/v1/pkulaw",
+        allowedHosts: ["audit.example"],
+        credentialRef: "PKULAW_MISMATCH_AUDIT",
+      },
+      {
+        resolveCredential: async () => "audit-only-credential",
+        fetch: async () => mismatchedDocumentResponse(),
+      },
+    ),
+    createWoltersLegalSourceAdapter(
+      {
+        endpoint: "https://api.audit.example/v1/wolters",
+        allowedHosts: ["audit.example"],
+        credentialRef: "WOLTERS_MISMATCH_AUDIT",
+      },
+      {
+        resolveCredential: async () => "audit-only-credential",
+        fetch: async () => mismatchedDocumentResponse(),
+      },
+    ),
+    createOfficialPublicLegalSourceAdapter(
+      {
+        endpoint: "https://api.audit.example/v1/official",
+        allowedHosts: ["audit.example"],
+      },
+      { fetch: async () => mismatchedDocumentResponse() },
+    ),
+  ];
+  for (const mismatchedAdapter of mismatchedAdapters) {
+    await assert.rejects(
+      () => mismatchedAdapter.fetch({ documentId: "approved-document" }),
+      adapterError("response_invalid"),
+      `${mismatchedAdapter.provider} must reject a different provider document ID`,
+    );
+  }
+
   const redirectingAdapter = createPkulawLegalSourceAdapter(config(), {
     resolveCredential: async () => "audit-only-credential",
     fetch: async () => jsonResponse({}, { status: 302, headers: { location: "https://api.pkulaw.example/other" } }),
@@ -187,6 +235,7 @@ async function main() {
         "query-context-rejection",
         "https-redirect-byte-timeout-policy",
         "response-snapshot-provenance",
+        "fetch-response-document-id-binding",
         "manual-import-representation",
       ],
     })}\n`,

@@ -19,9 +19,18 @@ import {
   type OfficialPublicLegalSourceAdapterConfig,
 } from "./legalSourceAdapter";
 import { LEGAL_SOURCE_RETENTION_ACTIVATION_V13 } from "../workspace/sourceRetentionPolicyV13";
+import {
+  createYuanDianLegalSourceAdapter,
+  type YuanDianLegalSourceAdapterConfig,
+} from "./yuandianLegalSourceAdapter";
+import {
+  classifyPkulawMcpEndpoint,
+  createPkulawMcpLegalSourceAdapter,
+  type PkulawMcpEndpointDisposition,
+} from "./pkulawMcpLegalSourceAdapter";
 
 export const LEGAL_RESEARCH_PROVIDER_CONTRACT_VERSION =
-  "vera-legal-research-provider-v1" as const;
+  "vera-legal-research-provider-v2" as const;
 
 export type LegalResearchRetentionPolicy =
   | "not_declared"
@@ -57,7 +66,7 @@ export type LegalResearchProviderDataUsePolicy = Readonly<{
 
 export type LegalResearchProviderCapabilities = Readonly<{
   search: true;
-  fetchFullText: true;
+  fetchFullText: boolean;
   pagination: false;
   getByCitation: false;
   jurisdictionFilter: false;
@@ -65,12 +74,9 @@ export type LegalResearchProviderCapabilities = Readonly<{
   structuredFilters: false;
   dynamicToolInvocation: false;
   requiresExplicitEgressApproval: true;
-  documentKinds: readonly [
-    "statute",
-    "judicial_interpretation",
-    "case",
-    "other",
-  ];
+  documentKinds:
+    | readonly ["statute", "judicial_interpretation", "case", "other"]
+    | readonly ["statute", "judicial_interpretation", "other"];
 }>;
 
 export type LegalResearchProviderConnectionState =
@@ -82,6 +88,7 @@ export type LegalResearchProviderUnavailableReason =
   | "endpoint_not_allowlisted"
   | "credential_reference_missing"
   | "activation_gate_closed"
+  | "data_use_policy_undeclared"
   | "credential_unavailable"
   | "secret_storage_unavailable"
   | "connection_test_failed";
@@ -95,7 +102,7 @@ export type LegalResearchProviderConnectionStatus = Readonly<{
 export type LegalResearchProviderDescriptor = Readonly<{
   contractVersion: typeof LEGAL_RESEARCH_PROVIDER_CONTRACT_VERSION;
   provider: LegalSourceProvider;
-  integration: "authorized_json_gateway";
+  integration: "authorized_provider_adapter";
   capabilities: LegalResearchProviderCapabilities;
   dataUsePolicy: LegalResearchProviderDataUsePolicy;
 }>;
@@ -107,7 +114,7 @@ export type LegalResearchProviderDescriptor = Readonly<{
  */
 export interface LegalResearchProvider extends LegalSourceAdapter {
   readonly contractVersion: typeof LEGAL_RESEARCH_PROVIDER_CONTRACT_VERSION;
-  readonly integration: "authorized_json_gateway";
+  readonly integration: "authorized_provider_adapter";
   readonly capabilities: LegalResearchProviderCapabilities;
   readonly dataUsePolicy: LegalResearchProviderDataUsePolicy;
   connectionStatus(): Promise<LegalResearchProviderConnectionStatus>;
@@ -117,23 +124,46 @@ export type LegalResearchProviderFactoryOptions = {
   dataUsePolicy?: LegalResearchProviderDataUsePolicy;
 };
 
-const CAPABILITIES: LegalResearchProviderCapabilities = Object.freeze({
-  search: true,
-  fetchFullText: true,
-  pagination: false,
-  getByCitation: false,
-  jurisdictionFilter: false,
-  asOfDateFilter: false,
-  structuredFilters: false,
-  dynamicToolInvocation: false,
-  requiresExplicitEgressApproval: true,
-  documentKinds: Object.freeze([
-    "statute",
-    "judicial_interpretation",
-    "case",
-    "other",
-  ]) as LegalResearchProviderCapabilities["documentKinds"],
-});
+const FULL_TEXT_CAPABILITIES: LegalResearchProviderCapabilities = Object.freeze(
+  {
+    search: true,
+    fetchFullText: true,
+    pagination: false,
+    getByCitation: false,
+    jurisdictionFilter: false,
+    asOfDateFilter: false,
+    structuredFilters: false,
+    dynamicToolInvocation: false,
+    requiresExplicitEgressApproval: true,
+    documentKinds: Object.freeze([
+      "statute",
+      "judicial_interpretation",
+      "case",
+      "other",
+    ]) as LegalResearchProviderCapabilities["documentKinds"],
+  },
+);
+
+const SEARCH_ONLY_CAPABILITIES: LegalResearchProviderCapabilities =
+  Object.freeze({
+    ...FULL_TEXT_CAPABILITIES,
+    fetchFullText: false,
+    documentKinds: Object.freeze([
+      "statute",
+      "judicial_interpretation",
+      "other",
+    ]) as LegalResearchProviderCapabilities["documentKinds"],
+  });
+
+type LegalResearchCapabilityProfile = "full_text" | "search_only";
+
+function capabilitiesFor(
+  profile: LegalResearchCapabilityProfile,
+): LegalResearchProviderCapabilities {
+  return profile === "search_only"
+    ? SEARCH_ONLY_CAPABILITIES
+    : FULL_TEXT_CAPABILITIES;
+}
 
 const UNDECLARED_DATA_USE_POLICY: LegalResearchProviderDataUsePolicy =
   Object.freeze({
@@ -150,17 +180,42 @@ function policyOrDefault(
   return Object.freeze({ ...policy });
 }
 
-export function legalResearchProviderDescriptor(
+/**
+ * API access never proves display, retention, export, or model-use rights. This
+ * predicate only establishes that an environment deployment supplied a complete
+ * contract-backed declaration; it does not open the separate retention gate or
+ * implement TTL, deletion, model-use, or export enforcement.
+ */
+export function hasDeclaredDeploymentDataUsePolicy(
+  policy: LegalResearchProviderDataUsePolicy,
+) {
+  return (
+    policy.basis === "deployment_contract" &&
+    policy.retention !== "not_declared" &&
+    policy.export !== "not_declared" &&
+    policy.modelUse !== "not_declared"
+  );
+}
+
+function providerDescriptor(
   provider: LegalSourceProvider,
-  options: LegalResearchProviderFactoryOptions = {},
+  options: LegalResearchProviderFactoryOptions,
+  capabilityProfile: LegalResearchCapabilityProfile,
 ): LegalResearchProviderDescriptor {
   return Object.freeze({
     contractVersion: LEGAL_RESEARCH_PROVIDER_CONTRACT_VERSION,
     provider,
-    integration: "authorized_json_gateway",
-    capabilities: CAPABILITIES,
+    integration: "authorized_provider_adapter",
+    capabilities: capabilitiesFor(capabilityProfile),
     dataUsePolicy: policyOrDefault(options.dataUsePolicy),
   });
+}
+
+export function legalResearchProviderDescriptor(
+  provider: LegalSourceProvider,
+  options: LegalResearchProviderFactoryOptions = {},
+): LegalResearchProviderDescriptor {
+  return providerDescriptor(provider, options, "full_text");
 }
 
 function unavailableReason(
@@ -184,6 +239,7 @@ export function projectLegalResearchProviderConnectionStatus(input: {
   credentialRequired: boolean;
   credentialAvailable: boolean;
   activationGateClosed?: boolean;
+  dataUsePolicyReady?: boolean;
   secretStorageAvailable?: boolean;
   connectionTestStatus?: "passed" | "failed" | "unsupported" | null;
 }): LegalResearchProviderConnectionStatus {
@@ -195,6 +251,8 @@ export function projectLegalResearchProviderConnectionStatus(input: {
   let reason = configurationReason;
   if (!reason && input.activationGateClosed === true) {
     reason = "activation_gate_closed";
+  } else if (!reason && input.dataUsePolicyReady === false) {
+    reason = "data_use_policy_undeclared";
   } else if (
     !reason &&
     input.credentialRequired &&
@@ -226,16 +284,22 @@ type CredentialProbe = () => Promise<boolean>;
 function createProvider(input: {
   provider: LegalSourceProvider;
   adapter: LegalSourceAdapter | null;
+  capabilityProfile?: LegalResearchCapabilityProfile;
   deployment: LegalSourceDeploymentStatus;
   credentialRequired: boolean;
   credentialProbe?: CredentialProbe;
   activationGateClosed?: boolean;
+  requireDeclaredDataUsePolicy?: boolean;
   options?: LegalResearchProviderFactoryOptions;
 }): LegalResearchProvider {
-  const descriptor = legalResearchProviderDescriptor(
+  const descriptor = providerDescriptor(
     input.provider,
-    input.options,
+    input.options ?? {},
+    input.capabilityProfile ?? "full_text",
   );
+  const dataUsePolicyReady =
+    input.requireDeclaredDataUsePolicy !== true ||
+    hasDeclaredDeploymentDataUsePolicy(descriptor.dataUsePolicy);
 
   const connectionStatus = async () => {
     let credentialAvailable = !input.credentialRequired;
@@ -246,6 +310,7 @@ function createProvider(input: {
     if (
       deploymentReady &&
       input.activationGateClosed !== true &&
+      dataUsePolicyReady &&
       input.credentialRequired &&
       input.credentialProbe
     ) {
@@ -261,6 +326,7 @@ function createProvider(input: {
       credentialRequired: input.credentialRequired,
       credentialAvailable,
       activationGateClosed: input.activationGateClosed,
+      dataUsePolicyReady,
       secretStorageAvailable,
     });
   };
@@ -349,6 +415,21 @@ export function createWoltersLegalResearchProvider(
   });
 }
 
+export function createYuanDianLegalResearchProvider(
+  config: YuanDianLegalSourceAdapterConfig,
+  deps: LegalSourceAdapterDeps = {},
+  options: LegalResearchProviderFactoryOptions = {},
+) {
+  return createProvider({
+    provider: "yuandian",
+    adapter: createYuanDianLegalSourceAdapter(config, deps),
+    deployment: configuredDeployment(true),
+    credentialRequired: true,
+    credentialProbe: credentialProbe(deps, config.credentialRef),
+    options,
+  });
+}
+
 export function createOfficialPublicLegalResearchProvider(
   config: OfficialPublicLegalSourceAdapterConfig,
   deps: LegalSourceAdapterDeps = {},
@@ -364,12 +445,68 @@ export function createOfficialPublicLegalResearchProvider(
 }
 
 function environmentCredentialProbe(
-  provider: "PKULAW" | "WOLTERS",
+  provider: "PKULAW" | "YUANDIAN" | "WOLTERS",
   deps: LegalSourceAdapterDeps,
 ): CredentialProbe | undefined {
   const credentialRef =
     process.env[`VERA_${provider}_API_CREDENTIAL_REF`]?.trim();
   return credentialRef ? credentialProbe(deps, credentialRef) : undefined;
+}
+
+function pkulawEnvironmentDisposition(): PkulawMcpEndpointDisposition {
+  return classifyPkulawMcpEndpoint(
+    process.env.VERA_PKULAW_API_ENDPOINT?.trim(),
+  );
+}
+
+function pkulawEnvironmentCapabilityProfile(
+  disposition = pkulawEnvironmentDisposition(),
+): LegalResearchCapabilityProfile {
+  // An invalid URL on an official MCP gateway must not fall back to claiming
+  // enterprise JSON full-text capability.
+  return disposition === "not_mcp" ? "full_text" : "search_only";
+}
+
+function exactPkulawMcpHostAllowlisted() {
+  const endpoint = process.env.VERA_PKULAW_API_ENDPOINT?.trim();
+  const allowedHosts = process.env.VERA_PKULAW_API_ALLOWED_HOSTS?.split(",")
+    .map((host) => host.trim().toLowerCase())
+    .filter(Boolean);
+  if (!endpoint || allowedHosts?.length !== 1) return false;
+  try {
+    return allowedHosts[0] === new URL(endpoint).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+/** Environment-aware deployment projection shared by runtime and status UI. */
+export function legalResearchProviderDeploymentStatus(
+  provider: LegalSourceProvider,
+): LegalSourceDeploymentStatus {
+  const deployment = legalSourceDeploymentStatus(provider);
+  if (provider !== "pkulaw") return deployment;
+
+  const disposition = pkulawEnvironmentDisposition();
+  if (
+    disposition === "invalid_mcp_gateway" ||
+    (disposition === "approved_mcp" && !exactPkulawMcpHostAllowlisted())
+  ) {
+    return { ...deployment, allowlisted: false };
+  }
+  return deployment;
+}
+
+/** Project the v2 descriptor from the configured environment adapter. */
+export function legalResearchProviderDescriptorFromEnvironment(
+  provider: LegalSourceProvider,
+  options: LegalResearchProviderFactoryOptions = {},
+): LegalResearchProviderDescriptor {
+  return providerDescriptor(
+    provider,
+    options,
+    provider === "pkulaw" ? pkulawEnvironmentCapabilityProfile() : "full_text",
+  );
 }
 
 /**
@@ -386,11 +523,18 @@ function environmentProvider(
   deps: LegalSourceAdapterDeps,
   options: LegalResearchProviderFactoryOptions,
 ) {
-  const deployment = legalSourceDeploymentStatus(provider);
+  const pkulawDisposition =
+    provider === "pkulaw" ? pkulawEnvironmentDisposition() : "not_mcp";
+  const deployment = legalResearchProviderDeploymentStatus(provider);
   const credentialRequired = provider !== "official";
+  const dataUsePolicyReady = hasDeclaredDeploymentDataUsePolicy(
+    legalResearchProviderDescriptorFromEnvironment(provider, options)
+      .dataUsePolicy,
+  );
   let adapter: LegalSourceAdapter | null = null;
   if (
     !ENVIRONMENT_PROVIDER_ACTIVATION_GATE_CLOSED &&
+    dataUsePolicyReady &&
     deployment.endpointConfigured &&
     deployment.allowlisted &&
     (!credentialRequired || deployment.credentialReferenceConfigured)
@@ -400,8 +544,29 @@ function environmentProvider(
         provider === "official"
           ? createOfficialPublicLegalSourceAdapterFromEnvironment(deps)
           : provider === "pkulaw"
-            ? createPkulawLegalSourceAdapterFromEnvironment(deps)
-            : createWoltersLegalSourceAdapterFromEnvironment(deps);
+            ? pkulawDisposition === "approved_mcp"
+              ? createPkulawMcpLegalSourceAdapter(
+                  {
+                    endpoint: process.env.VERA_PKULAW_API_ENDPOINT ?? "",
+                    credentialRef:
+                      process.env.VERA_PKULAW_API_CREDENTIAL_REF ?? "",
+                  },
+                  deps,
+                )
+              : pkulawDisposition === "not_mcp"
+                ? createPkulawLegalSourceAdapterFromEnvironment(deps)
+                : null
+            : provider === "yuandian"
+              ? createYuanDianLegalSourceAdapter(
+                  {
+                    credentialRef:
+                      process.env.VERA_YUANDIAN_API_CREDENTIAL_REF ?? "",
+                  },
+                  deps,
+                )
+              : provider === "wolters"
+                ? createWoltersLegalSourceAdapterFromEnvironment(deps)
+                : null;
     } catch (error) {
       if (!(error instanceof LegalSourceAdapterError)) throw error;
       adapter = null;
@@ -410,14 +575,19 @@ function environmentProvider(
   return createProvider({
     provider,
     adapter,
+    capabilityProfile:
+      provider === "pkulaw"
+        ? pkulawEnvironmentCapabilityProfile(pkulawDisposition)
+        : "full_text",
     deployment,
     credentialRequired,
     activationGateClosed: ENVIRONMENT_PROVIDER_ACTIVATION_GATE_CLOSED,
+    requireDeclaredDataUsePolicy: true,
     credentialProbe:
       provider === "official"
         ? undefined
         : environmentCredentialProbe(
-            provider.toUpperCase() as "PKULAW" | "WOLTERS",
+            provider.toUpperCase() as "PKULAW" | "YUANDIAN" | "WOLTERS",
             deps,
           ),
     options,
@@ -436,6 +606,13 @@ export function createWoltersLegalResearchProviderFromEnvironment(
   options: LegalResearchProviderFactoryOptions = {},
 ) {
   return environmentProvider("wolters", deps, options);
+}
+
+export function createYuanDianLegalResearchProviderFromEnvironment(
+  deps: LegalSourceAdapterDeps = {},
+  options: LegalResearchProviderFactoryOptions = {},
+) {
+  return environmentProvider("yuandian", deps, options);
 }
 
 export function createOfficialPublicLegalResearchProviderFromEnvironment(

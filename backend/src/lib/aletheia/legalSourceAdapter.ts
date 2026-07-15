@@ -6,7 +6,11 @@ const MAX_TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_BYTES = 5_000_000;
 const MAX_QUERY_LENGTH = 4_000;
 
-export type LegalSourceProvider = "pkulaw" | "wolters" | "official";
+export type LegalSourceProvider =
+  | "pkulaw"
+  | "yuandian"
+  | "wolters"
+  | "official";
 export type LegalSourceType = LegalSourceProvider | "manual_import";
 
 export type LegalSourceSnapshot = {
@@ -514,6 +518,12 @@ function createOfficialAdapter(
       const documentId = validateFetchRequest(request);
       const response = await requestOfficialApi(validatedConfig, { operation: "fetch", documentId }, deps);
       const item = parseFetchResponse(response, validatedConfig.allowedHosts);
+      if (item.id !== documentId) {
+        throw new LegalSourceAdapterError(
+          "Provider document ID does not match the requested source.",
+          "response_invalid",
+        );
+      }
       return {
         documentId: item.id,
         title: item.title ?? item.id,
@@ -627,8 +637,19 @@ export function legalSourceDeploymentStatus(
   if (endpoint && rawAllowedHosts?.length) {
     try {
       const allowedHosts = normalizeAllowedHosts(rawAllowedHosts);
-      validateOfficialUrl(endpoint, allowedHosts, "Authorized legal-source endpoint");
-      allowlisted = true;
+      const validatedEndpoint = validateOfficialUrl(
+        endpoint,
+        allowedHosts,
+        "Authorized legal-source endpoint",
+      );
+      allowlisted =
+        provider !== "yuandian" ||
+        (allowedHosts.length === 1 &&
+          allowedHosts[0] === "open.chineselaw.com" &&
+          validatedEndpoint.origin === "https://open.chineselaw.com" &&
+          validatedEndpoint.pathname === "/" &&
+          !validatedEndpoint.search &&
+          !validatedEndpoint.hash);
     } catch {
       allowlisted = false;
     }

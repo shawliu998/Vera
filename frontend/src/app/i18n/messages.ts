@@ -856,15 +856,16 @@ const zhCN = {
     legalSources: {
       title: "法律数据源",
       description:
-        "查看获授权法律数据源的本地部署、凭据和数据使用声明。此页面不会向 Provider 发起请求。",
+        "查看候选与受控法律数据源的本地部署、凭据、能力与数据使用声明。此页面不会向 Provider 发起请求。",
       loading: "正在读取本地法律数据源状态。",
-      providerContract: "授权 JSON 网关 · 本地配置状态",
+      providerContract: "授权适配器 · 本地配置状态",
       localStatus: {
         title: "仅显示本地配置状态",
-        body: "“已配置但未验证”不等于“已连接”。Vera 只检查本机部署与加密凭据是否就绪，不会从此页面联系 Provider；在留存执行门禁完成前，本版本的生产外呼保持关闭。",
+        body: "“已配置但未验证”不等于“已连接”。Vera 只检查本机部署与加密凭据是否就绪，不会从此页面联系 Provider；在数据使用政策完整声明且留存执行门禁完成前，生产外呼保持关闭。",
       },
       providers: {
         pkulaw: "北大法宝",
+        yuandian: "元典",
         wolters: "威科先行",
       },
       status: {
@@ -880,6 +881,8 @@ const zhCN = {
           secretStorageUnavailable: "本地加密密钥存储当前不可用。",
           activationGateClosed:
             "Vera 已启用逻辑 TTL 与访问拦截，但法律原文物理清理和完整派生链路尚未闭环，因此生产外呼保持关闭。",
+          dataUsePolicyUndeclared:
+            "机构数据使用政策尚未完整声明，法律来源保持不可用。",
         },
       },
       readiness: {
@@ -890,6 +893,22 @@ const zhCN = {
         encryption: "本地密钥加密",
         ready: "就绪",
         notReady: "未就绪",
+      },
+      capabilities: {
+        title: "适配器能力",
+        description:
+          "仅显示当前适配器已审计的能力；不代表供应商账号、内容权利或生产连接已就绪。",
+        retrieval: "取回范围",
+        fullText: "可检索并取回全文（仍受合同与门禁限制）",
+        searchOnly: "仅检索，不取回全文",
+        documentKinds: "文书类型",
+        kindSeparator: "、",
+        kinds: {
+          statute: "法律法规",
+          judicialInterpretation: "司法解释",
+          case: "案例",
+          other: "其他",
+        },
       },
       credential: {
         title: "本地密钥",
@@ -1994,15 +2013,16 @@ const enUS = {
     legalSources: {
       title: "Legal sources",
       description:
-        "Review the local deployment, credential, and data-use declarations for authorized legal sources. This page never calls a provider.",
+        "Review local deployment, credentials, audited capabilities, and data-use declarations for candidate and controlled legal sources. This page never calls a provider.",
       loading: "Reading local legal-source status.",
-      providerContract: "Authorized JSON gateway · local configuration status",
+      providerContract: "Authorized adapter · local configuration status",
       localStatus: {
         title: "Local configuration status only",
-        body: "Configured but unverified does not mean connected. Vera checks only local deployment and encrypted-credential readiness and never contacts a provider from this page; production egress remains closed until retention enforcement is complete.",
+        body: "Configured but unverified does not mean connected. Vera checks only local deployment and encrypted-credential readiness and never contacts a provider from this page. Production egress stays closed until the data-use policy is complete and retention enforcement is ready.",
       },
       providers: {
         pkulaw: "PKULAW (北大法宝)",
+        yuandian: "YuanDian (元典)",
         wolters: "Wolters Kluwer China (威科先行)",
       },
       status: {
@@ -2020,6 +2040,8 @@ const enUS = {
             "Local encrypted secret storage is unavailable.",
           activationGateClosed:
             "Vera enforces logical TTL and access denial, but production egress remains closed until legal-text physical cleanup and complete derived lineage are implemented.",
+          dataUsePolicyUndeclared:
+            "The institution's data-use policy is not fully declared, so this legal source remains unavailable.",
         },
       },
       readiness: {
@@ -2030,6 +2052,23 @@ const enUS = {
         encryption: "Local secret encryption",
         ready: "Ready",
         notReady: "Not ready",
+      },
+      capabilities: {
+        title: "Adapter capabilities",
+        description:
+          "Only audited adapter capabilities are shown. This does not prove that a provider account, content rights, or production connection is ready.",
+        retrieval: "Retrieval scope",
+        fullText:
+          "Search and full-text retrieval (still contract- and gate-limited)",
+        searchOnly: "Search only; no full-text retrieval",
+        documentKinds: "Document kinds",
+        kindSeparator: ", ",
+        kinds: {
+          statute: "Statutes and regulations",
+          judicialInterpretation: "Judicial interpretations",
+          case: "Cases",
+          other: "Other",
+        },
       },
       credential: {
         title: "Local secret",
