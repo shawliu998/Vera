@@ -1,8 +1,14 @@
 # Vera Legal Matter Agent Convergence — Target Architecture
 
+> Superseded forward-design notice (2026-07-16): retained as the historical
+> architecture explored during the first convergence pass. Its Case Map,
+> top-level Work Queue, Artifact-first phase order, and old Matter navigation
+> are not the active product plan. The canonical decision is now
+> `docs/adr/vera-product-convergence.md`.
+
 Date: 2026-07-16
 Baseline: `main` at `12af6fc53317e96314a980250d3bd12d5bfd3bcb`
-Status: Phase 0 architecture decision record
+Status: Historical / superseded architecture decision record
 
 ## 1. Outcome
 

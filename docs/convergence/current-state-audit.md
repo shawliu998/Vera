@@ -1,5 +1,12 @@
 # Vera Legal Matter Agent Convergence — Current-State Audit
 
+> Historical evidence notice (2026-07-16): this audit remains the detailed
+> source record for the `12af6fc5` v14 baseline. The canonical forward product
+> decisions and Gate sequence now live in
+> `docs/adr/vera-product-convergence.md` and
+> `docs/roadmap_legal_workspace.md`. Later commits on the feature branch have
+> already isolated Legacy and added Workspace migration v15.
+
 Date: 2026-07-16
 Audited baseline: `main` / `origin/main` at
 `12af6fc53317e96314a980250d3bd12d5bfd3bcb`

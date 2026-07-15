@@ -1,8 +1,14 @@
 # Vera Legal Matter Agent Convergence — Data Migration Plan
 
+> Superseded sequencing notice (2026-07-16): retained as historical migration
+> design. Migration v15 has since landed on the feature branch, while the
+> Proposal-first sequence and later provisional versions are governed by
+> `docs/roadmap_legal_workspace.md`. Existing committed migration files remain
+> immutable.
+
 Date: 2026-07-16
 Baseline Workspace schema: v14
-Status: Phase 0 migration design; no migration is applied by this document
+Status: Historical / superseded migration design; no migration is applied by this document
 
 ## 1. Migration contract
 

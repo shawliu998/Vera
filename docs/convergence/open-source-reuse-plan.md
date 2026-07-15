@@ -1,5 +1,10 @@
 # Vera Legal Matter Agent Convergence — Open-Source Reuse Plan
 
+> Registry notice (2026-07-16): this policy remains applicable, while the
+> capability-by-capability canonical decisions required for the revised plan
+> are recorded in `docs/reuse_decisions.md`. Source provenance continues to
+> live under `docs/provenance/`.
+
 Date: 2026-07-16
 Status: Phase 0 approval policy
 
