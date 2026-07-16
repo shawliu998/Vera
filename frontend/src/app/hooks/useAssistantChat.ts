@@ -25,7 +25,6 @@ import {
 import type {
   AssistantEvent,
   CitationAnnotation,
-  DocumentCitationAnnotation,
   Message,
 } from "@/app/components/shared/types";
 import { useI18n } from "@/app/i18n";
@@ -395,13 +394,10 @@ function applyStreamEvent(
         ],
       };
     case "citation_data": {
-      const citation = wire as DocumentCitationAnnotation;
+      const citation = wire as CitationAnnotation;
       const annotations = [
         ...(message.annotations ?? []).filter(
-          (item) =>
-            item.kind === "case" ||
-            item.ref !== citation.ref ||
-            item.document_id !== citation.document_id,
+          (item) => item.ref !== citation.ref,
         ),
         citation,
       ].sort((left, right) => left.ref - right.ref);

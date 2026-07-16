@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 
 import {
   LEGAL_RESEARCH_PROVIDER_CONTRACT_VERSION,
@@ -59,6 +60,7 @@ class InMemoryOwnership implements LegalResearchSessionOwnershipPort {
         providerSourceId: result.providerSourceId,
         queryId: input.queryId,
         durable: !input.transient,
+        ...(!input.transient ? { readId: randomUUID() } : {}),
       } satisfies OwnedLegalSourceReference;
       this.records.set(
         this.key({ context: input.context, sourceRef: reference.sourceRef }),

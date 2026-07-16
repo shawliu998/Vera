@@ -9,7 +9,7 @@ Baseline: `shawliu998/Vera` `main` at
 
 Feature branch: `feat/local-legal-work-agent`
 
-Workspace schema: v21
+Workspace schema: v22
 
 ## 1. Product objective
 
@@ -34,7 +34,7 @@ model gateway, editor, active Legacy product, or renderer-side provider client.
 | Capability                 | Current code-backed state                                                                                                                                                                                                                                                                                 |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Desktop lifecycle          | Electron supervises one loopback Next.js renderer and one loopback Express backend.                                                                                                                                                                                                                       |
-| Workspace database         | One SQLCipher database with contiguous, checksum-recorded migrations through v21.                                                                                                                                                                                                                         |
+| Workspace database         | One SQLCipher database with contiguous, checksum-recorded migrations through v22.                                                                                                                                                                                                                         |
 | Blob storage               | Original and derived payloads use the existing AES-256-GCM local blob boundary.                                                                                                                                                                                                                           |
 | Credentials                | Model-provider secrets use the isolated Keychain worker. Retained Legacy legal-source credentials use an application-envelope-encrypted Legacy store and are not an acceptable new active Workspace credential owner.                                                                                     |
 | Assistant jobs             | `assistant_generate` uses the durable Workspace job repository, pump, fencing, stop, retry, regenerate, recovery, and durable event outbox.                                                                                                                                                               |
@@ -47,6 +47,7 @@ model gateway, editor, active Legacy product, or renderer-side provider client.
 | Document Studio            | Blank/Assistant/Workflow drafts, canonical Markdown/TipTap projection, CAS save, immutable versions, restore-as-new-version, citations, bounded AI suggestions, accept/reject/stale checks, and DOCX import/export are wired.                                                                             |
 | Matter Drafts              | Schema v20 stores typed Draft origin metadata in the existing Studio create transaction. The Matter Drafts workbench lists real versions, current citations and pending suggestions, and reuses existing create/open/export/delete paths. Legacy Drafts remain unmodified and project as general/unknown. |
 | Legal document templates   | Schema v21 stores eight immutable built-in templates plus Project-local editable copies and bounded DraftPlans. The Matter Drafts workbench previews real section plans and creates the canonical existing Studio Draft; no second editor or document store is introduced.                                |
+| Legal research persistence | Schema v22 owns bounded Matter/job/attempt research sessions, exact replay metadata, captured-read links, and Assistant authority-message bindings. It stores no credential, URL, provider payload, or unbounded source text.                                                                              |
 | Backup and restore         | Encrypted backup, restore preflight, restore, failure recovery, and fail-closed desktop startup are wired.                                                                                                                                                                                                |
 | Packaged restart           | Current packaged E2E proves Matter/Profile/Policy/model/chat/document/source persistence and separately proves OCR -> snapshot/anchor -> Studio -> DOCX -> restart. It does not yet prove the new legal-research-to-Draft vertical.                                                                       |
 
@@ -168,19 +169,20 @@ v20 adds immutable type/origin metadata for existing Document Studio Drafts and
 a bounded Matter summary projection; it does not duplicate documents, versions,
 citations, suggestions, or blobs. Schema v21 adds the bounded local template
 catalogue and persisted DraftPlan, with immutable built-ins and Project-local
-editable copies. If later slices require durable legal research
-sessions/candidates, the next migration must add only
-demonstrated owners such as:
+editable copies. Schema v22 adds only the demonstrated durable research owners:
 
 ```text
 legal_research_sessions
 legal_search_queries
 legal_search_candidates
+legal_research_reads
+legal_research_read_anchors
+assistant_legal_authority_message_sources
 ```
 
 Before another schema owner lands, the design must prove that existing source
 snapshots, anchors, documents, versions, suggestions, chats, jobs, workflows,
-profiles, and policies cannot own the required state. Published v1-v21
+profiles, and policies cannot own the required state. Published v1-v22
 migrations remain immutable. Fresh, v14, v17, SQLCipher, backup/restore, and
 injected rollback fixtures are mandatory.
 

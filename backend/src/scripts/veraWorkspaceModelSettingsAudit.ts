@@ -4271,7 +4271,7 @@ try {
       checksumMaterial: migration.checksumMaterial,
     }));
     assert.deepEqual(compiledGraph.migrations, currentChecksums);
-    assert.equal(compiledGraph.runtime.currentVersion, 21);
+    assert.equal(compiledGraph.runtime.currentVersion, 22);
     assert.deepEqual(
       compiledGraph.runtime.appliedVersions,
       WORKSPACE_MIGRATIONS.map((migration) => migration.version),

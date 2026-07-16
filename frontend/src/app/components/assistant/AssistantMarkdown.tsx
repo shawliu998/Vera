@@ -115,7 +115,9 @@ export function AssistantMarkdown({
                     title={
                       citation.kind === "case"
                         ? t("assistant.citation")
-                        : citation.filename
+                        : citation.kind === "legal_authority"
+                          ? citation.title
+                          : citation.filename
                     }
                   >
                     {citation.ref}

@@ -3,7 +3,7 @@
 日期：2026-07-16
 
 审计基线：`shawliu998/Vera` `main` at
-`5611699e46552a20bf42ce84396a8e65aa139d16`；当前功能分支 Workspace schema v21。
+`5611699e46552a20bf42ce84396a8e65aa139d16`；当前功能分支 Workspace schema v22。
 
 本文只使用竞品公开能力类别帮助确定 Vera 的独立实现优先级，不推断其非公开架构、效果或安全边界，也不复制其商标、界面、提示词、代码或数据。
 
@@ -42,27 +42,26 @@ Matter -> 本地材料 -> Agent 工具 -> 授权法律检索
        -> DOCX -> 重启后继续工作
 ```
 
-阻塞该闭环的核心缺口是：
+本轮已关闭持久化与引用协议缺口；仍需诚实保留的边界是：
 
-1. 生产法律检索仍缺持久的 Matter-owned research session/candidate 身份。
-2. Assistant 当前 message source 与 evidence union 仍以项目文档为中心，不能绑定已读取的法律权威 snapshot/anchor。
-3. active Workspace Provider Settings 已接 v18 Hub，但生产激活 gate 关闭，没有可据实宣称的 live Provider。
-4. 默认 WorkspaceRuntime 在激活门关闭时不会装配生产 LegalResearch 模块。
-5. 尚无一条确定性 packaged E2E 同时覆盖本地文档、法律权威引用、Draft、suggestion、DOCX 与重启。
+1. active Workspace Provider Settings 已接 v18 Hub，但生产激活 gate 关闭，没有可据实宣称的 live Provider。
+2. 默认 WorkspaceRuntime 在激活门关闭时不会装配生产 LegalResearch 模块。
+3. v22 已实现 Matter/job/attempt research replay、durable read、Assistant authority message source 与 Draft 引用；确定性全链路仅是 test-only 证据，不等于 live acceptance。
+4. Firm Knowledge、多人协作、ACL/SSO、复杂审阅自动化仍不在当前本地单用户范围。
 
 ## 3. 当前已验证能力与真实边界
 
 | 能力族           | 已合并并接线                                                                                                                                                                | 当前边界                                                                                   |
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | 桌面运行时       | Electron 监管 loopback Next.js/Express；private bearer；sandbox/context isolation；受限导航和子进程环境。                                                                   | 单用户 macOS 本地客户端，不是多租户服务。                                                  |
-| 数据安全         | 一个 SQLCipher Workspace、AES-GCM Blob、Keychain 模型凭证、v1-v21 migration、backup/restore 与 fail-closed。                                                                | 新能力必须复用这些 owner，不得建第二套存储或凭证系统。                                     |
+| 数据安全         | 一个 SQLCipher Workspace、AES-GCM Blob、Keychain 模型凭证、v1-v22 migration、backup/restore 与 fail-closed。                                                                | 新能力必须复用这些 owner，不得建第二套存储或凭证系统。                                     |
 | Matter           | Project 技术所有权、Matter Profile、workspace classification、capabilities、Matter policy 与连续 shell。                                                                    | `Project` 仍是 document/chat/workflow/tabular/Studio 的唯一技术容器。                      |
 | 文档与 OCR       | PDF/DOCX/TXT/MD/XLSX 上传解析；扫描 PDF OCR、状态、重试、来源与 exact-page reopening。                                                                                      | OCR 来源不等于法律权威来源。                                                               |
-| Assistant        | durable job/outbox、streaming、10-round/16-call bounded loop、stop/retry/regenerate/recovery，以及组合的 Document/Draft/Workflow tools。                                    | 法律权威仍不能进入 document-only 引用投影。                                                |
+| Assistant        | durable job/outbox、streaming、10-round/16-call bounded loop、stop/retry/regenerate/recovery，以及 Document/Draft/Workflow tools；v22 增加法律权威 evidence/message citation。 | 生产法律检索模块仍受 activation gate 控制。                                                |
 | 模型             | OpenAI、DeepSeek、Anthropic、Gemini、OpenAI-compatible；Keychain secret、readiness 与 inference policy。                                                                    | 真模型可用性仍取决于用户合法凭证与模型工具调用能力。                                       |
 | Workflow/Tabular | 同一 durable Job Runtime 上的真实 definition/run、进度、取消、重试、恢复与导出；Assistant 已注册 bounded Workflow tools。                                                   | Tabular 不是统一 Review Center。                                                           |
-| 来源与引用       | Project document / legal authority Source Snapshot、source content、Citation Anchor、retention/tombstone/export/model-use。                                                 | 当前 Assistant message source 以 document 外键为中心，不能直接承载完整法律权威引用投影。   |
-| Document Studio  | Markdown/TipTap projection、CAS、版本、恢复、source-aware exact suggestion、accept/reject/stale、DOCX import/export；Assistant 可创建新 Draft，Matter Drafts 使用真实 API。 | 法律权威 citation rebuild 仍待接入 Assistant。                                             |
+| 来源与引用       | Project document / legal authority Source Snapshot、Citation Anchor、retention/tombstone/export/model-use；v22 独立绑定 Assistant authority sources。                       | UI 仅投影有界标题、定位与精确引文，不暴露内部 ID/URL/全文。                                 |
+| Document Studio  | Markdown/TipTap projection、CAS、版本、恢复、source-aware exact suggestion、accept/reject/stale、DOCX import/export；Assistant Draft 可绑定本次读取并复核的法律权威锚点。 | live Provider 与真实执业质量验收仍未开放。                                                 |
 | 模板与结构化起草 | v21 提供 8 类原创模板、Project 本地副本、严格 DraftPlan 预览和 template-to-Studio Draft。                                                                                   | 前端暂不提供局部模板编辑器；Agent 的分段策略仍依赖有界 prompt/plan，不冒充自动法律正确性。 |
 | 法律 Provider    | Legacy 中保留 PKULaw/YuanDian adapter、状态与失败处理合同；v13 activation gate fail-closed。                                                                                | 无官方材料、合法凭证和 rights matrix 的 live acceptance；生产不可声称 ready。              |
 | 发布恢复         | 本地 package/security/SQLCipher/backup/restore/restart/port release 检查。                                                                                                  | 当前证据仅为 unsigned、unnotarized、local-only。                                           |
@@ -129,7 +128,7 @@ get_workflow_run
 
 ### 数据
 
-Tool Registry 不需要 migration。v18-v21 已分别落地 Provider Hub、Assistant action ledger、Draft metadata 和本地模板/DraftPlan。后续只有在现有 owner 无法表达时，才允许以 additive migration 增加 Matter/Project-owned `legal_research_sessions`、`legal_search_queries`、`legal_search_candidates` 或必要引用绑定。v1-v21 不可改写。
+Tool Registry 不需要 migration。v18-v21 已分别落地 Provider Hub、Assistant action ledger、Draft metadata 和本地模板/DraftPlan。v22 以 additive migration 增加 Matter/job-owned `legal_research_sessions`、queries/candidates、durable reads/anchors 与 Assistant authority message bindings；v1-v22 不可改写。
 
 ### API
 

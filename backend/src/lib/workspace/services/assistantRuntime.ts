@@ -141,6 +141,64 @@ export const AssistantModelSourceSchema = z
     }
   });
 
+const AssistantLegalAuthorityLocatorSchema = z
+  .object({
+    article: z.string().trim().min(1).max(500).optional(),
+    section: z.string().trim().min(1).max(500).optional(),
+    paragraph: z.string().trim().min(1).max(500).optional(),
+    page: z.number().int().positive().optional(),
+  })
+  .strict();
+
+export const AssistantLegalAuthorityEvidenceSchema = z
+  .object({
+    kind: z.literal("legal_authority"),
+    projectId: Id,
+    jobId: Id,
+    attempt: z.number().int().positive().max(100),
+    readId: Id,
+    sourceRef: z.string().trim().min(1).max(500).optional(),
+    snapshotId: Id,
+    anchorId: Id,
+    title: z.string().trim().min(1).max(500),
+    exactQuote: z
+      .string()
+      .min(1)
+      .max(8_000)
+      .refine((quote) => quote.trim().length > 0),
+    locator: AssistantLegalAuthorityLocatorSchema.default({}),
+  })
+  .strict();
+
+const AssistantLegalAuthorityModelSourceSchema = z
+  .object({
+    sourceKind: z.literal("legal_authority"),
+    readId: Id,
+    snapshotId: Id,
+    anchorId: Id,
+    quote: z
+      .string()
+      .min(1)
+      .max(8_000)
+      .refine((quote) => quote.trim().length > 0),
+    locator: AssistantLegalAuthorityLocatorSchema.default({}),
+    rank: z.number().int().nonnegative().nullable().default(null),
+    score: z.number().finite().nullable().default(null),
+    citationOrdinal: z.number().int().nonnegative(),
+    citationMetadata: z
+      .object({
+        citationNumber: z.number().int().positive(),
+        label: z.string().min(1).max(500).optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
+export const AssistantModelCitationSourceSchema = z.union([
+  AssistantModelSourceSchema,
+  AssistantLegalAuthorityModelSourceSchema,
+]);
+
 const ModelToolCallSchema = z
   .object({
     id: z.string().trim().min(1).max(160),
@@ -153,6 +211,10 @@ export const AssistantModelSourcesSchema = z
   .array(AssistantModelSourceSchema)
   .max(200);
 
+export const AssistantModelCitationSourcesSchema = z
+  .array(AssistantModelCitationSourceSchema)
+  .max(200);
+
 const ModelTurnSchema = z
   .object({
     content: z.string().max(MAX_ASSISTANT_CONTENT_CHARS).default(""),
@@ -160,7 +222,7 @@ const ModelTurnSchema = z
       .array(ModelToolCallSchema)
       .max(MAX_TOOL_CALLS_PER_ROUND)
       .default([]),
-    sources: AssistantModelSourcesSchema.default([]),
+    sources: AssistantModelCitationSourcesSchema.default([]),
   })
   .strict();
 
@@ -175,7 +237,13 @@ const ModelRegistrationSchema = z
 
 export type AssistantModelTurn = z.infer<typeof ModelTurnSchema>;
 export type AssistantModelSource = z.infer<typeof AssistantModelSourceSchema>;
+export type AssistantModelCitationSource = z.infer<
+  typeof AssistantModelCitationSourceSchema
+>;
 export type AssistantModelToolCall = z.infer<typeof ModelToolCallSchema>;
+export type AssistantLegalAuthorityEvidence = z.infer<
+  typeof AssistantLegalAuthorityEvidenceSchema
+>;
 
 export type AssistantModelMessage =
   | Readonly<{
@@ -213,6 +281,7 @@ export interface AssistantModelPort {
     tools: readonly AssistantToolDefinition[];
     documents: AssistantGenerationSnapshot["documents"];
     evidence: readonly AssistantRetrievalChunk[];
+    legalAuthorityEvidence?: readonly AssistantLegalAuthorityEvidence[];
     signal: AbortSignal;
     onTextDelta(delta: string): Promise<void>;
     onReasoningDelta(delta: string): Promise<void>;
@@ -232,6 +301,8 @@ export type AssistantToolContext = Readonly<{
   documents: AssistantGenerationSnapshot["documents"];
   /** Evidence actually returned by registered read/search tools in this attempt. */
   evidence?: readonly AssistantRetrievalChunk[];
+  /** Durable authority excerpts returned only by read_legal_source in this attempt. */
+  legalAuthorityEvidence?: readonly AssistantLegalAuthorityEvidence[];
 }>;
 
 export interface AssistantToolPort {
@@ -250,7 +321,33 @@ export interface AssistantToolPort {
     content: string;
     events?: readonly MikeAssistantStreamEvent[];
     sourceContext?: readonly AssistantRetrievalChunk[];
+    legalAuthoritySourceContext?: readonly AssistantLegalAuthorityEvidence[];
   }>;
+}
+
+export type AssistantLegalAuthoritySourceWrite = Readonly<{
+  id: string;
+  readId: string;
+  anchorId: string;
+  citationOrdinal: number;
+  citationMetadata: Readonly<{
+    citationNumber: number;
+    label?: string;
+  }>;
+}>;
+
+export interface AssistantLegalAuthorityCommitPort {
+  bindAssistantAuthoritySourcesInCurrentTransaction(input: {
+    owner: {
+      projectId: string;
+      jobId: string;
+      attempt: number;
+      leaseOwner: string;
+      researchSessionId: string;
+    };
+    messageId: string;
+    sources: readonly AssistantLegalAuthoritySourceWrite[];
+  }): void;
 }
 
 /** Optional live fan-out after the same-database durable outbox accepts data. */
@@ -266,6 +363,7 @@ export type AssistantRuntimeOptions = Readonly<{
   }) => void;
   clock?: () => Date;
   createId?: () => string;
+  legalAuthorityCommit?: AssistantLegalAuthorityCommitPort;
 }>;
 
 function abortError() {
@@ -393,7 +491,7 @@ CORE RULES:
 - A legal search result or summary is only a candidate. Read the source before relying on it, consider effective dates and status, identify adverse as well as supporting authority, and state when the available basis is insufficient.
 - When the user requests deliverable legal work product and create_draft is registered, create a new Draft instead of placing an unnecessarily long document in chat. Never overwrite an existing Draft or accept an edit suggestion for the user.
 - Before create_draft, form a bounded Draft Plan with a title, document type, and ordered sections. Draft section by section against the evidence actually read, then submit one coherent Markdown document. Do not expose internal planning unless it helps the user, and do not invent content merely to fill a template section; mark material gaps explicitly.
-- For Draft citations, submit only evidenceSources returned by document read/search tools in this attempt, with an exact quote that appears once in that evidence chunk. Never submit or invent durable snapshot/anchor identifiers; the backend rebuilds them.
+- For Draft citations, submit only evidenceSources returned by document or legal-authority read tools in this attempt, using the returned evidence id and its exact quote. Never submit sourceSnapshotIds, citationAnchorIds, or identifiers outside the current evidence; the backend reverifies durable ownership.
 - Use at most 10 tool-use rounds per response. Batch independent tool calls and leave room for the final answer.
 - Per response, use at most 4 legal searches, 12 legal-source reads, 1 Draft creation, 5 Draft suggestions, 2 Workflow runs, and 8 Workflow status reads. When a budget is exhausted, stop that activity, answer from evidence already read, and disclose the limitation.
 - Use only the registered tools listed below. Never directly attempt shell, Python, arbitrary network access, MCP, CourtListener, cloud storage, dynamic tools, or multi-agent delegation. A registered legal-research tool may use its fixed backend provider boundary; do not invent or call provider tools directly.
@@ -401,11 +499,12 @@ CORE RULES:
 - Chat-local labels such as "doc-0" are internal. Use them only in tool arguments and citation data; refer to documents by filename in prose.
 - Do not use emojis.
 
-DOCUMENT CITATIONS (Mike-compatible local protocol):
+EVIDENCE CITATIONS (Mike-compatible local protocol):
 - Put sequential markers [1], [2], and so on exactly where cited claims appear.
 - At the very end, append <CITATIONS> followed by a JSON array and </CITATIONS>.
-- Each entry must be {"ref":1,"doc_id":"doc-0","quotes":[{"page":1,"quote":"exact verbatim text"}]}.
-- Use exactly one short verbatim quote per marker in local mode. Refs must be contiguous in first-appearance order and doc_id must be an advertised chat-local label.
+- For Matter documents, each entry must remain {"ref":1,"doc_id":"doc-0","quotes":[{"page":1,"quote":"exact verbatim text"}]}.
+- For a durable read_legal_source excerpt, use {"ref":1,"legal_authority":{"snapshot_id":"<returned snapshot UUID>","anchor_id":"<returned anchor UUID>"},"quotes":[{"quote":"exact returned excerpt"}]}. Never cite search_legal_sources metadata, a transient source, or a technical-PoC read.
+- Use exactly one short verbatim quote per marker in local mode. Refs must be contiguous in first-appearance order; document doc_id values must be advertised chat-local labels, and legal authority identifiers must come from a durable read in this response.
 - Omit the entire <CITATIONS> block when there are no citations. Never show doc-N labels elsewhere in the answer.
 
 REGISTERED LOCAL TOOLS:
@@ -503,6 +602,40 @@ function validateSourceContext(
   return chunks;
 }
 
+function validateLegalAuthoritySourceContext(
+  value: readonly AssistantLegalAuthorityEvidence[] | undefined,
+  context: AssistantToolContext,
+) {
+  const parsed = z
+    .array(AssistantLegalAuthorityEvidenceSchema)
+    .max(600)
+    .parse(value ?? []);
+  if (!context.projectId && parsed.length > 0) {
+    throw new WorkspaceApiError(
+      502,
+      "JOB_FAILED",
+      "Global Assistant chats cannot receive Matter legal authority evidence.",
+    );
+  }
+  const anchors = new Set<string>();
+  for (const evidence of parsed) {
+    if (
+      evidence.projectId !== context.projectId ||
+      evidence.jobId !== context.jobId ||
+      evidence.attempt !== context.attempt ||
+      anchors.has(evidence.anchorId)
+    ) {
+      throw new WorkspaceApiError(
+        502,
+        "JOB_FAILED",
+        "Assistant legal authority evidence is outside the current Matter job attempt.",
+      );
+    }
+    anchors.add(evidence.anchorId);
+  }
+  return parsed;
+}
+
 export class AssistantRuntimeService {
   constructor(
     private readonly chats: ChatsRepository,
@@ -536,8 +669,12 @@ export class AssistantRuntimeService {
   private sourceWrites(
     result: AssistantModelTurn,
     evidence: readonly AssistantRetrievalChunk[],
+    legalAuthorityEvidence: readonly AssistantLegalAuthorityEvidence[],
     answerContent: string,
-  ): AssistantSourceWrite[] {
+  ): {
+    documents: AssistantSourceWrite[];
+    legalAuthorities: AssistantLegalAuthoritySourceWrite[];
+  } {
     const chunks = new Map(evidence.map((chunk) => [chunk.chunkId, chunk]));
     const chunksByDocument = new Map<string, AssistantRetrievalChunk[]>();
     for (const chunk of evidence) {
@@ -546,7 +683,39 @@ export class AssistantRuntimeService {
       documentChunks.push(chunk);
       chunksByDocument.set(key, documentChunks);
     }
-    const writes = result.sources.map((source) => {
+    const legalAuthoritiesByAnchor = new Map(
+      legalAuthorityEvidence.map((authority) => [
+        authority.anchorId,
+        authority,
+      ]),
+    );
+    const documentWrites: AssistantSourceWrite[] = [];
+    const legalAuthorityWrites: AssistantLegalAuthoritySourceWrite[] = [];
+    for (const source of result.sources) {
+      if ("anchorId" in source) {
+        const authority = legalAuthoritiesByAnchor.get(source.anchorId);
+        if (
+          !authority ||
+          authority.readId !== source.readId ||
+          authority.snapshotId !== source.snapshotId ||
+          authority.exactQuote !== source.quote ||
+          JSON.stringify(authority.locator) !== JSON.stringify(source.locator)
+        ) {
+          throw new WorkspaceApiError(
+            502,
+            "JOB_FAILED",
+            "Assistant cited a legal authority outside an exact durable read in this attempt.",
+          );
+        }
+        legalAuthorityWrites.push({
+          id: this.createId(),
+          readId: source.readId,
+          anchorId: source.anchorId,
+          citationOrdinal: source.citationOrdinal,
+          citationMetadata: source.citationMetadata,
+        });
+        continue;
+      }
       let candidates: readonly AssistantRetrievalChunk[];
       if (source.chunkId) {
         const chunk = chunks.get(source.chunkId);
@@ -617,7 +786,7 @@ export class AssistantRuntimeService {
           "Assistant citation offsets fall outside exact tool evidence.",
         );
       }
-      return {
+      documentWrites.push({
         id: this.createId(),
         documentId: source.documentId,
         versionId: source.versionId,
@@ -630,13 +799,13 @@ export class AssistantRuntimeService {
         score: source.score,
         citationOrdinal: source.citationOrdinal,
         citationMetadata: source.citationMetadata,
-      };
-    });
-    const expectedNumbers = writes.map((_, index) => index + 1);
-    const ordinals = [...writes]
+      });
+    }
+    const expectedNumbers = result.sources.map((_, index) => index + 1);
+    const ordinals = result.sources
       .map((source) => source.citationOrdinal)
       .sort((left, right) => left - right);
-    const citationNumbers = [...writes]
+    const citationNumbers = result.sources
       .map((source) => source.citationMetadata.citationNumber)
       .sort((left, right) => (left ?? 0) - (right ?? 0));
     const markerNumbers = [
@@ -653,7 +822,7 @@ export class AssistantRuntimeService {
       citationNumbers.every(
         (citationNumber, index) => citationNumber === expectedNumbers[index],
       ) &&
-      writes.every(
+      result.sources.every(
         (source) =>
           source.citationMetadata.citationNumber === source.citationOrdinal + 1,
       ) &&
@@ -668,7 +837,10 @@ export class AssistantRuntimeService {
         "Assistant citation markers and source references must be unique, continuous, and bidirectionally consistent.",
       );
     }
-    return writes;
+    return {
+      documents: documentWrites,
+      legalAuthorities: legalAuthorityWrites,
+    };
   }
 
   async execute(input: {
@@ -758,6 +930,10 @@ export class AssistantRuntimeService {
       );
       assertMikeSafePayload({ systemPrompt, messages });
       const evidenceByChunk = new Map<string, AssistantRetrievalChunk>();
+      const legalAuthorityEvidenceByAnchor = new Map<
+        string,
+        AssistantLegalAuthorityEvidence
+      >();
       let totalOutputChars = 0;
       let totalReasoningChars = 0;
       let totalToolResultChars = 0;
@@ -786,6 +962,9 @@ export class AssistantRuntimeService {
             tools,
             documents: snapshot.documents,
             evidence: [...evidenceByChunk.values()],
+            legalAuthorityEvidence: [
+              ...legalAuthorityEvidenceByAnchor.values(),
+            ],
             signal: input.signal,
             onTextDelta: async (delta) => {
               throwIfAborted(input.signal);
@@ -981,6 +1160,9 @@ export class AssistantRuntimeService {
                   context: {
                     ...toolContext,
                     evidence: [...evidenceByChunk.values()],
+                    legalAuthorityEvidence: [
+                      ...legalAuthorityEvidenceByAnchor.values(),
+                    ],
                   },
                   call,
                   signal: input.signal,
@@ -1042,6 +1224,34 @@ export class AssistantRuntimeService {
           for (const chunk of sourceContext) {
             evidenceByChunk.set(chunk.chunkId, chunk);
           }
+          const legalAuthoritySourceContext =
+            validateLegalAuthoritySourceContext(
+              executed.legalAuthoritySourceContext,
+              toolContext,
+            );
+          for (const authority of legalAuthoritySourceContext) {
+            const existing = legalAuthorityEvidenceByAnchor.get(
+              authority.anchorId,
+            );
+            if (
+              existing &&
+              JSON.stringify(existing) !== JSON.stringify(authority)
+            ) {
+              throw new WorkspaceApiError(
+                502,
+                "JOB_FAILED",
+                "Assistant legal authority evidence changed within one attempt.",
+              );
+            }
+            legalAuthorityEvidenceByAnchor.set(authority.anchorId, authority);
+          }
+          if (legalAuthorityEvidenceByAnchor.size > 600) {
+            throw new WorkspaceApiError(
+              502,
+              "JOB_FAILED",
+              "Assistant legal authority evidence exceeded the safe limit.",
+            );
+          }
           messages.push({
             role: "tool",
             toolCallId: call.id,
@@ -1061,6 +1271,7 @@ export class AssistantRuntimeService {
       const sources = this.sourceWrites(
         finalTurn,
         [...evidenceByChunk.values()],
+        [...legalAuthorityEvidenceByAnchor.values()],
         fullText,
       );
       assertMikeSafePayload(fullText);
@@ -1077,7 +1288,35 @@ export class AssistantRuntimeService {
         claim: { ...initialClaim, at: this.now() },
         claims: this.claims,
         content: fullText,
-        sources,
+        sources: sources.documents,
+        beforeComplete:
+          sources.legalAuthorities.length > 0
+            ? () => {
+                if (
+                  !snapshot.payload.projectId ||
+                  !this.options.legalAuthorityCommit
+                ) {
+                  throw new WorkspaceApiError(
+                    503,
+                    "PRECONDITION_FAILED",
+                    "Durable Assistant legal authority source binding is unavailable.",
+                  );
+                }
+                this.options.legalAuthorityCommit.bindAssistantAuthoritySourcesInCurrentTransaction(
+                  {
+                    owner: {
+                      projectId: snapshot.payload.projectId,
+                      jobId: input.jobId,
+                      attempt: input.attempt,
+                      leaseOwner: input.leaseOwner,
+                      researchSessionId: `${input.jobId}:${input.attempt}`,
+                    },
+                    messageId: snapshot.outputMessageId,
+                    sources: sources.legalAuthorities,
+                  },
+                );
+              }
+            : undefined,
         now: this.now(),
       });
       completedMessageId = snapshot.outputMessageId;

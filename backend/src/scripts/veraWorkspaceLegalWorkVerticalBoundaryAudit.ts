@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import * as mammoth from "mammoth";
 
+import { toMikeChatDetail } from "../lib/workspace/assistantCompatibility";
 import type { WorkspaceBlobCodec } from "../lib/workspace/blobStore";
 import { WorkspaceDatabase } from "../lib/workspace/database";
 import { exportDocumentStudioMarkdownToDocx } from "../lib/workspace/documentStudioDocx";
@@ -14,27 +15,35 @@ import {
   WorkspaceInferencePolicy,
 } from "../lib/workspace/inferencePolicy";
 import { LocalWorkspaceBlobStore } from "../lib/workspace/localWorkspaceBlobStore";
+import { WORKSPACE_LOCAL_PRINCIPAL_ID } from "../lib/workspace/principal";
 import { WorkspaceBlobRecordsRepository } from "../lib/workspace/repositories/blobRecords";
 import { ChatsRepository } from "../lib/workspace/repositories/chats";
 import { WorkspaceDocumentStudioRepository } from "../lib/workspace/repositories/documentStudio";
 import { WorkspaceJobsRepository } from "../lib/workspace/repositories/jobs";
+import {
+  WorkspaceLegalResearchOwnershipAdapterV22,
+  WorkspaceLegalResearchRepository,
+  WorkspaceLegalResearchSourceCaptureAdapterV22,
+} from "../lib/workspace/repositories/legalResearch";
 import { ModelConnectionTestsRepository } from "../lib/workspace/repositories/modelConnectionTests";
 import { ModelProfilesRepository } from "../lib/workspace/repositories/modelProfiles";
 import { ProjectsRepository } from "../lib/workspace/repositories/projects";
 import { WorkspaceSourceFoundationRepository } from "../lib/workspace/repositories/sourceFoundation";
 import { WorkspaceSourceRetentionLifecycleRepository } from "../lib/workspace/repositories/sourceRetentionLifecycle";
 import { WorkspaceAssistantLegalResearchToolModule } from "../lib/workspace/services/assistantLegalResearchTools";
+import { WorkspaceAssistantActionLedger } from "../lib/workspace/services/assistantActionLedger";
+import { WorkspaceAssistantDraftToolModule } from "../lib/workspace/services/assistantDraftTools";
 import {
   AssistantRuntimeService,
   type AssistantModelPort,
 } from "../lib/workspace/services/assistantRuntime";
 import { WorkspaceAssistantToolRegistry } from "../lib/workspace/services/assistantToolRegistry";
+import { WorkspaceChatsRuntimePort } from "../lib/workspace/services/assistantChatsPort";
 import { ChatsService } from "../lib/workspace/services/chats";
 import { WorkspaceDocumentStudioService } from "../lib/workspace/services/documentStudio";
 import { WorkspaceDocumentStudioRepositoryAdapter } from "../lib/workspace/services/documentStudioRepositoryAdapter";
 import { WorkspaceJobsService } from "../lib/workspace/services/jobs";
 import {
-  BoundedInMemoryLegalResearchSessionOwnership,
   WorkspaceLegalResearchTools,
   type LegalResearchSourceCapturePort,
 } from "../lib/workspace/services/legalResearchTools";
@@ -52,20 +61,15 @@ const PROFILE_ID = "33333333-3333-4333-8333-333333333333";
 const WORKER = "legal-vertical-boundary-audit";
 const AUTHORITY_QUOTE =
   "Article 1. A deterministic legal-source fixture exists only for automated contract tests.";
+const VERTICAL_TRACE: string[] = [];
 
 /**
  * This is deliberately a boundary audit, not a claim that production legal
  * research is live. The test-only provider can be registered only through
  * WorkspaceLegalResearchProviderRegistry.forTesting(). The current production
- * gap is intentionally asserted below:
- *
- * 1. introduce a durable legal-authority evidence union alongside document
- *    retrieval chunks (snapshotId + anchorId, never provider payload identity);
- * 2. teach AssistantRuntime source validation/writes to bind that union to the
- *    immutable project_source_snapshots/source_citation_anchors rows;
- * 3. let create_draft rebuild citations from those durable authority anchors;
- * 4. construct the legal module in WorkspaceRuntime only from an activated,
- *    policy-authorized production provider (the deterministic fake stays test-only).
+ * activation gate remains intentionally not asserted live: the deterministic
+ * provider is accepted only by the explicit test registry and production must
+ * still construct this composition from an activated authorized provider.
  */
 class IdentityCodec implements WorkspaceBlobCodec {
   readonly encrypted = false;
@@ -126,99 +130,6 @@ function seedReadyProfile(database: WorkspaceDatabase) {
   return profiles;
 }
 
-function seedCompleteSuggestionOrigin(
-  database: WorkspaceDatabase,
-  projectId: string,
-) {
-  const profileId = randomUUID();
-  const chatId = randomUUID();
-  const jobId = randomUUID();
-  const promptMessageId = randomUUID();
-  const outputMessageId = randomUUID();
-  database
-    .prepare(
-      `INSERT INTO model_profiles (
-         id,name,provider,model,capabilities_json,settings_json,enabled,
-         created_at,updated_at
-       ) VALUES (?,?,'openai',?,'{}','{}',1,?,?)`,
-    )
-    .run(profileId, `Boundary downstream ${profileId}`, "test-model", NOW, NOW);
-  database
-    .prepare(
-      `INSERT INTO chats (
-         id,project_id,scope,title,status,model_profile_id,created_at,updated_at
-       ) VALUES (?,?,'project','Boundary downstream','active',?,?,?)`,
-    )
-    .run(chatId, projectId, profileId, NOW, NOW);
-  database
-    .prepare(
-      `INSERT INTO jobs (
-         id,type,status,resource_type,resource_id,payload_json,
-         created_at,updated_at
-       ) VALUES (?,'assistant_generate','queued','chat',?,?,?,?)`,
-    )
-    .run(
-      jobId,
-      chatId,
-      JSON.stringify({
-        schema: "vera-assistant-generation-v1",
-        chatId,
-        projectId,
-        promptMessageId,
-        outputMessageId,
-        modelProfileId: profileId,
-        documents: [],
-        retrieval: { currentVersionOnly: true, limit: 40 },
-      }),
-      NOW,
-      NOW,
-    );
-  database
-    .prepare(
-      `INSERT INTO chat_messages (
-         id,chat_id,sequence,role,content,status,model_profile_id,job_id,
-         created_at,updated_at,completed_at
-       ) VALUES (?,?,0,'user','Review the Draft.','complete',NULL,NULL,?,?,?),
-                (?,?,1,'assistant','','pending',?,?, ?,?,NULL)`,
-    )
-    .run(
-      promptMessageId,
-      chatId,
-      NOW,
-      NOW,
-      NOW,
-      outputMessageId,
-      chatId,
-      profileId,
-      jobId,
-      NOW,
-      NOW,
-    );
-  database
-    .prepare(
-      `INSERT INTO assistant_generation_snapshots (
-         job_id,chat_id,prompt_message_id,output_message_id,model_profile_id,
-         current_version_only,retrieval_limit,created_at
-       ) VALUES (?,?,?,?,?,1,40,?)`,
-    )
-    .run(jobId, chatId, promptMessageId, outputMessageId, profileId, NOW);
-  database
-    .prepare(
-      `UPDATE jobs
-          SET status='complete',attempt=1,updated_at=?,completed_at=?
-        WHERE id=?`,
-    )
-    .run(NOW, NOW, jobId);
-  database
-    .prepare(
-      `UPDATE chat_messages
-          SET content='Suggested exact edit.',status='complete',updated_at=?,completed_at=?
-        WHERE id=?`,
-    )
-    .run(NOW, NOW, outputMessageId);
-  return { jobId, outputMessageId };
-}
-
 function boundaryModel(): AssistantModelPort {
   return {
     async registeredCapabilities() {
@@ -233,6 +144,7 @@ function boundaryModel(): AssistantModelPort {
       const toolMessages = input.messages.filter(
         (message) => message.role === "tool",
       );
+      VERTICAL_TRACE.push(`model:${toolMessages.length}`);
       if (toolMessages.length === 0) {
         return {
           content: "",
@@ -270,11 +182,61 @@ function boundaryModel(): AssistantModelPort {
       };
       assert.equal(read.durable, true);
       assert.equal(read.excerpts[0]?.text, AUTHORITY_QUOTE);
+      if (toolMessages.length === 2) {
+        return {
+          content: "",
+          sources: [],
+          toolCalls: [
+            {
+              id: "create-authority-draft",
+              name: "create_draft",
+              input: {
+                title: "Assistant authority memorandum",
+                documentType: "legal_research_memo",
+                contentMarkdown:
+                  "# Test legal memorandum\n\nThe deterministic fixture applies[1].\n",
+                evidenceSources: [
+                  {
+                    evidenceId: read.excerpts[0]!.anchorCandidateId,
+                    exactQuote: read.excerpts[0]!.text,
+                  },
+                ],
+              },
+            },
+          ],
+        };
+      }
+      const created = JSON.parse(toolMessages[2]!.content) as {
+        draftId: string;
+        versionId: string;
+      };
+      assert.match(created.draftId, /^[a-f0-9-]{36}$/i);
+      assert.match(created.versionId, /^[a-f0-9-]{36}$/i);
+      const authority = input.legalAuthorityEvidence?.[0];
+      assert.ok(authority);
       const content = "测试法源支持该测试结论[1]。";
       await input.onTextDelta(content);
-      // There is no legal-authority variant in AssistantModelSourceSchema, so
-      // the honest model cannot attach the captured snapshot/anchor here.
-      return { content, sources: [], toolCalls: [] };
+      return {
+        content,
+        sources: [
+          {
+            sourceKind: "legal_authority",
+            readId: authority.readId,
+            snapshotId: authority.snapshotId,
+            anchorId: authority.anchorId,
+            quote: authority.exactQuote,
+            locator: authority.locator,
+            rank: 0,
+            score: null,
+            citationOrdinal: 0,
+            citationMetadata: {
+              citationNumber: 1,
+              label: authority.title,
+            },
+          },
+        ],
+        toolCalls: [],
+      };
     },
   };
 }
@@ -308,11 +270,36 @@ async function run() {
     });
     const profiles = seedReadyProfile(database);
     const sources = new WorkspaceSourceFoundationRepository(database);
+    const blobRecords = new WorkspaceBlobRecordsRepository(database);
+    const blobs = new LocalWorkspaceBlobStore({
+      root: blobRoot,
+      codec: new IdentityCodec(),
+      allowUnencryptedCodec: true,
+    });
+    const retention = new WorkspaceSourceRetentionService(
+      new WorkspaceSourceRetentionLifecycleRepository(database),
+      () => Date.parse(NOW),
+    );
+    const studio = new WorkspaceDocumentStudioService(
+      new WorkspaceDocumentStudioRepositoryAdapter(
+        new WorkspaceDocumentStudioRepository(database, {
+          blobRecords,
+          now: () => NOW,
+        }),
+        sources,
+        retention,
+        () => NOW,
+      ),
+      blobs,
+      blobRecords,
+      { cleanupRecorder: { record: () => undefined } },
+    );
     let capturedSnapshotId: string | null = null;
     let capturedAnchorId: string | null = null;
-    const capture: LegalResearchSourceCapturePort = {
+    const captureDelegate: LegalResearchSourceCapturePort = {
       async capture(input) {
         assert.equal(input.context.projectId, PROJECT_ID);
+        assert.match(input.readId, /^[a-f0-9-]{36}$/i);
         assert.equal(input.document.content, AUTHORITY_QUOTE);
         const snapshot = sources.createSnapshot({
           id: randomUUID(),
@@ -356,6 +343,17 @@ async function run() {
         };
       },
     };
+    const legalResearchRepository = new WorkspaceLegalResearchRepository(
+      database,
+      { now: () => NOW },
+    );
+    const ownership = new WorkspaceLegalResearchOwnershipAdapterV22(
+      legalResearchRepository,
+    );
+    const capture = new WorkspaceLegalResearchSourceCaptureAdapterV22(
+      captureDelegate,
+      ownership,
+    );
     const fake = createDeterministicFakeLegalResearchProvider({
       testingOnly: true,
     });
@@ -368,7 +366,7 @@ async function run() {
     const research = new WorkspaceLegalResearchTools(
       fake.id,
       WorkspaceLegalResearchProviderRegistry.forTesting([fake]),
-      new BoundedInMemoryLegalResearchSessionOwnership(),
+      ownership,
       capture,
     );
 
@@ -410,46 +408,78 @@ async function run() {
       "2099-07-16T08:10:00.000Z",
     );
     assert.equal(claimed?.id, generation.jobId);
-    const module = new WorkspaceAssistantLegalResearchToolModule(research, {
-      get: (projectId) =>
-        projectId === PROJECT_ID
-          ? {
-              projectId,
-              externalEgressMode: "allowed_by_policy",
-              executionLocations: ["standard_remote"],
-              allowExternalLegalSources: true,
-              allowWordBridge: false,
-              createdAt: NOW,
-              updatedAt: NOW,
-            }
-          : null,
-    });
+    const module = new WorkspaceAssistantLegalResearchToolModule(
+      research,
+      {
+        get: (projectId) =>
+          projectId === PROJECT_ID
+            ? {
+                projectId,
+                externalEgressMode: "allowed_by_policy",
+                executionLocations: ["standard_remote"],
+                allowExternalLegalSources: true,
+                allowWordBridge: false,
+                createdAt: NOW,
+                updatedAt: NOW,
+              }
+            : null,
+      },
+      legalResearchRepository,
+    );
+    const draftModule = new WorkspaceAssistantDraftToolModule(
+      database,
+      chatsRepository,
+      studio,
+      (projectId, content, citationSources) => {
+        VERTICAL_TRACE.push("draft:rebuild-anchors");
+        assert.match(content, /\[1\]/);
+        return citationSources.map((citation) => {
+          assert.ok("anchorId" in citation);
+          const retained = retention.readAnchorQuote(
+            projectId,
+            citation.anchorId,
+          );
+          assert.equal(retained.snapshotId, citation.snapshotId);
+          assert.equal(retained.exactQuote, citation.quote);
+          retention.assertStudioAnchorBindings({
+            projectId,
+            anchorIds: [citation.anchorId],
+          });
+          return citation.anchorId;
+        });
+      },
+      new WorkspaceAssistantActionLedger(database),
+    );
     const runtime = new AssistantRuntimeService(
       chatsRepository,
       jobsRepository,
       boundaryModel(),
       {
         clock: () => new Date(NOW),
-        tools: new WorkspaceAssistantToolRegistry([module]),
+        tools: new WorkspaceAssistantToolRegistry([module, draftModule]),
+        legalAuthorityCommit: legalResearchRepository,
       },
     );
-    await assert.rejects(
-      runtime.execute({
+    let completed: Awaited<ReturnType<AssistantRuntimeService["execute"]>>;
+    try {
+      completed = await runtime.execute({
         jobId: generation.jobId,
         leaseOwner: WORKER,
         attempt: claimed!.attempt,
         signal: new AbortController().signal,
-      }),
-      (error: unknown) => {
-        assert(error instanceof WorkspaceApiError);
-        assert.equal(error.code, "JOB_FAILED");
-        assert.equal(
-          error.message,
-          "Assistant citation markers and source references must be unique, continuous, and bidirectionally consistent.",
-        );
-        return true;
-      },
-    );
+      });
+    } catch (error) {
+      const diagnostic = database
+        .prepare("SELECT status,error_code FROM chat_messages WHERE id=?")
+        .get(generation.outputMessageId);
+      throw new Error(
+        `Vertical Assistant failed: ${JSON.stringify(diagnostic)} ${VERTICAL_TRACE.join(",")}`,
+        {
+          cause: error,
+        },
+      );
+    }
+    assert.equal(completed.messageId, generation.outputMessageId);
     assert.ok(capturedSnapshotId);
     assert.ok(capturedAnchorId);
     assert.equal(
@@ -461,16 +491,24 @@ async function run() {
           .get(generation.outputMessageId)?.total,
       ),
       0,
-      "failed legal citation binding must not persist forged message sources",
+      "legal authority citations must not be forged into document message_sources",
     );
     assert.equal(
       database
         .prepare("SELECT status FROM chat_messages WHERE id=?")
         .get(generation.outputMessageId)?.status,
-      "failed",
-      "citation binding failure must durably fail the output message",
+      "complete",
+      "the authority-grounded Assistant output must complete durably",
     );
-    assert.equal(jobsRepository.getJob(generation.jobId)?.status, "failed");
+    assert.equal(jobsRepository.getJob(generation.jobId)?.status, "complete");
+    const authorityMessageSources =
+      legalResearchRepository.listAssistantAuthoritySources(
+        generation.outputMessageId,
+      );
+    assert.equal(authorityMessageSources.length, 1);
+    assert.equal(authorityMessageSources[0]!.snapshotId, capturedSnapshotId);
+    assert.equal(authorityMessageSources[0]!.anchorId, capturedAnchorId);
+    assert.equal(authorityMessageSources[0]!.exactQuote, AUTHORITY_QUOTE);
     assert.equal(
       Number(
         database
@@ -479,8 +517,8 @@ async function run() {
           )
           .get(PROJECT_ID)?.total,
       ),
-      0,
-      "the failed Assistant boundary must not create a Draft",
+      1,
+      "the Assistant create_draft handoff must persist one Studio Draft",
     );
     assert.equal(
       sources.getSnapshot(FOREIGN_PROJECT_ID, capturedSnapshotId!),
@@ -491,43 +529,18 @@ async function run() {
       null,
     );
 
-    // Downstream reuse proof starts at the explicit durable-authority boundary.
-    // It does not erase the expected-fail Assistant citation gap above.
-    const blobRecords = new WorkspaceBlobRecordsRepository(database);
-    const blobs = new LocalWorkspaceBlobStore({
-      root: blobRoot,
-      codec: new IdentityCodec(),
-      allowUnencryptedCodec: true,
-    });
-    const retention = new WorkspaceSourceRetentionService(
-      new WorkspaceSourceRetentionLifecycleRepository(database),
-      () => Date.parse(NOW),
-    );
-    const studio = new WorkspaceDocumentStudioService(
-      new WorkspaceDocumentStudioRepositoryAdapter(
-        new WorkspaceDocumentStudioRepository(database, {
-          blobRecords,
-          now: () => NOW,
-        }),
-        sources,
-        retention,
-        () => NOW,
-      ),
-      blobs,
-      blobRecords,
-      { cleanupRecorder: { record: () => undefined } },
-    );
-    const initialContent = `# Test legal memorandum\n\nThe deterministic fixture applies[1].\n`;
-    const draft = await studio.createDraft({
-      projectId: PROJECT_ID,
-      title: "Boundary downstream memorandum",
-      content: initialContent,
-      source: "assistant_edit",
-      citationAnchorIds: [capturedAnchorId!],
-      documentType: "legal_research_memo",
-      originType: "manual",
-      originRef: null,
-    });
+    const draftRow = database
+      .prepare(
+        `SELECT id
+           FROM documents
+          WHERE project_id=? AND document_kind='draft' AND deleted_at IS NULL`,
+      )
+      .get(PROJECT_ID);
+    assert.equal(typeof draftRow?.id, "string");
+    const draft = await studio.getDocument(PROJECT_ID, String(draftRow!.id));
+    const initialContent = draft.content;
+    assert.equal(draft.document.title, "Assistant authority memorandum");
+    assert.deepEqual(draft.version.citationAnchorIds, [capturedAnchorId]);
     await assert.rejects(
       studio.createDraft({
         projectId: FOREIGN_PROJECT_ID,
@@ -543,15 +556,14 @@ async function run() {
         return true;
       },
     );
-    const origin = seedCompleteSuggestionOrigin(database, PROJECT_ID);
     const deletedText = "applies";
     const startOffset = initialContent.indexOf(deletedText);
     const suggestion = await studio.createSuggestionFromAssistantTool({
       projectId: PROJECT_ID,
       documentId: draft.document.id,
       baseVersionId: draft.version.id,
-      messageId: origin.outputMessageId,
-      jobId: origin.jobId,
+      messageId: generation.outputMessageId,
+      jobId: generation.jobId,
       attempt: 1,
       toolCallId: "boundary-suggestion",
       startOffset,
@@ -594,6 +606,66 @@ async function run() {
     database.close();
     database = new WorkspaceDatabase(databasePath);
     const reopenedSources = new WorkspaceSourceFoundationRepository(database);
+    const reopenedLegalResearch = new WorkspaceLegalResearchRepository(
+      database,
+      { now: () => NOW },
+    );
+    const reopenedChatsRepository = new ChatsRepository(database);
+    const reopenedChats = new ChatsService(
+      reopenedChatsRepository,
+      new ProjectsRepository(database),
+      new ModelProfilesRepository(database),
+      () => new Date(NOW),
+      {
+        capabilities: {
+          hydrate: () => ({ can_read: true, can_download: true }),
+        },
+      },
+    );
+    const reopenedChatPort = new WorkspaceChatsRuntimePort(
+      reopenedChats,
+      reopenedLegalResearch,
+    );
+    const reopenedChatDetail = await reopenedChatPort.getChatDetail(
+      { principalId: WORKSPACE_LOCAL_PRINCIPAL_ID },
+      chat.id,
+    );
+    const mikeChat = toMikeChatDetail(reopenedChatDetail);
+    const assistantMessage = mikeChat.messages.find(
+      (message) => message.id === generation.outputMessageId,
+    );
+    assert.ok(assistantMessage);
+    assert.equal(assistantMessage.citations?.length, 1);
+    const authorityWire = assistantMessage.citations?.[0];
+    assert.deepEqual(Object.keys(authorityWire ?? {}).sort(), [
+      "kind",
+      "locator",
+      "quote",
+      "ref",
+      "source_type",
+      "title",
+      "type",
+    ]);
+    assert.deepEqual(authorityWire, {
+      type: "citation_data",
+      kind: "legal_authority",
+      ref: 1,
+      title: "Deterministic Contract Law Fixture",
+      source_type: "statute",
+      locator: { article: "1" },
+      quote: AUTHORITY_QUOTE,
+    });
+    const authorityWireJson = JSON.stringify(authorityWire);
+    assert.doesNotMatch(
+      authorityWireJson,
+      /readId|snapshotId|anchorId|sourceRef|providerSourceId|https?:|bearer|sk_/i,
+    );
+    assert.equal(
+      reopenedLegalResearch.listAssistantAuthoritySources(
+        generation.outputMessageId,
+      )[0]?.anchorId,
+      capturedAnchorId,
+    );
     const reopenedRecords = new WorkspaceBlobRecordsRepository(database);
     const reopenedBlobs = new LocalWorkspaceBlobStore({
       root: blobRoot,
@@ -647,16 +719,18 @@ async function run() {
       JSON.stringify(
         {
           ok: true,
-          suite: "vera-legal-work-vertical-boundary-v1",
-          full_vertical_status: "blocked_fail_closed",
+          suite: "vera-legal-work-vertical-boundary-v22",
+          full_vertical_status: "complete_test_only",
           production_provider_status: "not_asserted_live",
           checks: [
             "test-only deterministic provider is rejected by the production registry",
-            "real AssistantRuntime search/read tool loop captures a Matter-scoped durable authority",
-            "document-only Assistant citation schema rejects the authority citation with JOB_FAILED and no message_sources",
-            "durable authority anchor is reusable by Studio Draft/version/suggestion/DOCX after the explicit boundary",
+            "real AssistantRuntime search/read tool loop captures a Matter-scoped durable v22 authority",
+            "create_draft consumes only the current-attempt anchorCandidateId and exact quote",
+            "final Assistant legal authority citation binds to its durable message owner without document message_sources",
+            "Assistant-created Draft/version supports suggestion acceptance and exact-version DOCX export",
             "cross-Matter source and Draft access fail closed",
-            "authority, accepted suggestion, current version, blob content, and deterministic DOCX survive reopen",
+            "reopened chat wire exposes only the reviewed legal-authority citation projection",
+            "authority owner, snapshot, anchor, Draft, accepted suggestion, current version, blob content, and deterministic DOCX survive reopen",
           ],
         },
         null,

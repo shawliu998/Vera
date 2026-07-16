@@ -13,7 +13,7 @@ import type {
   WorkspaceDocumentStudioService,
 } from "./documentStudio";
 import type {
-  AssistantModelSource,
+  AssistantModelCitationSource,
   AssistantModelToolCall,
   AssistantToolContext,
   AssistantToolDefinition,
@@ -151,7 +151,7 @@ const CREATE_DRAFT_TOOL: AssistantToolDefinition = Object.freeze({
         type: "array",
         maxItems: MAX_SOURCE_REFERENCES,
         description:
-          "Exact evidence returned by a document read/search in this Assistant attempt. Durable snapshots and anchors are rebuilt server-side.",
+          "Exact evidence returned by a document or legal-authority read in this Assistant attempt. Use only the returned evidence id and quote; durable source ownership is reverified server-side.",
         items: Object.freeze({
           type: "object",
           properties: Object.freeze({
@@ -358,7 +358,7 @@ export class WorkspaceAssistantDraftToolModule implements AssistantToolModule {
     private readonly rebuildEvidenceAnchors: (
       projectId: string,
       content: string,
-      sources: readonly AssistantModelSource[],
+      sources: readonly AssistantModelCitationSource[],
     ) => string[],
     private readonly actions: Pick<
       WorkspaceAssistantActionLedger,
@@ -369,18 +369,60 @@ export class WorkspaceAssistantDraftToolModule implements AssistantToolModule {
   private evidenceSources(
     context: AssistantToolContext,
     requested: readonly z.infer<typeof DraftEvidenceSource>[],
-  ): AssistantModelSource[] {
+  ): AssistantModelCitationSource[] {
     const available = context.evidence ?? [];
+    const availableAuthorities = context.legalAuthorityEvidence ?? [];
     const used = new Set<string>();
     return requested.map((request, index) => {
       const chunk = available.find(
         (candidate) => candidate.chunkId === request.evidenceId,
       );
-      const relativeStart = chunk?.text.indexOf(request.exactQuote) ?? -1;
+      if (chunk) {
+        const relativeStart = chunk.text.indexOf(request.exactQuote);
+        if (
+          relativeStart < 0 ||
+          chunk.text.indexOf(request.exactQuote, relativeStart + 1) >= 0 ||
+          used.has(request.evidenceId)
+        ) {
+          throw new AssistantDraftToolError(
+            "Draft evidence was not read in this Assistant attempt or does not exactly match durable Matter content.",
+          );
+        }
+        used.add(request.evidenceId);
+        const startOffset = chunk.startOffset + relativeStart;
+        const endOffset = startOffset + request.exactQuote.length;
+        return {
+          documentId: chunk.documentId,
+          versionId: chunk.versionId,
+          chunkId: chunk.chunkId,
+          quote: request.exactQuote,
+          startOffset,
+          endOffset,
+          locator: {
+            ...(chunk.pageStart === null ? {} : { pageStart: chunk.pageStart }),
+            ...(chunk.pageEnd === null ? {} : { pageEnd: chunk.pageEnd }),
+            startOffset,
+            endOffset,
+          },
+          rank: chunk.ordinal,
+          score: chunk.score,
+          citationOrdinal: index,
+          citationMetadata: {
+            citationNumber: index + 1,
+            label: chunk.filename,
+          },
+        };
+      }
+
+      const authority = availableAuthorities.find(
+        (candidate) => candidate.anchorId === request.evidenceId,
+      );
       if (
-        !chunk ||
-        relativeStart < 0 ||
-        chunk.text.indexOf(request.exactQuote, relativeStart + 1) >= 0 ||
+        !authority ||
+        authority.projectId !== context.projectId ||
+        authority.jobId !== context.jobId ||
+        authority.attempt !== context.attempt ||
+        authority.exactQuote !== request.exactQuote ||
         used.has(request.evidenceId)
       ) {
         throw new AssistantDraftToolError(
@@ -388,27 +430,19 @@ export class WorkspaceAssistantDraftToolModule implements AssistantToolModule {
         );
       }
       used.add(request.evidenceId);
-      const startOffset = chunk.startOffset + relativeStart;
-      const endOffset = startOffset + request.exactQuote.length;
       return {
-        documentId: chunk.documentId,
-        versionId: chunk.versionId,
-        chunkId: chunk.chunkId,
-        quote: request.exactQuote,
-        startOffset,
-        endOffset,
-        locator: {
-          ...(chunk.pageStart === null ? {} : { pageStart: chunk.pageStart }),
-          ...(chunk.pageEnd === null ? {} : { pageEnd: chunk.pageEnd }),
-          startOffset,
-          endOffset,
-        },
-        rank: chunk.ordinal,
-        score: chunk.score,
+        sourceKind: "legal_authority" as const,
+        readId: authority.readId,
+        snapshotId: authority.snapshotId,
+        anchorId: authority.anchorId,
+        quote: authority.exactQuote,
+        locator: authority.locator,
+        rank: null,
+        score: null,
         citationOrdinal: index,
         citationMetadata: {
           citationNumber: index + 1,
-          label: chunk.filename,
+          label: authority.title,
         },
       };
     });
@@ -535,6 +569,10 @@ export class WorkspaceAssistantDraftToolModule implements AssistantToolModule {
           "Draft durable source identifiers are rebuilt by the server; submit evidenceSources read in this attempt instead.",
         );
       }
+      const evidenceSources = this.evidenceSources(
+        input.context,
+        parsed.evidenceSources ?? [],
+      );
       const writeIdentity = draftWriteIdentity(input.context, parsed);
       const actionInput = {
         title: parsed.title,
@@ -561,10 +599,6 @@ export class WorkspaceAssistantDraftToolModule implements AssistantToolModule {
           "Completed Draft action identity does not match its durable resource.",
         );
       }
-      const evidenceSources = this.evidenceSources(
-        input.context,
-        parsed.evidenceSources ?? [],
-      );
       const citationAnchorIds = this.rebuildEvidenceAnchors(
         projectId,
         parsed.contentMarkdown,

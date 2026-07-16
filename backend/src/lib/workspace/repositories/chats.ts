@@ -2559,6 +2559,8 @@ export class ChatsRepository {
     claims: AssistantClaimTransactionPort;
     content: string;
     sources: readonly AssistantSourceWrite[];
+    /** Runs inside the fenced Assistant completion transaction. */
+    beforeComplete?: () => void;
     now: string;
   }) {
     return this.transaction(() => {
@@ -2608,6 +2610,7 @@ export class ChatsRepository {
           now: input.now,
         });
       }
+      input.beforeComplete?.();
       this.database
         .prepare(
           `UPDATE chat_messages

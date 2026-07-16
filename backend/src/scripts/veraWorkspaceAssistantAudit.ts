@@ -1058,7 +1058,7 @@ async function run() {
     );
 
     const currentMigration = database.runMigrations(WORKSPACE_MIGRATIONS);
-    assert.equal(currentMigration.currentVersion, 21);
+    assert.equal(currentMigration.currentVersion, 22);
     markProfileReady(database, profileId);
 
     const projects = new ProjectsRepository(database);
@@ -2751,6 +2751,67 @@ async function run() {
       false,
       "legacy sources without a non-empty quote are omitted instead of serialized as empty citations",
     );
+    const legalReadId = randomUUID();
+    const legalSnapshotId = randomUUID();
+    const legalAnchorId = randomUUID();
+    const withLegalAuthorityCitation = toMikeChatDetail({
+      chat: hydratedDetail.chat,
+      messages: hydratedDetail.messages.map((message, index) => ({
+        ...message,
+        legalAuthoritySources:
+          index === hydratedDetail.messages.length - 1
+            ? [
+                {
+                  id: randomUUID(),
+                  messageId: message.id,
+                  projectId: projectOne,
+                  readId: legalReadId,
+                  sourceRef: "a".repeat(32),
+                  snapshotId: legalSnapshotId,
+                  anchorId: legalAnchorId,
+                  title: "Civil Code",
+                  exactQuote:
+                    "The parties shall fully perform their obligations.",
+                  locator: { article: "Article 509", paragraph: "1" },
+                  sourceType: "statute" as const,
+                  citationOrdinal: 0,
+                  citationMetadata: {
+                    citationNumber: 1,
+                    label: "Civil Code, Article 509",
+                  },
+                  createdAt: NOW,
+                },
+              ]
+            : [],
+      })),
+    });
+    const legalWire = withLegalAuthorityCitation.messages
+      .flatMap((message) => message.citations ?? [])
+      .find((citation) => citation.kind === "legal_authority");
+    assert.deepEqual(legalWire, {
+      type: "citation_data",
+      kind: "legal_authority",
+      ref: 1,
+      title: "Civil Code",
+      source_type: "statute",
+      locator: { article: "Article 509", paragraph: "1" },
+      quote: "The parties shall fully perform their obligations.",
+    });
+    const legalWireJson = JSON.stringify(legalWire);
+    assert.doesNotMatch(
+      legalWireJson,
+      new RegExp(
+        [
+          legalReadId,
+          legalSnapshotId,
+          legalAnchorId,
+          "https?://",
+          "bearer",
+          "secret",
+        ].join("|"),
+        "i",
+      ),
+    );
     assert.equal(capabilityHydrations > 0, true);
     const mikeJson = JSON.stringify(mikeDetail);
     assert.doesNotMatch(
@@ -3097,7 +3158,7 @@ async function run() {
     migrations: WORKSPACE_MIGRATIONS,
   });
   try {
-    assert.equal(reopened.migration?.currentVersion, 21);
+    assert.equal(reopened.migration?.currentVersion, 22);
     assert.equal(
       reopened
         .prepare("SELECT value FROM assistant_legacy_sentinel WHERE id=1")

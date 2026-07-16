@@ -268,7 +268,7 @@ function auditV19Upgrade(root: string) {
 
   const upgraded = new WorkspaceDatabase(databasePath);
   try {
-    assert.equal(upgraded.migration?.currentVersion, 21);
+    assert.equal(upgraded.migration?.currentVersion, 22);
     assert.equal(
       upgraded
         .prepare(
@@ -348,7 +348,7 @@ function run() {
     );
     assert.deepEqual(
       WORKSPACE_MIGRATIONS.map((migration) => migration.version),
-      Array.from({ length: 21 }, (_, index) => index + 1),
+      Array.from({ length: 22 }, (_, index) => index + 1),
     );
     assert.equal(new Set(DOCUMENT_STUDIO_DRAFT_TYPES_V20).size, 8);
     assert.deepEqual(DOCUMENT_STUDIO_DRAFT_ORIGINS_V20, [
@@ -362,7 +362,7 @@ function run() {
     auditMigrationRollback(root);
 
     database = new WorkspaceDatabase(path.join(root, "fresh.sqlite"));
-    assert.equal(database.migration?.currentVersion, 21);
+    assert.equal(database.migration?.currentVersion, 22);
     for (const objectName of [
       "document_studio_draft_metadata",
       "idx_document_studio_draft_metadata_project_type_origin",

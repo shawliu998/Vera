@@ -158,6 +158,78 @@ test("Assistant chat/status contracts require exact canonical local wire data", 
   );
 });
 
+test("legal authority citations expose only bounded title, locator, type, and exact quote", () => {
+  const detail = parseVeraAssistantChatDetail({
+    chat: {
+      id: chatId,
+      project_id: chatId,
+      user_id: localUserId,
+      title: "Matter research",
+      created_at: now,
+    },
+    messages: [
+      {
+        id: outputId,
+        chat_id: chatId,
+        role: "assistant",
+        content: [{ type: "content", text: "适用规则 [1]。" }],
+        citations: [
+          {
+            type: "citation_data",
+            kind: "legal_authority",
+            ref: 1,
+            title: "中华人民共和国民法典",
+            source_type: "statute",
+            locator: { article: "第五百零九条", paragraph: "第一款" },
+            quote: "当事人应当按照约定全面履行自己的义务。",
+          },
+        ],
+        created_at: now,
+      },
+    ],
+  });
+  assert.deepEqual(detail.messages[0].citations?.[0], {
+    type: "citation_data",
+    kind: "legal_authority",
+    ref: 1,
+    title: "中华人民共和国民法典",
+    source_type: "statute",
+    locator: { article: "第五百零九条", paragraph: "第一款" },
+    quote: "当事人应当按照约定全面履行自己的义务。",
+  });
+  assert.equal(toUiMessage(detail.messages[0]).annotations?.[0].kind, "legal_authority");
+
+  for (const forbidden of [
+    { url: "blocked endpoint" },
+    { snapshot_id: documentId },
+    { full_text: "provider full text" },
+    { authorization: "credential material" },
+  ]) {
+    assert.throws(
+      () =>
+        parseVeraAssistantChatDetail({
+          chat: detail.chat,
+          messages: [
+            {
+              id: outputId,
+              chat_id: chatId,
+              role: "assistant",
+              content: "Rule [1].",
+              citations: [
+                {
+                  ...(detail.messages[0].citations?.[0] ?? {}),
+                  ...forbidden,
+                },
+              ],
+              created_at: now,
+            },
+          ],
+        }),
+      VeraApiError,
+    );
+  }
+});
+
 test("completed chat detail restores its bounded durable Draft projection on refresh", () => {
   const draftEvent = {
     type: "draft_created" as const,

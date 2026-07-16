@@ -5,6 +5,7 @@ import type {
   AssistantMessageSource,
   ChatMessageAttachment,
 } from "./repositories/chats";
+import type { AssistantLegalAuthoritySourceV22 } from "./legalResearchPersistenceContractsV22";
 import type { Chat, ChatMessage } from "./types";
 
 const Id = z.string().uuid();
@@ -353,6 +354,42 @@ const MikeDocumentCitationSchema = z
   })
   .strict();
 
+const MikeLegalAuthorityLocatorSchema = z
+  .object({
+    article: z.string().trim().min(1).max(160).optional(),
+    section: z.string().trim().min(1).max(300).optional(),
+    paragraph: z.string().trim().min(1).max(160).optional(),
+    page: z.number().int().positive().max(1_000_000).optional(),
+  })
+  .strict();
+
+const MikeLegalAuthorityCitationSchema = z
+  .object({
+    type: z.literal("citation_data"),
+    kind: z.literal("legal_authority"),
+    ref: z.number().int().positive().max(200),
+    title: z.string().trim().min(1).max(500),
+    source_type: z.enum([
+      "statute",
+      "regulation",
+      "judicial_interpretation",
+      "case",
+      "guidance",
+    ]),
+    locator: MikeLegalAuthorityLocatorSchema,
+    quote: z
+      .string()
+      .min(1)
+      .max(8_000)
+      .refine((quote) => quote.trim().length > 0),
+  })
+  .strict();
+
+const MikeAssistantCitationSchema = z.discriminatedUnion("kind", [
+  MikeDocumentCitationSchema,
+  MikeLegalAuthorityCitationSchema,
+]);
+
 const MikeServerMessageSchema = z
   .object({
     id: Id,
@@ -365,7 +402,7 @@ const MikeServerMessageSchema = z
       ),
     ]),
     files: z.array(MikeFileSchema).optional(),
-    citations: z.array(MikeDocumentCitationSchema).optional(),
+    citations: z.array(MikeAssistantCitationSchema).max(1_000).optional(),
     events: z
       .array(
         z
@@ -606,6 +643,20 @@ function toMikeCitation(source: AssistantMessageSource) {
   });
 }
 
+function toMikeLegalAuthorityCitation(
+  source: AssistantLegalAuthoritySourceV22,
+) {
+  return MikeLegalAuthorityCitationSchema.parse({
+    type: "citation_data",
+    kind: "legal_authority",
+    ref: source.citationMetadata.citationNumber,
+    title: source.title,
+    source_type: source.sourceType,
+    locator: source.locator,
+    quote: source.exactQuote,
+  });
+}
+
 export function toMikeChatDetail(input: {
   chat: Chat;
   messages: readonly (ChatMessage & {
@@ -613,6 +664,7 @@ export function toMikeChatDetail(input: {
       capability: AssistantHydratedCapability;
     })[];
     sources: readonly AssistantMessageSource[];
+    legalAuthoritySources?: readonly AssistantLegalAuthoritySourceV22[];
     events?: readonly Extract<
       MikeAssistantStreamEvent,
       { type: "draft_created" }
@@ -626,11 +678,16 @@ export function toMikeChatDetail(input: {
         (message) => message.role === "user" || message.role === "assistant",
       )
       .map((message) => {
-        const citations = message.sources
-          .map(toMikeCitation)
-          .filter((citation): citation is NonNullable<typeof citation> =>
-            Boolean(citation),
-          );
+        const citations = [
+          ...message.sources
+            .map(toMikeCitation)
+            .filter((citation): citation is NonNullable<typeof citation> =>
+              Boolean(citation),
+            ),
+          ...(message.legalAuthoritySources ?? []).map(
+            toMikeLegalAuthorityCitation,
+          ),
+        ].sort((left, right) => left.ref - right.ref);
         return {
           id: message.id,
           chat_id: message.chatId,

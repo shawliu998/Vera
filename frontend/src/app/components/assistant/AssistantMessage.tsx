@@ -156,6 +156,19 @@ function citationLocation(citation: CitationAnnotation, t: Translate): string {
       })
     );
   }
+  if (citation.kind === "legal_authority") {
+    const location = [
+      citation.locator.article,
+      citation.locator.section,
+      citation.locator.paragraph,
+      citation.locator.page === undefined
+        ? undefined
+        : t("assistant.citationPage", { page: citation.locator.page }),
+    ].filter((value): value is string => Boolean(value));
+    return location.length
+      ? location.join(" · ")
+      : citation.source_type.replaceAll("_", " ");
+  }
   const quotes = getDocumentCitationQuotes(citation);
   const pages = Array.from(
     new Set(quotes.map((quote) => String(quote.page)).filter(Boolean)),
@@ -272,7 +285,11 @@ export function AssistantMessage({
 
   function openCitation(citation: CitationAnnotation) {
     setCitationSourceFailure(false);
-    if (citation.kind === "case" || !citationScope) {
+    if (
+      citation.kind === "case" ||
+      citation.kind === "legal_authority" ||
+      !citationScope
+    ) {
       setSelectedCitation(citation);
       return;
     }
@@ -385,7 +402,9 @@ export function AssistantMessage({
                 [{selectedCitation.ref}]{" "}
                 {selectedCitation.kind === "case"
                   ? (selectedCitation.case_name ?? selectedCitation.citation)
-                  : selectedCitation.filename}
+                  : selectedCitation.kind === "legal_authority"
+                    ? selectedCitation.title
+                    : selectedCitation.filename}
               </p>
               <p className="mt-1 text-gray-500">
                 {citationLocation(selectedCitation, t)}
@@ -413,7 +432,13 @@ export function AssistantMessage({
           <div className="flex flex-wrap gap-1.5">
             {citations.map((citation) => (
               <button
-                key={`${citation.ref}-${citation.kind === "case" ? citation.cluster_id : citation.document_id}`}
+                key={`${citation.ref}-${
+                  citation.kind === "case"
+                    ? citation.cluster_id
+                    : citation.kind === "legal_authority"
+                      ? citation.title
+                      : citation.document_id
+                }`}
                 type="button"
                 onClick={() => openCitation(citation)}
                 data-testid={`assistant-citation-open-${citation.ref}`}
@@ -422,7 +447,9 @@ export function AssistantMessage({
                 [{citation.ref}]{" "}
                 {citation.kind === "case"
                   ? (citation.case_name ?? citation.citation)
-                  : citation.filename}
+                  : citation.kind === "legal_authority"
+                    ? citation.title
+                    : citation.filename}
               </button>
             ))}
           </div>

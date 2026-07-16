@@ -34,7 +34,7 @@ systems to fill navigation.
 
 The merged `main` baseline is `5611699e`; the active
 `feat/local-legal-work-agent` implementation is additive through Workspace
-schema v21. It includes one Electron lifecycle, one loopback Next.js renderer, one
+schema v22. It includes one Electron lifecycle, one loopback Next.js renderer, one
 loopback Express backend, one SQLCipher Workspace database, one encrypted blob
 store, one durable job runtime, one model gateway, Source Snapshots/Citation
 Anchors, and one Document Studio. OpenAI, DeepSeek, Anthropic, Gemini, and

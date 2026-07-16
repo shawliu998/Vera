@@ -175,7 +175,7 @@ async function run() {
   try {
     process.env.ALETHEIA_DATABASE_ENCRYPTION = "metadata_plaintext";
     database = new WorkspaceDatabase(path.join(root, "workspace.sqlite"));
-    assert.equal(database.migration?.currentVersion, 21);
+    assert.equal(database.migration?.currentVersion, 22);
 
     const projects = new ProjectsRepository(database);
     projects.create({
@@ -254,6 +254,39 @@ async function run() {
       ordinal: 0,
       exactQuote: "exact audit authority",
       locator: { startOffset: 23, endOffset: 44 },
+      createdAt: NOW,
+    });
+    const legalQuote = "依法成立的合同，自成立时生效";
+    const legalSnapshot = sources.createSnapshot({
+      id: randomUUID(),
+      projectId: PROJECT_ID,
+      sourceKind: "legal_authority",
+      sourceRecordId: "audit-law-article-502",
+      sourceVersionId: "effective-2021-01-01",
+      titleSnapshot: "中华人民共和国民法典第五百零二条",
+      contentSha256: createHash("sha256")
+        .update(legalQuote, "utf8")
+        .digest("hex"),
+      locator: { article: "第五百零二条" },
+      retrievedAt: NOW,
+      license: {
+        basis: "deployment_contract",
+        retention: "full_text_permitted",
+        export: "permitted",
+        modelUse: "permitted",
+      },
+      retentionPolicy: "full_text_permitted",
+      retentionExpiresAt: null,
+      retrievalMetadata: {},
+      createdAt: NOW,
+    });
+    const legalAnchor = sources.createCitationAnchor({
+      id: randomUUID(),
+      projectId: PROJECT_ID,
+      snapshotId: legalSnapshot.id,
+      ordinal: 0,
+      exactQuote: legalQuote,
+      locator: { article: "第五百零二条" },
       createdAt: NOW,
     });
     const foreignSource = sources.createSnapshot({
@@ -342,6 +375,21 @@ async function run() {
           score: 1,
         },
       ],
+      legalAuthorityEvidence: [
+        {
+          kind: "legal_authority",
+          projectId: PROJECT_ID,
+          jobId: snapshot.jobId,
+          attempt: claim!.attempt,
+          readId: randomUUID(),
+          sourceRef: "LegalAuditSourceRef_123456789012",
+          snapshotId: legalSnapshot.id,
+          anchorId: legalAnchor.id,
+          title: legalSnapshot.titleSnapshot,
+          exactQuote: legalQuote,
+          locator: { article: "第五百零二条" },
+        },
+      ],
     };
     const module = new WorkspaceAssistantDraftToolModule(
       database,
@@ -350,8 +398,16 @@ async function run() {
       (projectId, content, evidence) => {
         assert.equal(projectId, PROJECT_ID);
         assert.match(content, /\[1\]/);
-        assert.equal(evidence[0]?.chunkId, sourceAnchor.id);
-        assert.equal(evidence[0]?.quote, "exact audit authority");
+        const first = evidence[0];
+        assert.ok(first);
+        if ("anchorId" in first) {
+          assert.equal(first.anchorId, legalAnchor.id);
+          assert.equal(first.snapshotId, legalSnapshot.id);
+          assert.equal(first.quote, legalQuote);
+          return [legalAnchor.id];
+        }
+        assert.equal(first.chunkId, sourceAnchor.id);
+        assert.equal(first.quote, "exact audit authority");
         return [sourceAnchor.id];
       },
       new WorkspaceAssistantActionLedger(database, () => new Date(NOW)),
@@ -751,6 +807,109 @@ async function run() {
     );
     assert.deepEqual(completedOutput?.events, createdExecution.events);
     assert.equal(jobsRepository.getJob(generation.jobId)?.status, "complete");
+
+    const authorityChat = chats.create({
+      projectId: PROJECT_ID,
+      title: "Legal authority Draft audit chat",
+      modelProfileId: PROFILE_ID,
+    });
+    const authorityGeneration = chats.requestGeneration({
+      chatId: authorityChat.id,
+      prompt: "Create a legal-authority-backed Draft.",
+      modelProfileId: PROFILE_ID,
+      allowedDocumentIds: [],
+      attachmentDocumentIds: [],
+      retrievalLimit: 10,
+    });
+    const authoritySnapshot = chatsRepository.generationSnapshot(
+      authorityGeneration.jobId,
+    );
+    const authorityClaim = jobsRepository.claimNextQueuedForTypes(
+      NOW,
+      ["assistant_generate"],
+      "draft-authority-audit-worker",
+      "2099-07-16T08:10:00.000Z",
+    );
+    assert.equal(authorityClaim?.id, authorityGeneration.jobId);
+    const authorityClaimIdentity = {
+      jobId: authorityGeneration.jobId,
+      leaseOwner: "draft-authority-audit-worker",
+      attempt: authorityClaim!.attempt,
+      at: NOW,
+    };
+    chatsRepository.beginGenerationAttempt({
+      snapshot: authoritySnapshot,
+      claim: authorityClaimIdentity,
+      claims: jobsRepository,
+      now: NOW,
+    });
+    const authorityContext: AssistantToolContext = {
+      jobId: authoritySnapshot.jobId,
+      attempt: authorityClaim!.attempt,
+      leaseOwner: authorityClaimIdentity.leaseOwner,
+      chatId: authoritySnapshot.chatId,
+      projectId: authoritySnapshot.payload.projectId,
+      modelProfileId: authoritySnapshot.modelProfileId,
+      documents: authoritySnapshot.documents,
+      evidence: [],
+      legalAuthorityEvidence: [
+        {
+          kind: "legal_authority",
+          projectId: PROJECT_ID,
+          jobId: authoritySnapshot.jobId,
+          attempt: authorityClaim!.attempt,
+          readId: randomUUID(),
+          sourceRef: "LegalAuditSourceRef_123456789012",
+          snapshotId: legalSnapshot.id,
+          anchorId: legalAnchor.id,
+          title: legalSnapshot.titleSnapshot,
+          exactQuote: legalQuote,
+          locator: { article: "第五百零二条" },
+        },
+      ],
+    };
+    await module.registeredTools(authorityContext);
+    await rejects(() =>
+      module.execute({
+        context: authorityContext,
+        call: toolCall("create_draft", {
+          title: "Unverified authority draft",
+          documentType: "legal_research_memo",
+          contentMarkdown: "Unsupported [1].",
+          evidenceSources: [
+            {
+              evidenceId: legalAnchor.id,
+              exactQuote: `${legalQuote}。`,
+            },
+          ],
+        }),
+        signal: new AbortController().signal,
+      }),
+    );
+    const legalDraftResult = parseResult(
+      await module.execute({
+        context: authorityContext,
+        call: toolCall("create_draft", {
+          title: "Authority-backed research memo",
+          documentType: "legal_research_memo",
+          contentMarkdown: "合同效力规则如下 [1]。",
+          evidenceSources: [
+            { evidenceId: legalAnchor.id, exactQuote: legalQuote },
+          ],
+        }),
+        signal: new AbortController().signal,
+      }),
+    );
+    assert.deepEqual(
+      (
+        await studio.getDocument(
+          PROJECT_ID,
+          String(legalDraftResult.draftId),
+        )
+      ).version.citationAnchorIds,
+      [legalAnchor.id],
+      "only a legal authority anchor verified in this job attempt may bind to the Draft",
+    );
 
     console.log(
       JSON.stringify({

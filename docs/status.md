@@ -7,7 +7,7 @@ tests take precedence over historical programme text below.
 
 Status on 2026-07-16: Matter convergence is merged to `main` at
 `5611699e46552a20bf42ce84396a8e65aa139d16`; the active feature branch now uses
-Workspace schema v21. The active
+Workspace schema v22. The active
 implementation branch for the next vertical is `feat/local-legal-work-agent`.
 
 ```text
@@ -75,13 +75,18 @@ Draft from the selected template. Project-local copies can be edited through
 authenticated, Project-scoped APIs; built-ins are immutable, archived Matters
 are readable but reject writes, and cross-Matter access is hidden.
 
-The deterministic legal-work boundary audit now runs the real Assistant tool
-loop with the test-only Provider, captures a Matter-owned legal-authority
-snapshot and anchor, and proves the current document-only Assistant citation
-schema rejects the authority with `JOB_FAILED` and no forged message source or
-Draft. It separately proves the existing downstream anchor -> Draft -> user
-accepted suggestion -> DOCX -> reopen path. This is explicit blocked-boundary
-evidence, not a completed packaged vertical or live-provider acceptance.
+Schema v22 adds Matter/job/attempt-owned legal research replay, bounded candidate
+metadata, durable read-to-snapshot/anchor capture, and transactional Assistant
+authority-message bindings without changing the v5 document-source table.
+Assistant and Draft citations accept only authority excerpts actually read and
+reverified in the current attempt. The API/UI projection exposes only bounded
+title, source type, locator, exact quote, and citation number; internal IDs,
+URLs, credentials, provider payloads, and full text stay private.
+
+The deterministic legal-work vertical uses the test-only Provider to verify
+search -> durable read -> cited Assistant answer -> cited Studio Draft -> user
+accepted suggestion -> DOCX -> reopen. It is test evidence, not live-provider
+acceptance or a claim that the production activation gate is open.
 
 No production legal provider is claimed ready. The active Workspace now owns a
 v18 YuanDian Provider Hub, Keychain-only credential operations, authenticated

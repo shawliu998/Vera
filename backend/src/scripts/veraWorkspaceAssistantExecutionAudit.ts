@@ -52,6 +52,9 @@ const FOREIGN_DOCUMENT_ID = "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd";
 const FOREIGN_VERSION_ID = "dededede-dede-4ded-8ded-dededededede";
 const FOREIGN_CHUNK_ID = "efefefef-efef-4fef-8fef-efefefefefef";
 const CHAT_ID = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+const AUTHORITY_READ_ID = "11111111-2222-4333-8444-555555555555";
+const AUTHORITY_SNAPSHOT_ID = "22222222-3333-4444-8555-666666666666";
+const AUTHORITY_ANCHOR_ID = "33333333-4444-4555-8666-777777777777";
 const TOOL_TEXT =
   "The agreement is governed by Delaware law and the courts of Delaware have exclusive jurisdiction.";
 
@@ -402,6 +405,106 @@ async function auditProviderModelAdapter(database: WorkspaceDatabase) {
       TOOL_TEXT.indexOf("governed by Delaware law") +
       "governed by Delaware law".length,
   });
+
+  const authorityQuote =
+    "Article 1. A deterministic legal-source fixture exists only for automated contract tests.";
+  const authorityAdapter = new WorkspaceAssistantModelAdapter(
+    profiles,
+    fakeRegistry(
+      fakeProvider([
+        {
+          type: "text_delta",
+          text: "The fixture rule applies [1].<CITATIONS>",
+        },
+        {
+          type: "text_delta",
+          text: JSON.stringify([
+            {
+              ref: 1,
+              legal_authority: {
+                snapshot_id: AUTHORITY_SNAPSHOT_ID,
+                anchor_id: AUTHORITY_ANCHOR_ID,
+              },
+              quotes: [{ quote: authorityQuote }],
+            },
+          ]),
+        },
+        { type: "text_delta", text: "</CITATIONS>" },
+        { type: "completed" },
+      ]),
+    ),
+    adapterOptions,
+  );
+  const authorityTurn = await authorityAdapter.runTurn(
+    modelInput({
+      legalAuthorityEvidence: [
+        {
+          kind: "legal_authority",
+          projectId: PROJECT_ID,
+          jobId: "44444444-5555-4666-8777-888888888888",
+          attempt: 1,
+          readId: AUTHORITY_READ_ID,
+          sourceRef: "a".repeat(32),
+          snapshotId: AUTHORITY_SNAPSHOT_ID,
+          anchorId: AUTHORITY_ANCHOR_ID,
+          title: "Deterministic Contract Law Fixture",
+          exactQuote: authorityQuote,
+          locator: { article: "1" },
+        },
+      ],
+    }),
+  );
+  assert.equal(authorityTurn.content, "The fixture rule applies [1].");
+  assert.deepEqual(authorityTurn.sources, [
+    {
+      sourceKind: "legal_authority",
+      readId: AUTHORITY_READ_ID,
+      snapshotId: AUTHORITY_SNAPSHOT_ID,
+      anchorId: AUTHORITY_ANCHOR_ID,
+      quote: authorityQuote,
+      locator: { article: "1" },
+      rank: 0,
+      score: null,
+      citationOrdinal: 0,
+      citationMetadata: {
+        citationNumber: 1,
+        label: "Deterministic Contract Law Fixture",
+      },
+    },
+  ]);
+
+  const uncapturedAuthorityAdapter = new WorkspaceAssistantModelAdapter(
+    profiles,
+    fakeRegistry(
+      fakeProvider([
+        {
+          type: "text_delta",
+          text: `Unsupported [1].<CITATIONS>${JSON.stringify([
+            {
+              ref: 1,
+              legal_authority: {
+                snapshot_id: AUTHORITY_SNAPSHOT_ID,
+                anchor_id: AUTHORITY_ANCHOR_ID,
+              },
+              quotes: [{ quote: authorityQuote }],
+            },
+          ])}</CITATIONS>`,
+        },
+        { type: "completed" },
+      ]),
+    ),
+    adapterOptions,
+  );
+  await assert.rejects(
+    uncapturedAuthorityAdapter.runTurn(modelInput()),
+    (error: unknown) =>
+      Boolean(
+        error &&
+        typeof error === "object" &&
+        (error as { code?: unknown }).code === "assistant_output_invalid",
+      ),
+    "search metadata or an unread authority cannot become a citation",
+  );
 
   const invalidStreams: readonly (readonly ModelEvent[])[] = [
     [

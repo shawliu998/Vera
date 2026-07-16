@@ -5,6 +5,7 @@ import type {
   WorkspaceChatsV1Port,
 } from "../../../routes/workspaceChatsV1";
 import type { ChatsService } from "./chats";
+import type { AssistantLegalAuthoritySourceV22 } from "../legalResearchPersistenceContractsV22";
 
 function requireLocal(context: WorkspaceChatsV1Context) {
   if (context.principalId !== WORKSPACE_LOCAL_PRINCIPAL_ID) {
@@ -21,7 +22,14 @@ function requireLocal(context: WorkspaceChatsV1Context) {
  * generation, queue, or retrieval behavior of its own.
  */
 export class WorkspaceChatsRuntimePort implements WorkspaceChatsV1Port {
-  constructor(private readonly chats: ChatsService) {}
+  constructor(
+    private readonly chats: ChatsService,
+    private readonly legalAuthoritySources?: Readonly<{
+      listAssistantAuthoritySources(
+        messageId: string,
+      ): readonly AssistantLegalAuthoritySourceV22[];
+    }>,
+  ) {}
 
   async listChats(
     context: WorkspaceChatsV1Context,
@@ -58,7 +66,17 @@ export class WorkspaceChatsRuntimePort implements WorkspaceChatsV1Port {
 
   async getChatDetail(context: WorkspaceChatsV1Context, chatId: string) {
     requireLocal(context);
-    return this.chats.detail(chatId);
+    const detail = this.chats.detail(chatId);
+    return {
+      ...detail,
+      messages: detail.messages.map((message) => ({
+        ...message,
+        legalAuthoritySources:
+          this.legalAuthoritySources?.listAssistantAuthoritySources(
+            message.id,
+          ) ?? [],
+      })),
+    };
   }
 
   async updateChat(

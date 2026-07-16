@@ -55,7 +55,7 @@ export interface VeraAssistantCitationQuote {
   quote: string;
 }
 
-export interface VeraAssistantCitation {
+export interface VeraAssistantDocumentCitation {
   type: "citation_data";
   kind: "document";
   ref: number;
@@ -67,6 +67,32 @@ export interface VeraAssistantCitation {
   quote: string;
   quotes: VeraAssistantCitationQuote[];
 }
+
+export type VeraAssistantLegalAuthorityLocator = Readonly<{
+  article?: string;
+  section?: string;
+  paragraph?: string;
+  page?: number;
+}>;
+
+export interface VeraAssistantLegalAuthorityCitation {
+  type: "citation_data";
+  kind: "legal_authority";
+  ref: number;
+  title: string;
+  source_type:
+    | "statute"
+    | "regulation"
+    | "judicial_interpretation"
+    | "case"
+    | "guidance";
+  locator: VeraAssistantLegalAuthorityLocator;
+  quote: string;
+}
+
+export type VeraAssistantCitation =
+  | VeraAssistantDocumentCitation
+  | VeraAssistantLegalAuthorityCitation;
 
 export interface VeraAssistantMessage {
   id: string;
@@ -408,6 +434,92 @@ export function parseVeraAssistantCitation(
   value: unknown,
 ): VeraAssistantCitation {
   const raw = record(value, "Assistant citation");
+  if (raw.kind === "legal_authority") {
+    exactKeys(
+      raw,
+      ["type", "kind", "ref", "title", "source_type", "locator", "quote"],
+      [],
+      "Assistant legal authority citation",
+    );
+    if (raw.type !== "citation_data") {
+      return invalid("Assistant legal authority citation type");
+    }
+    const locator = record(
+      raw.locator,
+      "Assistant legal authority citation locator",
+    );
+    exactKeys(
+      locator,
+      [],
+      ["article", "section", "paragraph", "page"],
+      "Assistant legal authority citation locator",
+    );
+    return {
+      type: "citation_data",
+      kind: "legal_authority",
+      ref: integer(raw.ref, "Assistant legal authority citation ref", 1, 200),
+      title: stringValue(
+        raw.title,
+        "Assistant legal authority citation title",
+        500,
+      ),
+      source_type: enumValue(
+        raw.source_type,
+        [
+          "statute",
+          "regulation",
+          "judicial_interpretation",
+          "case",
+          "guidance",
+        ] as const,
+        "Assistant legal authority citation source type",
+      ),
+      locator: {
+        ...(locator.article === undefined
+          ? {}
+          : {
+              article: stringValue(
+                locator.article,
+                "Assistant legal authority citation article",
+                160,
+              ),
+            }),
+        ...(locator.section === undefined
+          ? {}
+          : {
+              section: stringValue(
+                locator.section,
+                "Assistant legal authority citation section",
+                300,
+              ),
+            }),
+        ...(locator.paragraph === undefined
+          ? {}
+          : {
+              paragraph: stringValue(
+                locator.paragraph,
+                "Assistant legal authority citation paragraph",
+                160,
+              ),
+            }),
+        ...(locator.page === undefined
+          ? {}
+          : {
+              page: integer(
+                locator.page,
+                "Assistant legal authority citation page",
+                1,
+                1_000_000,
+              ),
+            }),
+      },
+      quote: stringValue(
+        raw.quote,
+        "Assistant legal authority citation quote",
+        8_000,
+      ),
+    };
+  }
   exactKeys(
     raw,
     [

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import type { WorkspaceChatsV1Port } from "../../routes/workspaceChatsV1";
 import type { WorkspaceLegalProviderHubV1Port } from "../../routes/workspaceLegalProvidersV1";
@@ -71,6 +72,7 @@ import { WorkspaceSourceRetentionLifecycleRepository } from "./repositories/sour
 import { WorkspaceLegalProvidersRepository } from "./repositories/legalProviders";
 import { AssistantRetrievalRepository } from "./repositories/assistantRetrieval";
 import { ChatsRepository } from "./repositories/chats";
+import { WorkspaceLegalResearchRepository } from "./repositories/legalResearch";
 import {
   type DocumentParseJob,
   WorkspaceDocumentsRepository,
@@ -164,10 +166,12 @@ import {
 import { RotatingModelCallDiagnostics } from "./modelCallDiagnostics";
 import { WorkspaceModelSettingsRuntime } from "./modelSettingsRuntime";
 import {
+  AssistantModelCitationSourcesSchema,
   AssistantModelSourcesSchema,
   AssistantRuntimeService,
   type AssistantModelSource,
   type AssistantModelPort,
+  type AssistantLegalAuthorityCommitPort,
   type AssistantToolPort,
 } from "./services/assistantRuntime";
 import { WorkspaceAssistantModelAdapter } from "./services/assistantModelAdapter";
@@ -279,6 +283,8 @@ export type WorkspaceRuntimeDependencies = {
   allowLocalDevelopmentModelBaseUrl?: boolean;
   assistantModel?: AssistantModelPort;
   assistantTools?: AssistantToolPort;
+  /** Same-database authority owner used by fenced Assistant completion. */
+  assistantLegalAuthorityCommit?: AssistantLegalAuthorityCommitPort;
   /** Trusted composition seam for optional fail-closed Assistant modules. */
   assistantToolModules?: readonly AssistantToolModule[];
   workflowExecutor?: WorkflowStepExecutor;
@@ -403,6 +409,10 @@ type PreparedStudioCitation = {
   endOffset: number;
   existingAnchorId: string | null;
 };
+
+type OrderedStudioCitation =
+  | { kind: "project_document"; citation: PreparedStudioCitation }
+  | { kind: "legal_authority"; anchorId: string };
 
 function studioCitationKey(
   citation: Pick<
@@ -717,6 +727,9 @@ export class WorkspaceRuntime
         this.capabilities,
       );
     const chatsRepository = new ChatsRepository(this.database);
+    const legalResearchRepository = new WorkspaceLegalResearchRepository(
+      this.database,
+    );
     const assistantModel =
       dependencies.assistantModel ??
       (providerRegistry
@@ -781,7 +794,12 @@ export class WorkspaceRuntime
           chatsRepository,
           jobsRepository,
           assistantModel,
-          { tools: assistantTools },
+          {
+            tools: assistantTools,
+            legalAuthorityCommit:
+              dependencies.assistantLegalAuthorityCommit ??
+              legalResearchRepository,
+          },
         )
       : null;
     this.assistantGenerationEnabled = assistantRuntime !== null;
@@ -837,7 +855,10 @@ export class WorkspaceRuntime
         inferencePolicy,
       },
     );
-    this.chats = new WorkspaceChatsRuntimePort(this.chatsService);
+    this.chats = new WorkspaceChatsRuntimePort(
+      this.chatsService,
+      legalResearchRepository,
+    );
     const tabularRepository = new TabularRepository(this.database);
     const tabularSnapshots = new AuthoritativeExtractedTextReader(
       this.database,
@@ -1338,7 +1359,7 @@ export class WorkspaceRuntime
     content: string,
     sourceInput: unknown,
   ): string[] {
-    const parsed = AssistantModelSourcesSchema.safeParse(sourceInput);
+    const parsed = AssistantModelCitationSourcesSchema.safeParse(sourceInput);
     if (!parsed.success) {
       invalidStudioSource(
         "Draft citations are not supported durable source records.",
@@ -1380,8 +1401,45 @@ export class WorkspaceRuntime
       }
     >();
     const prepared: PreparedStudioCitation[] = [];
+    const ordered: OrderedStudioCitation[] = [];
     try {
       for (const source of sources) {
+        if ("anchorId" in source) {
+          const detail = this.projectSourcesService.getSnapshot(
+            projectId,
+            source.snapshotId,
+          );
+          const durableAnchor = detail.anchors.find(
+            (anchor) => anchor.id === source.anchorId,
+          );
+          const retainedQuote = this.sourceRetentionService.readAnchorQuote(
+            projectId,
+            source.anchorId,
+          );
+          this.sourceRetentionService.assertSnapshotAction({
+            projectId,
+            snapshotId: source.snapshotId,
+            action: "studio_bind",
+          });
+          if (
+            detail.snapshot.sourceKind !== "legal_authority" ||
+            durableAnchor?.snapshotId !== source.snapshotId ||
+            retainedQuote.snapshotId !== source.snapshotId ||
+            retainedQuote.exactQuote !== source.quote ||
+            durableAnchor.exactQuote !== source.quote ||
+            !isDeepStrictEqual(durableAnchor.locator, source.locator) ||
+            !isDeepStrictEqual(retainedQuote.locator, source.locator)
+          ) {
+            invalidStudioSource(
+              "A legal-authority draft citation no longer matches its retained immutable evidence.",
+            );
+          }
+          ordered.push({
+            kind: "legal_authority",
+            anchorId: source.anchorId,
+          });
+          continue;
+        }
         if (!source.chunkId) {
           invalidStudioSource(
             "A draft citation has no unambiguous durable source chunk.",
@@ -1440,14 +1498,16 @@ export class WorkspaceRuntime
             anchor.locator.startOffset === startOffset &&
             anchor.locator.endOffset === endOffset,
         );
-        prepared.push({
+        const citation: PreparedStudioCitation = {
           snapshotId: sourceSnapshot.snapshotId,
           chunkId: source.chunkId,
           exactQuote: source.quote,
           startOffset,
           endOffset,
           existingAnchorId: existing?.id ?? null,
-        });
+        };
+        prepared.push(citation);
+        ordered.push({ kind: "project_document", citation });
       }
 
       const missingBySnapshot = new Map<string, Set<string>>();
@@ -1468,7 +1528,14 @@ export class WorkspaceRuntime
 
       const created = new Map<string, string>();
       const orderedAnchorIds: string[] = [];
-      for (const citation of prepared) {
+      for (const item of ordered) {
+        if (item.kind === "legal_authority") {
+          if (!orderedAnchorIds.includes(item.anchorId)) {
+            orderedAnchorIds.push(item.anchorId);
+          }
+          continue;
+        }
+        const citation = item.citation;
         const key = studioCitationKey(citation);
         let anchorId = citation.existingAnchorId ?? created.get(key) ?? null;
         if (!anchorId) {
@@ -1494,6 +1561,9 @@ export class WorkspaceRuntime
             ? error.message
             : "Draft citations could not be re-verified against immutable Project evidence.",
         );
+      }
+      if (error instanceof WorkspaceSourceRetentionServiceError) {
+        invalidStudioSource(error.message);
       }
       throw error;
     }

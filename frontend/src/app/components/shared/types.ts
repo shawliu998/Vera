@@ -343,6 +343,26 @@ export type CaseCitationAnnotation = {
   quotes: CaseCitationQuote[];
 };
 
+export type LegalAuthorityCitationAnnotation = {
+  type: "citation_data";
+  kind: "legal_authority";
+  ref: number;
+  title: string;
+  source_type:
+    | "statute"
+    | "regulation"
+    | "judicial_interpretation"
+    | "case"
+    | "guidance";
+  locator: {
+    article?: string;
+    section?: string;
+    paragraph?: string;
+    page?: number;
+  };
+  quote: string;
+};
+
 /**
  * A citation emitted by the assistant. Document citations have doc/page
  * anchors. Case citations anchor to a CourtListener cluster and include a
@@ -350,7 +370,8 @@ export type CaseCitationAnnotation = {
  */
 export type CitationAnnotation =
   | DocumentCitationAnnotation
-  | CaseCitationAnnotation;
+  | CaseCitationAnnotation
+  | LegalAuthorityCitationAnnotation;
 
 const PAGE_BREAK_SENTINEL = "[[PAGE_BREAK]]";
 
@@ -381,7 +402,7 @@ function expandDocumentQuoteEntry(
 export function getDocumentCitationQuotes(
   a: CitationAnnotation,
 ): DocumentCitationQuote[] {
-  if (a.kind === "case") return [];
+  if (a.kind === "case" || a.kind === "legal_authority") return [];
   if (Array.isArray(a.quotes) && a.quotes.length) {
     return a.quotes.filter((entry) => entry.quote.trim().length > 0);
   }
@@ -396,7 +417,7 @@ export function getDocumentCitationQuotes(
 export function expandCitationToEntries(
   a: CitationAnnotation,
 ): CitationQuote[] {
-  if (a.kind === "case") return [];
+  if (a.kind === "case" || a.kind === "legal_authority") return [];
   return getDocumentCitationQuotes(a).flatMap(expandDocumentQuoteEntry);
 }
 
@@ -423,6 +444,16 @@ export function formatCitationPage(a: CitationAnnotation): string {
   if (a.kind === "case") {
     return a.citation || a.case_name || `Case ${a.cluster_id}`;
   }
+  if (a.kind === "legal_authority") {
+    return [
+      a.locator.article,
+      a.locator.section,
+      a.locator.paragraph,
+      a.locator.page === undefined ? undefined : `Page ${a.locator.page}`,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
   const quotes = getDocumentCitationQuotes(a);
   const pages = Array.from(
     new Set(quotes.map((q) => String(q.page)).filter(Boolean)),
@@ -440,6 +471,7 @@ export function displayCitationQuote(a: CitationAnnotation): string {
       .map((q) => q.quote.replaceAll(PAGE_BREAK_SENTINEL, "..."))
       .join(" / ");
   }
+  if (a.kind === "legal_authority") return a.quote;
   return getDocumentCitationQuotes(a)
     .map((q) => q.quote.replaceAll(PAGE_BREAK_SENTINEL, "..."))
     .join(" / ");

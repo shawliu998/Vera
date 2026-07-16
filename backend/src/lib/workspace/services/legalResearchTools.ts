@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 
 import type { SourceDataUsePolicyV11 } from "../sourceFoundationContractsV11";
@@ -87,6 +87,10 @@ export type LegalResearchToolContext = z.infer<
 > &
   Readonly<{
     modelExecution: "local" | "remote";
+    /** Present only for a fenced durable Assistant generation attempt. */
+    jobId?: string;
+    attempt?: number;
+    leaseOwner?: string;
   }>;
 
 export type OwnedLegalSourceReference = Readonly<{
@@ -95,6 +99,8 @@ export type OwnedLegalSourceReference = Readonly<{
   providerSourceId: string;
   queryId: string;
   durable: boolean;
+  /** Durable read owner allocated when the sourceRef is resolved. */
+  readId?: string;
 }>;
 
 export interface LegalResearchSessionOwnershipPort {
@@ -127,6 +133,7 @@ export interface LegalResearchSourceCapturePort {
     context: LegalResearchToolContext;
     providerId: string;
     sourceRef: string;
+    readId: string;
     document: LegalSourceDocument;
     dataUsePolicy: SourceDataUsePolicyV11;
   }): Promise<{
@@ -263,6 +270,7 @@ export class BoundedInMemoryLegalResearchSessionOwnership implements LegalResear
         providerSourceId: result.providerSourceId,
         queryId,
         durable: !input.transient,
+        ...(!input.transient ? { readId: randomUUID() } : {}),
       });
       session.sources.set(sourceRef, reference);
       return reference;
@@ -334,6 +342,29 @@ function validateContext(context: LegalResearchToolContext) {
     throw new LegalResearchToolError(
       "legal_research_tool_invalid",
       "Legal research model execution boundary is invalid.",
+    );
+  }
+  const ownerFieldCount = [
+    context.jobId,
+    context.attempt,
+    context.leaseOwner,
+  ].filter((value) => value !== undefined).length;
+  if (
+    (ownerFieldCount !== 0 && ownerFieldCount !== 3) ||
+    (context.jobId !== undefined &&
+      !z.string().uuid().safeParse(context.jobId).success) ||
+    (context.attempt !== undefined &&
+      (!Number.isSafeInteger(context.attempt) ||
+        context.attempt < 1 ||
+        context.attempt > 100)) ||
+    (context.leaseOwner !== undefined &&
+      (typeof context.leaseOwner !== "string" ||
+        context.leaseOwner.trim().length < 1 ||
+        context.leaseOwner.length > 200))
+  ) {
+    throw new LegalResearchToolError(
+      "legal_research_tool_invalid",
+      "Legal research Assistant owner boundary is invalid.",
     );
   }
 }
@@ -556,6 +587,13 @@ export class WorkspaceLegalResearchTools {
         "Durable legal research requires a durable session reference.",
       );
     }
+    const readId = z.string().uuid().safeParse(owned.readId);
+    if (!readId.success) {
+      throw new LegalResearchToolError(
+        "legal_source_not_owned",
+        "Durable legal research read owner is invalid.",
+      );
+    }
     if (!this.sourceCapture) {
       throw new LegalResearchToolError(
         "legal_source_capture_invalid",
@@ -575,6 +613,7 @@ export class WorkspaceLegalResearchTools {
       context: input.context,
       providerId: owned.providerId,
       sourceRef: owned.sourceRef,
+      readId: readId.data,
       document,
       dataUsePolicy: status.dataUsePolicy,
     });

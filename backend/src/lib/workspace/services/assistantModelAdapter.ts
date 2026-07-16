@@ -10,6 +10,7 @@ import {
   type StoredModelProfileRecord,
 } from "../repositories/modelProfiles";
 import type {
+  AssistantLegalAuthorityEvidence,
   AssistantModelMessage,
   AssistantModelPort,
   AssistantModelTurn,
@@ -38,28 +39,39 @@ const CitationPage = z.union([
     .regex(/^\d{1,6}\s*-\s*\d{1,6}$/)
     .max(20),
 ]);
+const CitationQuote = z
+  .object({
+    page: CitationPage.optional(),
+    quote: z
+      .string()
+      .min(1)
+      .max(8_000)
+      .refine((value) => value.trim().length > 0),
+  })
+  .strict();
 const CitationProtocol = z
   .array(
-    z
-      .object({
-        ref: z.number().int().positive().max(200),
-        doc_id: z.string().regex(/^doc-(?:0|[1-9]\d{0,2})$/),
-        quotes: z
-          .array(
-            z
-              .object({
-                page: CitationPage.optional(),
-                quote: z
-                  .string()
-                  .min(1)
-                  .max(8_000)
-                  .refine((value) => value.trim().length > 0),
-              })
-              .strict(),
-          )
-          .length(1),
-      })
-      .strict(),
+    z.union([
+      z
+        .object({
+          ref: z.number().int().positive().max(200),
+          doc_id: z.string().regex(/^doc-(?:0|[1-9]\d{0,2})$/),
+          quotes: z.array(CitationQuote).length(1),
+        })
+        .strict(),
+      z
+        .object({
+          ref: z.number().int().positive().max(200),
+          legal_authority: z
+            .object({
+              snapshot_id: z.string().uuid(),
+              anchor_id: z.string().uuid(),
+            })
+            .strict(),
+          quotes: z.array(CitationQuote.omit({ page: true })).length(1),
+        })
+        .strict(),
+    ]),
   )
   .max(200);
 
@@ -131,6 +143,7 @@ function citationSources(input: {
     attached: boolean;
   }[];
   evidence: readonly AssistantRetrievalChunk[];
+  legalAuthorityEvidence: readonly AssistantLegalAuthorityEvidence[];
 }): AssistantModelTurn["sources"] {
   if (input.raw === null) return [];
   if (input.raw.length > MAX_CITATION_JSON_CHARS) {
@@ -148,6 +161,34 @@ function citationSources(input: {
     throw new AssistantProviderError("assistant_output_invalid", false);
   }
   return parsed.map((citation, index) => {
+    if ("legal_authority" in citation) {
+      const quote = citation.quotes[0]!.quote;
+      const matches = input.legalAuthorityEvidence.filter(
+        (evidence) =>
+          evidence.snapshotId === citation.legal_authority.snapshot_id &&
+          evidence.anchorId === citation.legal_authority.anchor_id &&
+          evidence.exactQuote === quote,
+      );
+      if (matches.length !== 1) {
+        throw new AssistantProviderError("assistant_output_invalid", false);
+      }
+      const authority = matches[0]!;
+      return {
+        sourceKind: "legal_authority" as const,
+        readId: authority.readId,
+        snapshotId: authority.snapshotId,
+        anchorId: authority.anchorId,
+        quote,
+        locator: authority.locator,
+        rank: index,
+        score: null,
+        citationOrdinal: index,
+        citationMetadata: {
+          citationNumber: citation.ref,
+          label: authority.title,
+        },
+      };
+    }
     const documentIndex = Number(citation.doc_id.slice("doc-".length));
     const document = input.documents[documentIndex];
     if (!document) {
@@ -589,6 +630,7 @@ export class WorkspaceAssistantModelAdapter implements AssistantModelPort {
       raw: sawOpen ? hidden.trim() : null,
       documents: input.documents,
       evidence: input.evidence,
+      legalAuthorityEvidence: input.legalAuthorityEvidence ?? [],
     });
     const turn = { content: visible, toolCalls: calls, sources };
     assertMikeSafePayload(turn);

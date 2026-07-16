@@ -6,7 +6,7 @@ Status: canonical forward plan
 
 Current merged `main`: `5611699e46552a20bf42ce84396a8e65aa139d16`
 
-Current feature-branch Workspace schema: v21
+Current feature-branch Workspace schema: v22
 
 ## 1. Product truth source
 
@@ -40,7 +40,7 @@ The following capability families are merged and available in the active
 Workspace runtime:
 
 - one Electron-managed loopback Next.js/Express lifecycle;
-- one SQLCipher Workspace database with additive migrations through v21;
+- one SQLCipher Workspace database with additive migrations through v22;
 - encrypted local Blob storage and isolated Keychain credential handling;
 - Project-owned Matter Profile, explicit workspace classification, capability
   projections, continuous Matter shell, and unified inference policy;
@@ -202,17 +202,19 @@ while the live stage remains explicitly blocked.
 
 ## 4. Migration order
 
-Migrations v1-v21 are published and immutable. The Tool Registry needed no
+Migrations v1-v22 are published and immutable. The Tool Registry needed no
 migration. v18 owns Provider configuration, v19 owns the Assistant action
-ledger, v20 owns Draft type/origin metadata, and v21 owns the local template
-catalogue plus bounded DraftPlans. A later additive migration may add only
-owners proven necessary for durable legal research:
+ledger, v20 owns Draft type/origin metadata, v21 owns the local template
+catalogue plus bounded DraftPlans, and v22 owns bounded durable legal-research
+replay/read/message-source bindings:
 
 ```text
 legal_research_sessions
 legal_search_queries
 legal_search_candidates
-assistant_artifact_links
+legal_research_reads
+legal_research_read_anchors
+assistant_legal_authority_message_sources
 ```
 
 Before v18 lands, the design must prove that existing documents, source

@@ -69,13 +69,13 @@ try {
   );
   assert.deepEqual(
     WORKSPACE_MIGRATIONS.map((migration) => migration.version),
-    Array.from({ length: 21 }, (_, index) => index + 1),
+    Array.from({ length: 22 }, (_, index) => index + 1),
   );
 
   const databasePath = path.join(root, "provider-hub.db");
   const database = new WorkspaceDatabase(databasePath);
   try {
-    assert.equal(database.migration?.currentVersion, 21);
+    assert.equal(database.migration?.currentVersion, 22);
     for (const table of [
       "legal_provider_profiles",
       "legal_provider_capabilities",
@@ -419,7 +419,7 @@ try {
   }
   const upgraded = new WorkspaceDatabase(upgradePath);
   try {
-    assert.equal(upgraded.migration?.currentVersion, 21);
+    assert.equal(upgraded.migration?.currentVersion, 22);
     assert.equal(
       upgraded
         .prepare("SELECT payload FROM v18_upgrade_probe WHERE id = 1")

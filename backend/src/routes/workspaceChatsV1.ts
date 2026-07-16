@@ -28,10 +28,17 @@ import type {
   AssistantGenerationEventPage,
   AssistantGenerationStatus,
 } from "../lib/workspace/repositories/chats";
+import type { AssistantLegalAuthoritySourceV22 } from "../lib/workspace/legalResearchPersistenceContractsV22";
 
 const Id = z.string().uuid();
 
-type HydratedDetail = ReturnType<ChatsService["detail"]>;
+type BaseHydratedDetail = ReturnType<ChatsService["detail"]>;
+type HydratedDetail = Readonly<{
+  chat: BaseHydratedDetail["chat"];
+  messages: readonly (BaseHydratedDetail["messages"][number] & {
+    legalAuthoritySources?: readonly AssistantLegalAuthoritySourceV22[];
+  })[];
+}>;
 
 export type WorkspaceChatsV1Context = Readonly<{ principalId: string }>;
 
