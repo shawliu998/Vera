@@ -128,18 +128,51 @@ async function main() {
       `http://127.0.0.1:${frontendPort}/projects`,
       { redirect: "manual" },
     );
-    assert.equal(projects.status, 200);
-    const projectsCsp =
-      projects.headers.get("content-security-policy") ?? "";
-    const projectsNonce =
-      projectsCsp.match(/'nonce-([^']+)'/u)?.[1] ?? null;
-    assert.ok(projectsNonce);
-    assert.notEqual(projectsNonce, firstNonce);
-    assert.notEqual(projectsNonce, secondNonce);
-    const projectScriptNonces = scriptNonces(await projects.text());
+    assert.equal(projects.status, 307);
+    assert.equal(
+      new URL(
+        projects.headers.get("location") ?? "",
+        `http://127.0.0.1:${frontendPort}`,
+      ).pathname,
+      "/matters",
+      "the exact legacy Project list route must redirect to Matters",
+    );
+
+    const matters = await fetch(
+      `http://127.0.0.1:${frontendPort}/matters`,
+      { redirect: "manual" },
+    );
+    assert.equal(matters.status, 200);
+    const mattersCsp = matters.headers.get("content-security-policy") ?? "";
+    const mattersNonce =
+      mattersCsp.match(/'nonce-([^']+)'/u)?.[1] ?? null;
+    assert.ok(mattersNonce);
+    assert.notEqual(mattersNonce, firstNonce);
+    assert.notEqual(mattersNonce, secondNonce);
+    const matterScriptNonces = scriptNonces(await matters.text());
+    assert.ok(matterScriptNonces.length > 0);
+    assert.equal(
+      matterScriptNonces.every((nonce) => nonce === mattersNonce),
+      true,
+    );
+
+    const projectDeepLink = await fetch(
+      `http://127.0.0.1:${frontendPort}/projects/00000000-0000-4000-8000-000000000001`,
+      { redirect: "manual" },
+    );
+    assert.equal(projectDeepLink.status, 200);
+    const projectCsp =
+      projectDeepLink.headers.get("content-security-policy") ?? "";
+    const projectNonce =
+      projectCsp.match(/'nonce-([^']+)'/u)?.[1] ?? null;
+    assert.ok(projectNonce);
+    assert.notEqual(projectNonce, firstNonce);
+    assert.notEqual(projectNonce, secondNonce);
+    assert.notEqual(projectNonce, mattersNonce);
+    const projectScriptNonces = scriptNonces(await projectDeepLink.text());
     assert.ok(projectScriptNonces.length > 0);
     assert.equal(
-      projectScriptNonces.every((nonce) => nonce === projectsNonce),
+      projectScriptNonces.every((nonce) => nonce === projectNonce),
       true,
     );
 
@@ -147,13 +180,14 @@ async function main() {
       `${JSON.stringify(
         {
           ok: true,
-          suite: "vera-next-desktop-csp-runtime-v1",
+          suite: "vera-next-desktop-csp-runtime-v2",
           checks: [
             "production standalone frontend uses per-request nonces",
             "all Next framework and hydration scripts carry the nonce",
             "connect-src is pinned to the exact loopback backend",
             "unsafe-eval and X-Powered-By are absent",
-            "dynamic Assistant, Projects, and Settings routes remain renderable",
+            "the exact Projects list redirects to Matters while dynamic Project deep links remain renderable",
+            "dynamic Assistant, Matters, Project, and Settings routes remain nonce-protected",
           ],
         },
         null,
