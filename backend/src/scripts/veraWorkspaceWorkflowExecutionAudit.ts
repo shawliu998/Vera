@@ -13,6 +13,10 @@ import {
   WorkspaceDatabase,
 } from "../lib/workspace/database";
 import { WorkspaceApiError } from "../lib/workspace/errors";
+import {
+  ModelProfilePrivacyRepository,
+  WorkspaceInferencePolicy,
+} from "../lib/workspace/inferencePolicy";
 import { WORKSPACE_LOCAL_PRINCIPAL_ID } from "../lib/workspace/principal";
 import { ModelConnectionTestsRepository } from "../lib/workspace/repositories/modelConnectionTests";
 import { ModelProfilesRepository } from "../lib/workspace/repositories/modelProfiles";
@@ -288,6 +292,17 @@ async function run() {
   try {
     seedProject(database);
     seedProfile(database);
+    new ModelProfilePrivacyRepository(database).declare(
+      MODEL,
+      {
+        executionLocation: "local",
+        retention: "zero",
+        trainingUse: "prohibited",
+        sensitiveDataAllowed: true,
+      },
+      NOW,
+    );
+    const inferencePolicy = new WorkspaceInferencePolicy(database);
     const document = seedDocument(database);
     const abortRegistry = new WorkspaceJobAbortRegistry();
     const jobsRepository = new WorkspaceJobsRepository(database);
@@ -299,6 +314,8 @@ async function run() {
       new WorkflowsRepository(database),
       new WorkspaceJobEnqueuerAdapter(jobs),
       clock,
+      undefined,
+      { inferencePolicy },
     );
     const model = new AuditedModel();
     const executor = new WorkspaceWorkflowStepExecutor(
@@ -311,6 +328,74 @@ async function run() {
       executor,
       clock,
     );
+
+    // A workflow with no Prompt step is genuinely non-inference-only: it does
+    // not require a model/default/privacy declaration or a policy decision.
+    const localOnly = workflows.create({
+      type: "assistant",
+      projectId: PROJECT,
+      title: "Local document context only",
+      skillMarkdown: "Retrieve the selected local document.",
+      steps: [
+        {
+          kind: "document_context",
+          title: "Retrieve termination language",
+          maxDocuments: 4,
+          maxChunksPerDocument: 4,
+        },
+      ],
+    });
+    database
+      .prepare(
+        "UPDATE workspace_settings SET default_model_profile_id = NULL WHERE id = 'workspace'",
+      )
+      .run();
+    database
+      .prepare("UPDATE projects SET default_model_profile_id = NULL WHERE id = ?")
+      .run(PROJECT);
+    database
+      .prepare("UPDATE model_profiles SET enabled = 0 WHERE id = ?")
+      .run(MODEL);
+    const decisionsBeforeLocalOnly = Number(
+      database
+        .prepare("SELECT count(*) AS count FROM inference_policy_decisions")
+        .get()?.count ?? 0,
+    );
+    const localOnlyRun = workflows.prepareRun(localOnly.id, {
+      idempotencyKey: "local-document-context-only",
+      projectId: PROJECT,
+      inputBinding: { document_ids: [document.documentId] },
+    });
+    assert.equal(localOnlyRun.detail.run.modelProfileId, null);
+    assert.equal(localOnlyRun.snapshot.modelProfileId, null);
+    assert.equal(
+      (localOnlyRun.snapshot.config as Record<string, unknown>).modelProfile,
+      null,
+    );
+    await runtime.handle(
+      createClaimedContext(jobsRepository, localOnlyRun.detail.run.jobId!),
+    );
+    assert.equal(workflows.getRun(localOnlyRun.detail.run.id).run.status, "complete");
+    assert.equal(model.calls.length, 0);
+    assert.equal(
+      Number(
+        database
+          .prepare("SELECT count(*) AS count FROM inference_policy_decisions")
+          .get()?.count ?? 0,
+      ),
+      decisionsBeforeLocalOnly,
+    );
+    database
+      .prepare(
+        "UPDATE workspace_settings SET default_model_profile_id = ? WHERE id = 'workspace'",
+      )
+      .run(MODEL);
+    database
+      .prepare("UPDATE projects SET default_model_profile_id = ? WHERE id = ?")
+      .run(MODEL, PROJECT);
+    database
+      .prepare("UPDATE model_profiles SET enabled = 1 WHERE id = ?")
+      .run(MODEL);
 
     const skillOnly = workflows.create(
       parseMikeWorkflowCreate({
@@ -576,6 +661,8 @@ async function run() {
       new WorkflowsRepository(database),
       new WorkspaceJobEnqueuerAdapter(jobs),
       clock,
+      undefined,
+      { inferencePolicy },
     );
     assert.deepEqual(
       restartedWorkflows

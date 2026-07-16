@@ -22,6 +22,10 @@ import {
 } from "../repositories/chats";
 import { ModelProfilesRepository } from "../repositories/modelProfiles";
 import { ProjectsRepository } from "../repositories/projects";
+import {
+  assertInferenceAllowed,
+  type InferencePolicyEnforcementPort,
+} from "../inferencePolicy";
 
 export interface AssistantCapabilityHydratorPort {
   hydrate(input: {
@@ -40,6 +44,7 @@ export type ChatsServiceOptions = Readonly<{
   capabilities?: AssistantCapabilityHydratorPort;
   lifecycle?: ChatResourceLifecyclePort;
   createId?: () => string;
+  inferencePolicy?: InferencePolicyEnforcementPort;
 }>;
 
 export class ChatsService {
@@ -308,6 +313,18 @@ export class ChatsService {
       chatId: input.chatId,
       modelProfileId: input.modelProfileId,
       modelSelector: input.modelSelector,
+    });
+    if (!this.options.inferencePolicy) {
+      throw new WorkspaceApiError(
+        503,
+        "PRECONDITION_FAILED",
+        "Inference policy runtime is unavailable.",
+      );
+    }
+    assertInferenceAllowed(this.options.inferencePolicy, {
+      projectId: chat.projectId,
+      modelProfileId,
+      operation: "assistant",
     });
     const now = this.now();
     const created = this.chats.createGeneration({

@@ -24,7 +24,6 @@ export interface ModelProviderAdapterRegistryPort {
     canonicalOrigin: string | null;
   }): {
     runtimeWired: true;
-    handleRequest: (input: unknown) => unknown | Promise<unknown>;
     capabilities: RuntimeModelCapabilities;
   } | null;
 }

@@ -12,10 +12,13 @@ import {
   MatterListWireQuerySchema,
   parseCreateMatterProfileWire,
   parseCreateMatterWire,
+  parseReplaceMatterPolicyWire,
+  parseUpdateMatterWire,
   parseUpdateMatterProfileWire,
   safeMatterValidationDetails,
   toMatterViewPageWire,
   toMatterViewWire,
+  toMatterPolicyWire,
 } from "./contracts";
 import type { MatterProfileServiceContext } from "./service";
 
@@ -34,6 +37,20 @@ export interface MatterProfileV1Port {
   getMatter(
     context: MatterProfileServiceContext,
     projectId: string,
+  ): Awaitable<unknown>;
+  updateMatter(
+    context: MatterProfileServiceContext,
+    projectId: string,
+    input: unknown,
+  ): Awaitable<unknown>;
+  getMatterPolicy(
+    context: MatterProfileServiceContext,
+    projectId: string,
+  ): Awaitable<unknown>;
+  replaceMatterPolicy(
+    context: MatterProfileServiceContext,
+    projectId: string,
+    input: unknown,
   ): Awaitable<unknown>;
   getProjectMatterProfile(
     context: MatterProfileServiceContext,
@@ -115,6 +132,20 @@ function safePage(payload: unknown) {
   }
 }
 
+function safePolicy(payload: unknown) {
+  try {
+    return toMatterPolicyWire(
+      payload as Parameters<typeof toMatterPolicyWire>[0],
+    );
+  } catch {
+    throw new WorkspaceApiError(
+      500,
+      "INTERNAL_ERROR",
+      "Matter Policy response could not be serialized safely.",
+    );
+  }
+}
+
 function errorPayload(error: unknown) {
   if (error instanceof ZodError) {
     return {
@@ -173,6 +204,7 @@ export function createMatterProfileV1Router(
         safePage(
           await port.listMatters(contextFor(request, options), {
             status: query.status,
+            profileState: query.profile_state,
             cursor: query.cursor,
             limit: query.limit,
           }),
@@ -198,6 +230,35 @@ export function createMatterProfileV1Router(
   );
 
   router.get(
+    "/matters/:projectId/policy",
+    asyncRoute(async (request, response) => {
+      response.json(
+        safePolicy(
+          await port.getMatterPolicy(
+            contextFor(request, options),
+            projectId(request),
+          ),
+        ),
+      );
+    }),
+  );
+
+  router.patch(
+    "/matters/:projectId/policy",
+    asyncRoute(async (request, response) => {
+      response.json(
+        safePolicy(
+          await port.replaceMatterPolicy(
+            contextFor(request, options),
+            projectId(request),
+            parseReplaceMatterPolicyWire(request.body),
+          ),
+        ),
+      );
+    }),
+  );
+
+  router.get(
     "/matters/:projectId",
     asyncRoute(async (request, response) => {
       response.json(
@@ -205,6 +266,21 @@ export function createMatterProfileV1Router(
           await port.getMatter(
             contextFor(request, options),
             projectId(request),
+          ),
+        ),
+      );
+    }),
+  );
+
+  router.patch(
+    "/matters/:projectId",
+    asyncRoute(async (request, response) => {
+      response.json(
+        safeView(
+          await port.updateMatter(
+            contextFor(request, options),
+            projectId(request),
+            parseUpdateMatterWire(request.body),
           ),
         ),
       );

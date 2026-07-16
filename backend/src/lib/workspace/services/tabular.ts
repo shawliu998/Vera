@@ -37,6 +37,10 @@ import {
 } from "./tabularCompatibility";
 import type { JobEnqueuer } from "./jobEnqueuer";
 import type { AuthoritativeExtractedTextReader } from "./authoritativeExtractedText";
+import {
+  assertInferenceAllowed,
+  type InferencePolicyEnforcementPort,
+} from "../inferencePolicy";
 
 export const MAX_TABULAR_MATRIX_CELLS = 10_000;
 export const MAX_TABULAR_CELL_ATTEMPTS = 3;
@@ -323,6 +327,7 @@ export class TabularService {
     private readonly generation?: {
       snapshots: AuthoritativeExtractedTextReader;
       profiles: ModelProfilesRepository;
+      inferencePolicy: InferencePolicyEnforcementPort;
     },
   ) {}
 
@@ -541,6 +546,12 @@ export class TabularService {
       projectId,
       documentIds: detail.review.documentIds,
       maxTextBytes: MAX_TABULAR_DOCUMENT_TEXT_BYTES,
+    });
+    assertInferenceAllowed(generation.inferencePolicy, {
+      projectId,
+      modelProfileId,
+      operation: "tabular_generation",
+      sourceSnapshotIds: snapshots.map((snapshot) => snapshot.versionId),
     });
     return {
       generation,

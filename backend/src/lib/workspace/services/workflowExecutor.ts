@@ -705,6 +705,8 @@ export class WorkspaceWorkflowStepExecutor implements WorkflowStepExecutor {
     let streamed = "";
     const turn = await this.model.runTurn({
       modelProfileId: input.snapshot.modelProfileId ?? "",
+      projectId: input.snapshot.projectId,
+      operation: "workflow_prompt",
       systemPrompt: prepared.systemPrompt,
       messages: [{ role: "user", content: prepared.userPrompt }],
       tools: [],

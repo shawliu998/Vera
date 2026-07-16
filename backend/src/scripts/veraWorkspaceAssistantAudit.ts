@@ -22,6 +22,10 @@ import {
   type WorkspaceDatabaseAdapter,
 } from "../lib/workspace/database";
 import { WorkspaceApiError } from "../lib/workspace/errors";
+import {
+  ModelProfilePrivacyRepository,
+  WorkspaceInferencePolicy,
+} from "../lib/workspace/inferencePolicy";
 import { searchSafeFtsQuery } from "../lib/searchSafeFtsQuery";
 import { ASSISTANT_RUNTIME_MIGRATION } from "../lib/workspace/migrations/v5AssistantRuntime";
 import { TABULAR_MIKE_SEMANTICS_V7_MIGRATION } from "../lib/workspace/migrations/v7TabularMikeSemantics";
@@ -290,6 +294,28 @@ function markProfileReady(database: WorkspaceDatabase, id: string) {
   });
   assert.equal(result.stored, true);
   profiles.update(id, { enabled: true, now: NOW });
+  const privacyInstalled = Boolean(
+    database
+      .prepare(
+        "SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name='model_profile_privacy'",
+      )
+      .get(),
+  );
+  if (privacyInstalled) {
+    const privacy = new ModelProfilePrivacyRepository(database);
+    if (!privacy.get(id)) {
+      privacy.declare(
+        id,
+        {
+          executionLocation: "local",
+          retention: "zero",
+          trainingUse: "prohibited",
+          sensitiveDataAllowed: true,
+        },
+        NOW,
+      );
+    }
+  }
 }
 
 function insertDocument(
@@ -1019,7 +1045,7 @@ async function run() {
     );
 
     const currentMigration = database.runMigrations(WORKSPACE_MIGRATIONS);
-    assert.equal(currentMigration.currentVersion, 16);
+    assert.equal(currentMigration.currentVersion, 17);
     markProfileReady(database, profileId);
 
     const projects = new ProjectsRepository(database);
@@ -1029,6 +1055,7 @@ async function run() {
     const jobService = new WorkspaceJobsService(jobs, {
       now: () => new Date(NOW),
     });
+    const inferencePolicy = new WorkspaceInferencePolicy(database);
     let capabilityHydrations = 0;
     const service = new ChatsService(
       chats,
@@ -1043,6 +1070,7 @@ async function run() {
             return { can_read: true, can_download: true };
           },
         },
+        inferencePolicy,
       },
     );
     const retrieval = new AssistantRetrievalRepository(database);
@@ -2533,6 +2561,7 @@ async function run() {
           },
           requestAbortRunning() {},
         },
+        inferencePolicy,
       },
     );
     deletingService.delete(deletionChat.id);
@@ -2555,6 +2584,7 @@ async function run() {
             throw new Error("audit enqueue failure");
           },
         },
+        inferencePolicy,
       },
     );
     assert.throws(
@@ -2581,7 +2611,7 @@ async function run() {
       projects,
       profiles,
       () => new Date(NOW),
-      { jobs: jobService },
+      { jobs: jobService, inferencePolicy },
     ).requestGeneration({ chatId: rawChat.id, prompt: "Snapshot profile." });
     database.prepare("DELETE FROM model_profiles WHERE id=?").run(rawProfile);
     assert.equal(
@@ -2842,7 +2872,7 @@ async function run() {
     migrations: WORKSPACE_MIGRATIONS,
   });
   try {
-    assert.equal(reopened.migration?.currentVersion, 16);
+    assert.equal(reopened.migration?.currentVersion, 17);
     assert.equal(
       reopened
         .prepare("SELECT value FROM assistant_legacy_sentinel WHERE id=1")

@@ -343,10 +343,7 @@ export class ModelProfilesService {
 
   private adapterReady(record: StoredModelProfileRecord) {
     const runtime = this.runtimeDescriptor(record);
-    return Boolean(
-      runtime?.runtimeWired === true &&
-      typeof runtime.handleRequest === "function",
-    );
+    return Boolean(runtime?.runtimeWired === true);
   }
 
   private credentialResolverReady() {

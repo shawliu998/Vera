@@ -27,9 +27,11 @@ import {
 import { WorkspaceJobEnqueuerAdapter } from "../lib/workspace/services/jobEnqueuer";
 import { CanonicalProjectInferenceScopeResolver } from "../lib/workspace/services/projectInferenceScope";
 import { WorkflowsService } from "../lib/workspace/services/workflows";
-import { MatterInferencePolicyGate } from "../matter/inferencePolicy";
+import { WorkspaceInferencePolicy } from "../lib/workspace/inferencePolicy";
 import {
+  MatterPolicyWireSchema,
   MatterProfileWireSchema,
+  MatterViewSchema,
   MatterViewPageWireSchema,
   MatterViewWireSchema,
   toMatterViewWire,
@@ -267,6 +269,30 @@ function seedResolverModelProfile(database: WorkspaceDatabase) {
   return id;
 }
 
+function seedCapabilityModel(
+  database: WorkspaceDatabase,
+  executionLocation: "local" | "confidential_remote" = "local",
+) {
+  const id = seedResolverModelProfile(database);
+  database
+    .prepare(
+      `INSERT INTO model_profile_connection_tests (
+         profile_id, connection_revision, status, error_code, retryable,
+         latency_ms, tested_at
+       ) VALUES (?, 0, 'passed', NULL, 0, 1, ?)`,
+    )
+    .run(id, NOW);
+  database
+    .prepare(
+      `INSERT INTO model_profile_privacy (
+         model_profile_id, execution_location, retention, training_use,
+         sensitive_data_allowed, created_at, updated_at
+       ) VALUES (?, ?, 'zero', 'prohibited', 1, ?, ?)`,
+    )
+    .run(id, executionLocation, NOW, NOW);
+  return id;
+}
+
 function insertDurableRunningJob(
   database: WorkspaceDatabase,
   input: {
@@ -416,7 +442,7 @@ async function main() {
     v15.close();
 
     database = new WorkspaceDatabase(databasePath);
-    assert.equal(database.migration?.currentVersion, 16);
+    assert.equal(database.migration?.currentVersion, 17);
     const projects = new ProjectsRepository(database);
     const repository = new MatterProfileRepository(database);
     const overview = new MatterOverviewRepository(database);
@@ -444,8 +470,8 @@ async function main() {
     ]);
     assert.deepEqual(facade.health(), {
       status: "ready",
-      schemaVersion: 16,
-      inferencePolicy: "gate_closed",
+      schemaVersion: 17,
+      inferencePolicy: "minimal_unified",
     });
     assert.equal("policyMode" in facade.health(), false);
 
@@ -454,7 +480,9 @@ async function main() {
     assert.equal(legacy.profileState, "classification_required");
     assert.deepEqual(legacy.capabilities, {
       matterProfile: "classify",
-      inference: "policy_gate_closed",
+      assistant: "policy_gate_closed",
+      workflows: "non_inference_only",
+      tabular: "policy_gate_closed",
       review: "unavailable",
       drafts: "document_scoped",
     });
@@ -500,7 +528,9 @@ async function main() {
     assert.equal(emptyGeneric.project.practice, "");
     assert.deepEqual(emptyGeneric.capabilities, {
       matterProfile: "create",
-      inference: "workspace_compatibility",
+      assistant: "unavailable",
+      workflows: "non_inference_only",
+      tabular: "unavailable",
       review: "unavailable",
       drafts: "document_scoped",
     });
@@ -1457,17 +1487,11 @@ async function main() {
       );
 
       enqueue();
-      const inferencePolicy = new MatterInferencePolicyGate(database);
-      let providerCalls = 0;
-      expectApiError(
-        () => {
-          inferencePolicy.assertProjectModelUse(serializedProjectId);
-          providerCalls += 1;
-        },
-        412,
-        "PRECONDITION_FAILED",
+      const inferencePolicy = new WorkspaceInferencePolicy(database);
+      assert.equal(
+        inferencePolicy.resolveScope(serializedProjectId).scope,
+        "matter",
       );
-      assert.equal(providerCalls, 0);
     } finally {
       enqueueDatabase.close();
     }
@@ -1535,6 +1559,196 @@ async function main() {
     assert.equal(createdStorage?.matter_type, "general");
     assert.equal(createdStorage?.workspace_type, "dispute");
 
+    // Matter Policy is an explicit subresource. Missing and empty location
+    // states remain fail-closed, while approval is preserved truthfully.
+    expectApiError(
+      () => service.getMatterPolicy(localContext, created.project.id),
+      404,
+      "NOT_FOUND",
+    );
+    const capabilityModelId = seedCapabilityModel(database);
+    database
+      .prepare(
+        `UPDATE workspace_settings
+            SET default_model_profile_id = ?, updated_at = ?
+          WHERE id = 'workspace'`,
+      )
+      .run(capabilityModelId, NOW);
+    assert.equal(
+      service.getMatter(localContext, created.project.id).project
+        .defaultModelProfileId,
+      null,
+      "the public Project projection must not pretend the Workspace default is a Project override",
+    );
+    const decisionCountBeforeReads = Number(
+      database
+        .prepare("SELECT count(*) AS count FROM inference_policy_decisions")
+        .get()?.count,
+    );
+    const genericCapabilities = MatterViewSchema.parse(
+      facade.api.getMatter(localContext, emptyGenericId),
+    ).capabilities;
+    assert.equal(genericCapabilities.matterProfile, "create");
+    assert.equal(genericCapabilities.assistant, "available");
+    assert.equal(genericCapabilities.workflows, "available");
+    assert.equal(genericCapabilities.tabular, "available");
+    assert.equal(genericCapabilities.review, "unavailable");
+    const limitedModelId = seedCapabilityModel(database);
+    database
+      .prepare(
+        `UPDATE model_profiles
+            SET capabilities_json = ?
+          WHERE id = ?`,
+      )
+      .run(
+        JSON.stringify({
+          streaming: true,
+          toolCalling: false,
+          structuredOutput: false,
+          vision: false,
+        }),
+        limitedModelId,
+      );
+    const limitedProjectId = createProject(projects, {
+      name: "Project override with limited model capabilities",
+    });
+    database
+      .prepare("UPDATE projects SET default_model_profile_id = ? WHERE id = ?")
+      .run(limitedModelId, limitedProjectId);
+    const limitedCapabilities = MatterViewSchema.parse(
+      facade.api.getMatter(localContext, limitedProjectId),
+    ).capabilities;
+    assert.equal(limitedCapabilities.assistant, "unavailable");
+    assert.equal(limitedCapabilities.workflows, "non_inference_only");
+    assert.equal(limitedCapabilities.tabular, "unavailable");
+    const missingPolicyCapabilities = MatterViewSchema.parse(
+      facade.api.getMatter(localContext, created.project.id),
+    ).capabilities;
+    assert.equal(missingPolicyCapabilities.assistant, "policy_gate_closed");
+    assert.equal(missingPolicyCapabilities.workflows, "non_inference_only");
+    assert.equal(missingPolicyCapabilities.tabular, "policy_gate_closed");
+    assert.equal(missingPolicyCapabilities.review, "unavailable");
+
+    const emptyPolicy = service.replaceMatterPolicy(
+      localContext,
+      created.project.id,
+      {
+        externalEgressMode: "disabled",
+        executionLocations: [],
+        allowExternalLegalSources: false,
+        allowWordBridge: false,
+      },
+    );
+    assert.deepEqual(emptyPolicy.executionLocations, []);
+    assert.deepEqual(
+      service.getMatterPolicy(localContext, created.project.id),
+      emptyPolicy,
+    );
+    assert.equal(
+      MatterViewSchema.parse(
+        facade.api.getMatter(localContext, created.project.id),
+      ).capabilities.assistant,
+      "policy_gate_closed",
+    );
+
+    const localPolicy = service.replaceMatterPolicy(
+      localContext,
+      created.project.id,
+      {
+        externalEgressMode: "disabled",
+        executionLocations: ["local"],
+        allowExternalLegalSources: true,
+        allowWordBridge: false,
+      },
+    );
+    assert.equal(localPolicy.externalEgressMode, "disabled");
+    const localCapabilities = MatterViewSchema.parse(
+      facade.api.getMatter(localContext, created.project.id),
+    ).capabilities;
+    assert.equal(localCapabilities.assistant, "available");
+    assert.equal(localCapabilities.workflows, "available");
+    assert.equal(localCapabilities.tabular, "available");
+    assert.equal(localCapabilities.review, "unavailable");
+    const runtimeClosedFacade = createMatterProfileModule(database, projects, {
+      activeInferenceScopes: () => [],
+      modelRuntimeCapabilities: {
+        runtimeWired: () => false,
+        capabilitiesFor: () => ({
+          streaming: true,
+          toolCalling: true,
+          structuredOutput: true,
+        }),
+      },
+    });
+    const runtimeClosedCapabilities = MatterViewSchema.parse(
+      runtimeClosedFacade.api.getMatter(localContext, created.project.id),
+    ).capabilities;
+    assert.equal(runtimeClosedCapabilities.assistant, "unavailable");
+    assert.equal(runtimeClosedCapabilities.workflows, "non_inference_only");
+    assert.equal(runtimeClosedCapabilities.tabular, "unavailable");
+
+    database.exec(`
+      CREATE TRIGGER audit_reject_policy_location
+      BEFORE INSERT ON matter_policy_execution_locations
+      WHEN new.execution_location = 'firm_private'
+      BEGIN
+        SELECT RAISE(ABORT, '${SECRET} ${PRIVATE_PATH}');
+      END;
+    `);
+    const policyAtomicFailure = expectApiError(
+      () =>
+        service.replaceMatterPolicy(localContext, created.project.id, {
+          externalEgressMode: "allowed_by_policy",
+          executionLocations: ["firm_private"],
+          allowExternalLegalSources: false,
+          allowWordBridge: true,
+        }),
+      500,
+      "INTERNAL_ERROR",
+    );
+    assertRedacted(policyAtomicFailure.toResponse());
+    assert.deepEqual(
+      service.getMatterPolicy(localContext, created.project.id),
+      localPolicy,
+    );
+    database.exec("DROP TRIGGER audit_reject_policy_location");
+
+    database
+      .prepare(
+        `UPDATE model_profile_privacy
+            SET execution_location = 'confidential_remote', updated_at = ?
+          WHERE model_profile_id = ?`,
+      )
+      .run("2026-07-16T10:00:01.000Z", capabilityModelId);
+    const approvalPolicy = service.replaceMatterPolicy(
+      localContext,
+      created.project.id,
+      {
+        externalEgressMode: "approval",
+        executionLocations: ["confidential_remote"],
+        allowExternalLegalSources: false,
+        allowWordBridge: true,
+      },
+    );
+    assert.equal(approvalPolicy.externalEgressMode, "approval");
+    const approvalCapabilities = MatterViewSchema.parse(
+      facade.api.getMatter(localContext, created.project.id),
+    ).capabilities;
+    assert.equal(approvalCapabilities.assistant, "require_approval");
+    assert.equal(approvalCapabilities.workflows, "require_approval");
+    assert.equal(approvalCapabilities.tabular, "require_approval");
+    assert.equal(approvalCapabilities.review, "unavailable");
+    facade.api.listMatters(localContext, { profileState: "profiled", limit: 20 });
+    assert.equal(
+      Number(
+        database
+          .prepare("SELECT count(*) AS count FROM inference_policy_decisions")
+          .get()?.count,
+      ),
+      decisionCountBeforeReads,
+      "capability projection must not write enforcement decisions",
+    );
+
     seedOverviewCounts(database, created.project.id);
     const counted = service.getMatter(localContext, created.project.id);
     assert.deepEqual(
@@ -1592,6 +1806,91 @@ async function main() {
       secondPage.items[0].project.id,
     );
 
+    // SQL applies profile_state before cursor/limit. One hundred newer Generic
+    // Projects cannot hide either older Matter, and each filtered stream owns
+    // a cursor that is rejected by a different stream.
+    const paginationGenericIds = Array.from({ length: 100 }, (_, index) =>
+      createProject(projects, {
+        name: `Pagination Generic ${index}`,
+        now: new Date(Date.UTC(2035, 0, 1) + index).toISOString(),
+      }),
+    );
+    const paginationMatterIds = [
+      service.createMatter(localContext, {
+        name: "Pagination Matter One",
+        workspaceType: "general_legal",
+      }).project.id,
+      service.createMatter(localContext, {
+        name: "Pagination Matter Two",
+        workspaceType: "research",
+      }).project.id,
+    ];
+    const collectFiltered = (profileState: "absent" | "profiled") => {
+      const ids: string[] = [];
+      let cursor: string | null = null;
+      do {
+        const page = service.listMatters(localContext, {
+          profileState,
+          cursor,
+          limit: 23,
+        });
+        ids.push(...page.items.map((item) => item.project.id));
+        assert.ok(
+          page.items.every((item) =>
+            profileState === "absent"
+              ? item.profile === null
+              : item.profile !== null,
+          ),
+        );
+        cursor = page.nextCursor;
+      } while (cursor !== null);
+      return ids;
+    };
+    const absentIds = collectFiltered("absent");
+    const profiledIds = collectFiltered("profiled");
+    for (const id of paginationGenericIds) assert.ok(absentIds.includes(id));
+    for (const id of paginationMatterIds) assert.ok(profiledIds.includes(id));
+    const absentCursor = service.listMatters(localContext, {
+      profileState: "absent",
+      limit: 1,
+    }).nextCursor;
+    assert.ok(absentCursor);
+    expectApiError(
+      () =>
+        service.listMatters(localContext, {
+          profileState: "profiled",
+          cursor: absentCursor,
+          limit: 1,
+        }),
+      400,
+      "VALIDATION_ERROR",
+    );
+    expectApiError(
+      () =>
+        service.listMatters(localContext, {
+          status: "archived",
+          profileState: "absent",
+          cursor: absentCursor,
+          limit: 1,
+        }),
+      400,
+      "VALIDATION_ERROR",
+    );
+    const readyFiltered = service.listMatters(localContext, {
+      profileState: "ready",
+      limit: 1,
+    });
+    assert.equal(readyFiltered.items.length, 1);
+    assert.equal(readyFiltered.items[0].profileState, "ready");
+    assert.ok(
+      service
+        .listMatters(localContext, {
+          profileState: "classification_required",
+          limit: 100,
+        })
+        .items.some((item) => item.project.id === legacyProjectId),
+    );
+
     projects.update(created.project.id, {
       now: "2027-02-01T00:00:00.000+08:00",
     });
@@ -1614,6 +1913,65 @@ async function main() {
       "general",
     );
 
+    const combined = service.updateMatter(
+      localContext,
+      created.project.id,
+      {
+        project: {
+          name: "Alpha Matter Renamed",
+          description: "General and Legal Profile saved atomically.",
+          cmNumber: "MAT-001-A",
+          practice: "Transactions",
+        },
+        profile: {
+          workspaceType: "transaction",
+          clientName: "Alpha Client Updated",
+          objective: "Complete an atomic combined update.",
+        },
+      },
+    );
+    assert.equal(combined.project.name, "Alpha Matter Renamed");
+    assert.equal(combined.project.cmNumber, "MAT-001-A");
+    assert.equal(combined.profile?.clientName, "Alpha Client Updated");
+    assert.equal(combined.profile?.updatedAt, combined.project.updatedAt);
+    assert.equal("matterType" in combined, false);
+
+    database.exec(`
+      CREATE TRIGGER audit_reject_combined_profile_update
+      BEFORE UPDATE ON matter_profiles
+      WHEN new.objective = 'Reject combined update'
+      BEGIN
+        SELECT RAISE(ABORT, '${SECRET} ${PRIVATE_PATH}');
+      END;
+    `);
+    const beforeCombinedRollback = service.getMatter(
+      localContext,
+      created.project.id,
+    );
+    const combinedFailure = expectApiError(
+      () =>
+        service.updateMatter(localContext, created.project.id, {
+          project: { name: "Project write must roll back" },
+          profile: { objective: "Reject combined update" },
+        }),
+      500,
+      "INTERNAL_ERROR",
+    );
+    assertRedacted(combinedFailure.toResponse());
+    const afterCombinedRollback = service.getMatter(
+      localContext,
+      created.project.id,
+    );
+    assert.equal(
+      afterCombinedRollback.project.name,
+      beforeCombinedRollback.project.name,
+    );
+    assert.equal(
+      afterCombinedRollback.profile?.objective,
+      beforeCombinedRollback.profile?.objective,
+    );
+    database.exec("DROP TRIGGER audit_reject_combined_profile_update");
+
     // Archived Projects remain readable but cannot create or mutate a profile.
     const archivedGenericId = createProject(projects, {
       name: "Archived generic Project",
@@ -1623,9 +1981,11 @@ async function main() {
     assert.equal(archivedGeneric.profileState, "absent");
     assert.deepEqual(archivedGeneric.capabilities, {
       matterProfile: "unavailable",
-      inference: "unavailable",
+      assistant: "unavailable",
+      workflows: "unavailable",
+      tabular: "unavailable",
       review: "unavailable",
-      drafts: "document_scoped",
+      drafts: "unavailable",
     });
     expectApiError(
       () =>
@@ -1639,16 +1999,27 @@ async function main() {
     const archivedLegacy = service.getMatter(localContext, legacyProjectId);
     assert.equal(archivedLegacy.profileState, "classification_required");
     assert.equal(archivedLegacy.capabilities.matterProfile, "unavailable");
-    assert.equal(archivedLegacy.capabilities.inference, "unavailable");
+    assert.equal(archivedLegacy.capabilities.assistant, "unavailable");
     projects.archive(created.project.id, "2027-02-01T00:00:00.000Z");
     const archivedMatter = service.getMatter(localContext, created.project.id);
     assert.equal(archivedMatter.profileState, "ready");
     assert.equal(archivedMatter.capabilities.matterProfile, "unavailable");
-    assert.equal(archivedMatter.capabilities.inference, "unavailable");
+    assert.equal(archivedMatter.capabilities.assistant, "unavailable");
     expectApiError(
       () =>
         service.updateProjectMatterProfile(localContext, created.project.id, {
           objective: "Archived edit must fail",
+        }),
+      409,
+      "CONFLICT",
+    );
+    expectApiError(
+      () =>
+        service.replaceMatterPolicy(localContext, created.project.id, {
+          externalEgressMode: "disabled",
+          executionLocations: ["local"],
+          allowExternalLegalSources: false,
+          allowWordBridge: false,
         }),
       409,
       "CONFLICT",
@@ -1669,7 +2040,7 @@ async function main() {
       assert.ok(item);
       assert.equal(item.profileState, profileState);
       assert.equal(item.capabilities.matterProfile, "unavailable");
-      assert.equal(item.capabilities.inference, "unavailable");
+      assert.equal(item.capabilities.assistant, "unavailable");
     }
 
     const deletedGenericId = createProject(projects, {
@@ -1683,11 +2054,17 @@ async function main() {
     const deletedGeneric = service.getMatter(localContext, deletedGenericId);
     assert.equal(deletedGeneric.profileState, "absent");
     assert.equal(deletedGeneric.capabilities.matterProfile, "unavailable");
-    assert.equal(deletedGeneric.capabilities.inference, "unavailable");
+    assert.equal(deletedGeneric.capabilities.assistant, "unavailable");
 
     const deletedMatter = service.createMatter(localContext, {
       name: "Deleted classified Matter",
       workspaceType: "investigation",
+    });
+    service.replaceMatterPolicy(localContext, deletedMatter.project.id, {
+      externalEgressMode: "disabled",
+      executionLocations: ["local"],
+      allowExternalLegalSources: false,
+      allowWordBridge: false,
     });
     database
       .prepare(
@@ -1700,7 +2077,7 @@ async function main() {
     );
     assert.equal(deletedReady.profileState, "ready");
     assert.equal(deletedReady.capabilities.matterProfile, "unavailable");
-    assert.equal(deletedReady.capabilities.inference, "unavailable");
+    assert.equal(deletedReady.capabilities.assistant, "unavailable");
     expectApiError(
       () =>
         service.updateProjectMatterProfile(
@@ -1708,6 +2085,17 @@ async function main() {
           deletedMatter.project.id,
           { objective: "Deleted edit must fail" },
         ),
+      409,
+      "CONFLICT",
+    );
+    expectApiError(
+      () =>
+        service.replaceMatterPolicy(localContext, deletedMatter.project.id, {
+          externalEgressMode: "allowed_by_policy",
+          executionLocations: ["standard_remote"],
+          allowExternalLegalSources: true,
+          allowWordBridge: true,
+        }),
       409,
       "CONFLICT",
     );
@@ -1852,17 +2240,67 @@ async function main() {
       403,
     );
 
-    const listResponse = await requestJson(origin, "/api/v1/matters?limit=100");
+    const listResponse = await requestJson(
+      origin,
+      "/api/v1/matters?profile_state=absent&limit=100",
+    );
     assert.equal(listResponse.status, 200);
     const listWire = MatterViewPageWireSchema.parse(listResponse.body);
     assert.ok(
       listWire.items.some(
         (item) =>
-          item.project.id === emptyGenericId &&
+          paginationGenericIds.includes(item.project.id) &&
           item.matter_profile === null &&
           item.profile_state === "absent" &&
-          item.capabilities.inference === "workspace_compatibility",
+          item.capabilities.assistant === "unavailable",
       ),
+    );
+    assert.ok(
+      listWire.items.every(
+        (item) => item.matter_profile === null && item.profile_state === "absent",
+      ),
+    );
+    const profiledListResponse = await requestJson(
+      origin,
+      "/api/v1/matters?profile_state=profiled&limit=100",
+    );
+    assert.equal(profiledListResponse.status, 200);
+    const profiledListWire = MatterViewPageWireSchema.parse(
+      profiledListResponse.body,
+    );
+    for (const id of paginationMatterIds) {
+      assert.ok(
+        profiledListWire.items.some(
+          (item) => item.project.id === id && item.matter_profile !== null,
+        ),
+      );
+    }
+    const absentCursorWire = MatterViewPageWireSchema.parse(
+      (
+        await requestJson(
+          origin,
+          "/api/v1/matters?profile_state=absent&limit=1",
+        )
+      ).body,
+    );
+    assert.ok(absentCursorWire.next_cursor);
+    assert.equal(
+      (
+        await requestJson(
+          origin,
+          `/api/v1/matters?profile_state=profiled&limit=1&cursor=${encodeURIComponent(absentCursorWire.next_cursor)}`,
+        )
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await requestJson(
+          origin,
+          `/api/v1/matters?status=archived&profile_state=absent&limit=1&cursor=${encodeURIComponent(absentCursorWire.next_cursor)}`,
+        )
+      ).status,
+      400,
     );
 
     const archivedListResponse = await requestJson(
@@ -1884,7 +2322,7 @@ async function main() {
       assert.ok(item);
       assert.equal(item.profile_state, profileState);
       assert.equal(item.capabilities.matter_profile, "unavailable");
-      assert.equal(item.capabilities.inference, "unavailable");
+      assert.equal(item.capabilities.assistant, "unavailable");
     }
 
     const detailResponse = await requestJson(
@@ -1942,6 +2380,92 @@ async function main() {
     assert.equal(routeMatter.matter_profile?.workspace_type, "research");
     assert.equal(routeMatter.project.cm_number, "HTTP-001");
     assertProfileWireKeys(routeMatter.matter_profile);
+
+    const missingPolicyRoute = await requestJson(
+      origin,
+      `/api/v1/matters/${routeMatter.project.id}/policy`,
+    );
+    assert.equal(missingPolicyRoute.status, 404);
+    const policyRoutePatch = await requestJson(
+      origin,
+      `/api/v1/matters/${routeMatter.project.id}/policy`,
+      {
+        method: "PATCH",
+        body: {
+          external_egress_mode: "approval",
+          execution_locations: ["confidential_remote"],
+          allow_external_legal_sources: false,
+          allow_word_bridge: true,
+        },
+      },
+    );
+    assert.equal(policyRoutePatch.status, 200);
+    const policyRouteWire = MatterPolicyWireSchema.parse(policyRoutePatch.body);
+    assert.equal(policyRouteWire.external_egress_mode, "approval");
+    assert.deepEqual(policyRouteWire.execution_locations, ["confidential_remote"]);
+    assert.equal(policyRouteWire.allow_word_bridge, true);
+    const policyRouteGet = await requestJson(
+      origin,
+      `/api/v1/matters/${routeMatter.project.id}/policy`,
+    );
+    assert.equal(policyRouteGet.status, 200);
+    assert.deepEqual(
+      MatterPolicyWireSchema.parse(policyRouteGet.body),
+      policyRouteWire,
+    );
+
+    const combinedRoutePatch = await requestJson(
+      origin,
+      `/api/v1/matters/${routeMatter.project.id}`,
+      {
+        method: "PATCH",
+        body: {
+          project: {
+            name: "HTTP Matter Updated",
+            cm_number: "HTTP-002",
+            practice: "Transactions",
+          },
+          profile: {
+            workspace_type: "transaction",
+            client_name: "HTTP Client Updated",
+          },
+        },
+      },
+    );
+    assert.equal(combinedRoutePatch.status, 200);
+    const combinedRouteWire = MatterViewWireSchema.parse(
+      combinedRoutePatch.body,
+    );
+    assert.equal(combinedRouteWire.project.name, "HTTP Matter Updated");
+    assert.equal(combinedRouteWire.project.cm_number, "HTTP-002");
+    assert.equal(
+      combinedRouteWire.matter_profile?.workspace_type,
+      "transaction",
+    );
+    assert.equal(
+      combinedRouteWire.matter_profile?.client_name,
+      "HTTP Client Updated",
+    );
+    assert.equal(
+      combinedRouteWire.project.updated_at,
+      combinedRouteWire.matter_profile?.updated_at,
+    );
+    assert.equal(JSON.stringify(combinedRoutePatch.body).includes("matter_type"), false);
+    assert.equal(
+      (
+        await requestJson(
+          origin,
+          `/api/v1/matters/${routeMatter.project.id}`,
+          {
+            method: "PATCH",
+            body: {
+              matter_profile: { workspace_type: "research" },
+            },
+          },
+        )
+      ).status,
+      400,
+    );
 
     projects.unarchive(legacyProjectId, "2027-02-01T00:00:00.004Z");
     const classifyLegacy = await requestJson(
@@ -2017,7 +2541,11 @@ async function main() {
       restarted.getMatter(localContext, legacyProjectId).profile?.workspaceType,
       "dispute",
     );
-    assert.equal(restartedRepository.readiness().schemaVersion, 16);
+    assert.deepEqual(restartedRepository.readiness(), {
+      status: "ready",
+      schemaVersion: 17,
+      inferencePolicy: "minimal_unified",
+    });
     reopened
       .prepare("DELETE FROM projects WHERE id = ?")
       .run(cascade.project.id);
@@ -2093,6 +2621,13 @@ async function main() {
       assert.equal(source.includes("Keychain"), false);
     }
 
+    reopened.exec("DROP TRIGGER inference_policy_decisions_v17_delete_guard");
+    expectApiError(
+      () => restartedRepository.readiness(),
+      500,
+      "INTERNAL_ERROR",
+    );
+
     console.log(
       JSON.stringify({
         ok: true,
@@ -2109,7 +2644,7 @@ async function main() {
           "serialized enqueue retries stop at the final model policy gate",
           "archived/deleted capabilities, write gates and monotonic timestamps",
           "strict authentication, local principal, lifecycle and redaction",
-          "truthful v16 readiness and fail-closed Matter inference capability",
+          "truthful v17 readiness and operation-specific fail-closed inference capability",
           "restart persistence and Project-delete cascade",
           "all six Matter/Profile routes and narrow module exports",
         ],
@@ -2132,7 +2667,7 @@ void main().catch((error) => {
   if (error instanceof WorkspaceApiError) {
     console.error(`${error.code}: ${error.message}`);
   } else if (error instanceof Error) {
-    console.error(error.message);
+    console.error(error.stack ?? error.message);
   }
   process.exitCode = 1;
 });

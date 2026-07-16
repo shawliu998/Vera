@@ -32,8 +32,8 @@ export interface MatterProfilePersistencePort {
   readonly database: WorkspaceDatabaseAdapter;
   readiness(): {
     status: "ready";
-    schemaVersion: 16;
-    inferencePolicy: "gate_closed";
+    schemaVersion: 17;
+    inferencePolicy: "minimal_unified";
   };
   get(projectId: string): MatterProfile | null;
   require(projectId: string): MatterProfile;
@@ -60,18 +60,18 @@ export class MatterProfileRepository implements MatterProfilePersistencePort {
 
   readiness(): {
     status: "ready";
-    schemaVersion: 16;
-    inferencePolicy: "gate_closed";
+    schemaVersion: 17;
+    inferencePolicy: "minimal_unified";
   } {
     return this.safe(() => {
       const migration = this.database
         .prepare(
           `SELECT name
              FROM workspace_schema_migrations
-            WHERE version = 16`,
+            WHERE version = 17`,
         )
         .get() as { name?: unknown } | undefined;
-      if (migration?.name !== "matter_profile_classification") {
+      if (migration?.name !== "minimal_unified_inference_policy") {
         internal("Matter Profile schema is unavailable.");
       }
       this.database
@@ -87,10 +87,30 @@ export class MatterProfileRepository implements MatterProfilePersistencePort {
           "SELECT project_id FROM matter_policy_execution_locations LIMIT 1",
         )
         .get();
+      this.database
+        .prepare("SELECT model_profile_id FROM model_profile_privacy LIMIT 1")
+        .get();
+      this.database
+        .prepare("SELECT id FROM inference_policy_decisions LIMIT 1")
+        .get();
+      const guards = this.database
+        .prepare(
+          `SELECT name FROM sqlite_master
+            WHERE type = 'trigger'
+              AND name IN (
+                'model_profile_privacy_v17_update_guard',
+                'inference_policy_decisions_v17_immutable',
+                'inference_policy_decisions_v17_delete_guard'
+              )`,
+        )
+        .all();
+      if (guards.length !== 3) {
+        internal("Inference Policy schema guards are unavailable.");
+      }
       return {
         status: "ready" as const,
-        schemaVersion: 16 as const,
-        inferencePolicy: "gate_closed" as const,
+        schemaVersion: 17 as const,
+        inferencePolicy: "minimal_unified" as const,
       };
     });
   }

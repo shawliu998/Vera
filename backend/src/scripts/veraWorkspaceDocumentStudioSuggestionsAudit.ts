@@ -14,6 +14,10 @@ import type {
   WorkspaceBlobLocator,
 } from "../lib/workspace/blobStore";
 import { WorkspaceDatabase } from "../lib/workspace/database";
+import {
+  ModelProfilePrivacyRepository,
+  WorkspaceInferencePolicy,
+} from "../lib/workspace/inferencePolicy";
 import { WorkspaceBlobRecordsRepository } from "../lib/workspace/repositories/blobRecords";
 import { ChatsRepository } from "../lib/workspace/repositories/chats";
 import { WorkspaceDocumentStudioRepository } from "../lib/workspace/repositories/documentStudio";
@@ -153,6 +157,16 @@ function seedProfile(database: WorkspaceDatabase) {
     true,
   );
   profiles.update(PROFILE_ID, { enabled: true, now: NOW });
+  new ModelProfilePrivacyRepository(database).declare(
+    PROFILE_ID,
+    {
+      executionLocation: "local",
+      retention: "zero",
+      trainingUse: "prohibited",
+      sensitiveDataAllowed: true,
+    },
+    NOW,
+  );
   return profiles;
 }
 
@@ -284,7 +298,7 @@ async function run() {
   try {
     process.env.ALETHEIA_DATABASE_ENCRYPTION = "metadata_plaintext";
     database = new WorkspaceDatabase(databasePath);
-    assert.equal(database.migration?.currentVersion, 16);
+    assert.equal(database.migration?.currentVersion, 17);
     const projects = new ProjectsRepository(database);
     for (const [id, name] of [
       [PROJECT_ID, "Suggestion Project"],
@@ -373,7 +387,11 @@ async function run() {
       projects,
       profiles,
       () => new Date(NOW),
-      { jobs, generationControl: jobs },
+      {
+        jobs,
+        generationControl: jobs,
+        inferencePolicy: new WorkspaceInferencePolicy(database),
+      },
     );
     const chat = chats.create({
       projectId: PROJECT_ID,

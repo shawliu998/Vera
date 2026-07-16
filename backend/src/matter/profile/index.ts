@@ -1,4 +1,8 @@
 import type { WorkspaceDatabaseAdapter } from "../../lib/workspace/migrations";
+import {
+  WorkspaceInferencePolicy,
+  type InferencePolicyPort,
+} from "../../lib/workspace/inferencePolicy";
 import type { WorkspaceInferenceActivityScope } from "../../lib/workspace/jobs/types";
 import { ProjectsRepository } from "../../lib/workspace/repositories/projects";
 import {
@@ -8,6 +12,11 @@ import {
 } from "./router";
 import { MatterOverviewRepository } from "./overviewRepository";
 import { MatterProfileRepository } from "./repository";
+import { MatterPolicyRepository } from "./policyRepository";
+import {
+  MatterCapabilityProjector,
+  type MatterModelRuntimeCapabilityPort,
+} from "./capabilities";
 import {
   createProjectInferenceActivityPort,
   MatterProfileService,
@@ -31,10 +40,21 @@ export function createMatterProfileModule(
   projects: ProjectsRepository,
   options: MatterProfileServiceOptions & {
     activeInferenceScopes: () => readonly WorkspaceInferenceActivityScope[];
+    inferencePolicy?: InferencePolicyPort;
+    modelRuntimeCapabilities?: MatterModelRuntimeCapabilityPort;
   },
 ) {
   const profiles = new MatterProfileRepository(database);
-  const overview = new MatterOverviewRepository(database);
+  const policies = options.policyRepository ?? new MatterPolicyRepository(database);
+  const inferencePolicy =
+    options.inferencePolicy ?? new WorkspaceInferencePolicy(database);
+  const overview = new MatterOverviewRepository(
+    database,
+    new MatterCapabilityProjector(
+      inferencePolicy,
+      options.modelRuntimeCapabilities ?? null,
+    ),
+  );
   const inferenceActivity = createProjectInferenceActivityPort(
     projects,
     options.activeInferenceScopes,
@@ -45,12 +65,15 @@ export function createMatterProfileModule(
     profiles,
     overview,
     inferenceActivity,
-    options,
+    { ...options, policyRepository: policies },
   );
   const api: MatterProfileV1Port = Object.freeze({
     listMatters: service.listMatters.bind(service),
     createMatter: service.createMatter.bind(service),
     getMatter: service.getMatter.bind(service),
+    updateMatter: service.updateMatter.bind(service),
+    getMatterPolicy: service.getMatterPolicy.bind(service),
+    replaceMatterPolicy: service.replaceMatterPolicy.bind(service),
     getProjectMatterProfile: service.getProjectMatterProfile.bind(service),
     createProjectMatterProfile:
       service.createProjectMatterProfile.bind(service),

@@ -109,7 +109,7 @@ export type NewWorkflowRunRecord = {
   id: string;
   workflowId: string;
   projectId: string | null;
-  modelProfileId: string;
+  modelProfileId: string | null;
   jobId: string;
   retryOfRunId: string | null;
   input: WorkspaceJson;

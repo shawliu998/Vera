@@ -29,6 +29,10 @@ import type {
   WorkflowStep,
   WorkspaceJson,
 } from "../types";
+import {
+  assertInferenceAllowed,
+  type InferencePolicyEnforcementPort,
+} from "../inferencePolicy";
 
 export const DEFAULT_WORKFLOW_MAX_STEPS = 25;
 export const HARD_WORKFLOW_MAX_STEPS = 100;
@@ -43,6 +47,10 @@ export type WorkflowExecutionLimits = {
   maxSteps?: number;
   maxModelCalls?: number;
 };
+
+export type WorkflowsServiceOptions = Readonly<{
+  inferencePolicy?: InferencePolicyEnforcementPort;
+}>;
 
 /**
  * Callbacks supplied by the shared fenced Jobs implementation.  They execute
@@ -472,6 +480,7 @@ export class WorkflowsService {
     private readonly jobs: JobEnqueuer,
     private readonly clock: () => Date = () => new Date(),
     private readonly idFactory: () => string = randomUUID,
+    private readonly options: WorkflowsServiceOptions = {},
   ) {}
 
   private now() {
@@ -833,7 +842,9 @@ export class WorkflowsService {
 
   requireExecutionSnapshotReady(runId: string) {
     const snapshot = this.repository.requireExecutionSnapshot(runId);
-    this.repository.requireExecutionModelProfileSnapshot(snapshot);
+    if (modelCallCount(snapshot.steps) > 0) {
+      this.repository.requireExecutionModelProfileSnapshot(snapshot);
+    }
     return snapshot;
   }
 
@@ -900,19 +911,24 @@ export class WorkflowsService {
         "All prompt steps must use the same immutable run model profile.",
       );
     }
-    const modelProfileId =
+    const modelCalls = modelCallCount(executionSteps);
+    const requiresModel = modelCalls > 0;
+    const resolvedModelProfileId =
       request.modelProfileId ??
       configuredStepProfiles[0] ??
       project?.defaultModelProfileId ??
       defaults.defaultModelProfileId;
-    if (!modelProfileId) {
+    const modelProfileId = requiresModel ? resolvedModelProfileId : null;
+    if (requiresModel && !modelProfileId) {
       throw new WorkspaceApiError(
         412,
         "PRECONDITION_FAILED",
         "Configure an enabled project or workspace default model profile before running a workflow.",
       );
     }
-    this.repository.requireEnabledModelProfile(modelProfileId);
+    if (modelProfileId) {
+      this.repository.requireEnabledModelProfile(modelProfileId);
+    }
     const mismatchedStep = executionSteps.find(
       (step) =>
         step.kind === "prompt" &&
@@ -926,7 +942,23 @@ export class WorkflowsService {
         "A prompt step model profile must match the immutable run model profile.",
       );
     }
-    const modelProfile = this.repository.executionModelProfile(modelProfileId);
+    if (requiresModel) {
+      if (!this.options.inferencePolicy) {
+        throw new WorkspaceApiError(
+          503,
+          "PRECONDITION_FAILED",
+          "Inference policy runtime is unavailable.",
+        );
+      }
+      assertInferenceAllowed(this.options.inferencePolicy, {
+        projectId,
+        modelProfileId: modelProfileId!,
+        operation: "workflow_prompt",
+      });
+    }
+    const modelProfile = modelProfileId
+      ? this.repository.executionModelProfile(modelProfileId)
+      : null;
     const maxSteps = requirePositiveLimit(
       limits.maxSteps,
       DEFAULT_WORKFLOW_MAX_STEPS,
@@ -941,7 +973,7 @@ export class WorkflowsService {
     );
     if (
       executionSteps.length > maxSteps ||
-      modelCallCount(executionSteps) > maxModelCalls
+      modelCalls > maxModelCalls
     ) {
       throw new WorkspaceApiError(
         409,
@@ -1090,7 +1122,10 @@ export class WorkflowsService {
     const parentSnapshot = this.repository.requireExecutionSnapshot(
       parent.run.id,
     );
-    this.repository.requireExecutionModelProfileSnapshot(parentSnapshot);
+    const requiresModel = modelCallCount(parentSnapshot.steps) > 0;
+    if (requiresModel) {
+      this.repository.requireExecutionModelProfileSnapshot(parentSnapshot);
+    }
     const { maxSteps, maxModelCalls } = snapshotExecutionLimits(parentSnapshot);
     if (parentSnapshot.steps.length > maxSteps) {
       throw new WorkspaceApiError(
@@ -1115,14 +1150,16 @@ export class WorkflowsService {
         "Workflow snapshot is not eligible for Assistant retry execution.",
       );
     }
-    if (!parentSnapshot.modelProfileId) {
+    if (requiresModel && !parentSnapshot.modelProfileId) {
       throw new WorkspaceApiError(
         412,
         "PRECONDITION_FAILED",
         "Retry model profile is unavailable.",
       );
     }
-    this.repository.requireEnabledModelProfile(parentSnapshot.modelProfileId);
+    if (parentSnapshot.modelProfileId) {
+      this.repository.requireEnabledModelProfile(parentSnapshot.modelProfileId);
+    }
     const now = this.now();
     const nextRunId = this.idFactory();
     const nextJobId = this.idFactory();

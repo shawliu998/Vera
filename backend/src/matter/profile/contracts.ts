@@ -4,6 +4,7 @@ import {
   UnicodeCodePointStringSchemaV1,
   WorkspaceIdSchema,
 } from "../../lib/workspace/workspacePersistencePrimitivesV1";
+import { ExecutionLocationSchema } from "../../lib/workspace/inferencePolicy";
 
 export const WORKSPACE_TYPES = [
   "general_legal",
@@ -20,8 +21,17 @@ export const MATTER_PROFILE_STATES = [
   "ready",
 ] as const;
 
+export const MATTER_PROFILE_FILTERS = [
+  "profiled",
+  "ready",
+  "classification_required",
+  "absent",
+  "all",
+] as const;
+
 export const WorkspaceTypeSchema = z.enum(WORKSPACE_TYPES);
 export const MatterProfileStateSchema = z.enum(MATTER_PROFILE_STATES);
+export const MatterProfileFilterSchema = z.enum(MATTER_PROFILE_FILTERS);
 
 /** v15/v16 profile timestamps are canonical millisecond UTC instants. */
 export const MatterUtcTimestampSchema = z
@@ -114,24 +124,54 @@ export const MatterProjectProjectionSchema = z
 export const MatterCapabilitiesSchema = z
   .object({
     matterProfile: z.enum(["create", "classify", "edit", "unavailable"]),
-    inference: z.enum([
-      "workspace_compatibility",
+    assistant: z.enum([
+      "available",
+      "require_approval",
       "policy_gate_closed",
       "unavailable",
     ]),
-    review: z.literal("unavailable"),
-    drafts: z.literal("document_scoped"),
+    workflows: z.enum([
+      "available",
+      "non_inference_only",
+      "require_approval",
+      "policy_gate_closed",
+      "unavailable",
+    ]),
+    tabular: z.enum([
+      "available",
+      "require_approval",
+      "policy_gate_closed",
+      "unavailable",
+    ]),
+    review: z.enum(["available", "unavailable"]),
+    drafts: z.enum(["document_scoped", "available", "unavailable"]),
   })
   .strict();
 
 export type WorkspaceType = z.infer<typeof WorkspaceTypeSchema>;
 export type MatterProfileState = z.infer<typeof MatterProfileStateSchema>;
+export type MatterProfileFilter = z.infer<typeof MatterProfileFilterSchema>;
 export type MatterProfile = z.infer<typeof MatterProfileSchema>;
 export type MatterCapabilities = z.infer<typeof MatterCapabilitiesSchema>;
+
+export type MatterInferenceCapabilityDecisions = Readonly<{
+  assistant: "allow" | "require_approval" | "deny";
+  workflows: "allow" | "require_approval" | "deny";
+  tabular: "allow" | "require_approval" | "deny";
+}>;
+
+function inferenceCapability(decision: "allow" | "require_approval" | "deny") {
+  return decision === "allow"
+    ? ("available" as const)
+    : decision === "require_approval"
+      ? ("require_approval" as const)
+      : ("policy_gate_closed" as const);
+}
 
 export function matterProfilePresentation(
   projectStatus: "active" | "archived" | "deleted",
   profile: MatterProfile | null,
+  inference: MatterInferenceCapabilityDecisions | null = null,
 ): {
   profileState: MatterProfileState;
   capabilities: MatterCapabilities;
@@ -147,28 +187,41 @@ export function matterProfilePresentation(
       profileState,
       capabilities: {
         matterProfile: "unavailable",
-        inference: "unavailable",
+        assistant: "unavailable",
+        workflows: "unavailable",
+        tabular: "unavailable",
         review: "unavailable",
-        drafts: "document_scoped",
-      },
-    };
-  }
-  if (profile === null) {
-    return {
-      profileState,
-      capabilities: {
-        matterProfile: "create",
-        inference: "workspace_compatibility",
-        review: "unavailable",
-        drafts: "document_scoped",
+        drafts: "unavailable",
       },
     };
   }
   return {
     profileState,
     capabilities: {
-      matterProfile: profile.workspaceType === null ? "classify" : "edit",
-      inference: "policy_gate_closed",
+      matterProfile:
+        profile === null
+          ? "create"
+          : profile.workspaceType === null
+            ? "classify"
+            : "edit",
+      assistant:
+        inference === null
+          ? profile !== null
+            ? "policy_gate_closed"
+            : "unavailable"
+          : inferenceCapability(inference.assistant),
+      workflows:
+        inference === null
+          ? "non_inference_only"
+          : inference.workflows === "deny"
+            ? "non_inference_only"
+            : inferenceCapability(inference.workflows),
+      tabular:
+        inference === null
+          ? profile !== null
+            ? "policy_gate_closed"
+            : "unavailable"
+          : inferenceCapability(inference.tabular),
       review: "unavailable",
       drafts: "document_scoped",
     },
@@ -205,14 +258,21 @@ export const MatterViewSchema = z
         message: "Matter Profile state is inconsistent",
       });
     }
+    if (value.capabilities.matterProfile !== expected.capabilities.matterProfile) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["capabilities", "matterProfile"],
+        message: "Matter Profile capability is inconsistent",
+      });
+    }
     if (
-      JSON.stringify(value.capabilities) !==
-      JSON.stringify(expected.capabilities)
+      value.project.status !== "active" &&
+      JSON.stringify(value.capabilities) !== JSON.stringify(expected.capabilities)
     ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["capabilities"],
-        message: "Matter capabilities are inconsistent",
+        message: "Inactive Matter capabilities are inconsistent",
       });
     }
   });
@@ -252,9 +312,86 @@ export const UpdateMatterProfileRequestSchema = z
     message: "at least one Matter Profile update is required",
   });
 
+export const UpdateMatterRequestSchema = z
+  .object({
+    project: z
+      .object({
+        name: matterTextInput(240).optional(),
+        description: matterTextInput(2_000).nullable().optional(),
+        cmNumber: matterTextInput(160).nullable().optional(),
+        practice: matterTextInput(160).nullable().optional(),
+      })
+      .strict()
+      .refine((value) => Object.keys(value).length > 0, {
+        message: "at least one Project update is required",
+      })
+      .optional(),
+    profile: UpdateMatterProfileRequestSchema.optional(),
+  })
+  .strict()
+  .refine((value) => value.project !== undefined || value.profile !== undefined, {
+    message: "at least one Matter update is required",
+  });
+
+const MatterPolicyShape = {
+  projectId: WorkspaceIdSchema,
+  externalEgressMode: z.enum([
+    "disabled",
+    "approval",
+    "allowed_by_policy",
+  ]),
+  executionLocations: z.array(ExecutionLocationSchema).max(4),
+  allowExternalLegalSources: z.boolean(),
+  allowWordBridge: z.boolean(),
+  createdAt: MatterUtcTimestampSchema,
+  updatedAt: MatterUtcTimestampSchema,
+} satisfies z.ZodRawShape;
+
+export const MatterPolicySchema = z
+  .object(MatterPolicyShape)
+  .strict()
+  .superRefine((value, context) => {
+    if (value.updatedAt < value.createdAt) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["updatedAt"],
+        message: "updatedAt must not precede createdAt",
+      });
+    }
+    if (new Set(value.executionLocations).size !== value.executionLocations.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["executionLocations"],
+        message: "execution locations must be unique",
+      });
+    }
+  });
+
+export const ReplaceMatterPolicyRequestSchema = z
+  .object({
+    externalEgressMode: MatterPolicyShape.externalEgressMode,
+    executionLocations: MatterPolicyShape.executionLocations,
+    allowExternalLegalSources: MatterPolicyShape.allowExternalLegalSources,
+    allowWordBridge: MatterPolicyShape.allowWordBridge,
+  })
+  .strict()
+  .refine(
+    (value) =>
+      new Set(value.executionLocations).size === value.executionLocations.length,
+    {
+      path: ["executionLocations"],
+      message: "execution locations must be unique",
+    },
+  )
+  .transform((value) => ({
+    ...value,
+    executionLocations: [...value.executionLocations].sort(),
+  }));
+
 export const MatterListRequestSchema = z
   .object({
     status: z.enum(["active", "archived"]).optional(),
+    profileState: MatterProfileFilterSchema.optional(),
     cursor: z.string().min(1).max(512).nullable().optional(),
     limit: z.number().int().min(1).max(100).optional(),
   })
@@ -302,13 +439,27 @@ export const MatterProjectWireSchema = z
 export const MatterCapabilitiesWireSchema = z
   .object({
     matter_profile: z.enum(["create", "classify", "edit", "unavailable"]),
-    inference: z.enum([
-      "workspace_compatibility",
+    assistant: z.enum([
+      "available",
+      "require_approval",
       "policy_gate_closed",
       "unavailable",
     ]),
-    review: z.literal("unavailable"),
-    drafts: z.literal("document_scoped"),
+    workflows: z.enum([
+      "available",
+      "non_inference_only",
+      "require_approval",
+      "policy_gate_closed",
+      "unavailable",
+    ]),
+    tabular: z.enum([
+      "available",
+      "require_approval",
+      "policy_gate_closed",
+      "unavailable",
+    ]),
+    review: z.enum(["available", "unavailable"]),
+    drafts: z.enum(["document_scoped", "available", "unavailable"]),
   })
   .strict();
 
@@ -331,6 +482,7 @@ export const MatterViewPageWireSchema = z
 export const MatterListWireQuerySchema = z
   .object({
     status: z.enum(["active", "archived"]).optional(),
+    profile_state: MatterProfileFilterSchema.optional(),
     cursor: z.string().min(1).max(512).optional(),
     limit: z.coerce.number().int().min(1).max(100).optional(),
   })
@@ -371,6 +523,51 @@ export const UpdateMatterProfileWireRequestSchema = z
     message: "at least one Matter Profile update is required",
   });
 
+export const UpdateMatterWireRequestSchema = z
+  .object({
+    project: z
+      .object({
+        name: matterTextInput(240).optional(),
+        description: matterTextInput(2_000).nullable().optional(),
+        cm_number: matterTextInput(160).nullable().optional(),
+        practice: matterTextInput(160).nullable().optional(),
+      })
+      .strict()
+      .refine((value) => Object.keys(value).length > 0, {
+        message: "at least one Project update is required",
+      })
+      .optional(),
+    profile: UpdateMatterProfileWireRequestSchema.optional(),
+  })
+  .strict()
+  .refine(
+    (value) => value.project !== undefined || value.profile !== undefined,
+    { message: "at least one Matter update is required" },
+  );
+
+export const MatterPolicyWireSchema = z
+  .object({
+    project_id: WorkspaceIdSchema,
+    external_egress_mode: z.enum([
+      "disabled",
+      "approval",
+      "allowed_by_policy",
+    ]),
+    execution_locations: z.array(ExecutionLocationSchema).max(4),
+    allow_external_legal_sources: z.boolean(),
+    allow_word_bridge: z.boolean(),
+    created_at: MatterUtcTimestampSchema,
+    updated_at: MatterUtcTimestampSchema,
+  })
+  .strict();
+
+export const ReplaceMatterPolicyWireRequestSchema = MatterPolicyWireSchema.pick({
+  external_egress_mode: true,
+  execution_locations: true,
+  allow_external_legal_sources: true,
+  allow_word_bridge: true,
+});
+
 export type MatterView = z.infer<typeof MatterViewSchema>;
 export type MatterViewPage = z.infer<typeof MatterViewPageSchema>;
 export type CreateMatterRequest = z.infer<typeof CreateMatterRequestSchema>;
@@ -381,6 +578,11 @@ export type UpdateMatterProfileRequest = z.infer<
   typeof UpdateMatterProfileRequestSchema
 >;
 export type MatterListRequest = z.infer<typeof MatterListRequestSchema>;
+export type UpdateMatterRequest = z.infer<typeof UpdateMatterRequestSchema>;
+export type MatterPolicy = z.infer<typeof MatterPolicySchema>;
+export type ReplaceMatterPolicyRequest = z.infer<
+  typeof ReplaceMatterPolicyRequestSchema
+>;
 
 const PUBLIC_VALIDATION_PATHS = new Set([
   "request",
@@ -395,6 +597,8 @@ const PUBLIC_VALIDATION_PATHS = new Set([
   "representedRole",
   "objective",
   "status",
+  "profileState",
+  "profile_state",
   "cursor",
   "limit",
   "project_id",
@@ -402,6 +606,17 @@ const PUBLIC_VALIDATION_PATHS = new Set([
   "workspace_type",
   "client_name",
   "represented_role",
+  "project",
+  "profile",
+  "matter_profile",
+  "externalEgressMode",
+  "executionLocations",
+  "allowExternalLegalSources",
+  "allowWordBridge",
+  "external_egress_mode",
+  "execution_locations",
+  "allow_external_legal_sources",
+  "allow_word_bridge",
 ]);
 
 /** Zod enum messages can echo rejected source values; public details never do. */
@@ -467,6 +682,45 @@ export function parseUpdateMatterProfileWire(
   });
 }
 
+export function parseUpdateMatterWire(value: unknown): UpdateMatterRequest {
+  const input = UpdateMatterWireRequestSchema.parse(value);
+  return UpdateMatterRequestSchema.parse({
+    ...(input.project === undefined
+      ? {}
+      : {
+          project: {
+            ...(input.project.name === undefined
+              ? {}
+              : { name: input.project.name }),
+            ...(input.project.description === undefined
+              ? {}
+              : { description: input.project.description }),
+            ...(input.project.cm_number === undefined
+              ? {}
+              : { cmNumber: input.project.cm_number }),
+            ...(input.project.practice === undefined
+              ? {}
+              : { practice: input.project.practice }),
+          },
+        }),
+    ...(input.profile === undefined
+      ? {}
+      : { profile: parseUpdateMatterProfileWire(input.profile) }),
+  });
+}
+
+export function parseReplaceMatterPolicyWire(
+  value: unknown,
+): ReplaceMatterPolicyRequest {
+  const input = ReplaceMatterPolicyWireRequestSchema.parse(value);
+  return ReplaceMatterPolicyRequestSchema.parse({
+    externalEgressMode: input.external_egress_mode,
+    executionLocations: input.execution_locations,
+    allowExternalLegalSources: input.allow_external_legal_sources,
+    allowWordBridge: input.allow_word_bridge,
+  });
+}
+
 export function toMatterProfileWire(profile: MatterProfile) {
   return MatterProfileWireSchema.parse({
     project_id: profile.projectId,
@@ -504,10 +758,25 @@ export function toMatterViewWire(value: MatterView) {
     profile_state: view.profileState,
     capabilities: {
       matter_profile: view.capabilities.matterProfile,
-      inference: view.capabilities.inference,
+      assistant: view.capabilities.assistant,
+      workflows: view.capabilities.workflows,
+      tabular: view.capabilities.tabular,
       review: view.capabilities.review,
       drafts: view.capabilities.drafts,
     },
+  });
+}
+
+export function toMatterPolicyWire(value: MatterPolicy) {
+  const policy = MatterPolicySchema.parse(value);
+  return MatterPolicyWireSchema.parse({
+    project_id: policy.projectId,
+    external_egress_mode: policy.externalEgressMode,
+    execution_locations: policy.executionLocations,
+    allow_external_legal_sources: policy.allowExternalLegalSources,
+    allow_word_bridge: policy.allowWordBridge,
+    created_at: policy.createdAt,
+    updated_at: policy.updatedAt,
   });
 }
 

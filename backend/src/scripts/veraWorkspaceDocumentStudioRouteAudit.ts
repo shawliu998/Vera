@@ -23,6 +23,10 @@ import PizZip from "pizzip";
 import type { WorkspaceBlobCodec } from "../lib/workspace/blobStore";
 import { LocalWorkspaceBlobStore } from "../lib/workspace/localWorkspaceBlobStore";
 import { WORKSPACE_LOCAL_PRINCIPAL_ID } from "../lib/workspace/principal";
+import {
+  ModelProfilePrivacyRepository,
+  WorkspaceInferencePolicy,
+} from "../lib/workspace/inferencePolicy";
 import { ChatsRepository } from "../lib/workspace/repositories/chats";
 import { ModelConnectionTestsRepository } from "../lib/workspace/repositories/modelConnectionTests";
 import { ModelProfilesRepository } from "../lib/workspace/repositories/modelProfiles";
@@ -533,13 +537,27 @@ async function main() {
         true,
       );
       profiles.update(suggestionProfileId, { enabled: true, now: NOW });
+      new ModelProfilePrivacyRepository(runtime.database).declare(
+        suggestionProfileId,
+        {
+          executionLocation: "local",
+          retention: "zero",
+          trainingUse: "prohibited",
+          sensitiveDataAllowed: true,
+        },
+        NOW,
+      );
       const chatsRepository = new ChatsRepository(runtime.database);
       const chats = new ChatsService(
         chatsRepository,
         new ProjectsRepository(runtime.database),
         profiles,
         () => new Date(NOW),
-        { jobs: runtime.jobs, generationControl: runtime.jobs },
+        {
+          jobs: runtime.jobs,
+          generationControl: runtime.jobs,
+          inferencePolicy: new WorkspaceInferencePolicy(runtime.database),
+        },
       );
       const suggestionChat = chats.create({
         projectId,

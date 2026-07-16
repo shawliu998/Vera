@@ -16,6 +16,10 @@ import type {
   AssistantToolName,
 } from "./assistantRuntime";
 import { buildEndpointBindingSnapshot } from "./modelGateway";
+import {
+  assertInferenceAllowed,
+  type InferencePolicyEnforcementPort,
+} from "../inferencePolicy";
 
 const CITATIONS_OPEN = "<CITATIONS>";
 const CITATIONS_CLOSE = "</CITATIONS>";
@@ -216,6 +220,7 @@ function citationSources(input: {
 export type WorkspaceAssistantModelAdapterOptions = Readonly<{
   allowLocalDevelopmentBaseUrl?: boolean;
   clock?: () => Date;
+  inferencePolicy?: InferencePolicyEnforcementPort;
 }>;
 
 export type AssistantProviderUsageDiagnostic = Readonly<{
@@ -235,6 +240,7 @@ export type AssistantProviderUsageDiagnostic = Readonly<{
 export class WorkspaceAssistantModelAdapter implements AssistantModelPort {
   private readonly allowLocalDevelopmentBaseUrl: boolean;
   private readonly clock: () => Date;
+  private readonly inferencePolicy: InferencePolicyEnforcementPort | null;
   private readonly usageHistory: AssistantProviderUsageDiagnostic[] = [];
 
   constructor(
@@ -245,6 +251,7 @@ export class WorkspaceAssistantModelAdapter implements AssistantModelPort {
     this.allowLocalDevelopmentBaseUrl =
       options.allowLocalDevelopmentBaseUrl ?? false;
     this.clock = options.clock ?? (() => new Date());
+    this.inferencePolicy = options.inferencePolicy ?? null;
   }
 
   /** Bounded, process-local, secret-free provider usage diagnostics. */
@@ -365,6 +372,22 @@ export class WorkspaceAssistantModelAdapter implements AssistantModelPort {
       tools: request.tools,
       responseFormat: request.responseFormat,
       metadata: request.metadata,
+    });
+
+    // Re-evaluate at the last synchronous boundary. Queue-time policy is only
+    // a preflight; declarations or Matter policy may change while a job waits.
+    if (!this.inferencePolicy) {
+      throw new WorkspaceApiError(
+        503,
+        "PRECONDITION_FAILED",
+        "Inference policy runtime is unavailable.",
+      );
+    }
+    assertInferenceAllowed(this.inferencePolicy, {
+      projectId: input.projectId,
+      modelProfileId: input.modelProfileId,
+      operation: input.operation,
+      sourceSnapshotIds: input.documents.map((document) => document.versionId),
     });
 
     const toolCalls = new Map<

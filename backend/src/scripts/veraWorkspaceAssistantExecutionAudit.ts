@@ -6,6 +6,10 @@ import os from "node:os";
 import path from "node:path";
 
 import { WorkspaceDatabase } from "../lib/workspace/database";
+import {
+  ModelProfilePrivacyRepository,
+  WorkspaceInferencePolicy,
+} from "../lib/workspace/inferencePolicy";
 import { WorkspaceModelProviderRegistry } from "../lib/workspace/modelProviderRegistry";
 import type {
   ModelEvent,
@@ -225,6 +229,8 @@ function modelInput(
 ) {
   return {
     modelProfileId: PROFILE_ID,
+    projectId: null,
+    operation: "assistant" as const,
     systemPrompt: "Be precise.",
     messages: [{ role: "user" as const, content: "Review the contract." }],
     tools: DOCUMENT_TOOLS,
@@ -243,6 +249,18 @@ async function auditProviderModelAdapter(database: WorkspaceDatabase) {
   const tests = new ModelConnectionTestsRepository(database);
   createProfile(profiles, tests, PROFILE_ID, true);
   createProfile(profiles, tests, UNTESTED_PROFILE_ID, false);
+  const inferencePolicy = new WorkspaceInferencePolicy(database);
+  new ModelProfilePrivacyRepository(database).declare(
+    PROFILE_ID,
+    {
+      executionLocation: "local",
+      retention: "zero",
+      trainingUse: "prohibited",
+      sensitiveDataAllowed: true,
+    },
+    NOW,
+  );
+  const adapterOptions = { inferencePolicy };
 
   let providerCreations = 0;
   const unavailableRegistry = {
@@ -255,6 +273,7 @@ async function auditProviderModelAdapter(database: WorkspaceDatabase) {
   const gate = new WorkspaceAssistantModelAdapter(
     profiles,
     unavailableRegistry,
+    adapterOptions,
   );
   await assert.rejects(
     gate.registeredCapabilities({ modelProfileId: UNTESTED_PROFILE_ID }),
@@ -295,6 +314,7 @@ async function auditProviderModelAdapter(database: WorkspaceDatabase) {
         capture,
       ),
     ),
+    adapterOptions,
   );
   const turn = await adapter.runTurn(
     modelInput({
@@ -363,6 +383,7 @@ async function auditProviderModelAdapter(database: WorkspaceDatabase) {
         { type: "completed" },
       ]),
     ),
+    adapterOptions,
   );
   const citationTurn = await citationAdapter.runTurn(
     modelInput({
@@ -398,6 +419,7 @@ async function auditProviderModelAdapter(database: WorkspaceDatabase) {
     const invalid = new WorkspaceAssistantModelAdapter(
       profiles,
       fakeRegistry(fakeProvider(events)),
+      adapterOptions,
     );
     await assert.rejects(invalid.runTurn(modelInput()), (error: unknown) =>
       Boolean(
@@ -420,6 +442,7 @@ async function auditProviderModelAdapter(database: WorkspaceDatabase) {
         },
       ]),
     ),
+    adapterOptions,
   );
   await assert.rejects(
     providerFailure.runTurn(modelInput()),
@@ -438,6 +461,7 @@ async function auditProviderModelAdapter(database: WorkspaceDatabase) {
   const abortAdapter = new WorkspaceAssistantModelAdapter(
     profiles,
     fakeRegistry(fakeProvider([], abortCapture)),
+    adapterOptions,
   );
   await assert.rejects(
     abortAdapter.runTurn(modelInput({ signal: abortController.signal })),
@@ -474,7 +498,11 @@ async function auditDocumentTools(database: WorkspaceDatabase) {
     projects,
     new ModelProfilesRepository(database),
     () => new Date(NOW),
-    { jobs, generationControl: jobs },
+    {
+      jobs,
+      generationControl: jobs,
+      inferencePolicy: new WorkspaceInferencePolicy(database),
+    },
   );
   service.create({
     projectId: PROJECT_ID,
@@ -698,6 +726,16 @@ async function auditRuntimePumpAndRoutes(root: string) {
   const profiles = new ModelProfilesRepository(database);
   const tests = new ModelConnectionTestsRepository(database);
   createProfile(profiles, tests, PROFILE_ID, true);
+  new ModelProfilePrivacyRepository(database).declare(
+    PROFILE_ID,
+    {
+      executionLocation: "local",
+      retention: "zero",
+      trainingUse: "prohibited",
+      sensitiveDataAllowed: true,
+    },
+    NOW,
+  );
   let modelTurnCount = 0;
   const conversionRaceEntered = deferredSignal();
   const conversionRaceRelease = deferredSignal();
@@ -997,10 +1035,10 @@ async function auditRuntimePumpAndRoutes(root: string) {
     assert.equal(completedConversion.status, 201);
     const convertedMatter = (await completedConversion.json()) as {
       profile_state: string;
-      capabilities: { inference: string };
+      capabilities: { assistant: string };
     };
     assert.equal(convertedMatter.profile_state, "ready");
-    assert.equal(convertedMatter.capabilities.inference, "policy_gate_closed");
+    assert.equal(convertedMatter.capabilities.assistant, "policy_gate_closed");
 
     const beforeConvertedSubmit = modelTurnCount;
     const convertedSubmit = await fetch(`${server.baseUrl}/api/v1/chat`, {
@@ -1017,16 +1055,7 @@ async function auditRuntimePumpAndRoutes(root: string) {
         ],
       }),
     });
-    assert.equal(convertedSubmit.status, 202);
-    const convertedJobId = String(
-      ((await convertedSubmit.json()) as { job_id: unknown }).job_id,
-    );
-    await waitForStatus(
-      server.baseUrl,
-      convertedJobId,
-      token,
-      (status) => status === "failed",
-    );
+    assert.equal(convertedSubmit.status, 412);
     assert.equal(
       modelTurnCount,
       beforeConvertedSubmit,
@@ -1045,10 +1074,10 @@ async function auditRuntimePumpAndRoutes(root: string) {
     const matter = (await matterResponse.json()) as {
       project: { id: string };
       profile_state: string;
-      capabilities: { inference: string };
+      capabilities: { assistant: string };
     };
     assert.equal(matter.profile_state, "ready");
-    assert.equal(matter.capabilities.inference, "policy_gate_closed");
+    assert.equal(matter.capabilities.assistant, "policy_gate_closed");
     const matterChatResponse = await fetch(
       `${server.baseUrl}/api/v1/chat/create`,
       {
@@ -1075,26 +1104,11 @@ async function auditRuntimePumpAndRoutes(root: string) {
         messages: [{ role: "user", content: "This must fail closed." }],
       }),
     });
-    assert.equal(matterSubmit.status, 202);
-    const matterJobId = String(
-      ((await matterSubmit.json()) as { job_id: unknown }).job_id,
-    );
-    await waitForStatus(
-      server.baseUrl,
-      matterJobId,
-      token,
-      (status) => status === "failed",
-    );
+    assert.equal(matterSubmit.status, 412);
     assert.equal(
       modelTurnCount,
       beforeClosedMatter,
       "a Matter without Gate 3 policy must make zero provider turns",
-    );
-    const matterReplay = await replay(server.baseUrl, matterJobId, token);
-    assert.equal(matterReplay.terminal, true);
-    assert.equal(
-      matterReplay.events.some((event) => event.event.type === "content_delta"),
-      false,
     );
   } finally {
     releaseConversionRace();
@@ -1123,6 +1137,6 @@ async function main() {
 }
 
 void main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(error);
   process.exitCode = 1;
 });

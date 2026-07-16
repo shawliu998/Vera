@@ -41,6 +41,10 @@ import { WorkspaceTabularV1RuntimeAdapter } from "../lib/workspace/services/tabu
 import { workspaceBlobStorageKey } from "../lib/workspace/repositories/blobRecords";
 import { WORKSPACE_LOCAL_PRINCIPAL_ID } from "../lib/workspace/principal";
 import { WorkspaceRuntime } from "../lib/workspace/runtime";
+import {
+  ModelProfilePrivacyRepository,
+  WorkspaceInferencePolicy,
+} from "../lib/workspace/inferencePolicy";
 
 const NOW = "2026-07-15T08:00:00.000Z";
 const PROFILE_ID = "10000000-0000-4000-8000-000000000001";
@@ -332,17 +336,34 @@ function runtime(input: {
   const jobsRepository = new WorkspaceJobsRepository(input.database);
   const abortRegistry = new WorkspaceJobAbortRegistry();
   const jobs = new WorkspaceJobsService(jobsRepository, { abortRegistry });
+  const inferencePolicy = new WorkspaceInferencePolicy(input.database);
+  const privacy = new ModelProfilePrivacyRepository(input.database);
+  for (const profile of input.profiles.list()) {
+    if (!privacy.get(profile.id)) {
+      privacy.declare(
+        profile.id,
+        {
+          executionLocation: "local",
+          retention: "zero",
+          trainingUse: "prohibited",
+          sensitiveDataAllowed: true,
+        },
+        NOW,
+      );
+    }
+  }
   const service = new TabularService(
     tabular,
     new WorkspaceJobEnqueuerAdapter(jobs),
     undefined,
     randomUUID,
-    { snapshots: reader, profiles: input.profiles },
+    { snapshots: reader, profiles: input.profiles, inferencePolicy },
   );
   const model = new WorkspaceTabularModelAdapter(
     input.profiles,
     input.registry,
     reader,
+    { inferencePolicy },
   );
   const pump = createWorkspaceJobPump({
     jobs,
@@ -369,6 +390,7 @@ function runtime(input: {
     jobsRepository,
     service,
     model,
+    inferencePolicy,
     pump,
     wire: new WorkspaceTabularV1RuntimeAdapter(
       input.database,
@@ -557,6 +579,7 @@ async function main() {
       profiles,
       registry,
       retentionReader,
+      { inferencePolicy: current.inferencePolicy },
     );
     await assert.rejects(
       retentionModel.generateCell({

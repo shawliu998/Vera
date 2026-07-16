@@ -16,6 +16,10 @@ import {
   type AuthoritativeExtractedText,
 } from "./authoritativeExtractedText";
 import { buildEndpointBindingSnapshot } from "./modelGateway";
+import {
+  assertInferenceAllowed,
+  type InferencePolicyEnforcementPort,
+} from "../inferencePolicy";
 
 const MAX_PROVIDER_OUTPUT_CHARS = 220_000;
 const MAX_REASONING_CHARS = 100_000;
@@ -202,7 +206,10 @@ export class WorkspaceTabularModelAdapter implements TabularCellModelPort {
     private readonly profiles: ModelProfilesRepository,
     private readonly registry: WorkspaceModelProviderRegistry,
     private readonly snapshots: AuthoritativeExtractedTextReader,
-    private readonly options: { allowLocalDevelopmentBaseUrl?: boolean } = {},
+    private readonly options: {
+      allowLocalDevelopmentBaseUrl?: boolean;
+      inferencePolicy?: InferencePolicyEnforcementPort;
+    } = {},
   ) {}
 
   async generateCell(
@@ -276,6 +283,19 @@ export class WorkspaceTabularModelAdapter implements TabularCellModelPort {
     // both the immutable snapshot and retention policy at the last synchronous
     // boundary before the provider is allowed to observe the request.
     this.snapshots.assertCurrentModelUse(input.snapshot);
+    if (!this.options.inferencePolicy) {
+      throw new WorkspaceApiError(
+        503,
+        "PRECONDITION_FAILED",
+        "Inference policy runtime is unavailable.",
+      );
+    }
+    assertInferenceAllowed(this.options.inferencePolicy, {
+      projectId: input.snapshot.projectId,
+      modelProfileId: input.modelProfileId,
+      operation: "tabular_generation",
+      sourceSnapshotIds: [input.snapshot.versionId],
+    });
     let output = "";
     let completed = false;
     try {

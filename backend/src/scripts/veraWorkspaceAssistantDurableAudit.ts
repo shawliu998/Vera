@@ -13,6 +13,10 @@ import {
   WORKSPACE_MIGRATIONS,
 } from "../lib/workspace/database";
 import { WorkspaceApiError } from "../lib/workspace/errors";
+import {
+  ModelProfilePrivacyRepository,
+  WorkspaceInferencePolicy,
+} from "../lib/workspace/inferencePolicy";
 import { WORKSPACE_LOCAL_PRINCIPAL_ID } from "../lib/workspace/principal";
 import { ChatsRepository } from "../lib/workspace/repositories/chats";
 import { ModelProfilesRepository } from "../lib/workspace/repositories/modelProfiles";
@@ -88,6 +92,24 @@ function seedEnabledProfile(database: WorkspaceDatabase) {
        VALUES (?,0,'passed',NULL,0,1,?)`,
     )
     .run(id, NOW);
+  if (
+    database
+      .prepare(
+        "SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name='model_profile_privacy'",
+      )
+      .get()
+  ) {
+    new ModelProfilePrivacyRepository(database).declare(
+      id,
+      {
+        executionLocation: "local",
+        retention: "zero",
+        trainingUse: "prohibited",
+        sensitiveDataAllowed: true,
+      },
+      NOW,
+    );
+  }
   return id;
 }
 
@@ -116,6 +138,7 @@ function createServices(
         hydrate: () => ({ can_read: true, can_download: true }),
       },
       lifecycle,
+      inferencePolicy: new WorkspaceInferencePolicy(database),
     },
   );
   return { chats, jobs, jobService, profiles, service };
@@ -321,7 +344,7 @@ async function terminalUpgradeReplay(root: string) {
 
   const upgraded = new WorkspaceDatabase(databasePath);
   try {
-    assert.equal(upgraded.migration?.currentVersion, 16);
+    assert.equal(upgraded.migration?.currentVersion, 17);
     const replay = new ChatsRepository(upgraded).listGenerationEvents(jobId);
     assert.equal(replay.terminal, true);
     assert.deepEqual(
@@ -452,7 +475,7 @@ async function run() {
   let database: WorkspaceDatabase | null = new WorkspaceDatabase(databasePath);
   let observer: WorkspaceDatabase | null = null;
   try {
-    assert.equal(database.migration?.currentVersion, 16);
+    assert.equal(database.migration?.currentVersion, 17);
     const profileId = seedEnabledProfile(database);
     const activeControllers = new Map<string, AbortController>();
     const setup = createServices(database, {

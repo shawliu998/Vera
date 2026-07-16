@@ -547,8 +547,8 @@ async function auditApplicationSurface(): Promise<void> {
     createRouter: () => matterRouter,
     health: () => ({
       status: "ready" as const,
-      schemaVersion: 16 as const,
-      inferencePolicy: "gate_closed" as const,
+      schemaVersion: 17 as const,
+      inferencePolicy: "minimal_unified" as const,
       internalPath: "/private/matter.db",
     }),
   } as NonNullable<VeraWorkspaceRuntime["matterProfiles"]>;
@@ -578,8 +578,8 @@ async function auditApplicationSurface(): Promise<void> {
     };
     assert.deepEqual(payload.vera.matter, {
       status: "ready",
-      schemaVersion: 16,
-      inferencePolicy: "gate_closed",
+      schemaVersion: 17,
+      inferencePolicy: "minimal_unified",
     });
   });
 

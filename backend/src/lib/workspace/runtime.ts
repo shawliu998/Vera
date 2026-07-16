@@ -24,11 +24,6 @@ import {
   createMatterProfileModule,
   type MatterProfileModule,
 } from "../../matter/profile";
-import {
-  MatterInferencePolicyGate,
-  MatterPolicyAssistantToolPort,
-  MatterPolicyWorkflowStepExecutor,
-} from "../../matter/inferencePolicy";
 import type {
   WorkspaceV1Context,
   WorkspaceV1DocumentCapability,
@@ -49,6 +44,11 @@ import {
 } from "./documentStudioDocx";
 import { InMemoryDownloadCapabilityStore } from "./downloadCapabilities";
 import { WorkspaceApiError } from "./errors";
+import {
+  ModelProfilePrivacyRepository,
+  WorkspaceInferencePolicy,
+  type InferencePolicyEnforcementPort,
+} from "./inferencePolicy";
 import { WorkspaceJobPump } from "./jobs/pump";
 import {
   MIKE_LOCAL_USER_ID,
@@ -259,6 +259,7 @@ export type WorkspaceRuntimeDependencies = {
   assistantModel?: AssistantModelPort;
   assistantTools?: AssistantToolPort;
   workflowExecutor?: WorkflowStepExecutor;
+  inferencePolicy?: InferencePolicyEnforcementPort;
   /** Read-only authority for derived blob metadata.  This is injectable solely
    * for runtime integration tests; production shares the repository instance. */
   blobRecords?: WorkspaceBlobRecordsRepository;
@@ -485,11 +486,17 @@ export class WorkspaceRuntime
       new WorkspaceJobsService(jobsRepository, {
         abortRegistry: this.abortRegistry,
       });
+    const inferencePolicy =
+      dependencies.inferencePolicy ??
+      new WorkspaceInferencePolicy(this.database);
     this.workflows =
       dependencies.workflows ??
       new WorkflowsService(
         new WorkflowsRepository(this.database),
         new WorkspaceJobEnqueuerAdapter(this.jobs),
+        undefined,
+        undefined,
+        { inferencePolicy },
       );
     const cleanupRecorder: CleanupRecorder = {
       record: (input) => cleanupLedger.record(input),
@@ -524,13 +531,23 @@ export class WorkspaceRuntime
     };
     const projectsRepository =
       dependencies.projectRepository ?? new ProjectsRepository(this.database);
+    let providerRegistryForMatterCapabilities:
+      | WorkspaceModelProviderRegistry
+      | null = null;
     this.matterProfiles =
       dependencies.matterProfiles ??
       createMatterProfileModule(this.database, projectsRepository, {
         activeInferenceScopes: () => this.abortRegistry.activeInferenceScopes(),
         acceptingRequests: () => this.started && !this.draining && !this.closed,
+        inferencePolicy,
+        modelRuntimeCapabilities: {
+          runtimeWired: () =>
+            providerRegistryForMatterCapabilities?.runtimeWired() === true,
+          capabilitiesFor: (provider) =>
+            providerRegistryForMatterCapabilities?.capabilitiesFor(provider) ??
+            null,
+        },
       });
-    const matterInferencePolicy = new MatterInferencePolicyGate(this.database);
     this.projects =
       dependencies.projects ??
       new ProjectsService(projectsRepository, this.blobs, {
@@ -547,6 +564,7 @@ export class WorkspaceRuntime
               dependencies.allowLocalDevelopmentModelBaseUrl ?? false,
           })
         : null);
+    providerRegistryForMatterCapabilities = providerRegistry;
     const modelProfiles = new ModelProfilesService(modelProfilesRepository, {
       allowLocalDevelopmentBaseUrl:
         dependencies.allowLocalDevelopmentModelBaseUrl ?? false,
@@ -569,6 +587,7 @@ export class WorkspaceRuntime
         profileRepository: modelProfilesRepository,
         connectionTests: new ModelConnectionTestsRepository(this.database),
         settings,
+        privacy: new ModelProfilePrivacyRepository(this.database),
         providerRegistry,
         allowLocalDevelopmentBaseUrl:
           dependencies.allowLocalDevelopmentModelBaseUrl ?? false,
@@ -628,6 +647,7 @@ export class WorkspaceRuntime
             {
               allowLocalDevelopmentBaseUrl:
                 dependencies.allowLocalDevelopmentModelBaseUrl ?? false,
+              inferencePolicy,
             },
           )
         : null);
@@ -636,7 +656,6 @@ export class WorkspaceRuntime
       documentId: string;
       versionId: string;
     }) => {
-      matterInferencePolicy.assertProjectModelUse(input.projectId);
       this.assertStudioVersionRetention({
         ...input,
         action: "model_use",
@@ -646,19 +665,17 @@ export class WorkspaceRuntime
         modelExecution: "unknown",
       });
     };
-    const assistantTools = new MatterPolicyAssistantToolPort(
+    const assistantTools =
       dependencies.assistantTools ??
-        new WorkspaceAssistantDocumentTools(
-          this.database,
-          chatsRepository,
-          new AssistantRetrievalRepository(this.database),
-          {
-            studioSuggestions: this.documentStudioService,
-            assertModelUse: assertDocumentModelUse,
-          },
-        ),
-      matterInferencePolicy,
-    );
+      new WorkspaceAssistantDocumentTools(
+        this.database,
+        chatsRepository,
+        new AssistantRetrievalRepository(this.database),
+        {
+          studioSuggestions: this.documentStudioService,
+          assertModelUse: assertDocumentModelUse,
+        },
+      );
     const assistantRuntime = assistantModel
       ? new AssistantRuntimeService(
           chatsRepository,
@@ -668,7 +685,7 @@ export class WorkspaceRuntime
         )
       : null;
     this.assistantGenerationEnabled = assistantRuntime !== null;
-    const unguardedWorkflowExecutor =
+    const workflowExecutor =
       dependencies.workflowExecutor ??
       (assistantModel
         ? new WorkspaceWorkflowStepExecutor(
@@ -679,12 +696,6 @@ export class WorkspaceRuntime
             { assertModelUse: assertDocumentModelUse },
           )
         : null);
-    const workflowExecutor = unguardedWorkflowExecutor
-      ? new MatterPolicyWorkflowStepExecutor(
-          unguardedWorkflowExecutor,
-          matterInferencePolicy,
-        )
-      : null;
     const workflowRuntime = workflowExecutor
       ? new WorkspaceWorkflowRuntime(
           this.workflows,
@@ -723,6 +734,7 @@ export class WorkspaceRuntime
           this.documentRepository,
         ),
         lifecycle: chatLifecycle,
+        inferencePolicy,
       },
     );
     this.chats = new WorkspaceChatsRuntimePort(this.chatsService);
@@ -741,6 +753,7 @@ export class WorkspaceRuntime
             {
               allowLocalDevelopmentBaseUrl:
                 dependencies.allowLocalDevelopmentModelBaseUrl ?? false,
+              inferencePolicy,
             },
           )
         : null;
@@ -754,6 +767,7 @@ export class WorkspaceRuntime
         ? {
             snapshots: tabularSnapshots,
             profiles: modelProfilesRepository,
+            inferencePolicy,
           }
         : undefined,
     );

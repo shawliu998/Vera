@@ -7,6 +7,7 @@ import path from "node:path";
 import type { WorkspaceBlobCodec } from "../lib/workspace/blobStore";
 import { WorkspaceDatabase } from "../lib/workspace/database";
 import { LocalWorkspaceBlobStore } from "../lib/workspace/localWorkspaceBlobStore";
+import { ModelProfilePrivacyRepository } from "../lib/workspace/inferencePolicy";
 import { ModelConnectionTestsRepository } from "../lib/workspace/repositories/modelConnectionTests";
 import { ModelProfilesRepository } from "../lib/workspace/repositories/modelProfiles";
 import { ProjectsRepository } from "../lib/workspace/repositories/projects";
@@ -91,6 +92,16 @@ function seed(database: WorkspaceDatabase) {
     true,
   );
   profiles.update(PROFILE_ID, { enabled: true, now: NOW });
+  new ModelProfilePrivacyRepository(database).declare(
+    PROFILE_ID,
+    {
+      executionLocation: "local",
+      retention: "zero",
+      trainingUse: "prohibited",
+      sensitiveDataAllowed: true,
+    },
+    NOW,
+  );
   const projects = new ProjectsRepository(database);
   for (const [id, name] of [
     [PROJECT_ID, "Entry action Project"],

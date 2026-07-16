@@ -7,6 +7,7 @@ import path from "node:path";
 import type { Express } from "express";
 
 import { WorkspaceRuntime } from "../lib/workspace/runtime";
+import { WorkspaceInferencePolicy } from "../lib/workspace/inferencePolicy";
 import {
   CREDENTIAL_STORE_OPERATION_MODE,
   CredentialStoreCollisionError,
@@ -189,8 +190,8 @@ async function main() {
           : { id: model },
       ),
       {
-      status: 200,
-      headers: { "content-type": "application/json" },
+        status: 200,
+        headers: { "content-type": "application/json" },
       },
     );
   };
@@ -289,24 +290,84 @@ async function main() {
         vision: false,
       });
       const genericId = String(genericBody.value.id);
-      await fetch(
-        `${baseUrl}/api/v1/model-profiles/${genericId}/credential`,
+      const missingPrivacy = await fetch(
+        `${baseUrl}/api/v1/model-profiles/${genericId}/privacy`,
+        { headers: headers() },
+      );
+      assert.equal(missingPrivacy.status, 404);
+      assert.equal(
+        Number(
+          runtime.database
+            .prepare(
+              "SELECT count(*) AS count FROM model_profile_privacy WHERE model_profile_id=?",
+            )
+            .get(genericId)?.count,
+        ),
+        0,
+        "GET must not infer or persist model privacy metadata",
+      );
+      const incompletePrivacy = await fetch(
+        `${baseUrl}/api/v1/model-profiles/${genericId}/privacy`,
         {
-          method: "PUT",
+          method: "PATCH",
           headers: headers(),
-          body: JSON.stringify({ secret: "valid-audit-secret" }),
+          body: JSON.stringify({ execution_location: "local" }),
         },
       );
+      assert.equal(incompletePrivacy.status, 412);
+      const unknownPrivacyField = await fetch(
+        `${baseUrl}/api/v1/model-profiles/${genericId}/privacy`,
+        {
+          method: "PATCH",
+          headers: headers(),
+          body: JSON.stringify({
+            execution_location: "confidential_remote",
+            retention: "unknown",
+            training_use: "unknown",
+            sensitive_data_allowed: true,
+            inferred_from_localhost: true,
+          }),
+        },
+      );
+      assert.equal(unknownPrivacyField.status, 400);
+      const declaredPrivacy = await fetch(
+        `${baseUrl}/api/v1/model-profiles/${genericId}/privacy`,
+        {
+          method: "PATCH",
+          headers: headers(),
+          body: JSON.stringify({
+            execution_location: "confidential_remote",
+            retention: "unknown",
+            training_use: "unknown",
+            sensitive_data_allowed: true,
+          }),
+        },
+      );
+      assert.equal(declaredPrivacy.status, 200);
+      const declaredPrivacyBody = await json(declaredPrivacy);
+      assertSecretFree(declaredPrivacyBody.text, []);
+      assert.equal(
+        declaredPrivacyBody.value.declaration_basis,
+        "user_or_admin_declared",
+      );
+      assert.equal(declaredPrivacyBody.value.model_profile_enabled, false);
+      await fetch(`${baseUrl}/api/v1/model-profiles/${genericId}/credential`, {
+        method: "PUT",
+        headers: headers(),
+        body: JSON.stringify({ secret: "valid-audit-secret" }),
+      });
       const genericTested = await fetch(
         `${baseUrl}/api/v1/model-profiles/${genericId}/test`,
         { method: "POST", headers: headers(), body: "{}" },
       );
       assert.equal(genericTested.status, 200);
       assert.equal(
-        ((await json(genericTested)).value.connection_test as Record<
-          string,
-          unknown
-        >).status,
+        (
+          (await json(genericTested)).value.connection_test as Record<
+            string,
+            unknown
+          >
+        ).status,
         "passed",
       );
       const genericEnabled = await fetch(
@@ -315,6 +376,79 @@ async function main() {
       );
       const genericEnabledBody = await json(genericEnabled);
       assert.equal(genericEnabledBody.value.enabled, true);
+      const policy = new WorkspaceInferencePolicy(runtime.database);
+      assert.deepEqual(
+        policy.evaluate({
+          scope: {
+            scope: "global",
+            projectId: null,
+            matterProfilePresent: false,
+          },
+          modelProfileId: genericId,
+          operation: "assistant",
+        }),
+        { decision: "deny", reasonCode: "model_retention_unknown" },
+      );
+      const confirmedPrivacy = await fetch(
+        `${baseUrl}/api/v1/model-profiles/${genericId}/privacy`,
+        {
+          method: "PATCH",
+          headers: headers(),
+          body: JSON.stringify({
+            retention: "zero",
+            training_use: "prohibited",
+          }),
+        },
+      );
+      assert.equal(confirmedPrivacy.status, 200);
+      const confirmedPrivacyBody = await json(confirmedPrivacy);
+      assert(
+        Date.parse(String(confirmedPrivacyBody.value.updated_at)) >
+          Date.parse(String(declaredPrivacyBody.value.updated_at)),
+        "privacy PATCH timestamps must move strictly forwards",
+      );
+      const projectId = "40000000-0000-4000-8000-000000000001";
+      const matterId = "40000000-0000-4000-8000-000000000002";
+      const at = new Date().toISOString();
+      runtime.database
+        .prepare(
+          `INSERT INTO projects (id,name,status,created_at,updated_at)
+           VALUES (?,'Privacy Project','active',?,?),
+                  (?,'Privacy Matter','active',?,?)`,
+        )
+        .run(projectId, at, at, matterId, at, at);
+      runtime.database
+        .prepare(
+          `INSERT INTO matter_profiles
+             (project_id,matter_type,workspace_type,created_at,updated_at)
+           VALUES (?,'general','general_legal',?,?)`,
+        )
+        .run(matterId, at, at);
+      runtime.database
+        .prepare(
+          `INSERT INTO matter_policies
+             (project_id,external_egress_mode,created_at,updated_at)
+           VALUES (?,'allowed_by_policy',?,?)`,
+        )
+        .run(matterId, at, at);
+      runtime.database
+        .prepare(
+          `INSERT INTO matter_policy_execution_locations
+             (project_id,execution_location,created_at)
+           VALUES (?,'confidential_remote',?)`,
+        )
+        .run(matterId, at);
+      for (const projectIdValue of [null, projectId, matterId] as const) {
+        assert.equal(
+          policy.evaluate({
+            scope: policy.resolveScope(projectIdValue),
+            modelProfileId: genericId,
+            operation:
+              projectIdValue === matterId ? "tabular_generation" : "assistant",
+          }).decision,
+          "allow",
+        );
+      }
       const genericRevision = Number(
         (genericEnabledBody.value.endpoint_binding as Record<string, unknown>)
           .connection_revision,

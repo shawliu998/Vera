@@ -793,6 +793,20 @@ function createRuntimePort(
       modelService.update(id, input);
       return toModelWire(modelService.getView(id));
     },
+    getModelPrivacy() {
+      throw new WorkspaceApiError(
+        404,
+        "NOT_FOUND",
+        "Model privacy declaration is not configured.",
+      );
+    },
+    updateModelPrivacy() {
+      throw new WorkspaceApiError(
+        503,
+        "PRECONDITION_FAILED",
+        "Model privacy runtime is unavailable in this compatibility fixture.",
+      );
+    },
     putCredential(_context, id, input) {
       modelService.configureCredential(id, input);
       return toModelWire(modelService.getView(id));
@@ -4257,7 +4271,7 @@ try {
       checksumMaterial: migration.checksumMaterial,
     }));
     assert.deepEqual(compiledGraph.migrations, currentChecksums);
-    assert.equal(compiledGraph.runtime.currentVersion, 16);
+    assert.equal(compiledGraph.runtime.currentVersion, 17);
     assert.deepEqual(
       compiledGraph.runtime.appliedVersions,
       WORKSPACE_MIGRATIONS.map((migration) => migration.version),

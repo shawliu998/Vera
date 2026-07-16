@@ -17,6 +17,7 @@ import type {
 } from "../repositories/chats";
 import { WorkspaceJobLeaseLostError } from "../repositories/jobs";
 import type { AssistantRetrievalChunk } from "../repositories/assistantRetrieval";
+import type { InferenceOperation } from "../inferencePolicy";
 
 const Id = z.string().uuid();
 const MAX_TOOL_ROUNDS = 10;
@@ -188,6 +189,8 @@ export interface AssistantModelPort {
 
   runTurn(input: {
     modelProfileId: string;
+    projectId: string | null;
+    operation: Extract<InferenceOperation, "assistant" | "workflow_prompt">;
     systemPrompt: string;
     messages: readonly AssistantModelMessage[];
     tools: readonly AssistantToolDefinition[];
@@ -746,6 +749,8 @@ export class AssistantRuntimeService {
         const turn = ModelTurnSchema.parse(
           await this.model.runTurn({
             modelProfileId: snapshot.modelProfileId,
+            projectId: snapshot.payload.projectId,
+            operation: "assistant",
             systemPrompt,
             messages,
             tools,

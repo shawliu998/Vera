@@ -15,6 +15,7 @@ import {
   type MatterView,
   type MatterViewPage,
 } from "./contracts";
+import type { MatterCapabilityReadPort } from "./capabilities";
 
 type Row = Record<string, unknown>;
 
@@ -26,6 +27,45 @@ const PROJECT_MATTER_COLUMNS = `
   p.practice AS project_practice,
   p.status AS project_status,
   p.default_model_profile_id AS project_default_model_profile_id,
+  coalesce(
+    p.default_model_profile_id,
+    (SELECT settings.default_model_profile_id
+       FROM workspace_settings settings
+      WHERE settings.id = 'workspace')
+  ) AS project_effective_default_model_profile_id,
+  (SELECT model.provider
+     FROM model_profiles model
+    WHERE model.id = coalesce(
+      p.default_model_profile_id,
+      (SELECT settings.default_model_profile_id
+         FROM workspace_settings settings
+        WHERE settings.id = 'workspace')
+    )) AS project_effective_model_provider,
+  (SELECT model.capabilities_json
+     FROM model_profiles model
+    WHERE model.id = coalesce(
+      p.default_model_profile_id,
+      (SELECT settings.default_model_profile_id
+         FROM workspace_settings settings
+        WHERE settings.id = 'workspace')
+    )) AS project_effective_model_capabilities_json,
+  CASE WHEN EXISTS (
+    SELECT 1
+      FROM model_profiles model
+      JOIN model_profile_connection_tests connection
+        ON connection.profile_id = model.id
+       AND connection.connection_revision = model.connection_revision
+       AND connection.status = 'passed'
+       AND connection.error_code IS NULL
+       AND connection.retryable = 0
+     WHERE model.id = coalesce(
+       p.default_model_profile_id,
+       (SELECT settings.default_model_profile_id
+          FROM workspace_settings settings
+         WHERE settings.id = 'workspace')
+     )
+       AND model.enabled = 1
+  ) THEN 1 ELSE 0 END AS project_default_model_ready,
   p.created_at AS project_created_at,
   p.updated_at AS project_updated_at,
   p.archived_at AS project_archived_at,
@@ -88,6 +128,8 @@ const CursorSchema = z
   .object({
     updatedAt: z.string().datetime({ offset: true }),
     id: WorkspaceIdSchema,
+    status: MatterListRequestSchema.shape.status.unwrap(),
+    profileState: MatterListRequestSchema.shape.profileState.unwrap(),
   })
   .strict();
 
@@ -117,29 +159,69 @@ function mapMatterProfile(row: Row): MatterProfile | null {
   }
 }
 
-function mapMatterView(row: Row): MatterView {
+function mapMatterView(
+  row: Row,
+  capabilities: MatterCapabilityReadPort,
+): MatterView {
   try {
     const profile = mapMatterProfile(row);
+    const effectiveModelCapabilities =
+      row.project_effective_model_capabilities_json == null
+        ? null
+        : z
+            .object({
+              streaming: z.boolean(),
+              toolCalling: z.boolean(),
+              structuredOutput: z.boolean(),
+              vision: z.boolean(),
+            })
+            .strict()
+            .parse(JSON.parse(String(row.project_effective_model_capabilities_json)));
+    const project = MatterProjectProjectionSchema.parse({
+      id: row.project_id,
+      name: row.project_name,
+      description: row.project_description,
+      cmNumber: row.project_cm_number,
+      practice: row.project_practice,
+      status: row.project_status,
+      defaultModelProfileId: row.project_default_model_profile_id,
+      createdAt: row.project_created_at,
+      updatedAt: row.project_updated_at,
+      archivedAt: row.project_archived_at,
+      documentCount: Number(row.project_document_count),
+      chatCount: Number(row.project_chat_count),
+      tabularReviewCount: Number(row.project_tabular_review_count),
+      workflowCount: Number(row.project_workflow_count),
+    });
     return MatterViewSchema.parse({
-      project: {
-        id: row.project_id,
-        name: row.project_name,
-        description: row.project_description,
-        cmNumber: row.project_cm_number,
-        practice: row.project_practice,
-        status: row.project_status,
-        defaultModelProfileId: row.project_default_model_profile_id,
-        createdAt: row.project_created_at,
-        updatedAt: row.project_updated_at,
-        archivedAt: row.project_archived_at,
-        documentCount: Number(row.project_document_count),
-        chatCount: Number(row.project_chat_count),
-        tabularReviewCount: Number(row.project_tabular_review_count),
-        workflowCount: Number(row.project_workflow_count),
-      },
+      project,
       profile,
-      ...matterProfilePresentation(
-        MatterProjectProjectionSchema.shape.status.parse(row.project_status),
+      profileState: matterProfilePresentation(project.status, profile).profileState,
+      capabilities: capabilities.project(
+        {
+          id: project.id,
+          status: project.status,
+          defaultModelProfileId:
+            row.project_effective_default_model_profile_id == null
+              ? null
+              : WorkspaceIdSchema.parse(
+                  row.project_effective_default_model_profile_id,
+                ),
+          defaultModelReady: Number(row.project_default_model_ready) === 1,
+          effectiveModelProvider:
+            row.project_effective_model_provider == null
+              ? null
+              : z
+                  .enum([
+                    "openai",
+                    "deepseek",
+                    "anthropic",
+                    "gemini",
+                    "openai_compatible",
+                  ])
+                  .parse(row.project_effective_model_provider),
+          effectiveModelCapabilities,
+        },
         profile,
       ),
     });
@@ -149,17 +231,27 @@ function mapMatterView(row: Row): MatterView {
   }
 }
 
-function encodeCursor(view: MatterView): string {
+function encodeCursor(
+  view: MatterView,
+  status: NonNullable<MatterListRequest["status"]>,
+  profileState: NonNullable<MatterListRequest["profileState"]>,
+): string {
   return Buffer.from(
     JSON.stringify({
       updatedAt: view.project.updatedAt,
       id: view.project.id,
+      status,
+      profileState,
     }),
     "utf8",
   ).toString("base64url");
 }
 
-function decodeCursor(value: string | null | undefined) {
+function decodeCursor(
+  value: string | null | undefined,
+  status: NonNullable<MatterListRequest["status"]>,
+  profileState: NonNullable<MatterListRequest["profileState"]>,
+) {
   if (value == null) return null;
   if (!/^[A-Za-z0-9_-]{1,512}$/.test(value)) {
     validationError("Matter pagination cursor is invalid.");
@@ -169,7 +261,11 @@ function decodeCursor(value: string | null | undefined) {
     if (Buffer.byteLength(decoded, "utf8") > 1_024) {
       validationError("Matter pagination cursor is invalid.");
     }
-    return CursorSchema.parse(JSON.parse(decoded) as unknown);
+    const cursor = CursorSchema.parse(JSON.parse(decoded) as unknown);
+    if (cursor.status !== status || cursor.profileState !== profileState) {
+      validationError("Matter pagination cursor is invalid.");
+    }
+    return cursor;
   } catch (error) {
     if (error instanceof WorkspaceApiError) throw error;
     validationError("Matter pagination cursor is invalid.");
@@ -185,7 +281,13 @@ export interface MatterOverviewReadPort {
 
 /** Read-only owner for Matter list/detail projection and aggregate counts. */
 export class MatterOverviewRepository implements MatterOverviewReadPort {
-  constructor(readonly database: WorkspaceDatabaseAdapter) {}
+  constructor(
+    readonly database: WorkspaceDatabaseAdapter,
+    private readonly capabilities: MatterCapabilityReadPort = {
+      project: (project, profile) =>
+        matterProfilePresentation(project.status, profile).capabilities,
+    },
+  ) {}
 
   private safe<T>(operation: () => T): T {
     try {
@@ -203,14 +305,27 @@ export class MatterOverviewRepository implements MatterOverviewReadPort {
   list(input: MatterListRequest = {}): MatterViewPage {
     return this.safe(() => {
       const request = MatterListRequestSchema.parse(input);
-      const cursor = decodeCursor(request.cursor);
+      const status = request.status ?? "active";
+      const profileState = request.profileState ?? "all";
+      const cursor = decodeCursor(request.cursor, status, profileState);
       const limit = request.limit ?? 50;
+      const profilePredicate =
+        profileState === "profiled"
+          ? "AND EXISTS (SELECT 1 FROM matter_profiles filter_profile WHERE filter_profile.project_id = p.id)"
+          : profileState === "ready"
+            ? "AND EXISTS (SELECT 1 FROM matter_profiles filter_profile WHERE filter_profile.project_id = p.id AND filter_profile.workspace_type IS NOT NULL)"
+            : profileState === "classification_required"
+              ? "AND EXISTS (SELECT 1 FROM matter_profiles filter_profile WHERE filter_profile.project_id = p.id AND filter_profile.workspace_type IS NULL)"
+              : profileState === "absent"
+                ? "AND NOT EXISTS (SELECT 1 FROM matter_profiles filter_profile WHERE filter_profile.project_id = p.id)"
+                : "";
       const rows = this.database
         .prepare(
           projectionQuery(`
             SELECT p.*
               FROM projects p
              WHERE p.status = ?
+               ${profilePredicate}
                ${
                  cursor
                    ? "AND (p.updated_at < ? OR (p.updated_at = ? AND p.id < ?))"
@@ -221,16 +336,20 @@ export class MatterOverviewRepository implements MatterOverviewReadPort {
           `),
         )
         .all(
-          request.status ?? "active",
+          status,
           ...(cursor ? [cursor.updatedAt, cursor.updatedAt, cursor.id] : []),
           limit + 1,
         );
-      const items = rows.slice(0, limit).map(mapMatterView);
+      const items = rows
+        .slice(0, limit)
+        .map((row) => mapMatterView(row, this.capabilities));
       const last = items.at(-1);
       return MatterViewPageSchema.parse({
         items,
         nextCursor:
-          rows.length > limit && last !== undefined ? encodeCursor(last) : null,
+          rows.length > limit && last !== undefined
+            ? encodeCursor(last, status, profileState)
+            : null,
       });
     });
   }
@@ -251,7 +370,7 @@ export class MatterOverviewRepository implements MatterOverviewReadPort {
           `),
         )
         .get(parsedProjectId.data);
-      return row ? mapMatterView(row) : null;
+      return row ? mapMatterView(row, this.capabilities) : null;
     });
   }
 

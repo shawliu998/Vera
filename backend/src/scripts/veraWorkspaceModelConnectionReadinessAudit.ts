@@ -189,10 +189,10 @@ function auditUpgradeAndConnectionRevisionSemantics() {
 
   const upgraded = new WorkspaceDatabase(databasePath);
   try {
-    assert.equal(upgraded.migration?.currentVersion, 16);
+    assert.equal(upgraded.migration?.currentVersion, 17);
     assert.deepEqual(
       upgraded.migration?.applied.map((entry) => entry.version),
-      [9, 10, 11, 12, 13, 14, 15, 16],
+      [9, 10, 11, 12, 13, 14, 15, 16, 17],
     );
     assert.equal(
       columnNames(upgraded, "model_profiles").includes("connection_revision"),
@@ -377,10 +377,10 @@ function insertConnectionResult(
 function auditNewInstallAndStrictConstraints() {
   const database = new WorkspaceDatabase(path.join(root, "new-install.db"));
   try {
-    assert.equal(database.migration?.currentVersion, 16);
+    assert.equal(database.migration?.currentVersion, 17);
     assert.deepEqual(
       database.migration?.applied.map((entry) => entry.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
     );
     assert.equal(
       WORKSPACE_MIGRATIONS.at(8),
@@ -719,7 +719,7 @@ try {
   process.env.ALETHEIA_DATABASE_ENCRYPTION = "metadata_plaintext";
   assert.deepEqual(
     WORKSPACE_MIGRATIONS.map((migration) => migration.version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
   );
   assert.deepEqual(
     V8_MIGRATIONS.map((migration) => migration.version),

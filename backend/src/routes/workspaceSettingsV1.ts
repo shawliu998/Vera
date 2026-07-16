@@ -2,6 +2,11 @@ import { Router, type RequestHandler, type Response } from "express";
 import { ZodError, z } from "zod";
 
 import { WorkspaceApiError } from "../lib/workspace/errors";
+import {
+  ExecutionLocationSchema,
+  ModelRetentionSchema,
+  ModelTrainingUseSchema,
+} from "../lib/workspace/inferencePolicy";
 import { MODEL_CONNECTION_TEST_ERROR_CODES } from "../lib/workspace/modelConnectionReadiness";
 import { MAX_MODEL_CREDENTIAL_STORE_SECRET_BYTES } from "../lib/workspace/services/credentialStore";
 
@@ -57,6 +62,18 @@ const ModelPatchBody = ModelCreateBody.partial()
   .refine(
     (value) => Object.keys(value).length > 0,
     "at least one update is required",
+  );
+const ModelPrivacyPatchBody = z
+  .object({
+    execution_location: ExecutionLocationSchema.optional(),
+    retention: ModelRetentionSchema.optional(),
+    training_use: ModelTrainingUseSchema.optional(),
+    sensitive_data_allowed: z.boolean().optional(),
+  })
+  .strict()
+  .refine(
+    (value) => Object.keys(value).length > 0,
+    "at least one privacy update is required",
   );
 const CredentialBody = z
   .object({
@@ -276,6 +293,20 @@ const SettingsWireSchema = z
     updated_at: StrictUtcTimestamp,
   })
   .strict();
+const ModelPrivacyWireSchema = z
+  .object({
+    model_profile_id: Uuid,
+    configured: z.literal(true),
+    declaration_basis: z.literal("user_or_admin_declared"),
+    model_profile_enabled: z.boolean(),
+    execution_location: ExecutionLocationSchema,
+    retention: ModelRetentionSchema,
+    training_use: ModelTrainingUseSchema,
+    sensitive_data_allowed: z.boolean(),
+    created_at: StrictUtcTimestamp,
+    updated_at: StrictUtcTimestamp,
+  })
+  .strict();
 const StatusWireSchema = z
   .object({
     capabilities: CapabilitiesWireSchema,
@@ -326,6 +357,21 @@ function toSettingsPatch(value: z.infer<typeof SettingsPatchBody>) {
       : {}),
     ...(value.default_project_id !== undefined
       ? { defaultProjectId: value.default_project_id }
+      : {}),
+  };
+}
+
+function toModelPrivacyPatch(value: z.infer<typeof ModelPrivacyPatchBody>) {
+  return {
+    ...(value.execution_location !== undefined
+      ? { executionLocation: value.execution_location }
+      : {}),
+    ...(value.retention !== undefined ? { retention: value.retention } : {}),
+    ...(value.training_use !== undefined
+      ? { trainingUse: value.training_use }
+      : {}),
+    ...(value.sensitive_data_allowed !== undefined
+      ? { sensitiveDataAllowed: value.sensitive_data_allowed }
       : {}),
   };
 }
@@ -431,6 +477,7 @@ export type WorkspaceCapabilitiesWire = z.infer<typeof CapabilitiesWireSchema>;
 export type WorkspaceModelWire = z.infer<typeof ModelWireSchema>;
 export type WorkspaceSettingsWire = z.infer<typeof SettingsWireSchema>;
 export type WorkspaceStatusWire = z.infer<typeof StatusWireSchema>;
+export type WorkspaceModelPrivacyWire = z.infer<typeof ModelPrivacyWireSchema>;
 
 export interface WorkspaceModelSettingsRuntimePort {
   getStatus(
@@ -459,6 +506,15 @@ export interface WorkspaceModelSettingsRuntimePort {
     id: string,
     input: ReturnType<typeof toModelInput>,
   ): Promise<WorkspaceModelWire> | WorkspaceModelWire;
+  getModelPrivacy(
+    context: WorkspaceModelSettingsContext,
+    id: string,
+  ): Promise<WorkspaceModelPrivacyWire> | WorkspaceModelPrivacyWire;
+  updateModelPrivacy(
+    context: WorkspaceModelSettingsContext,
+    id: string,
+    input: ReturnType<typeof toModelPrivacyPatch>,
+  ): Promise<WorkspaceModelPrivacyWire> | WorkspaceModelPrivacyWire;
   putCredential(
     context: WorkspaceModelSettingsContext,
     id: string,
@@ -614,6 +670,37 @@ export function createWorkspaceSettingsV1Router(
             requestContext(response),
             parseInput(Uuid, request.params.id),
             toModelInput(parseInput(ModelPatchBody, request.body)),
+          ),
+        ),
+      );
+    })().catch((error) => handleRouteError(response, error));
+  });
+  router.get(
+    "/model-profiles/:id/privacy",
+    run(async (response) => {
+      const request = response.req;
+      response.json(
+        parseOutput(
+          ModelPrivacyWireSchema,
+          await runtime.getModelPrivacy(
+            requestContext(response),
+            parseInput(Uuid, request.params.id),
+          ),
+        ),
+      );
+    }),
+  );
+  router.patch("/model-profiles/:id/privacy", (request, response) => {
+    void (async () => {
+      response.json(
+        parseOutput(
+          ModelPrivacyWireSchema,
+          await runtime.updateModelPrivacy(
+            requestContext(response),
+            parseInput(Uuid, request.params.id),
+            toModelPrivacyPatch(
+              parseInput(ModelPrivacyPatchBody, request.body),
+            ),
           ),
         ),
       );

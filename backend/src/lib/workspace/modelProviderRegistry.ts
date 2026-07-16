@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 
-import { WorkspaceApiError } from "./errors";
 import {
   defaultBaseUrlForProvider,
   defaultOriginForProvider,
@@ -11,13 +10,11 @@ import { createModelProvider } from "./providers";
 import { createHardenedGenericTransport } from "./providers/hardenedGenericTransport";
 import type {
   HardenedGenericTransport,
-  ModelGenerateRequest,
   ModelProvider,
   ModelProviderConfig,
 } from "./providers";
 import type { StoredModelProfileRecord } from "./repositories/modelProfiles";
 import type { CredentialStorePort } from "./services/credentialStore";
-import type { EndpointBindingSnapshot } from "./services/modelProfiles";
 import {
   instrumentModelProvider,
   type ModelCallDiagnosticsPort,
@@ -39,68 +36,6 @@ const PROVIDER_CAPABILITIES: RuntimeModelCapabilities = Object.freeze({
   vision: false,
 });
 
-type ProviderRuntimeRequest =
-  | {
-      operation: "validate";
-      profile: StoredModelProfileRecord;
-      expectedBinding: EndpointBindingSnapshot;
-    }
-  | {
-      operation: "generate";
-      profile: StoredModelProfileRecord;
-      expectedBinding: EndpointBindingSnapshot;
-      request: ModelGenerateRequest;
-      signal: AbortSignal;
-    };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function providerRuntimeRequest(value: unknown): ProviderRuntimeRequest {
-  if (
-    !isRecord(value) ||
-    (value.operation !== "validate" && value.operation !== "generate")
-  ) {
-    throw new WorkspaceApiError(
-      400,
-      "VALIDATION_ERROR",
-      "Model provider runtime request is invalid.",
-    );
-  }
-  const profile = value.profile as StoredModelProfileRecord;
-  const expectedBinding = value.expectedBinding as EndpointBindingSnapshot;
-  if (
-    !isRecord(profile) ||
-    !isRecord(expectedBinding) ||
-    profile.provider !== expectedBinding.provider ||
-    profile.model !== expectedBinding.model
-  ) {
-    throw new WorkspaceApiError(
-      409,
-      "CONFLICT",
-      "Model provider binding is invalid.",
-    );
-  }
-  if (value.operation === "validate") {
-    return { operation: "validate", profile, expectedBinding };
-  }
-  if (!isRecord(value.request) || !(value.signal instanceof AbortSignal)) {
-    throw new WorkspaceApiError(
-      400,
-      "VALIDATION_ERROR",
-      "Model generation runtime request is invalid.",
-    );
-  }
-  return {
-    operation: "generate",
-    profile,
-    expectedBinding,
-    request: value.request as ModelGenerateRequest,
-    signal: value.signal,
-  };
-}
-
 export type WorkspaceModelProviderRegistryOptions = {
   fetchImpl?: typeof fetch;
   hardenedGenericTransport?: HardenedGenericTransport;
@@ -112,8 +47,9 @@ export type WorkspaceModelProviderRegistryOptions = {
 
 /**
  * A registry of concrete provider adapters. Its compatibility port is consumed
- * by ModelProfilesService for availability, while createProvider() is the same
- * factory used by connection probes and later generation runtimes.
+ * by ModelProfilesService for availability. It deliberately exposes no
+ * compatibility request executor: createProvider() is reserved for the fixed
+ * connection validation path and policy-enforced generation adapters.
  */
 export class WorkspaceModelProviderRegistry implements ModelProviderAdapterRegistryPort {
   private readonly fetchImpl: typeof fetch;
@@ -193,34 +129,6 @@ export class WorkspaceModelProviderRegistry implements ModelProviderAdapterRegis
     return {
       runtimeWired: true as const,
       capabilities,
-      handleRequest: (value: unknown) => {
-        const request = providerRuntimeRequest(value);
-        if (
-          request.profile.provider !== input.provider ||
-          request.profile.model !== input.model ||
-          request.expectedBinding.normalizedBaseUrl !==
-            input.normalizedBaseUrl ||
-          request.expectedBinding.canonicalOrigin !== input.canonicalOrigin
-        ) {
-          throw new WorkspaceApiError(
-            409,
-            "CONFLICT",
-            "Model provider binding changed before execution.",
-          );
-        }
-        const provider = this.createProvider({
-          profile: request.profile,
-          expectedBinding: request.expectedBinding,
-          allowLocalDevelopmentBaseUrl: this.allowLocalDevelopmentBaseUrl,
-        });
-        return request.operation === "validate"
-          ? provider.validateConfiguration({
-              profile: request.profile,
-              expectedBinding: request.expectedBinding,
-              allowLocalDevelopmentBaseUrl: this.allowLocalDevelopmentBaseUrl,
-            })
-          : provider.generate(request.request, request.signal);
-      },
     };
   }
 

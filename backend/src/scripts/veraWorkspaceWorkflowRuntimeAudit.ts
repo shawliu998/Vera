@@ -12,6 +12,10 @@ import {
   WorkspaceDatabase,
 } from "../lib/workspace/database";
 import { WorkspaceApiError } from "../lib/workspace/errors";
+import {
+  ModelProfilePrivacyRepository,
+  WorkspaceInferencePolicy,
+} from "../lib/workspace/inferencePolicy";
 import { WORKSPACE_LOCAL_PRINCIPAL_ID } from "../lib/workspace/principal";
 import { WORKFLOW_RUNTIME_V6_MIGRATION } from "../lib/workspace/migrations/v6WorkflowRuntime";
 import {
@@ -101,6 +105,24 @@ function seed(database: WorkspaceDatabase) {
          VALUES (?,0,'passed',NULL,0,1,?)`,
       )
       .run(MODEL, now);
+  }
+  if (
+    database
+      .prepare(
+        "SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name='model_profile_privacy'",
+      )
+      .get()
+  ) {
+    new ModelProfilePrivacyRepository(database).declare(
+      MODEL,
+      {
+        executionLocation: "local",
+        retention: "zero",
+        trainingUse: "prohibited",
+        sensitiveDataAllowed: true,
+      },
+      now,
+    );
   }
   for (const [id, name] of [
     [PROJECT, "Audit Project"],
@@ -443,6 +465,7 @@ async function run() {
       jobEnqueuer,
       clock,
       nextUuid,
+      { inferencePolicy: new WorkspaceInferencePolicy(database) },
     );
 
     const workflow = createWorkflow(workflows, "Immutable Audit");

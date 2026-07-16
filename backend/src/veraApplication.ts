@@ -118,13 +118,13 @@ function matterHealth(runtime: VeraWorkspaceRuntime): Record<string, unknown> {
       typeof health === "object" &&
       !Array.isArray(health) &&
       health.status === "ready" &&
-      health.schemaVersion === 16 &&
-      health.inferencePolicy === "gate_closed"
+      health.schemaVersion === 17 &&
+      health.inferencePolicy === "minimal_unified"
     ) {
       return {
         status: "ready",
-        schemaVersion: 16,
-        inferencePolicy: "gate_closed",
+        schemaVersion: 17,
+        inferencePolicy: "minimal_unified",
       };
     }
     return { status: "unavailable" };

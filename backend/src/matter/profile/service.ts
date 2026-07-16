@@ -14,13 +14,20 @@ import {
   CreateMatterProfileRequestSchema,
   CreateMatterRequestSchema,
   MatterListRequestSchema,
+  MatterPolicySchema,
   MatterProfileSchema,
+  ReplaceMatterPolicyRequestSchema,
+  UpdateMatterRequestSchema,
   UpdateMatterProfileRequestSchema,
   safeMatterValidationDetails,
   type CreateMatterProfileRequest,
 } from "./contracts";
 import type { MatterOverviewReadPort } from "./overviewRepository";
 import type { MatterProfilePersistencePort } from "./repository";
+import {
+  MatterPolicyRepository,
+  type MatterPolicyPersistencePort,
+} from "./policyRepository";
 
 export type MatterProfileServiceContext = { principalId: string };
 
@@ -28,6 +35,7 @@ export type MatterProfileServiceOptions = {
   clock?: () => Date;
   nextId?: () => string;
   acceptingRequests?: () => boolean;
+  policyRepository?: MatterPolicyPersistencePort;
 };
 
 /** Narrow policy seam: no job payload, controller, or cancellation authority. */
@@ -102,6 +110,7 @@ export class MatterProfileService {
   private readonly clock: () => Date;
   private readonly nextId: () => string;
   private readonly accepting: () => boolean;
+  private readonly policies: MatterPolicyPersistencePort;
 
   constructor(
     private readonly database: WorkspaceDatabaseAdapter,
@@ -114,13 +123,16 @@ export class MatterProfileService {
     if (
       projects.database !== database ||
       profiles.database !== database ||
-      overview.database !== database
+      overview.database !== database ||
+      (options.policyRepository !== undefined &&
+        options.policyRepository.database !== database)
     ) {
       internal("Matter Profile repositories must share one database.");
     }
     this.clock = options.clock ?? (() => new Date());
     this.nextId = options.nextId ?? randomUUID;
     this.accepting = options.acceptingRequests ?? (() => true);
+    this.policies = options.policyRepository ?? new MatterPolicyRepository(database);
   }
 
   private requireAccess(context: MatterProfileServiceContext) {
@@ -318,6 +330,96 @@ export class MatterProfileService {
         this.profiles.update(profile);
         this.projects.update(parsedProjectId, { now: timestamp });
         return this.overview.require(parsedProjectId);
+      });
+    });
+  }
+
+  updateMatter(
+    context: MatterProfileServiceContext,
+    projectId: string,
+    value: unknown,
+  ) {
+    return this.publicCall(() => {
+      this.requireAccess(context);
+      const parsedProjectId = WorkspaceIdSchema.parse(projectId);
+      const request = UpdateMatterRequestSchema.parse(value);
+      return this.transaction(() => {
+        const project = this.projects.requireActive(parsedProjectId);
+        const existing = this.profiles.require(parsedProjectId);
+        if (
+          request.profile !== undefined &&
+          existing.workspaceType === null &&
+          request.profile.workspaceType === undefined
+        ) {
+          throw new WorkspaceApiError(
+            400,
+            "VALIDATION_ERROR",
+            "Matter workspace classification is required.",
+          );
+        }
+        const timestamp = nextTimestamp(this.now(), [
+          project.updatedAt,
+          existing.updatedAt,
+        ]);
+        this.projects.update(parsedProjectId, {
+          ...(request.project ?? {}),
+          now: timestamp,
+        });
+        if (request.profile !== undefined) {
+          this.profiles.update(
+            MatterProfileSchema.parse({
+              ...existing,
+              ...request.profile,
+              updatedAt: timestamp,
+            }),
+          );
+        }
+        return this.overview.require(parsedProjectId);
+      });
+    });
+  }
+
+  getMatterPolicy(
+    context: MatterProfileServiceContext,
+    projectId: string,
+  ) {
+    return this.publicCall(() => {
+      this.requireAccess(context);
+      const parsedProjectId = WorkspaceIdSchema.parse(projectId);
+      this.projects.require(parsedProjectId);
+      this.profiles.require(parsedProjectId);
+      return this.policies.require(parsedProjectId);
+    });
+  }
+
+  replaceMatterPolicy(
+    context: MatterProfileServiceContext,
+    projectId: string,
+    value: unknown,
+  ) {
+    return this.publicCall(() => {
+      this.requireAccess(context);
+      const parsedProjectId = WorkspaceIdSchema.parse(projectId);
+      const request = ReplaceMatterPolicyRequestSchema.parse(value);
+      return this.transaction(() => {
+        const project = this.projects.requireActive(parsedProjectId);
+        const profile = this.profiles.require(parsedProjectId);
+        const existing = this.policies.get(parsedProjectId);
+        const timestamp = nextTimestamp(this.now(), [
+          project.updatedAt,
+          profile.updatedAt,
+          ...(existing ? [existing.updatedAt] : []),
+        ]);
+        const policy = this.policies.replace(
+          MatterPolicySchema.parse({
+            projectId: parsedProjectId,
+            ...request,
+            createdAt: existing?.createdAt ?? timestamp,
+            updatedAt: timestamp,
+          }),
+        );
+        this.projects.update(parsedProjectId, { now: timestamp });
+        return policy;
       });
     });
   }

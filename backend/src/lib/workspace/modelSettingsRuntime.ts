@@ -22,8 +22,15 @@ import type {
   WorkspaceModelSettingsContext,
   WorkspaceModelSettingsRuntimePort,
   WorkspaceModelWire,
+  WorkspaceModelPrivacyWire,
   WorkspaceSettingsWire,
 } from "../../routes/workspaceSettingsV1";
+import {
+  ModelProfilePrivacyRepository,
+  type ExecutionLocation,
+  type ModelRetention,
+  type ModelTrainingUse,
+} from "./inferencePolicy";
 
 type ModelMutationInput = {
   name?: string;
@@ -35,12 +42,20 @@ type ModelMutationInput = {
   capabilities?: StoredModelProfileRecord["capabilities"];
 };
 
+type ModelPrivacyMutationInput = {
+  executionLocation?: ExecutionLocation;
+  retention?: ModelRetention;
+  trainingUse?: ModelTrainingUse;
+  sensitiveDataAllowed?: boolean;
+};
+
 export type WorkspaceModelSettingsRuntimeDependencies = {
   profiles: ModelProfilesService;
   profileRepository: ModelProfilesRepository;
   connectionTests: ModelConnectionTestsRepository;
   settings: SettingsService;
   providerRegistry: WorkspaceModelProviderRegistry | null;
+  privacy: ModelProfilePrivacyRepository;
   allowLocalDevelopmentBaseUrl?: boolean;
   clock?: () => Date;
   monotonicClock?: () => number;
@@ -162,6 +177,47 @@ export class WorkspaceModelSettingsRuntime implements WorkspaceModelSettingsRunt
     return this.dependencies.profileRepository
       .listStored()
       .map((record) => this.modelWire(record.id));
+  }
+
+  private modelPrivacyWire(id: string): WorkspaceModelPrivacyWire {
+    const profile = this.dependencies.profileRepository.requireStored(id);
+    const privacy = this.dependencies.privacy.get(id);
+    if (!privacy) {
+      throw new WorkspaceApiError(
+        404,
+        "NOT_FOUND",
+        "Model privacy declaration is not configured.",
+      );
+    }
+    return {
+      model_profile_id: id,
+      configured: true,
+      declaration_basis: "user_or_admin_declared",
+      model_profile_enabled: profile.enabled,
+      execution_location: privacy.executionLocation,
+      retention: privacy.retention,
+      training_use: privacy.trainingUse,
+      sensitive_data_allowed: privacy.sensitiveDataAllowed,
+      created_at: privacy.createdAt,
+      updated_at: privacy.updatedAt,
+    };
+  }
+
+  private privacyUpdateTime(currentUpdatedAt: string | null) {
+    const observed = this.clock().getTime();
+    const minimum =
+      currentUpdatedAt === null
+        ? Number.NEGATIVE_INFINITY
+        : Date.parse(currentUpdatedAt) + 1;
+    const selected = Math.max(observed, minimum);
+    if (!Number.isFinite(selected)) {
+      throw new WorkspaceApiError(
+        500,
+        "INTERNAL_ERROR",
+        "Model privacy declaration clock is invalid.",
+      );
+    }
+    return new Date(selected).toISOString();
   }
 
   private supportedCapabilities(
@@ -322,6 +378,47 @@ export class WorkspaceModelSettingsRuntime implements WorkspaceModelSettingsRunt
       capabilities,
     });
     return this.modelWire(id);
+  }
+
+  async getModelPrivacy(context: WorkspaceModelSettingsContext, id: string) {
+    this.requireLocal(context);
+    return this.modelPrivacyWire(id);
+  }
+
+  async updateModelPrivacy(
+    context: WorkspaceModelSettingsContext,
+    id: string,
+    input: ModelPrivacyMutationInput,
+  ) {
+    this.requireLocal(context);
+    this.dependencies.profileRepository.requireStored(id);
+    const current = this.dependencies.privacy.get(id);
+    if (
+      !current &&
+      (input.executionLocation === undefined ||
+        input.retention === undefined ||
+        input.trainingUse === undefined ||
+        input.sensitiveDataAllowed === undefined)
+    ) {
+      throw new WorkspaceApiError(
+        412,
+        "PRECONDITION_FAILED",
+        "An initial model privacy declaration requires all four fields.",
+      );
+    }
+    this.dependencies.privacy.declare(
+      id,
+      {
+        executionLocation:
+          input.executionLocation ?? current!.executionLocation,
+        retention: input.retention ?? current!.retention,
+        trainingUse: input.trainingUse ?? current!.trainingUse,
+        sensitiveDataAllowed:
+          input.sensitiveDataAllowed ?? current!.sensitiveDataAllowed,
+      },
+      this.privacyUpdateTime(current?.updatedAt ?? null),
+    );
+    return this.modelPrivacyWire(id);
   }
 
   async putCredential(
