@@ -163,6 +163,10 @@ import {
   WorkspaceAssistantCapabilityHydrator,
   WorkspaceAssistantDocumentTools,
 } from "./services/assistantDocumentTools";
+import {
+  WorkspaceAssistantDocumentToolModule,
+  WorkspaceAssistantToolRegistry,
+} from "./services/assistantToolRegistry";
 import { WorkspaceChatsRuntimePort } from "./services/assistantChatsPort";
 import { ChatsService } from "./services/chats";
 import {
@@ -667,15 +671,20 @@ export class WorkspaceRuntime
     };
     const assistantTools =
       dependencies.assistantTools ??
-      new WorkspaceAssistantDocumentTools(
-        this.database,
-        chatsRepository,
-        new AssistantRetrievalRepository(this.database),
-        {
-          studioSuggestions: this.documentStudioService,
-          assertModelUse: assertDocumentModelUse,
-        },
-      );
+      (() => {
+        const documentTools = new WorkspaceAssistantDocumentTools(
+          this.database,
+          chatsRepository,
+          new AssistantRetrievalRepository(this.database),
+          {
+            studioSuggestions: this.documentStudioService,
+            assertModelUse: assertDocumentModelUse,
+          },
+        );
+        return new WorkspaceAssistantToolRegistry([
+          new WorkspaceAssistantDocumentToolModule(documentTools),
+        ]);
+      })();
     const assistantRuntime = assistantModel
       ? new AssistantRuntimeService(
           chatsRepository,

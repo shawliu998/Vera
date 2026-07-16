@@ -36,6 +36,9 @@ const MAX_FIND_CONTEXT_CHARS = 1_000;
 const MAX_FIND_EXCERPT_CHARS = 4_000;
 const MAX_TRACKED_JOBS = 256;
 
+export const WORKSPACE_ASSISTANT_DOCUMENT_TOOL_ADAPTER_ID =
+  "vera-local-document-tools-mike-e32daad-v1";
+
 const DocLabel = z.string().regex(/^doc-(?:0|[1-9]\d?)$/);
 const EmptyInput = z.object({}).strict();
 const ReadInput = z.object({ doc_id: DocLabel }).strict();
@@ -667,7 +670,7 @@ export class WorkspaceAssistantDocumentTools implements AssistantToolPort {
     this.reads.delete(context.jobId);
     this.studioReads.delete(`${context.jobId}\0${context.attempt}`);
     return {
-      adapterId: "vera-local-document-tools-mike-e32daad-v1",
+      adapterId: WORKSPACE_ASSISTANT_DOCUMENT_TOOL_ADAPTER_ID,
       tools: this.hasStudioSuggestionTarget(snapshot)
         ? [
             ...DOCUMENT_TOOLS,
