@@ -19,6 +19,10 @@ import type {
   DocumentVersionSource,
 } from "../types";
 import type { WorkspaceBlobCleanupRecorder } from "./documents";
+import type {
+  DocumentStudioDraftOriginV20,
+  DocumentStudioDraftTypeV20,
+} from "../documentStudioDraftMetadataV20";
 
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -94,6 +98,9 @@ export type DocumentStudioCreatePersistenceInput = {
   storageKey: string;
   source: DocumentStudioSaveSource;
   operationId?: string | null;
+  documentType: DocumentStudioDraftTypeV20;
+  originType: DocumentStudioDraftOriginV20;
+  originRef: string | null;
   citationAnchorIds: string[];
   blobRecord: DocumentStudioStoredBlobInput;
 };
@@ -223,6 +230,9 @@ export type CreateDocumentStudioDraftInput = {
   content?: string;
   source?: DocumentStudioSaveSource;
   citationAnchorIds?: readonly string[];
+  documentType?: DocumentStudioDraftTypeV20;
+  originType?: DocumentStudioDraftOriginV20;
+  originRef?: string | null;
   /** Trusted backend-only identity used to make an Agent action replay-safe. */
   writeIdentity?: Readonly<{
     documentId: string;
@@ -608,6 +618,36 @@ export class WorkspaceDocumentStudioService {
     const content = input.content ?? "";
     const source = input.source ?? "user_upload";
     const citationAnchorIds = normalizeCitationIds(input.citationAnchorIds);
+    const documentType = input.documentType ?? "general_legal_document";
+    const originType = input.originType ?? "manual";
+    const originRef = input.originRef == null ? null : input.originRef.trim();
+    if (
+      ![
+        "legal_research_memo",
+        "legal_opinion",
+        "contract_review_memo",
+        "due_diligence_report",
+        "litigation_strategy_memo",
+        "lawyer_letter",
+        "contract_clause",
+        "general_legal_document",
+      ].includes(documentType) ||
+      !["manual", "assistant", "workflow", "unknown"].includes(originType) ||
+      ((originType === "manual" || originType === "unknown") &&
+        originRef !== null) ||
+      ((originType === "assistant" || originType === "workflow") &&
+        originRef === null) ||
+      (originRef !== null &&
+        (originRef.length < 1 ||
+          originRef.length > 240 ||
+          originRef.includes("\0")))
+    ) {
+      throw new WorkspaceApiError(
+        422,
+        "VALIDATION_ERROR",
+        "Document Studio Draft metadata is invalid.",
+      );
+    }
     const writeIdentity = input.writeIdentity
       ? {
           documentId: assertUuid(
@@ -649,6 +689,9 @@ export class WorkspaceDocumentStudioService {
       content,
       source,
       citationAnchorIds,
+      documentType,
+      originType,
+      originRef,
       writeIdentity,
       buffer: contentBuffer(content),
     };
@@ -674,6 +717,9 @@ export class WorkspaceDocumentStudioService {
         content,
         source,
         citationAnchorIds,
+        documentType,
+        originType,
+        originRef,
         writeIdentity,
         buffer,
       } = this.normalizeCreateDraftInput(input);
@@ -693,6 +739,9 @@ export class WorkspaceDocumentStudioService {
           storageKey: documentStorageKey(ids.documentId, ids.versionId),
           source,
           operationId: writeIdentity?.operationId ?? null,
+          documentType,
+          originType,
+          originRef,
           citationAnchorIds,
           blobRecord: stored,
         });

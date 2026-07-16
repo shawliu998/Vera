@@ -570,18 +570,22 @@ export class WorkspaceAssistantDraftToolModule implements AssistantToolModule {
         parsed.contentMarkdown,
         evidenceSources,
       );
-      const existing = this.database
-        .prepare(
-          `SELECT document.id,document.project_id,document.document_kind,
+      const existingStatement = this.database.prepare(
+        `SELECT document.id,document.project_id,document.document_kind,
                   document.current_version_id,document.deleted_at,
-                  studio.version_id,studio.operation_id
+                  studio.version_id,studio.operation_id,
+                  metadata.document_type,metadata.origin_type,
+                  metadata.origin_ref
              FROM documents document
              LEFT JOIN document_studio_versions studio
                ON studio.document_id = document.id
               AND studio.version_id = document.current_version_id
+             LEFT JOIN document_studio_draft_metadata metadata
+               ON metadata.project_id = document.project_id
+              AND metadata.document_id = document.id
             WHERE document.id = ?`,
-        )
-        .get(writeIdentity.documentId);
+      );
+      let existing = existingStatement.get(writeIdentity.documentId);
       if (
         existing &&
         (existing.project_id !== projectId ||
@@ -595,15 +599,98 @@ export class WorkspaceAssistantDraftToolModule implements AssistantToolModule {
           "The replay-safe Draft identity is already bound to another resource.",
         );
       }
+      let existingDraft: Awaited<
+        ReturnType<WorkspaceDocumentStudioService["getDocument"]>
+      > | null = null;
+      if (existing) {
+        existingDraft = await this.studio.getDocument(
+          projectId,
+          writeIdentity.documentId,
+        );
+        if (
+          existingDraft.document.id !== writeIdentity.documentId ||
+          existingDraft.version.id !== writeIdentity.versionId ||
+          existingDraft.document.title !== parsed.title ||
+          existingDraft.content !== parsed.contentMarkdown ||
+          !isDeepStrictEqual(
+            existingDraft.version.citationAnchorIds,
+            citationAnchorIds,
+          )
+        ) {
+          throw new AssistantDraftToolError(
+            "An existing replay-safe Draft identity does not match this action.",
+          );
+        }
+        if (
+          existing.document_type == null &&
+          existing.origin_type == null &&
+          existing.origin_ref == null
+        ) {
+          // A v19 create_draft may have committed its immutable document before
+          // the additive v20 metadata table existed. The action ledger has
+          // rebound this retry to the same canonical input hash and the full
+          // durable body/citations were verified above before this repair.
+          const inserted = this.database
+            .prepare(
+              `INSERT INTO document_studio_draft_metadata (
+                 document_id,project_id,document_type,origin_type,origin_ref,
+                 created_at
+               )
+               SELECT document.id,document.project_id,?,'assistant',?,?
+                 FROM documents document
+                 JOIN document_studio_versions studio
+                   ON studio.project_id = document.project_id
+                  AND studio.document_id = document.id
+                  AND studio.version_id = document.current_version_id
+                WHERE document.id = ?
+                  AND document.project_id = ?
+                  AND document.document_kind = 'draft'
+                  AND document.deleted_at IS NULL
+                  AND document.current_version_id = ?
+                  AND studio.operation_id = ?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM document_studio_draft_metadata metadata
+                     WHERE metadata.document_id = document.id
+                  )`,
+            )
+            .run(
+              parsed.documentType,
+              snapshot.outputMessageId,
+              snapshot.createdAt,
+              writeIdentity.documentId,
+              projectId,
+              writeIdentity.versionId,
+              writeIdentity.operationId,
+            ) as { changes?: number };
+          if (Number(inserted.changes ?? 0) !== 1) {
+            throw new AssistantDraftToolError(
+              "Legacy Draft metadata could not be rebound safely.",
+            );
+          }
+          existing = existingStatement.get(writeIdentity.documentId);
+        }
+        if (
+          existing?.document_type !== parsed.documentType ||
+          existing?.origin_type !== "assistant" ||
+          existing?.origin_ref !== snapshot.outputMessageId
+        ) {
+          throw new AssistantDraftToolError(
+            "The replay-safe Draft metadata belongs to another action.",
+          );
+        }
+      }
       throwIfAborted(input.signal);
-      const created = existing
-        ? await this.studio.getDocument(projectId, writeIdentity.documentId)
+      const created = existingDraft
+        ? existingDraft
         : await this.studio.createDraft({
             projectId,
             title: parsed.title,
             content: parsed.contentMarkdown,
             source: "assistant_edit",
             citationAnchorIds,
+            documentType: parsed.documentType,
+            originType: "assistant",
+            originRef: snapshot.outputMessageId,
             writeIdentity,
           });
       if (

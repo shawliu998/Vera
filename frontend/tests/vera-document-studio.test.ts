@@ -15,8 +15,10 @@ import {
   getVeraStudioDocument,
   getVeraStudioSuggestion,
   importVeraStudioDocx,
+  listVeraStudioDrafts,
   listVeraStudioVersions,
   listVeraStudioSuggestions,
+  parseVeraStudioDraftPage,
   parseVeraStudioSuggestion,
   parseVeraStudioSuggestionPreview,
   parseVeraStudioDocument,
@@ -50,6 +52,28 @@ const SUGGESTION_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const RESULT_VERSION_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const TOKEN = "vdt_1234567890abcdefghijklmnopqrstuvwxyz";
 const HASH = "a".repeat(64);
+
+function studioDraftPage(overrides: Record<string, unknown> = {}) {
+  return {
+    items: [
+      {
+        draft_id: DOCUMENT_ID,
+        project_id: PROJECT_ID,
+        title: "Contract review memo",
+        document_type: "contract_review_memo",
+        current_version_id: CURRENT_VERSION_ID,
+        current_version_number: 2,
+        updated_at: "2026-07-15T10:00:00.000Z",
+        source_count: 3,
+        pending_suggestion_count: 1,
+        origin_type: "assistant",
+      },
+    ],
+    has_more: true,
+    next_cursor: "draft-cursor-2",
+    ...overrides,
+  };
+}
 
 function digest(value: string) {
   return createHash("sha256").update(value, "utf8").digest("hex");
@@ -322,6 +346,101 @@ test("Studio parser fails closed on extra fields, invalid provenance, and unsafe
       ),
     VeraApiError,
   );
+});
+
+test("Matter draft page parser is strict, bounded, and preserves typed provenance", () => {
+  const parsed = parseVeraStudioDraftPage(studioDraftPage());
+  assert.equal(parsed.items[0]?.document_type, "contract_review_memo");
+  assert.equal(parsed.items[0]?.origin_type, "assistant");
+  assert.equal(parsed.items[0]?.source_count, 3);
+  assert.equal(parsed.next_cursor, "draft-cursor-2");
+
+  assert.throws(
+    () => parseVeraStudioDraftPage(studioDraftPage({ storage_key: "/tmp/x" })),
+    VeraApiError,
+  );
+  assert.throws(
+    () =>
+      parseVeraStudioDraftPage(
+        studioDraftPage({
+          items: [
+            {
+              ...((
+                studioDraftPage().items as Array<Record<string, unknown>>
+              )[0] ?? {}),
+              origin_type: "model_guess",
+            },
+          ],
+        }),
+      ),
+    VeraApiError,
+  );
+  assert.throws(
+    () =>
+      parseVeraStudioDraftPage(
+        studioDraftPage({ has_more: false, next_cursor: "unexpected" }),
+      ),
+    VeraApiError,
+  );
+  assert.throws(
+    () =>
+      parseVeraStudioDraftPage(
+        studioDraftPage({
+          items: Array.from(
+            { length: 101 },
+            () =>
+              (studioDraftPage().items as Array<Record<string, unknown>>)[0] ??
+              {},
+          ),
+        }),
+      ),
+    VeraApiError,
+  );
+});
+
+test("Matter draft list and blank creation remain Project-scoped", async () => {
+  const restoreDesktop = installDesktop();
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: URL; init?: RequestInit; body: unknown }> = [];
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+    calls.push({ url, init, body });
+    const value =
+      init?.method === "POST"
+        ? studioDocument()
+        : studioDraftPage({ has_more: false, next_cursor: null });
+    return new Response(JSON.stringify(value), {
+      status: init?.method === "POST" ? 201 : 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  try {
+    const page = await listVeraStudioDrafts(PROJECT_ID, { limit: 100 });
+    assert.equal(page.items.length, 1);
+    await createVeraStudioDocument(PROJECT_ID, {
+      title: "Legal opinion",
+      document_type: "legal_opinion",
+    });
+    assert.equal(
+      calls[0]?.url.pathname,
+      `/api/v1/projects/${PROJECT_ID}/studio/drafts`,
+    );
+    assert.equal(calls[0]?.url.searchParams.get("limit"), "100");
+    assert.equal(calls[0]?.init?.method, "GET");
+    assert.equal(
+      calls[1]?.url.pathname,
+      `/api/v1/projects/${PROJECT_ID}/studio/documents`,
+    );
+    assert.equal(calls[1]?.init?.method, "POST");
+    assert.deepEqual(calls[1]?.body, {
+      title: "Legal opinion",
+      document_type: "legal_opinion",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreDesktop();
+  }
 });
 
 test("Project source content parser enforces a bounded path-free chunk wire", () => {

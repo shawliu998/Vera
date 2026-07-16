@@ -8,6 +8,7 @@ const MAX_STUDIO_CONTENT_LENGTH = 2_000_000;
 const MAX_STUDIO_CONTENT_BYTES = 4_000_000;
 const MAX_CITATION_ANCHORS = 200;
 const MAX_STUDIO_DOCX_BYTES = 10 * 1024 * 1024;
+const MAX_STUDIO_DRAFTS_PER_PAGE = 100;
 export const VERA_STUDIO_DOCX_MIME_TYPE =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 export const VERA_STUDIO_DOCX_WARNING_CODES = [
@@ -29,10 +30,34 @@ const STUDIO_VERSION_SOURCES = new Set([
   "user_accept",
 ] as const);
 
+export const VERA_STUDIO_DOCUMENT_TYPES = [
+  "legal_research_memo",
+  "legal_opinion",
+  "contract_review_memo",
+  "due_diligence_report",
+  "litigation_strategy_memo",
+  "lawyer_letter",
+  "contract_clause",
+  "general_legal_document",
+] as const;
+export type VeraStudioDocumentType =
+  (typeof VERA_STUDIO_DOCUMENT_TYPES)[number];
+const STUDIO_DOCUMENT_TYPE_SET = new Set<string>(VERA_STUDIO_DOCUMENT_TYPES);
+
+export const VERA_STUDIO_DRAFT_ORIGIN_TYPES = [
+  "manual",
+  "assistant",
+  "workflow",
+  "unknown",
+] as const;
+export type VeraStudioDraftOriginType =
+  (typeof VERA_STUDIO_DRAFT_ORIGIN_TYPES)[number];
+const STUDIO_DRAFT_ORIGIN_TYPE_SET = new Set<string>(
+  VERA_STUDIO_DRAFT_ORIGIN_TYPES,
+);
+
 export type VeraStudioVersionSourceWire =
-  | "user_upload"
-  | "assistant_edit"
-  | "user_accept";
+  "user_upload" | "assistant_edit" | "user_accept";
 
 export interface VeraStudioVersionWire {
   id: string;
@@ -93,6 +118,31 @@ export interface VeraStudioVersionsWire {
 export interface CreateVeraStudioDocumentInput {
   title: string;
   folder_id?: string | null;
+  document_type?: VeraStudioDocumentType;
+}
+
+export interface VeraStudioDraftListItemWire {
+  draft_id: string;
+  project_id: string;
+  title: string;
+  document_type: VeraStudioDocumentType;
+  current_version_id: string;
+  current_version_number: number;
+  updated_at: string;
+  source_count: number;
+  pending_suggestion_count: number;
+  origin_type: VeraStudioDraftOriginType;
+}
+
+export interface VeraStudioDraftPageWire {
+  items: VeraStudioDraftListItemWire[];
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
+export interface VeraStudioDraftListQuery {
+  cursor?: string;
+  limit?: number;
 }
 
 export interface CreateVeraStudioDraftFromAssistantInput {
@@ -312,6 +362,22 @@ function versionSource(value: unknown): VeraStudioVersionSourceWire {
     invalidWire("Studio version source");
   }
   return source as VeraStudioVersionSourceWire;
+}
+
+function studioDocumentType(value: unknown): VeraStudioDocumentType {
+  const documentType = boundedString(value, "Studio document type", 80);
+  if (!STUDIO_DOCUMENT_TYPE_SET.has(documentType)) {
+    invalidWire("Studio document type");
+  }
+  return documentType as VeraStudioDocumentType;
+}
+
+function studioDraftOriginType(value: unknown): VeraStudioDraftOriginType {
+  const originType = boundedString(value, "Studio draft origin type", 80);
+  if (!STUDIO_DRAFT_ORIGIN_TYPE_SET.has(originType)) {
+    invalidWire("Studio draft origin type");
+  }
+  return originType as VeraStudioDraftOriginType;
 }
 
 function studioMimeType(value: unknown): "text/markdown" {
@@ -605,6 +671,78 @@ export function parseVeraStudioVersions(
     invalidWire("Studio current version list entry");
   }
   return { current_version_id: currentVersionId, versions };
+}
+
+function parseVeraStudioDraftListItem(
+  value: unknown,
+): VeraStudioDraftListItemWire {
+  const wire = record(value, "Studio draft list item");
+  exactKeys(
+    wire,
+    [
+      "draft_id",
+      "project_id",
+      "title",
+      "document_type",
+      "current_version_id",
+      "current_version_number",
+      "updated_at",
+      "source_count",
+      "pending_suggestion_count",
+      "origin_type",
+    ],
+    "Studio draft list item",
+  );
+  return {
+    draft_id: uuid(wire.draft_id, "Studio draft id"),
+    project_id: uuid(wire.project_id, "Studio draft project id"),
+    title: studioTitle(wire.title),
+    document_type: studioDocumentType(wire.document_type),
+    current_version_id: uuid(
+      wire.current_version_id,
+      "Studio draft current version id",
+    ),
+    current_version_number: positiveInteger(
+      wire.current_version_number,
+      "Studio draft current version number",
+    ),
+    updated_at: isoTimestamp(wire.updated_at, "Studio draft updated timestamp"),
+    source_count: nonNegativeInteger(
+      wire.source_count,
+      "Studio draft source count",
+    ),
+    pending_suggestion_count: nonNegativeInteger(
+      wire.pending_suggestion_count,
+      "Studio draft pending suggestion count",
+    ),
+    origin_type: studioDraftOriginType(wire.origin_type),
+  };
+}
+
+export function parseVeraStudioDraftPage(
+  value: unknown,
+): VeraStudioDraftPageWire {
+  const wire = record(value, "Studio draft page");
+  exactKeys(wire, ["items", "has_more", "next_cursor"], "Studio draft page");
+  if (
+    !Array.isArray(wire.items) ||
+    wire.items.length > MAX_STUDIO_DRAFTS_PER_PAGE ||
+    typeof wire.has_more !== "boolean"
+  ) {
+    invalidWire("Studio draft page");
+  }
+  const items = wire.items.map(parseVeraStudioDraftListItem);
+  if (new Set(items.map((item) => item.draft_id)).size !== items.length) {
+    invalidWire("Studio draft page");
+  }
+  const nextCursor =
+    wire.next_cursor === null
+      ? null
+      : boundedString(wire.next_cursor, "Studio draft cursor", 512);
+  if (wire.has_more !== (nextCursor !== null)) {
+    invalidWire("Studio draft pagination");
+  }
+  return { items, has_more: wire.has_more, next_cursor: nextCursor };
 }
 
 export function parseVeraStudioSuggestion(
@@ -999,6 +1137,28 @@ function safeTitle(value: string): string {
   return title;
 }
 
+function safeDocumentType(value: string): VeraStudioDocumentType {
+  if (!STUDIO_DOCUMENT_TYPE_SET.has(value)) {
+    throw new VeraRuntimeConfigurationError(
+      "The Vera Studio document type is invalid.",
+    );
+  }
+  return value as VeraStudioDocumentType;
+}
+
+function safeDraftCursor(value: string): string {
+  if (
+    !value ||
+    value.length > 512 ||
+    /[\u0000-\u001f\u007f-\u009f]/u.test(value)
+  ) {
+    throw new VeraRuntimeConfigurationError(
+      "The Vera Studio draft cursor is invalid.",
+    );
+  }
+  return value;
+}
+
 function safeSummary(value: string | null): string | null {
   if (value === null) return null;
   const summary = value.trim();
@@ -1080,10 +1240,46 @@ export async function createVeraStudioDocument(
                   ? null
                   : safeId(input.folder_id, "folder id"),
             }),
+        ...(input.document_type === undefined
+          ? {}
+          : { document_type: safeDocumentType(input.document_type) }),
       },
       signal,
     }),
   );
+}
+
+export async function listVeraStudioDrafts(
+  projectId: string,
+  query: VeraStudioDraftListQuery = {},
+  signal?: AbortSignal,
+): Promise<VeraStudioDraftPageWire> {
+  const limit = query.limit ?? MAX_STUDIO_DRAFTS_PER_PAGE;
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > MAX_STUDIO_DRAFTS_PER_PAGE
+  ) {
+    throw new VeraRuntimeConfigurationError(
+      "The Vera Studio draft page limit is invalid.",
+    );
+  }
+  const projectIdValue = safeId(projectId, "project id");
+  const page = parseVeraStudioDraftPage(
+    await veraApiRequest<unknown>(`/projects/${projectIdValue}/studio/drafts`, {
+      query: {
+        limit,
+        ...(query.cursor === undefined
+          ? {}
+          : { cursor: safeDraftCursor(query.cursor) }),
+      },
+      signal,
+    }),
+  );
+  if (page.items.some((item) => item.project_id !== projectIdValue)) {
+    invalidWire("Studio draft project scope");
+  }
+  return page;
 }
 
 export async function createVeraStudioDraftFromAssistant(

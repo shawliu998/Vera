@@ -60,7 +60,10 @@ test("Studio stays inside Project documents and uses only real capability/API st
     /studio_capability\?\.editable !== true && \([\s\S]*documents\.newVersion/,
   );
   assert.match(documents, /createVeraStudioDocument/);
-  assert.match(documents, /routes\.documentStudioHref\(projectId, document\.id\)/);
+  assert.match(
+    documents,
+    /routes\.documentStudioHref\(projectId, document\.id\)/,
+  );
   assert.match(route, /DocumentStudioView/);
   for (const helper of [
     "getVeraStudioDocument",
@@ -124,6 +127,32 @@ test("Studio stays inside Project documents and uses only real capability/API st
   );
   assert.doesNotMatch(studio, /mock|fixture|demo|localStorage|sessionStorage/);
   assert.doesNotMatch(sidebar, /Document Studio|studio\.title/);
+});
+
+test("Matter Drafts is a real scoped workbench with no production mock fallback", () => {
+  const page = source("src/app/(pages)/matters/[id]/drafts/page.tsx");
+  const workbench = source("src/app/components/projects/MatterDraftsView.tsx");
+  const api = source("src/app/lib/veraDocumentStudioApi.ts");
+
+  assert.match(page, /MatterDraftsView/);
+  assert.match(page, /MatterCapabilityBoundary capability="drafts"/);
+  assert.match(workbench, /listVeraStudioDrafts/);
+  assert.match(workbench, /createVeraStudioDocument/);
+  assert.match(workbench, /exportVeraStudioDocx/);
+  assert.match(
+    workbench,
+    /deleteVeraDocument\(draft\.draft_id, \{ projectId \}\)/,
+  );
+  assert.match(workbench, /setItems\(\(current\) =>[\s\S]*filter/);
+  assert.match(workbench, /ConfirmPopup/);
+  assert.match(workbench, /current_version_id/);
+  assert.match(api, /MAX_STUDIO_DRAFTS_PER_PAGE = 100/);
+  assert.match(api, /exactKeys\([\s\S]*"origin_type"/);
+  assert.match(
+    api,
+    /page\.items\.some\(\(item\) => item\.project_id !== projectIdValue\)/,
+  );
+  assert.doesNotMatch(workbench, /mock|fixture|localStorage|sessionStorage/i);
 });
 
 test("Citation viewer reuses the authenticated Project source and original PDF paths", () => {

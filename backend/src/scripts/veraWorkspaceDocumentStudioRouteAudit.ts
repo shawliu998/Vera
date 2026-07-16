@@ -481,6 +481,69 @@ async function main() {
         docx_export: true,
       });
 
+      const draftListResponse = await fetch(
+        `${baseUrl}/api/v1/projects/${projectId}/studio/drafts?limit=1`,
+        { headers: authHeaders(false) },
+      );
+      assert.equal(draftListResponse.status, 200);
+      const draftListPayload = await responseJson(draftListResponse);
+      const draftList = record(draftListPayload.value, "Draft summary page");
+      const draftItems = array(draftList.items, "Draft summary items");
+      assert.equal(draftItems.length, 1);
+      assert.deepEqual(
+        Object.keys(record(draftItems[0], "Draft summary")).sort(),
+        [
+          "current_version_id",
+          "current_version_number",
+          "document_type",
+          "draft_id",
+          "origin_type",
+          "pending_suggestion_count",
+          "project_id",
+          "source_count",
+          "title",
+          "updated_at",
+        ].sort(),
+      );
+      assert.equal(record(draftItems[0], "Draft summary").draft_id, documentId);
+      assert.equal(
+        record(draftItems[0], "Draft summary").project_id,
+        projectId,
+      );
+      for (const forbidden of [
+        root,
+        TOKEN,
+        "origin_ref",
+        "storage_key",
+        "filename",
+        "Authorization",
+      ]) {
+        assert.equal(draftListPayload.text.includes(forbidden), false);
+      }
+      const invalidDraftCursor = await fetch(
+        `${baseUrl}/api/v1/projects/${projectId}/studio/drafts?cursor=not-a-cursor`,
+        { headers: authHeaders(false) },
+      );
+      await assertSafeError(invalidDraftCursor, 422, "VALIDATION_ERROR");
+      const crossMatterCursor = Buffer.from(
+        JSON.stringify({
+          project_id: otherProjectId,
+          updated_at: NOW,
+          draft_id: documentId,
+        }),
+        "utf8",
+      ).toString("base64url");
+      const crossMatterCursorResponse = await fetch(
+        `${baseUrl}/api/v1/projects/${projectId}/studio/drafts?cursor=${crossMatterCursor}`,
+        { headers: authHeaders(false) },
+      );
+      await assertSafeError(crossMatterCursorResponse, 422, "VALIDATION_ERROR");
+      const oversizedDraftPage = await fetch(
+        `${baseUrl}/api/v1/projects/${projectId}/studio/drafts?limit=101`,
+        { headers: authHeaders(false) },
+      );
+      await assertSafeError(oversizedDraftPage, 422, "VALIDATION_ERROR");
+
       const suggestionDraftResponse = await fetch(
         `${baseUrl}/api/v1/projects/${projectId}/studio/documents`,
         {
@@ -1541,6 +1604,7 @@ async function main() {
             "generic version upload cannot split Studio lineage",
             "generic rename preserves Studio editability and save path",
             "strict response serializer rejects storage/credential fields",
+            "bounded Draft summary list rejects malformed and cross-Matter cursors without exposing origin references or local paths",
             "authenticated suggestion acceptance serializes the user_accept version through the real runtime",
             "strict DOCX multipart auth, upload rate, UUID, field, extension, MIME and 10 MB limits",
             "malicious external, tracked-change and active-content DOCX rejection without error leaks",

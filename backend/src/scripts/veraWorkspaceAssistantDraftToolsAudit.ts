@@ -175,7 +175,7 @@ async function run() {
   try {
     process.env.ALETHEIA_DATABASE_ENCRYPTION = "metadata_plaintext";
     database = new WorkspaceDatabase(path.join(root, "workspace.sqlite"));
-    assert.equal(database.migration?.currentVersion, 19);
+    assert.equal(database.migration?.currentVersion, 20);
 
     const projects = new ProjectsRepository(database);
     projects.create({
@@ -443,6 +443,58 @@ async function run() {
     const createdDraft = await studio.getDocument(PROJECT_ID, draftId);
     assert.equal(createdDraft.version.id, versionId);
     assert.deepEqual(createdDraft.version.citationAnchorIds, [sourceAnchor.id]);
+    assert.deepEqual(
+      {
+        ...database
+          .prepare(
+            `SELECT document_type,origin_type,origin_ref
+               FROM document_studio_draft_metadata WHERE document_id=?`,
+          )
+          .get(draftId),
+      },
+      {
+        document_type: "legal_opinion",
+        origin_type: "assistant",
+        origin_ref: snapshot.outputMessageId,
+      },
+    );
+    database
+      .prepare("DELETE FROM document_studio_draft_metadata WHERE document_id=?")
+      .run(draftId);
+    database
+      .prepare("UPDATE documents SET title='collision' WHERE id=?")
+      .run(draftId);
+    await rejects(() =>
+      module.execute({
+        context,
+        call: toolCall("create_draft", {
+          title: "Assistant legal opinion",
+          documentType: "legal_opinion",
+          contentMarkdown: "Hello old world [1].\n",
+          evidenceSources: [
+            {
+              evidenceId: sourceAnchor.id,
+              exactQuote: "exact audit authority",
+            },
+          ],
+        }),
+        signal: new AbortController().signal,
+      }),
+    );
+    assert.equal(
+      Number(
+        database
+          .prepare(
+            "SELECT count(*) AS total FROM document_studio_draft_metadata WHERE document_id=?",
+          )
+          .get(draftId)?.total,
+      ),
+      0,
+      "a mismatched v19 Draft must not receive repaired provenance",
+    );
+    database
+      .prepare("UPDATE documents SET title=? WHERE id=?")
+      .run("Assistant legal opinion", draftId);
     const replayedCreate = parseResult(
       await module.execute({
         context,
@@ -462,6 +514,22 @@ async function run() {
     );
     assert.equal(replayedCreate.draftId, draftId);
     assert.equal(replayedCreate.versionId, versionId);
+    assert.deepEqual(
+      {
+        ...database
+          .prepare(
+            `SELECT document_type,origin_type,origin_ref
+               FROM document_studio_draft_metadata WHERE document_id=?`,
+          )
+          .get(draftId),
+      },
+      {
+        document_type: "legal_opinion",
+        origin_type: "assistant",
+        origin_ref: snapshot.outputMessageId,
+      },
+      "an exact v19 create_draft retry rebinds typed v20 provenance",
+    );
     assert.deepEqual(
       database
         .prepare(

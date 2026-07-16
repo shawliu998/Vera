@@ -170,7 +170,51 @@ const zhCN = {
       readOnlyShort: "只读",
       reviewUnavailable: "统一复核将在 Gate 2 接入真实复核队列后开放。",
       draftsDocumentScoped:
-        "草稿目前只存在于具体文档工作室中，尚无事项级草稿列表。",
+        "草稿仍由具体文档工作室存储，并在事项级工作台中聚合展示。",
+    },
+    drafts: {
+      eyebrow: "事项文稿",
+      title: "草稿工作台",
+      subtitle:
+        "集中查看事项草稿、来源与待处理建议，并进入文档工作室继续编辑。",
+      newDraft: "新建草稿",
+      create: "创建并打开",
+      titleLabel: "草稿标题",
+      titlePlaceholder: "例如：合同审阅备忘录",
+      typeLabel: "文稿类型",
+      loadError: "无法加载草稿",
+      emptyTitle: "还没有草稿",
+      emptyBody: "新建空白草稿，或让助手和工作流把结果保存到文档工作室。",
+      listLabel: "事项草稿列表",
+      exportDocx: "导出 DOCX",
+      loadMore: "加载更多",
+      readOnly: "此事项为只读状态。你仍可打开和导出草稿，但不能新建或删除。",
+      deleteLabel: "删除草稿“{title}”",
+      deleteConfirm: {
+        title: "删除草稿？",
+        body: "草稿“{title}”及其版本将被永久删除。此操作无法撤销。",
+      },
+      fields: {
+        version: "当前版本",
+        sources: "引用来源",
+        suggestions: "待处理建议",
+      },
+      origins: {
+        manual: "手动创建",
+        assistant: "助手生成",
+        workflow: "工作流生成",
+        unknown: "历史草稿",
+      },
+      types: {
+        legal_research_memo: "法律研究备忘录",
+        legal_opinion: "法律意见书",
+        contract_review_memo: "合同审阅备忘录",
+        due_diligence_report: "尽职调查报告",
+        litigation_strategy_memo: "诉讼策略备忘录",
+        lawyer_letter: "律师函",
+        contract_clause: "合同条款",
+        general_legal_document: "通用法律文稿",
+      },
     },
     settings: {
       title: "事项设置",
@@ -1537,7 +1581,53 @@ const enUS = {
       reviewUnavailable:
         "Unified Review will open in Gate 2 after a real review queue is connected.",
       draftsDocumentScoped:
-        "Drafts currently live only in an individual Document Studio; no Matter-level draft list exists yet.",
+        "Drafts remain stored in an individual Document Studio and are aggregated in the Matter workspace.",
+    },
+    drafts: {
+      eyebrow: "Matter documents",
+      title: "Draft workspace",
+      subtitle:
+        "Review Matter drafts, sources, and pending suggestions, then continue editing in Document Studio.",
+      newDraft: "New draft",
+      create: "Create and open",
+      titleLabel: "Draft title",
+      titlePlaceholder: "For example, Contract review memo",
+      typeLabel: "Document type",
+      loadError: "Drafts could not be loaded",
+      emptyTitle: "No drafts yet",
+      emptyBody:
+        "Create a blank draft, or save Assistant and Workflow results to Document Studio.",
+      listLabel: "Matter drafts",
+      exportDocx: "Export DOCX",
+      loadMore: "Load more",
+      readOnly:
+        "This Matter is read-only. You can still open and export drafts, but cannot create or delete them.",
+      deleteLabel: "Delete draft “{title}”",
+      deleteConfirm: {
+        title: "Delete draft?",
+        body: "The draft “{title}” and its versions will be permanently deleted. This cannot be undone.",
+      },
+      fields: {
+        version: "Current version",
+        sources: "Cited sources",
+        suggestions: "Pending suggestions",
+      },
+      origins: {
+        manual: "Manual",
+        assistant: "Assistant",
+        workflow: "Workflow",
+        unknown: "Legacy draft",
+      },
+      types: {
+        legal_research_memo: "Legal research memo",
+        legal_opinion: "Legal opinion",
+        contract_review_memo: "Contract review memo",
+        due_diligence_report: "Due diligence report",
+        litigation_strategy_memo: "Litigation strategy memo",
+        lawyer_letter: "Lawyer letter",
+        contract_clause: "Contract clause",
+        general_legal_document: "General legal document",
+      },
     },
     settings: {
       title: "Matter settings",

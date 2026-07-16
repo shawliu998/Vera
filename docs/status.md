@@ -7,7 +7,7 @@ tests take precedence over historical programme text below.
 
 Status on 2026-07-16: Matter convergence is merged to `main` at
 `5611699e46552a20bf42ce84396a8e65aa139d16`; the active feature branch now uses
-Workspace schema v19. The active
+Workspace schema v20. The active
 implementation branch for the next vertical is `feat/local-legal-work-agent`.
 
 ```text
@@ -60,6 +60,13 @@ asynchronous; hidden and cross-Matter workflows fail closed. The trusted
 optional registry also has bounded legal research tools for the YuanDian
 technical acceptance path, but the default production Assistant does not
 register them while the activation gate is closed.
+
+The Matter Drafts route is now a real Document Studio workbench rather than an
+empty navigation shell. It lists typed Drafts with current version, citation and
+pending-suggestion counts; supports blank creation, exact Studio opening, DOCX
+export, and scoped deletion; and records manual/Assistant/Workflow origin in the
+same Draft transaction. Existing pre-v20 Draft rows are not backfilled or
+guessed and are projected as general documents with unknown origin.
 
 No production legal provider is claimed ready. The active Workspace now owns a
 v18 YuanDian Provider Hub, Keychain-only credential operations, authenticated

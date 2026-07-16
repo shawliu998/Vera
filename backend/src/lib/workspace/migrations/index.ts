@@ -17,6 +17,7 @@ import { MATTER_CLASSIFICATION_V16_MIGRATION } from "./v16MatterClassification";
 import { INFERENCE_POLICY_V17_MIGRATION } from "./v17InferencePolicy";
 import { LEGAL_PROVIDER_HUB_V18_MIGRATION } from "./v18LegalProviderHub";
 import { ASSISTANT_ACTION_LEDGER_V19_MIGRATION } from "./v19AssistantActionLedger";
+import { DOCUMENT_STUDIO_DRAFT_METADATA_V20_MIGRATION } from "./v20DocumentStudioDraftMetadata";
 
 export {
   detectWorkspaceDatabaseCapabilities,
@@ -51,6 +52,7 @@ export { MATTER_CLASSIFICATION_V16_MIGRATION } from "./v16MatterClassification";
 export { INFERENCE_POLICY_V17_MIGRATION } from "./v17InferencePolicy";
 export { LEGAL_PROVIDER_HUB_V18_MIGRATION } from "./v18LegalProviderHub";
 export { ASSISTANT_ACTION_LEDGER_V19_MIGRATION } from "./v19AssistantActionLedger";
+export { DOCUMENT_STUDIO_DRAFT_METADATA_V20_MIGRATION } from "./v20DocumentStudioDraftMetadata";
 
 export const WORKSPACE_MIGRATIONS = [
   INITIAL_WORKSPACE_MIGRATION,
@@ -72,4 +74,5 @@ export const WORKSPACE_MIGRATIONS = [
   INFERENCE_POLICY_V17_MIGRATION,
   LEGAL_PROVIDER_HUB_V18_MIGRATION,
   ASSISTANT_ACTION_LEDGER_V19_MIGRATION,
+  DOCUMENT_STUDIO_DRAFT_METADATA_V20_MIGRATION,
 ] as const;

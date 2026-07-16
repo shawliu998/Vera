@@ -64,6 +64,7 @@ import { WORKSPACE_LOCAL_PRINCIPAL_ID } from "./principal";
 import { WorkspaceBlobCleanupRepository } from "./repositories/blobCleanup";
 import { WorkspaceBlobRecordsRepository } from "./repositories/blobRecords";
 import { WorkspaceDocumentStudioRepository } from "./repositories/documentStudio";
+import { WorkspaceDocumentStudioDraftsRepository } from "./repositories/documentStudioDrafts";
 import { WorkspaceSourceFoundationRepository } from "./repositories/sourceFoundation";
 import { WorkspaceSourceRetentionLifecycleRepository } from "./repositories/sourceRetentionLifecycle";
 import { WorkspaceLegalProvidersRepository } from "./repositories/legalProviders";
@@ -106,6 +107,7 @@ import type {
   DocumentStudioSuggestionV14,
 } from "./documentStudioSuggestionContractsV14";
 import { WorkspaceDocumentStudioRepositoryAdapter } from "./services/documentStudioRepositoryAdapter";
+import { WorkspaceDocumentStudioDraftsService } from "./services/documentStudioDrafts";
 import {
   WorkspaceProjectSourcesService,
   type CaptureProjectDocumentSourceResult,
@@ -446,6 +448,7 @@ export class WorkspaceRuntime
   private readonly documentOcrSummary: WorkspaceDocumentOcrSummaryService;
   private readonly documentStudioService: WorkspaceDocumentStudioService;
   private readonly documentStudioRepository: WorkspaceDocumentStudioRepositoryPort;
+  private readonly documentStudioDrafts: WorkspaceDocumentStudioDraftsService;
   private readonly projectSourcesService: WorkspaceProjectSourcesService;
   private readonly sourceRetentionService: WorkspaceSourceRetentionService;
   private readonly chatsService: ChatsService;
@@ -682,6 +685,9 @@ export class WorkspaceRuntime
         blobRecords,
         { cleanupRecorder },
       );
+    this.documentStudioDrafts = new WorkspaceDocumentStudioDraftsService(
+      new WorkspaceDocumentStudioDraftsRepository(this.database),
+    );
     this.projectSourcesService =
       dependencies.projectSourcesService ??
       new WorkspaceProjectSourcesService(this.database, sourceFoundation, {
@@ -1498,8 +1504,27 @@ export class WorkspaceRuntime
         projectId,
         folderId: input.folderId,
         title: input.title,
+        documentType: input.documentType ?? "general_legal_document",
+        originType: "manual",
+        originRef: null,
       }),
     );
+  }
+  async listStudioDrafts(
+    context: WorkspaceV1Context,
+    projectId: string,
+    input: {
+      limit: number;
+      cursor: { updatedAt: string; documentId: string } | null;
+    },
+  ) {
+    this.requireAccess(context);
+    this.projects.get(projectId);
+    return this.documentStudioDrafts.list({
+      projectId,
+      limit: input.limit,
+      cursor: input.cursor,
+    });
   }
   async createStudioDocumentFromAssistantMessage(
     context: WorkspaceV1Context,
@@ -1584,6 +1609,9 @@ export class WorkspaceRuntime
         content: message.content,
         source: "assistant_edit",
         citationAnchorIds,
+        documentType: "general_legal_document",
+        originType: "assistant",
+        originRef: assistantMessageId,
       }),
     );
   }
@@ -1636,6 +1664,9 @@ export class WorkspaceRuntime
         content: draft.content,
         source: "assistant_edit",
         citationAnchorIds,
+        documentType: "general_legal_document",
+        originType: "workflow",
+        originRef: workflowRunId,
       }),
     );
   }

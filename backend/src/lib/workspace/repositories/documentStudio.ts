@@ -837,6 +837,21 @@ export class WorkspaceDocumentStudioRepository {
           parsed.documentId,
           parsed.projectId,
         );
+      this.database
+        .prepare(
+          `INSERT INTO document_studio_draft_metadata (
+             document_id, project_id, document_type, origin_type, origin_ref,
+             created_at
+           ) VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          parsed.documentId,
+          parsed.projectId,
+          parsed.draftDocumentType,
+          parsed.draftOriginType,
+          parsed.draftOriginRef,
+          parsed.createdAt,
+        );
       this.insertParseJob(
         parsed.jobId,
         parsed.documentId,

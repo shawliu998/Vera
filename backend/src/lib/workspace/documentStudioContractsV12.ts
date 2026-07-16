@@ -6,6 +6,10 @@ import {
   UnicodeCodePointStringSchemaV1,
   WorkspaceIdSchema,
 } from "./workspacePersistencePrimitivesV1";
+import {
+  DocumentStudioDraftOriginV20Schema,
+  DocumentStudioDraftTypeV20Schema,
+} from "./documentStudioDraftMetadataV20";
 
 export const DOCUMENT_KINDS_V12 = ["source", "draft", "template"] as const;
 export const DOCUMENT_STUDIO_KINDS_V12 = ["draft", "template"] as const;
@@ -83,6 +87,11 @@ const OperationIdSchema = UnicodeCodePointStringSchemaV1({
   max: 120,
   trimForMin: true,
 }).nullable();
+const DraftOriginRefV20Schema = UnicodeCodePointStringSchemaV1({
+  min: 1,
+  max: 240,
+  trimForMin: true,
+}).nullable();
 const ByteCountSchema = z
   .number()
   .int()
@@ -120,6 +129,11 @@ export const CreateMarkdownDraftV12Schema = z
     source: z.enum(["user_upload", "assistant_edit"]).default("user_upload"),
     summary: SummarySchema,
     operationId: OperationIdSchema,
+    draftDocumentType: DocumentStudioDraftTypeV20Schema.default(
+      "general_legal_document",
+    ),
+    draftOriginType: DocumentStudioDraftOriginV20Schema.default("manual"),
+    draftOriginRef: DraftOriginRefV20Schema.default(null),
     citationAnchorIds: CitationAnchorIdsSchema,
     createdAt: IsoDateTimeSchema,
     ...PreparedMarkdownBlobShape,

@@ -9,7 +9,7 @@ Baseline: `shawliu998/Vera` `main` at
 
 Feature branch: `feat/local-legal-work-agent`
 
-Workspace schema: v19
+Workspace schema: v20
 
 ## 1. Product objective
 
@@ -34,7 +34,7 @@ model gateway, editor, active Legacy product, or renderer-side provider client.
 | Capability                 | Current code-backed state                                                                                                                                                                                                                                                                           |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Desktop lifecycle          | Electron supervises one loopback Next.js renderer and one loopback Express backend.                                                                                                                                                                                                                 |
-| Workspace database         | One SQLCipher database with contiguous, checksum-recorded migrations through v19.                                                                                                                                                                                                                   |
+| Workspace database         | One SQLCipher database with contiguous, checksum-recorded migrations through v20.                                                                                                                                                                                                                   |
 | Blob storage               | Original and derived payloads use the existing AES-256-GCM local blob boundary.                                                                                                                                                                                                                     |
 | Credentials                | Model-provider secrets use the isolated Keychain worker. Retained Legacy legal-source credentials use an application-envelope-encrypted Legacy store and are not an acceptable new active Workspace credential owner.                                                                               |
 | Assistant jobs             | `assistant_generate` uses the durable Workspace job repository, pump, fencing, stop, retry, regenerate, recovery, and durable event outbox.                                                                                                                                                         |
@@ -45,6 +45,7 @@ model gateway, editor, active Legacy product, or renderer-side provider client.
 | Documents and OCR          | Project/Matter uploads, parsing, native OCR, status, retry, encrypted originals, source capture, and exact-page reopening are wired.                                                                                                                                                                |
 | Source identity            | Workspace v11-v13 Source Snapshots, source content, Citation Anchors, retention, tombstone, export, and model-use checks are the only active provenance foundation.                                                                                                                                 |
 | Document Studio            | Blank/Assistant/Workflow drafts, canonical Markdown/TipTap projection, CAS save, immutable versions, restore-as-new-version, citations, bounded AI suggestions, accept/reject/stale checks, and DOCX import/export are wired.                                                                       |
+| Matter Drafts              | Schema v20 stores typed Draft origin metadata in the existing Studio create transaction. The Matter Drafts workbench lists real versions, current citations and pending suggestions, and reuses existing create/open/export/delete paths. Legacy Drafts remain unmodified and project as general/unknown. |
 | Backup and restore         | Encrypted backup, restore preflight, restore, failure recovery, and fail-closed desktop startup are wired.                                                                                                                                                                                          |
 | Packaged restart           | Current packaged E2E proves Matter/Profile/Policy/model/chat/document/source persistence and separately proves OCR -> snapshot/anchor -> Studio -> DOCX -> restart. It does not yet prove the new legal-research-to-Draft vertical.                                                                 |
 
@@ -88,8 +89,8 @@ routers, repositories, credentials, or `/aletheia/*` endpoints.
    research-session records and
    cannot safely back `read_legal_source` ownership checks.
 3. Legal-authority citations still lack an activated durable provider path.
-4. The Matter Drafts page, document-template catalogue, and structured
-   multi-section drafting strategy remain incomplete.
+4. The document-template catalogue and structured multi-section drafting
+   strategy remain incomplete.
 5. No deterministic packaged E2E covers local documents + test legal provider
    -> legal citation -> new Draft -> suggestion -> DOCX -> restart.
 
@@ -161,9 +162,12 @@ Schema v18 is published and adds only active Legal Provider configuration,
 capabilities, connection tests, and credential-cleanup intent. It deliberately
 does not persist technical-PoC source content. Schema v19 adds the bounded
 Assistant action ledger and extends the existing durable event outbox for the
-`draft_created` result; it does not add a second job or artifact store. If later
-slices require durable legal research sessions/candidates or user-copyable
-templates, the next migration must add only demonstrated owners such as:
+`draft_created` result; it does not add a second job or artifact store. Schema
+v20 adds immutable type/origin metadata for existing Document Studio Drafts and
+a bounded Matter summary projection; it does not duplicate documents, versions,
+citations, suggestions, or blobs. If later slices require durable legal research
+sessions/candidates or user-copyable templates, the next migration must add only
+demonstrated owners such as:
 
 ```text
 legal_research_sessions
@@ -174,7 +178,7 @@ legal_document_templates
 
 Before another schema owner lands, the design must prove that existing source
 snapshots, anchors, documents, versions, suggestions, chats, jobs, workflows,
-profiles, and policies cannot own the required state. Published v1-v19
+profiles, and policies cannot own the required state. Published v1-v20
 migrations remain immutable. Fresh, v14, v17, SQLCipher, backup/restore, and
 injected rollback fixtures are mandatory.
 

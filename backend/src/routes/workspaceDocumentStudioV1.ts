@@ -20,6 +20,7 @@ import {
   type DocumentStudioDocxWarning,
 } from "../lib/workspace/documentStudioDocx";
 import { WorkspaceApiError } from "../lib/workspace/errors";
+import { DocumentStudioDraftTypeV20Schema } from "../lib/workspace/documentStudioDraftMetadataV20";
 import { MIKE_LOCAL_USER_ID } from "../lib/workspace/mikeCompatibility";
 import { TransportSafeSourceMetadataV11Schema } from "../lib/workspace/sourceFoundationContractsV11";
 import {
@@ -65,6 +66,7 @@ const CreateDraft = z
   .object({
     title: Title,
     folder_id: Id.nullable().optional(),
+    document_type: DocumentStudioDraftTypeV20Schema.optional(),
   })
   .strict();
 
@@ -73,6 +75,59 @@ const CreateDraftFromAssistant = z
   .strict();
 const CreateDraftFromWorkflow = z.object({ workflow_run_id: Id }).strict();
 const EmptySuggestionDecision = z.object({}).strict();
+
+const DraftListCursorPayload = z
+  .object({
+    project_id: Id,
+    updated_at: z.string().datetime({ precision: 3 }),
+    draft_id: Id,
+  })
+  .strict();
+const DraftListQuery = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+    cursor: z.string().min(1).max(512).optional(),
+  })
+  .strict();
+
+function decodeDraftListCursor(
+  value: string | undefined,
+  expectedProjectId: string,
+) {
+  if (!value) return null;
+  try {
+    const parsed = DraftListCursorPayload.parse(
+      JSON.parse(Buffer.from(value, "base64url").toString("utf8")),
+    );
+    if (parsed.project_id !== expectedProjectId) throw new Error("scope");
+    return parsed;
+  } catch {
+    throw new WorkspaceApiError(
+      422,
+      "VALIDATION_ERROR",
+      "Draft list cursor is invalid.",
+    );
+  }
+}
+
+function encodeDraftListCursor(
+  value: {
+    updatedAt: string;
+    documentId: string;
+  } | null,
+  projectId: string,
+) {
+  return value
+    ? Buffer.from(
+        JSON.stringify({
+          project_id: projectId,
+          updated_at: value.updatedAt,
+          draft_id: value.documentId,
+        }),
+        "utf8",
+      ).toString("base64url")
+    : null;
+}
 
 const ReadDocumentQuery = z
   .object({
@@ -317,10 +372,32 @@ const StudioSuggestionAcceptanceResponse = z
     document: StudioDocumentResponse,
   })
   .strict();
+const StudioDraftSummaryResponse = z
+  .object({
+    draft_id: Id,
+    project_id: Id,
+    title: Title,
+    document_type: DocumentStudioDraftTypeV20Schema,
+    current_version_id: Id,
+    current_version_number: z.number().int().positive(),
+    updated_at: z.string().datetime({ precision: 3 }),
+    source_count: z.number().int().nonnegative(),
+    pending_suggestion_count: z.number().int().nonnegative(),
+    origin_type: z.enum(["manual", "assistant", "workflow", "unknown"]),
+  })
+  .strict();
+const StudioDraftSummaryListResponse = z
+  .object({
+    items: z.array(StudioDraftSummaryResponse).max(100),
+    has_more: z.boolean(),
+    next_cursor: z.string().min(1).max(512).nullable(),
+  })
+  .strict();
 
 export type WorkspaceDocumentStudioCreateInput = {
   title: string;
   folderId: string | null;
+  documentType?: z.infer<typeof DocumentStudioDraftTypeV20Schema>;
 };
 
 export type WorkspaceDocumentStudioSaveInput = {
@@ -359,6 +436,14 @@ export type WorkspaceDocumentStudioExportResult = {
 
 /** The dedicated Studio HTTP seam; implementations must enforce Project scope again. */
 export interface WorkspaceDocumentStudioV1Port {
+  listStudioDrafts?(
+    context: WorkspaceV1Context,
+    projectId: string,
+    input: {
+      limit: number;
+      cursor: { updatedAt: string; documentId: string } | null;
+    },
+  ): Promise<unknown>;
   createStudioDocument(
     context: WorkspaceV1Context,
     projectId: string,
@@ -824,10 +909,76 @@ export function createWorkspaceDocumentStudioV1Router(
         await port.createStudioDocument(
           contextFor(request, options),
           idParam(request, "projectId"),
-          { title: input.title, folderId: input.folder_id ?? null },
+          {
+            title: input.title,
+            folderId: input.folder_id ?? null,
+            documentType: input.document_type ?? "general_legal_document",
+          },
         ),
         201,
       );
+    }),
+  );
+
+  router.get(
+    "/projects/:projectId/studio/drafts",
+    asyncRoute(async (request, response) => {
+      const query = DraftListQuery.parse(request.query);
+      const projectId = idParam(request, "projectId");
+      const cursor = decodeDraftListCursor(query.cursor, projectId);
+      const method = port.listStudioDrafts;
+      if (!method) {
+        throw new WorkspaceApiError(
+          503,
+          "PRECONDITION_FAILED",
+          "Draft summary listing is unavailable.",
+        );
+      }
+      const result = (await method.call(
+        port,
+        contextFor(request, options),
+        projectId,
+        {
+          limit: query.limit,
+          cursor: cursor
+            ? {
+                updatedAt: cursor.updated_at,
+                documentId: cursor.draft_id,
+              }
+            : null,
+        },
+      )) as {
+        drafts: readonly {
+          documentId: string;
+          projectId: string;
+          title: string;
+          documentType: z.infer<typeof DocumentStudioDraftTypeV20Schema>;
+          currentVersionId: string;
+          currentVersionNumber: number;
+          updatedAt: string;
+          sourceCount: number;
+          pendingSuggestionCount: number;
+          originType: "manual" | "assistant" | "workflow" | "unknown";
+        }[];
+        hasMore: boolean;
+        nextCursor: { updatedAt: string; documentId: string } | null;
+      };
+      safeJson(response, StudioDraftSummaryListResponse, {
+        items: result.drafts.map((draft) => ({
+          draft_id: draft.documentId,
+          project_id: draft.projectId,
+          title: draft.title,
+          document_type: draft.documentType,
+          current_version_id: draft.currentVersionId,
+          current_version_number: draft.currentVersionNumber,
+          updated_at: draft.updatedAt,
+          source_count: draft.sourceCount,
+          pending_suggestion_count: draft.pendingSuggestionCount,
+          origin_type: draft.originType,
+        })),
+        has_more: result.hasMore,
+        next_cursor: encodeDraftListCursor(result.nextCursor, projectId),
+      });
     }),
   );
 
