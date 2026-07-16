@@ -84,6 +84,11 @@ function git(root: string, args: string[]) {
   }
 }
 
+function gitBranch(root: string) {
+  const currentBranch = git(root, ["branch", "--show-current"]);
+  return currentBranch || env("GITHUB_HEAD_REF") || env("GITHUB_REF_NAME");
+}
+
 function readText(root: string, relativePath: string) {
   return readFileSync(path.join(root, relativePath), "utf8");
 }
@@ -138,7 +143,7 @@ function main() {
     evidenceFile(root, file),
   );
   const statusShort = git(root, ["status", "--short"]) ?? "";
-  const branch = git(root, ["branch", "--show-current"]);
+  const branch = gitBranch(root);
   const commit = git(root, ["rev-parse", "HEAD"]);
   const remote = git(root, ["remote", "get-url", "origin"]);
   const generatedAt = new Date().toISOString();
