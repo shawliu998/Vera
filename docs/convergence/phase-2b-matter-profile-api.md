@@ -208,9 +208,9 @@ verified encrypted-backup rollback path.
 
 ## Remaining blockers
 
-- The current packaged macOS cross-restart run remains the only unfinished
-  Gate 1 acceptance item; source, migration and security validation passed.
+- The current unsigned local-only packaged macOS cross-restart run now passes;
+  the exact pushed final commit still requires its remote CI result.
 - Unified Proposal/Review remains Gate 2 and is accurately `unavailable` here.
-- Inference Broker, model/source policy resolution and Knowledge remain Gate 3;
-  Matter inference is intentionally closed until then.
+- The minimal v17 unified inference policy is now implemented; approval UX,
+  policy administration/attestation, and Knowledge remain Gate 3 work.
 - A real authorized Chinese legal source and Office Add-in remain later gates.

@@ -2,12 +2,20 @@
 
 Date: 2026-07-16
 
-Status: canonical forward plan
+Status: canonical forward plan — **implementation and local packaged
+acceptance complete; remote final-commit CI pending**
 
-Code baseline: `origin/main` at `12af6fc5` (Workspace schema v14)
+Historical pre-merge baseline: `origin/main` at `12af6fc5` (Workspace schema
+v14)
 
-Feature-branch baseline: `feat/legal-matter-agent-convergence` at `408333d7`
-(Workspace schema v15)
+Historical feature-branch baseline: `feat/legal-matter-agent-convergence` at
+`408333d7` (Workspace schema v15)
+
+Current merged `main` baseline: `9ba3759c` (Workspace schema v16).
+
+Current stabilization worktree: Matter convergence implementation on top of
+that merge at Workspace schema v17. Source, full local CI-equivalent, and
+unsigned local packaged acceptance pass; this is not a signed release baseline.
 
 ## 1. Delivery objective
 
@@ -61,17 +69,28 @@ Exit criteria:
 
 - every current-state claim is backed by code, test, migration, or fixed-source
   evidence;
-- `origin/main` v14 and feature-branch v15 are not conflated;
+- historical v14/v15 baselines, merged `main` v16, and stabilization v17 are
+  not conflated;
 - no uncommitted implementation is described as delivered;
 - no new product feature is added in the Gate 0 commit.
 
 ### Gate 1 — Product convergence and Matter Profile
 
-Gate 1 is delivered as separate schema, API, UI, and release-evidence commits.
+Gate 1 has **implementation and local packaged acceptance complete; remote
+final-commit CI pending**. Its implementation is split into 1A–1E so local
+acceptance cannot be confused with remote or signed release acceptance.
+
+| Slice | Current state | Exit evidence still required |
+| --- | --- | --- |
+| 1A Legacy isolation | Implemented; focused audit and packaged default-off startup pass. | Remote final-commit CI. |
+| 1B Matter Profile and classification | v16 schema/API/transactions plus packaged encrypted CRUD/restart pass. | Remote final-commit CI. |
+| 1C Minimal inference policy | v17 authority plus packaged Global/Project/Matter enforcement and persistence pass. | Remote final-commit CI. |
+| 1D Continuous Matter shell | List/route adapter tests plus packaged navigation and cross-restart state pass. | Remote final-commit CI. |
+| 1E CI and packaged acceptance | Complete local Actions-equivalent chain and current unsigned macOS package pass. | Remote final-commit CI; signed/notarized artifacts only for distribution. |
 
 #### 1A. Legacy isolation
 
-Already implemented by `edf26827`:
+Implemented and retained from `edf26827`:
 
 - `VERA_ENABLE_LEGACY_ROUTES` and `VERA_ENABLE_LEGACY_RUNTIME` require the exact
   string `true`;
@@ -80,7 +99,7 @@ Already implemented by `edf26827`:
 - the Workspace product remains functional without Legacy routes, seed, or
   runtime.
 
-#### 1B. Matter classification migration
+#### 1B. Matter Profile and classification
 
 Migration v16 adds the following without editing v15:
 
@@ -109,14 +128,13 @@ Canonical ownership avoids duplicate fields:
 - v15 litigation-oriented fields remain bounded transitional metadata, do not
   drive navigation, and are not silently promoted to sourced facts.
 
-#### 1C. Matter module and API
-
-Add the Matter Profile module beneath the existing `/api/v1` authentication and
-audit-mutation boundary:
+The Matter Profile module remains beneath the existing `/api/v1`
+authentication and audit-mutation boundary:
 
 ```text
 GET/POST  /api/v1/matters
-GET       /api/v1/matters/:projectId
+GET/PATCH /api/v1/matters/:projectId
+GET/PATCH /api/v1/matters/:projectId/policy
 GET/POST/PATCH /api/v1/projects/:projectId/matter-profile
 ```
 
@@ -125,9 +143,14 @@ Rules:
 - a new Matter atomically creates one Project and one Matter Profile in the
   existing Workspace database;
 - a generic Project is never silently converted;
-- list/read projections expose nullable `workspace_type`, exact
+- list/read projections expose nullable `workspace_type`, exact item state
   `profile_state: absent | classification_required | ready`, and truthful
   feature capabilities;
+- list queries accept `profile_state: profiled | ready |
+  classification_required | absent | all`; filtering occurs in SQL before
+  keyset pagination, and each filtered stream owns its cursor;
+- Project General plus Matter Profile combined edits use one
+  `BEGIN IMMEDIATE` transaction and one monotonic timestamp;
 - the compatibility projection may include generic Projects, but the UI must
   put them in a separate “add Matter Profile” section;
 - Project APIs and `/projects/:id/**` deep links remain valid;
@@ -137,10 +160,33 @@ Rules:
   separate owner ports. One application service/transaction coordinator
   composes Project and Profile writes on the same WorkspaceDatabase
   transaction; owner ports do not begin or commit nested transactions;
-- health reports Profile schema readiness separately from the future Inference
-  Policy.
+- health reports Profile schema readiness separately from inference-policy
+  readiness.
 
-#### 1D. Matter UI
+#### 1C. Minimal inference policy
+
+Migration v17 and `WorkspaceInferencePolicy` implement one backend authority
+for Global, generic Project, and Matter scope:
+
+- model execution location, retention, training use, and sensitive-data
+  permission are explicit declarations and never inferred from a URL;
+- Global and generic Project calls use the Workspace model-privacy rule and do
+  not manufacture a Matter Profile or Matter Policy;
+- Matter calls additionally require a complete Matter Policy and an allowed
+  execution location. Missing policy and an empty location set deny;
+- `approval` remains `require_approval`; it is not treated as allow;
+- capability projection uses side-effect-free `evaluate`; enqueue/final
+  enforcement uses `assertAllowed` and records a bounded decision;
+- Assistant and Workflow recheck at the shared Assistant provider boundary;
+  Tabular rechecks at its cell provider boundary;
+- Studio has no separate provider generator in Gate 1. Assistant-created
+  suggestions inherit the Assistant boundary; `studio_suggestion` is reserved
+  for a future direct generator.
+
+Gate 1 does not add permissive policy defaults or claim that approval UX is
+complete.
+
+#### 1D. Continuous Matter shell
 
 Use the current design system and complete Chinese/English i18n:
 
@@ -151,7 +197,9 @@ Use the current design system and complete Chinese/English i18n:
 - Matter navigation is Overview, Documents, Assistant, Review, Workflows,
   Drafts;
 - Documents, Assistant, and Workflows reuse existing Project-scoped routes;
-- Review remains disabled until Gate 2;
+- backend Review Center capability remains disabled until Gate 2. The current
+  `/matters/:id/review` route is only a compatibility route for the existing
+  Tabular Review owner and is controlled by the `tabular` capability;
 - Drafts links only to real Studio-backed content; if a complete Draft list
   cannot be derived, it is marked unavailable rather than populated with fake
   data;
@@ -160,26 +208,28 @@ Use the current design system and complete Chinese/English i18n:
 - the application landing route stays `/assistant` unless a later ADR changes
   it.
 
-#### 1E. Interim inference safety
+#### 1E. CI and packaged acceptance
 
-The v15 Matter Policy tables are not evidence of an implemented Inference
-Policy. Before Gate 1 is declared complete, model calls for a Project with a
-Matter Profile must pass a backend-owned interim gate. Missing policy or an
-empty allowed execution-location set denies generation. The renderer cannot
-bypass this via a Project deep link. Generic Projects and global Assistant keep
-their existing P0 model-readiness behavior during this compatibility window;
-they cannot use `matter_policies`, whose foreign key deliberately requires a
-Matter Profile.
+The two failures in GitHub Actions run 29465212424 have source-level fixes. The
+complete backend local-first command block, frontend lint/legal-source/UI smoke,
+desktop signing-contract prechecks, and
+`VERA_RELEASE_SIGNING=false ./scripts/package-desktop-mac.sh` pass locally.
 
-Gate 1 does not add permissive policy defaults. Gate 3 supplies verified model
-privacy metadata and the user-facing controls needed to enable Matter
-inference safely, plus an explicit Workspace/global inference-policy port and
-persistence fallback for generic Projects and global Assistant. That fallback
-must not create a Matter Profile or silently convert a Project.
+`packagedWorkspaceE2E.js` now exercises the Gate 1 v3 success chain: classified
+Matter creation, explicit model privacy, complete Matter Policy, two source
+snapshots, real Matter Assistant provider/tool turns with exact citations, and
+offline restart verification of the exact Profile/Policy/default-model/chat/
+source/count/capability state. The same package run also passes SQLCipher,
+migration, backup/restore, restore-failure, native OCR, hygiene, and CSP gates.
+
+The resulting Vera 1.0.1 arm64 DMG/ZIP are unsigned, unnotarized, local-only
+acceptance artifacts. Gate 1 still awaits GitHub Actions on the exact final
+commit; a distributable release additionally requires Developer ID signing,
+notarization, stapling, and new artifact hashes.
 
 ### Gate 2 — Proposal contract and Unified Review Center
 
-Use a new additive migration after v16 for:
+Use the planned additive v18 migration after v17 for:
 
 ```text
 workspace_proposals
@@ -193,7 +243,8 @@ service, re-reads the current suggestion and base version, validates source,
 retention, stale state, and audit health, then records the resolution in the
 same database transaction as the formal version change.
 
-Adapters then expand in this order:
+Only after that Proposal Contract → Review Center slice is accepted may
+adapters be considered in this order:
 
 1. OCR warning: acknowledge, defer, or reopen through typed resolution events;
    it is not a legal fact and those actions are not Proposal lifecycle states.
@@ -215,29 +266,20 @@ Matter Overview gains a real open-Proposal count only after the Review query is
 live. Review becomes an enabled top-level and Matter navigation destination at
 that point.
 
-#### Gate 2B — Work Queue projection
+Work Queue, broad adapters, and new formal owners are not Gate 2 entry work and
+must not begin before the first vertical slice passes its packaged acceptance.
 
-The new plan names Work Queue as necessary but does not assign it a numbered
-Gate. It is therefore an explicit Gate 2 follow-on, not a new top-level product
-area. Review can expose Queue as a secondary mode.
-
-- aggregate open Proposals, failed/retryable Jobs, OCR warnings, Studio
-  suggestions, and waiting Workflow work by stable references;
-- add a formal table only for user-created tasks;
-- do not copy source payloads or create a second job state machine;
-- define deduplication, completion history, and Project ownership.
-
-### Gate 3 — Inference Policy and Knowledge
+### Gate 3 — Inference policy controls and Knowledge
 
 Split this Gate into independently migrated and tested slices.
 
-#### 3A. Inference Broker policy
+#### 3A. Inference policy controls
 
-- extend Model Profile with declared execution location, retention, training
-  use, sensitive-data permission, and attestation;
-- expose Matter Policy API/UI with deny-all defaults;
+- extend the v17 minimal declaration with attestation, administrator/user
+  controls, and a complete approval workflow;
 - enforce Source retention/model-use policy at the last outbound boundary;
-- return only `allow`, `allow_after_redaction`, `require_approval`, or `deny`;
+- preserve the existing `allow`, `require_approval`, and `deny` contract unless
+  a later ADR introduces a separately reviewed redaction decision;
 - record bounded egress audit metadata answering what, where, model, policy,
   redaction, approval, retention, and training-use questions;
 - never infer “local” solely from a URL.
@@ -320,18 +362,20 @@ license, native packaging, saved-audio recovery, and model-weight reviews.
 
 ## 4. Provisional migration order
 
-Migrations v15 and v16 are committed. Versions v17 and later remain planning
-reservations and can be split before their migration lands:
+Migrations v15, v16, and v17 are implemented and immutable. Versions v18 and
+later remain planning reservations and can be split before their migration
+lands:
 
 | Version | Domain                                                                       |
 | ------- | ---------------------------------------------------------------------------- |
 | v15     | Existing Matter Profile and dormant fail-closed Matter Policy foundation     |
 | v16     | Broad workspace classification and jurisdiction                              |
-| v17     | Proposal and resolution contract                                             |
-| v18     | User-created tasks for the Work Queue                                        |
-| v19     | Model privacy metadata and source/inference policy evolution                 |
-| v20     | Knowledge Collections and reference-only items                               |
-| v21+    | Legal-source, Word, or Conversation state only when its contract is approved |
+| v17     | Explicit model privacy declarations and inference decision ledger             |
+| v18     | Proposal and resolution contract                                             |
+| v19     | User-created tasks only after a separately accepted Work Queue contract       |
+| v20     | Inference-policy controls/attestation if durable state is required            |
+| v21     | Knowledge Collections and reference-only items                               |
+| v22+    | Legal-source, Word, or Conversation state only when its contract is approved |
 
 Released migration files and checksums are immutable. Every new migration is
 additive, transactional, contiguous, bounded, and preserves Project ownership,
@@ -368,10 +412,14 @@ claims change only after the corresponding real vertical acceptance passes.
 
 ## 6. Immediate next slice
 
-Gate 1's v16 schema, corrected Matter API, interim inference boundary, and
-Matter UI slices are implemented and have passed the backend/security review.
-The remaining Gate 1 acceptance item is a current packaged macOS cross-restart
-run. After that release evidence is recorded, Gate 2 begins with one real
+Gate 1A–1E source implementation, the complete local CI-equivalent chain, and
+the current unsigned macOS cross-restart package acceptance are complete. The
+immediate work is to push the reviewed commits and obtain the required GitHub
+Actions result for that exact final commit. Developer ID signing and
+notarization remain separate distribution requirements.
+
+Only after the remote final-commit evidence is recorded does Gate 2 begin, with one real
 Document Studio suggestion projected through the Proposal Contract into the
 Review Center, including authoritative accept/reject and stale/source
-revalidation.
+revalidation. No broader Review adapter, Work Queue, Knowledge, or automation
+scope is pulled forward.
