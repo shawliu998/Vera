@@ -65,6 +65,7 @@ import { WorkspaceBlobCleanupRepository } from "./repositories/blobCleanup";
 import { WorkspaceBlobRecordsRepository } from "./repositories/blobRecords";
 import { WorkspaceDocumentStudioRepository } from "./repositories/documentStudio";
 import { WorkspaceDocumentStudioDraftsRepository } from "./repositories/documentStudioDrafts";
+import { WorkspaceDocumentStudioTemplatesRepository } from "./repositories/documentStudioTemplates";
 import { WorkspaceSourceFoundationRepository } from "./repositories/sourceFoundation";
 import { WorkspaceSourceRetentionLifecycleRepository } from "./repositories/sourceRetentionLifecycle";
 import { WorkspaceLegalProvidersRepository } from "./repositories/legalProviders";
@@ -108,6 +109,7 @@ import type {
 } from "./documentStudioSuggestionContractsV14";
 import { WorkspaceDocumentStudioRepositoryAdapter } from "./services/documentStudioRepositoryAdapter";
 import { WorkspaceDocumentStudioDraftsService } from "./services/documentStudioDrafts";
+import { WorkspaceDocumentStudioTemplatesService } from "./services/documentStudioTemplates";
 import {
   WorkspaceProjectSourcesService,
   type CaptureProjectDocumentSourceResult,
@@ -449,6 +451,7 @@ export class WorkspaceRuntime
   private readonly documentStudioService: WorkspaceDocumentStudioService;
   private readonly documentStudioRepository: WorkspaceDocumentStudioRepositoryPort;
   private readonly documentStudioDrafts: WorkspaceDocumentStudioDraftsService;
+  private readonly documentStudioTemplates: WorkspaceDocumentStudioTemplatesService;
   private readonly projectSourcesService: WorkspaceProjectSourcesService;
   private readonly sourceRetentionService: WorkspaceSourceRetentionService;
   private readonly chatsService: ChatsService;
@@ -687,6 +690,9 @@ export class WorkspaceRuntime
       );
     this.documentStudioDrafts = new WorkspaceDocumentStudioDraftsService(
       new WorkspaceDocumentStudioDraftsRepository(this.database),
+    );
+    this.documentStudioTemplates = new WorkspaceDocumentStudioTemplatesService(
+      new WorkspaceDocumentStudioTemplatesRepository(this.database),
     );
     this.projectSourcesService =
       dependencies.projectSourcesService ??
@@ -1509,6 +1515,91 @@ export class WorkspaceRuntime
         originRef: null,
       }),
     );
+  }
+  async listStudioTemplates(context: WorkspaceV1Context, projectId: string) {
+    this.requireAccess(context);
+    this.projects.get(projectId);
+    return this.documentStudioTemplates.list(projectId);
+  }
+  async getStudioTemplate(
+    context: WorkspaceV1Context,
+    projectId: string,
+    templateId: string,
+  ) {
+    this.requireAccess(context);
+    this.projects.get(projectId);
+    return this.documentStudioTemplates.get(projectId, templateId);
+  }
+  async copyStudioTemplate(
+    context: WorkspaceV1Context,
+    projectId: string,
+    templateId: string,
+    title?: string,
+  ) {
+    this.requireAccess(context);
+    const project = this.projects.get(projectId);
+    if (project.status !== "active") {
+      throw new WorkspaceApiError(
+        409,
+        "CONFLICT",
+        "Archived Projects are read-only.",
+      );
+    }
+    return this.documentStudioTemplates.copy({ projectId, templateId, title });
+  }
+  async updateStudioTemplate(
+    context: WorkspaceV1Context,
+    projectId: string,
+    templateId: string,
+    input: {
+      title?: string;
+      description?: string;
+      content?: string;
+      plan?: unknown;
+    },
+  ) {
+    this.requireAccess(context);
+    const project = this.projects.get(projectId);
+    if (project.status !== "active") {
+      throw new WorkspaceApiError(
+        409,
+        "CONFLICT",
+        "Archived Projects are read-only.",
+      );
+    }
+    return this.documentStudioTemplates.update({
+      projectId,
+      templateId,
+      ...input,
+    });
+  }
+  async createStudioDocumentFromTemplate(
+    context: WorkspaceV1Context,
+    projectId: string,
+    templateId: string,
+    input: { title?: string; folderId: string | null },
+  ) {
+    this.requireAccess(context);
+    const project = this.projects.get(projectId);
+    if (project.status !== "active") {
+      throw new WorkspaceApiError(
+        409,
+        "CONFLICT",
+        "Archived Projects are read-only.",
+      );
+    }
+    this.assertUploadPlacement(projectId, input.folderId);
+    const template = this.documentStudioTemplates.get(projectId, templateId);
+    const document = await this.documentStudioService.createDraft({
+      projectId,
+      folderId: input.folderId,
+      title: input.title ?? template.plan.title,
+      content: template.content,
+      documentType: template.documentType,
+      originType: "manual",
+      originRef: null,
+    });
+    return { document: this.studioDocumentWire(document), plan: template.plan };
   }
   async listStudioDrafts(
     context: WorkspaceV1Context,

@@ -6,7 +6,7 @@ Status: canonical forward plan
 
 Current merged `main`: `5611699e46552a20bf42ce84396a8e65aa139d16`
 
-Current Workspace schema: v17
+Current feature-branch Workspace schema: v21
 
 ## 1. Product truth source
 
@@ -40,7 +40,7 @@ The following capability families are merged and available in the active
 Workspace runtime:
 
 - one Electron-managed loopback Next.js/Express lifecycle;
-- one SQLCipher Workspace database with additive migrations through v17;
+- one SQLCipher Workspace database with additive migrations through v21;
 - encrypted local Blob storage and isolated Keychain credential handling;
 - Project-owned Matter Profile, explicit workspace classification, capability
   projections, continuous Matter shell, and unified inference policy;
@@ -52,6 +52,8 @@ Workspace runtime:
 - durable Workflow and Tabular execution on the same Job Runtime;
 - Document Studio versions, source-aware suggestions, accept/reject/stale
   checks, and DOCX import/export;
+- composed Document/Draft/Workflow Assistant tools, a real Matter Drafts
+  workbench, and eight local legal-document templates with bounded DraftPlans;
 - encrypted backup/restore, security gates, and local packaged restart tests.
 
 The primary navigation is already `Assistant / Matters / Workflows / Review /
@@ -65,6 +67,8 @@ distribution readiness, or remote CI for a different commit.
 ## 3. Immediate vertical sequence
 
 ### Stage 1 — Documentation and Tool Registry
+
+Status: implemented and covered by retained Assistant registry audits.
 
 Objective: establish a truthful baseline and replace the one-file Assistant
 tool composition with one registry while preserving behavior.
@@ -84,6 +88,10 @@ Exit: backend build, migration and Assistant suites pass with no behavior
 change.
 
 ### Stage 2 — Active Legal Provider Hub and research contracts
+
+Status: Provider Hub, Settings, fixed YuanDian technical PoC, and test-only
+provider contracts are implemented. Durable production research ownership and
+legal-authority Assistant citations remain incomplete.
 
 Objective: add `search_legal_sources` and `read_legal_source` behind an active
 Workspace provider boundary, without enabling an unverified vendor.
@@ -109,6 +117,9 @@ No endpoint or response shape may be guessed.
 
 ### Stage 3 — One authorized provider
 
+Status: externally blocked. The YuanDian technical PoC proves transport only;
+the activation gate remains closed pending documented rights and live acceptance.
+
 Objective: activate exactly one licensed PKULaw or YuanDian vertical.
 
 Entry criteria:
@@ -126,6 +137,8 @@ evidence -> Draft path. A fake provider, Legacy contract test, configured
 endpoint, or successful connection probe cannot satisfy this stage.
 
 ### Stage 4 — Draft and Workflow tools
+
+Status: implemented, including durable action budgets and the Draft result card.
 
 Objective: compose `DraftTools` and `WorkflowTools` using the existing Studio
 and Workflow owners.
@@ -152,6 +165,12 @@ Rules:
   IDs and do not block one tool call indefinitely.
 
 ### Stage 5 — Legal research loop and UI
+
+Status: partially implemented. The bounded prompt/tool loop, Provider status,
+Draft result, Matter Drafts workbench, templates, and DraftPlan preview are
+wired. The document-only Assistant source model still rejects durable legal
+authority citations; the deterministic boundary audit records that exact
+fail-closed gap.
 
 Objective: let one Matter Assistant distinguish local facts from legal
 authorities, search only when authorized, read selected sources, cite evidence,
@@ -183,16 +202,17 @@ while the live stage remains explicitly blocked.
 
 ## 4. Migration order
 
-Migrations v1-v17 are published and immutable. The Tool Registry needs no
-migration. A later additive v18 may add only owners proven necessary for this
-vertical:
+Migrations v1-v21 are published and immutable. The Tool Registry needed no
+migration. v18 owns Provider configuration, v19 owns the Assistant action
+ledger, v20 owns Draft type/origin metadata, and v21 owns the local template
+catalogue plus bounded DraftPlans. A later additive migration may add only
+owners proven necessary for durable legal research:
 
 ```text
 legal_research_sessions
 legal_search_queries
 legal_search_candidates
 assistant_artifact_links
-legal_document_templates
 ```
 
 Before v18 lands, the design must prove that existing documents, source

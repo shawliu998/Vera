@@ -442,7 +442,7 @@ async function main() {
     v15.close();
 
     database = new WorkspaceDatabase(databasePath);
-    assert.equal(database.migration?.currentVersion, 20);
+    assert.equal(database.migration?.currentVersion, 21);
     const projects = new ProjectsRepository(database);
     const repository = new MatterProfileRepository(database);
     const overview = new MatterOverviewRepository(database);

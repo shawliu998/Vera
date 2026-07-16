@@ -7,7 +7,7 @@ tests take precedence over historical programme text below.
 
 Status on 2026-07-16: Matter convergence is merged to `main` at
 `5611699e46552a20bf42ce84396a8e65aa139d16`; the active feature branch now uses
-Workspace schema v20. The active
+Workspace schema v21. The active
 implementation branch for the next vertical is `feat/local-legal-work-agent`.
 
 ```text
@@ -67,6 +67,21 @@ pending-suggestion counts; supports blank creation, exact Studio opening, DOCX
 export, and scoped deletion; and records manual/Assistant/Workflow origin in the
 same Draft transaction. Existing pre-v20 Draft rows are not backfilled or
 guessed and are projected as general documents with unknown origin.
+
+Schema v21 adds eight original built-in legal-document templates and bounded,
+persisted DraftPlans. Matter Drafts can load a strict template catalogue,
+preview ordered sections and required-source prompts, and create a real Studio
+Draft from the selected template. Project-local copies can be edited through
+authenticated, Project-scoped APIs; built-ins are immutable, archived Matters
+are readable but reject writes, and cross-Matter access is hidden.
+
+The deterministic legal-work boundary audit now runs the real Assistant tool
+loop with the test-only Provider, captures a Matter-owned legal-authority
+snapshot and anchor, and proves the current document-only Assistant citation
+schema rejects the authority with `JOB_FAILED` and no forged message source or
+Draft. It separately proves the existing downstream anchor -> Draft -> user
+accepted suggestion -> DOCX -> reopen path. This is explicit blocked-boundary
+evidence, not a completed packaged vertical or live-provider acceptance.
 
 No production legal provider is claimed ready. The active Workspace now owns a
 v18 YuanDian Provider Hub, Keychain-only credential operations, authenticated

@@ -23,7 +23,7 @@ Agent Tool Expansion
 + Agent-to-Draft End-to-End Vertical
 ```
 
-当前 `main` 基线是 `5611699e46552a20bf42ce84396a8e65aa139d16`，Workspace migration 最高版本是 v17。`Project` 仍是文档、对话、Workflow run、Tabular Review 与 Studio Draft 的技术所有者；`Matter` 是其上的法律工作语义与 Profile/Policy 投影，不引入第二套数据系统。
+已合并的 `main` 基线是 `5611699e46552a20bf42ce84396a8e65aa139d16`；当前 `feat/local-legal-work-agent` 实现以加法 migration 推进到 Workspace v21。`Project` 仍是文档、对话、Workflow run、Tabular Review、模板与 Studio Draft 的技术所有者；`Matter` 是其上的法律工作语义与 Profile/Policy 投影，不引入第二套数据系统。
 
 ## 已接线能力
 
@@ -35,7 +35,9 @@ Agent Tool Expansion
 - Source Snapshot/Citation Anchor、Document Studio、版本、AI suggestion、接受/拒绝、DOCX 导入导出。
 - Matter Profile、显式 workspace classification 与统一 inference policy。
 
-当前 Assistant 正式工具仅覆盖本地文档读取/检索以及兼容 Studio 文档的读取和修改建议。法律检索、创建 Draft 与 Workflow 工具仍属于本轮待实现能力，详见 [`docs/local_legal_work_agent_vertical.md`](docs/local_legal_work_agent_vertical.md)。
+当前 Assistant 已通过组合 registry 接入本地文档、Draft 与 Workflow 工具，支持创建/读取 Draft、生成待用户接受的修改建议以及启动/查询持久 Workflow。Matter Drafts 已接真实 Studio 数据；v21 还提供 8 类本地法律文书模板、严格 DraftPlan 预览以及项目范围内的复制、编辑和创建 Draft API。
+
+法律检索工具已有固定 Provider 边界和测试接线，但法律权威尚不能进入 Assistant 当前以文档为中心的引用模型。确定性边界审计证明该路径会安全失败且不写入伪引用或 Draft；因此完整法律检索到文书闭环仍未宣称完成。详见 [`docs/local_legal_work_agent_vertical.md`](docs/local_legal_work_agent_vertical.md)。
 
 ## 法律数据源状态
 

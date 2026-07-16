@@ -32,8 +32,9 @@ Documents, Assistant, Review, Workflows, Drafts, and Settings. Review exposes
 only already-wired capabilities; the product does not create empty review
 systems to fill navigation.
 
-The current `main` baseline is merge commit `5611699e` with Workspace schema
-v17. It includes one Electron lifecycle, one loopback Next.js renderer, one
+The merged `main` baseline is `5611699e`; the active
+`feat/local-legal-work-agent` implementation is additive through Workspace
+schema v21. It includes one Electron lifecycle, one loopback Next.js renderer, one
 loopback Express backend, one SQLCipher Workspace database, one encrypted blob
 store, one durable job runtime, one model gateway, Source Snapshots/Citation
 Anchors, and one Document Studio. OpenAI, DeepSeek, Anthropic, Gemini, and
@@ -52,6 +53,13 @@ unnotarized, and local-only—not a public release. A production legal-data
 Provider is also not claimed: retained PKULaw/YuanDian contracts remain
 activation-gated until official endpoint material, credentials, and written
 retention/model-use/export rights are available and live acceptance passes.
+
+The active branch also composes Draft and Workflow Assistant tools, a real
+Matter Drafts workbench, eight local legal-document templates with bounded
+DraftPlan previews, and Project-scoped template copy/edit/create APIs. A
+deterministic boundary audit proves that legal-authority citations still fail
+closed at the document-only Assistant source model; it does not claim the full
+legal-research-to-Draft vertical or a live Provider is complete.
 
 The executable plan for the next vertical is
 [docs/local_legal_work_agent_vertical.md](docs/local_legal_work_agent_vertical.md).

@@ -138,6 +138,20 @@ test("Matter Drafts is a real scoped workbench with no production mock fallback"
   assert.match(page, /MatterCapabilityBoundary capability="drafts"/);
   assert.match(workbench, /listVeraStudioDrafts/);
   assert.match(workbench, /createVeraStudioDocument/);
+  assert.match(workbench, /listVeraStudioTemplates/);
+  assert.match(workbench, /getVeraStudioTemplate/);
+  assert.match(workbench, /createVeraStudioDraftFromTemplate/);
+  assert.match(workbench, /selectedTemplate\.plan\.sections\.map/);
+  assert.match(workbench, /router\.push[\s\S]*document\.document_id/);
+  assert.match(workbench, /if \(!showCreate \|\| readOnly\) return/);
+  assert.match(workbench, /disabled=\{readOnly\}/);
+  assert.match(workbench, /setTemplatesFailure/);
+  assert.match(workbench, /setTemplateFailure/);
+  assert.match(
+    workbench,
+    /selectedTemplate\?\.template_id !== selectedTemplateId/,
+  );
+  assert.doesNotMatch(workbench, /systemInstructions|system_instructions/);
   assert.match(workbench, /exportVeraStudioDocx/);
   assert.match(
     workbench,
@@ -148,6 +162,9 @@ test("Matter Drafts is a real scoped workbench with no production mock fallback"
   assert.match(workbench, /current_version_id/);
   assert.match(api, /MAX_STUDIO_DRAFTS_PER_PAGE = 100/);
   assert.match(api, /exactKeys\([\s\S]*"origin_type"/);
+  assert.match(api, /MAX_STUDIO_TEMPLATE_SECTIONS = 24/);
+  assert.match(api, /exactKeys\([\s\S]*"required_sources"/);
+  assert.match(api, /\^\[a-z\]\[a-z0-9_\]\{0,39\}\$/);
   assert.match(
     api,
     /page\.items\.some\(\(item\) => item\.project_id !== projectIdValue\)/,

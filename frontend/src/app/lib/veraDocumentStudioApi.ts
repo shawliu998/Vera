@@ -9,6 +9,8 @@ const MAX_STUDIO_CONTENT_BYTES = 4_000_000;
 const MAX_CITATION_ANCHORS = 200;
 const MAX_STUDIO_DOCX_BYTES = 10 * 1024 * 1024;
 const MAX_STUDIO_DRAFTS_PER_PAGE = 100;
+const MAX_STUDIO_TEMPLATES = 100;
+const MAX_STUDIO_TEMPLATE_SECTIONS = 24;
 export const VERA_STUDIO_DOCX_MIME_TYPE =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 export const VERA_STUDIO_DOCX_WARNING_CODES = [
@@ -143,6 +145,50 @@ export interface VeraStudioDraftPageWire {
 export interface VeraStudioDraftListQuery {
   cursor?: string;
   limit?: number;
+}
+
+export type VeraStudioTemplateScope = "builtin" | "project";
+
+export interface VeraStudioTemplateSummaryWire {
+  template_id: string;
+  scope: VeraStudioTemplateScope;
+  title: string;
+  description: string;
+  document_type: VeraStudioDocumentType;
+  section_count: number;
+  updated_at: string;
+}
+
+export interface VeraStudioDraftPlanSectionWire {
+  id: string;
+  heading: string;
+  purpose: string;
+  required_sources: string[];
+}
+
+export interface VeraStudioDraftPlanWire {
+  title: string;
+  document_type: VeraStudioDocumentType;
+  sections: VeraStudioDraftPlanSectionWire[];
+}
+
+export interface VeraStudioTemplateWire extends VeraStudioTemplateSummaryWire {
+  content: string;
+  plan: VeraStudioDraftPlanWire;
+}
+
+export interface VeraStudioTemplateListWire {
+  items: VeraStudioTemplateSummaryWire[];
+}
+
+export interface CreateVeraStudioDraftFromTemplateInput {
+  title?: string;
+  folder_id?: string | null;
+}
+
+export interface VeraStudioTemplateDraftWire {
+  document: VeraStudioDocumentWire;
+  plan: VeraStudioDraftPlanWire;
 }
 
 export interface CreateVeraStudioDraftFromAssistantInput {
@@ -378,6 +424,13 @@ function studioDraftOriginType(value: unknown): VeraStudioDraftOriginType {
     invalidWire("Studio draft origin type");
   }
   return originType as VeraStudioDraftOriginType;
+}
+
+function studioTemplateScope(value: unknown): VeraStudioTemplateScope {
+  if (value !== "builtin" && value !== "project") {
+    invalidWire("Studio template scope");
+  }
+  return value;
 }
 
 function studioMimeType(value: unknown): "text/markdown" {
@@ -743,6 +796,201 @@ export function parseVeraStudioDraftPage(
     invalidWire("Studio draft pagination");
   }
   return { items, has_more: wire.has_more, next_cursor: nextCursor };
+}
+
+function studioTemplateText(
+  value: unknown,
+  label: string,
+  maxCodePoints: number,
+  allowEmpty = false,
+): string {
+  if (allowEmpty && value === "") return "";
+  const text = boundedCodePointString(value, label, maxCodePoints).trim();
+  if (
+    (!allowEmpty && text.length === 0) ||
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(text)
+  ) {
+    invalidWire(label);
+  }
+  return text;
+}
+
+function parseVeraStudioTemplateSummary(
+  value: unknown,
+): VeraStudioTemplateSummaryWire {
+  const wire = record(value, "Studio template summary");
+  exactKeys(
+    wire,
+    [
+      "template_id",
+      "scope",
+      "title",
+      "description",
+      "document_type",
+      "section_count",
+      "updated_at",
+    ],
+    "Studio template summary",
+  );
+  const sectionCount = positiveInteger(
+    wire.section_count,
+    "Studio template section count",
+  );
+  if (sectionCount > MAX_STUDIO_TEMPLATE_SECTIONS) {
+    invalidWire("Studio template section count");
+  }
+  return {
+    template_id: uuid(wire.template_id, "Studio template id"),
+    scope: studioTemplateScope(wire.scope),
+    title: studioTemplateText(wire.title, "Studio template title", 240),
+    description: studioTemplateText(
+      wire.description,
+      "Studio template description",
+      500,
+    ),
+    document_type: studioDocumentType(wire.document_type),
+    section_count: sectionCount,
+    updated_at: isoTimestamp(
+      wire.updated_at,
+      "Studio template updated timestamp",
+    ),
+  };
+}
+
+function parseVeraStudioDraftPlanSection(
+  value: unknown,
+): VeraStudioDraftPlanSectionWire {
+  const wire = record(value, "Studio DraftPlan section");
+  exactKeys(
+    wire,
+    ["id", "heading", "purpose", "required_sources"],
+    "Studio DraftPlan section",
+  );
+  if (
+    !Array.isArray(wire.required_sources) ||
+    wire.required_sources.length > 8
+  ) {
+    invalidWire("Studio DraftPlan required sources");
+  }
+  const requiredSources = wire.required_sources.map((source) =>
+    studioTemplateText(source, "Studio DraftPlan required source", 120),
+  );
+  const sectionId = studioTemplateText(
+    wire.id,
+    "Studio DraftPlan section id",
+    40,
+  );
+  if (!/^[a-z][a-z0-9_]{0,39}$/.test(sectionId)) {
+    invalidWire("Studio DraftPlan section id");
+  }
+  return {
+    id: sectionId,
+    heading: studioTemplateText(
+      wire.heading,
+      "Studio DraftPlan section heading",
+      120,
+    ),
+    purpose: studioTemplateText(
+      wire.purpose,
+      "Studio DraftPlan section purpose",
+      500,
+    ),
+    required_sources: requiredSources,
+  };
+}
+
+export function parseVeraStudioDraftPlan(
+  value: unknown,
+): VeraStudioDraftPlanWire {
+  const wire = record(value, "Studio DraftPlan");
+  exactKeys(wire, ["title", "document_type", "sections"], "Studio DraftPlan");
+  if (
+    !Array.isArray(wire.sections) ||
+    wire.sections.length < 1 ||
+    wire.sections.length > MAX_STUDIO_TEMPLATE_SECTIONS
+  ) {
+    invalidWire("Studio DraftPlan sections");
+  }
+  const sections = wire.sections.map(parseVeraStudioDraftPlanSection);
+  if (new Set(sections.map((section) => section.id)).size !== sections.length) {
+    invalidWire("Studio DraftPlan section ids");
+  }
+  return {
+    title: studioTemplateText(wire.title, "Studio DraftPlan title", 240),
+    document_type: studioDocumentType(wire.document_type),
+    sections,
+  };
+}
+
+export function parseVeraStudioTemplateList(
+  value: unknown,
+): VeraStudioTemplateListWire {
+  const wire = record(value, "Studio template list");
+  exactKeys(wire, ["items"], "Studio template list");
+  if (!Array.isArray(wire.items) || wire.items.length > MAX_STUDIO_TEMPLATES) {
+    invalidWire("Studio template list");
+  }
+  const items = wire.items.map(parseVeraStudioTemplateSummary);
+  if (new Set(items.map((item) => item.template_id)).size !== items.length) {
+    invalidWire("Studio template ids");
+  }
+  return { items };
+}
+
+export function parseVeraStudioTemplate(
+  value: unknown,
+): VeraStudioTemplateWire {
+  const outer = record(value, "Studio template response");
+  exactKeys(outer, ["template"], "Studio template response");
+  const wire = record(outer.template, "Studio template");
+  exactKeys(
+    wire,
+    [
+      "template_id",
+      "scope",
+      "title",
+      "description",
+      "document_type",
+      "section_count",
+      "updated_at",
+      "content",
+      "plan",
+    ],
+    "Studio template",
+  );
+  const summary = parseVeraStudioTemplateSummary({
+    template_id: wire.template_id,
+    scope: wire.scope,
+    title: wire.title,
+    description: wire.description,
+    document_type: wire.document_type,
+    section_count: wire.section_count,
+    updated_at: wire.updated_at,
+  });
+  const plan = parseVeraStudioDraftPlan(wire.plan);
+  if (
+    plan.document_type !== summary.document_type ||
+    plan.sections.length !== summary.section_count
+  ) {
+    invalidWire("Studio template DraftPlan binding");
+  }
+  const content = studioContent(wire.content);
+  if (content.length === 0) invalidWire("Studio template content");
+  return {
+    ...summary,
+    content,
+    plan,
+  };
+}
+
+export function parseVeraStudioTemplateDraft(
+  value: unknown,
+): VeraStudioTemplateDraftWire {
+  const wire = record(value, "Studio template draft");
+  exactKeys(wire, ["document", "plan"], "Studio template draft");
+  const document = parseCurrentVeraStudioDocument(wire.document);
+  const plan = parseVeraStudioDraftPlan(wire.plan);
+  return { document, plan };
 }
 
 export function parseVeraStudioSuggestion(
@@ -1280,6 +1528,71 @@ export async function listVeraStudioDrafts(
     invalidWire("Studio draft project scope");
   }
   return page;
+}
+
+export async function listVeraStudioTemplates(
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<VeraStudioTemplateListWire> {
+  return parseVeraStudioTemplateList(
+    await veraApiRequest<unknown>(
+      `/projects/${safeId(projectId, "project id")}/studio/templates`,
+      { signal },
+    ),
+  );
+}
+
+export async function getVeraStudioTemplate(
+  projectId: string,
+  templateId: string,
+  signal?: AbortSignal,
+): Promise<VeraStudioTemplateWire> {
+  const parsedTemplateId = safeId(templateId, "Studio template id");
+  const template = parseVeraStudioTemplate(
+    await veraApiRequest<unknown>(
+      `/projects/${safeId(projectId, "project id")}/studio/templates/${parsedTemplateId}`,
+      { signal },
+    ),
+  );
+  if (template.template_id !== parsedTemplateId) {
+    invalidWire("Studio template identity");
+  }
+  return template;
+}
+
+export async function createVeraStudioDraftFromTemplate(
+  projectId: string,
+  templateId: string,
+  input: CreateVeraStudioDraftFromTemplateInput,
+  signal?: AbortSignal,
+): Promise<VeraStudioTemplateDraftWire> {
+  const projectIdValue = safeId(projectId, "project id");
+  const result = parseVeraStudioTemplateDraft(
+    await veraApiRequest<unknown>(
+      `/projects/${projectIdValue}/studio/templates/${safeId(templateId, "Studio template id")}/drafts`,
+      {
+        method: "POST",
+        json: {
+          ...(input.title === undefined
+            ? {}
+            : { title: safeTitle(input.title) }),
+          ...(input.folder_id === undefined
+            ? {}
+            : {
+                folder_id:
+                  input.folder_id === null
+                    ? null
+                    : safeId(input.folder_id, "folder id"),
+              }),
+        },
+        signal,
+      },
+    ),
+  );
+  if (result.document.project_id !== projectIdValue) {
+    invalidWire("Studio template draft Project binding");
+  }
+  return result;
 }
 
 export async function createVeraStudioDraftFromAssistant(

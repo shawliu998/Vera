@@ -21,6 +21,11 @@ import {
 } from "../lib/workspace/documentStudioDocx";
 import { WorkspaceApiError } from "../lib/workspace/errors";
 import { DocumentStudioDraftTypeV20Schema } from "../lib/workspace/documentStudioDraftMetadataV20";
+import {
+  DOCUMENT_STUDIO_TEMPLATE_MAX_CONTENT_BYTES_V21,
+  DOCUMENT_STUDIO_TEMPLATE_MAX_CONTENT_CHARS_V21,
+  DOCUMENT_STUDIO_TEMPLATE_MAX_SECTIONS_V21,
+} from "../lib/workspace/documentStudioTemplatesV21";
 import { MIKE_LOCAL_USER_ID } from "../lib/workspace/mikeCompatibility";
 import { TransportSafeSourceMetadataV11Schema } from "../lib/workspace/sourceFoundationContractsV11";
 import {
@@ -74,6 +79,10 @@ const CreateDraftFromAssistant = z
   .object({ chat_id: Id, assistant_message_id: Id })
   .strict();
 const CreateDraftFromWorkflow = z.object({ workflow_run_id: Id }).strict();
+const CopyTemplate = z.object({ title: Title.optional() }).strict();
+const CreateDraftFromTemplate = z
+  .object({ title: Title.optional(), folder_id: Id.nullable().optional() })
+  .strict();
 const EmptySuggestionDecision = z.object({}).strict();
 
 const DraftListCursorPayload = z
@@ -393,6 +402,147 @@ const StudioDraftSummaryListResponse = z
     next_cursor: z.string().min(1).max(512).nullable(),
   })
   .strict();
+const TemplateScope = z.enum(["builtin", "project"]);
+const DraftPlanSectionResponse = z
+  .object({
+    id: z.string().regex(/^[a-z][a-z0-9_]{0,39}$/),
+    heading: z.string().trim().min(1).max(120),
+    purpose: z.string().trim().min(1).max(500),
+    required_sources: z.array(z.string().trim().min(1).max(120)).max(8),
+  })
+  .strict();
+const DraftPlanResponse = z
+  .object({
+    title: Title,
+    document_type: DocumentStudioDraftTypeV20Schema,
+    sections: z
+      .array(DraftPlanSectionResponse)
+      .min(1)
+      .max(DOCUMENT_STUDIO_TEMPLATE_MAX_SECTIONS_V21),
+  })
+  .strict();
+const TemplateSummaryResponse = z
+  .object({
+    template_id: Id,
+    scope: TemplateScope,
+    title: Title,
+    description: z.string().trim().min(1).max(500),
+    document_type: DocumentStudioDraftTypeV20Schema,
+    section_count: z
+      .number()
+      .int()
+      .min(1)
+      .max(DOCUMENT_STUDIO_TEMPLATE_MAX_SECTIONS_V21),
+    updated_at: IsoDateTime,
+  })
+  .strict();
+const TemplateResponse = TemplateSummaryResponse.extend({
+  content: z
+    .string()
+    .min(1)
+    .max(DOCUMENT_STUDIO_TEMPLATE_MAX_CONTENT_CHARS_V21)
+    .refine(
+      (value) =>
+        Buffer.byteLength(value, "utf8") <=
+        DOCUMENT_STUDIO_TEMPLATE_MAX_CONTENT_BYTES_V21,
+    ),
+  plan: DraftPlanResponse,
+}).strict();
+const TemplateListResponse = z
+  .object({ items: z.array(TemplateSummaryResponse).max(100) })
+  .strict();
+const TemplateDetailResponse = z
+  .object({ template: TemplateResponse })
+  .strict();
+const TemplateDraftResponse = z
+  .object({ document: StudioDocumentResponse, plan: DraftPlanResponse })
+  .strict();
+const UpdateTemplate = z
+  .object({
+    title: Title.optional(),
+    description: z.string().trim().min(1).max(500).optional(),
+    content: TemplateResponse.shape.content.optional(),
+    plan: DraftPlanResponse.optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: "At least one template field is required.",
+  });
+
+type TemplateDomain = {
+  templateId: string;
+  scope: "builtin" | "project";
+  title: string;
+  description: string;
+  documentType: z.infer<typeof DocumentStudioDraftTypeV20Schema>;
+  sectionCount?: number;
+  updatedAt: string;
+  content?: string;
+  plan?: {
+    title: string;
+    documentType: z.infer<typeof DocumentStudioDraftTypeV20Schema>;
+    sections: readonly {
+      id: string;
+      heading: string;
+      purpose: string;
+      requiredSources: readonly string[];
+    }[];
+  };
+};
+
+function draftPlanWire(plan: NonNullable<TemplateDomain["plan"]>) {
+  return {
+    title: plan.title,
+    document_type: plan.documentType,
+    sections: plan.sections.map((section) => ({
+      id: section.id,
+      heading: section.heading,
+      purpose: section.purpose,
+      required_sources: [...section.requiredSources],
+    })),
+  };
+}
+
+function draftPlanDomain(plan: z.infer<typeof DraftPlanResponse>) {
+  return {
+    title: plan.title,
+    documentType: plan.document_type,
+    sections: plan.sections.map((section) => ({
+      id: section.id,
+      heading: section.heading,
+      purpose: section.purpose,
+      requiredSources: section.required_sources,
+    })),
+  };
+}
+
+function templateSummaryWire(template: TemplateDomain) {
+  const sectionCount = template.sectionCount ?? template.plan?.sections.length;
+  return {
+    template_id: template.templateId,
+    scope: template.scope,
+    title: template.title,
+    description: template.description,
+    document_type: template.documentType,
+    section_count: sectionCount,
+    updated_at: template.updatedAt,
+  };
+}
+
+function templateWire(template: TemplateDomain) {
+  if (template.content === undefined || template.plan === undefined) {
+    throw new WorkspaceApiError(
+      500,
+      "INTERNAL_ERROR",
+      "Document template detail is incomplete.",
+    );
+  }
+  return {
+    ...templateSummaryWire(template),
+    content: template.content,
+    plan: draftPlanWire(template.plan),
+  };
+}
 
 export type WorkspaceDocumentStudioCreateInput = {
   title: string;
@@ -436,6 +586,38 @@ export type WorkspaceDocumentStudioExportResult = {
 
 /** The dedicated Studio HTTP seam; implementations must enforce Project scope again. */
 export interface WorkspaceDocumentStudioV1Port {
+  listStudioTemplates?(
+    context: WorkspaceV1Context,
+    projectId: string,
+  ): Promise<unknown>;
+  getStudioTemplate?(
+    context: WorkspaceV1Context,
+    projectId: string,
+    templateId: string,
+  ): Promise<unknown>;
+  copyStudioTemplate?(
+    context: WorkspaceV1Context,
+    projectId: string,
+    templateId: string,
+    title?: string,
+  ): Promise<unknown>;
+  updateStudioTemplate?(
+    context: WorkspaceV1Context,
+    projectId: string,
+    templateId: string,
+    input: {
+      title?: string;
+      description?: string;
+      content?: string;
+      plan?: ReturnType<typeof draftPlanDomain>;
+    },
+  ): Promise<unknown>;
+  createStudioDocumentFromTemplate?(
+    context: WorkspaceV1Context,
+    projectId: string,
+    templateId: string,
+    input: { title?: string; folderId: string | null },
+  ): Promise<unknown>;
   listStudioDrafts?(
     context: WorkspaceV1Context,
     projectId: string,
@@ -915,6 +1097,139 @@ export function createWorkspaceDocumentStudioV1Router(
             documentType: input.document_type ?? "general_legal_document",
           },
         ),
+        201,
+      );
+    }),
+  );
+
+  router.get(
+    "/projects/:projectId/studio/templates",
+    asyncRoute(async (request, response) => {
+      const projectId = idParam(request, "projectId");
+      const method = port.listStudioTemplates;
+      if (!method)
+        throw new WorkspaceApiError(
+          503,
+          "PRECONDITION_FAILED",
+          "Document templates are unavailable.",
+        );
+      const items = (await method.call(
+        port,
+        contextFor(request, options),
+        projectId,
+      )) as TemplateDomain[];
+      safeJson(response, TemplateListResponse, {
+        items: items.map(templateSummaryWire),
+      });
+    }),
+  );
+
+  router.get(
+    "/projects/:projectId/studio/templates/:templateId",
+    asyncRoute(async (request, response) => {
+      const method = port.getStudioTemplate;
+      if (!method)
+        throw new WorkspaceApiError(
+          503,
+          "PRECONDITION_FAILED",
+          "Document templates are unavailable.",
+        );
+      const template = (await method.call(
+        port,
+        contextFor(request, options),
+        idParam(request, "projectId"),
+        idParam(request, "templateId"),
+      )) as TemplateDomain;
+      safeJson(response, TemplateDetailResponse, {
+        template: templateWire(template),
+      });
+    }),
+  );
+
+  router.patch(
+    "/projects/:projectId/studio/templates/:templateId",
+    asyncRoute(async (request, response) => {
+      const input = UpdateTemplate.parse(request.body ?? {});
+      const method = port.updateStudioTemplate;
+      if (!method)
+        throw new WorkspaceApiError(
+          503,
+          "PRECONDITION_FAILED",
+          "Document templates are unavailable.",
+        );
+      const template = (await method.call(
+        port,
+        contextFor(request, options),
+        idParam(request, "projectId"),
+        idParam(request, "templateId"),
+        {
+          title: input.title,
+          description: input.description,
+          content: input.content,
+          plan: input.plan ? draftPlanDomain(input.plan) : undefined,
+        },
+      )) as TemplateDomain;
+      safeJson(response, TemplateDetailResponse, {
+        template: templateWire(template),
+      });
+    }),
+  );
+
+  router.post(
+    "/projects/:projectId/studio/templates/:templateId/copies",
+    asyncRoute(async (request, response) => {
+      const input = CopyTemplate.parse(request.body ?? {});
+      const method = port.copyStudioTemplate;
+      if (!method)
+        throw new WorkspaceApiError(
+          503,
+          "PRECONDITION_FAILED",
+          "Document templates are unavailable.",
+        );
+      const template = (await method.call(
+        port,
+        contextFor(request, options),
+        idParam(request, "projectId"),
+        idParam(request, "templateId"),
+        input.title,
+      )) as TemplateDomain;
+      safeJson(
+        response,
+        TemplateDetailResponse,
+        { template: templateWire(template) },
+        201,
+      );
+    }),
+  );
+
+  router.post(
+    "/projects/:projectId/studio/templates/:templateId/drafts",
+    asyncRoute(async (request, response) => {
+      const input = CreateDraftFromTemplate.parse(request.body ?? {});
+      const method = port.createStudioDocumentFromTemplate;
+      if (!method)
+        throw new WorkspaceApiError(
+          503,
+          "PRECONDITION_FAILED",
+          "Document templates are unavailable.",
+        );
+      const result = (await method.call(
+        port,
+        contextFor(request, options),
+        idParam(request, "projectId"),
+        idParam(request, "templateId"),
+        { title: input.title, folderId: input.folder_id ?? null },
+      )) as {
+        document: unknown;
+        plan: NonNullable<TemplateDomain["plan"]>;
+      };
+      safeJson(
+        response,
+        TemplateDraftResponse,
+        {
+          document: result.document,
+          plan: draftPlanWire(result.plan),
+        },
         201,
       );
     }),

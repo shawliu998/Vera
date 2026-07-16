@@ -9,7 +9,7 @@ Baseline: `shawliu998/Vera` `main` at
 
 Feature branch: `feat/local-legal-work-agent`
 
-Workspace schema: v20
+Workspace schema: v21
 
 ## 1. Product objective
 
@@ -31,23 +31,24 @@ model gateway, editor, active Legacy product, or renderer-side provider client.
 
 ## 2. Audited current baseline
 
-| Capability                 | Current code-backed state                                                                                                                                                                                                                                                                           |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Desktop lifecycle          | Electron supervises one loopback Next.js renderer and one loopback Express backend.                                                                                                                                                                                                                 |
-| Workspace database         | One SQLCipher database with contiguous, checksum-recorded migrations through v20.                                                                                                                                                                                                                   |
-| Blob storage               | Original and derived payloads use the existing AES-256-GCM local blob boundary.                                                                                                                                                                                                                     |
-| Credentials                | Model-provider secrets use the isolated Keychain worker. Retained Legacy legal-source credentials use an application-envelope-encrypted Legacy store and are not an acceptable new active Workspace credential owner.                                                                               |
-| Assistant jobs             | `assistant_generate` uses the durable Workspace job repository, pump, fencing, stop, retry, regenerate, recovery, and durable event outbox.                                                                                                                                                         |
-| Streaming and tools        | OpenAI, DeepSeek, Anthropic, Gemini, and hardened OpenAI-compatible adapters support bounded streaming/tool calls through the single model gateway.                                                                                                                                                 |
-| Current Assistant tools    | Production composes Document, Draft, and Workflow modules. Matter-scoped runs register bounded create/read/suggest Draft tools and list/read/run/status Workflow tools in addition to the existing document and compatible Studio tools. Legal research tools remain optional and activation-gated. |
-| Irreversible Agent actions | Schema v19 records create-Draft, suggest-Draft-edit, and run-Workflow reservations/completions in a per-job action ledger. Stable semantic identities and durable 1/5/2 budgets prevent attempt retries from multiplying actions.                                                                   |
-| Matter                     | A Matter is a Project plus the v15-v17 Matter Profile, explicit workspace classification, six capability projections, and unified inference policy. Project ownership remains canonical.                                                                                                            |
-| Documents and OCR          | Project/Matter uploads, parsing, native OCR, status, retry, encrypted originals, source capture, and exact-page reopening are wired.                                                                                                                                                                |
-| Source identity            | Workspace v11-v13 Source Snapshots, source content, Citation Anchors, retention, tombstone, export, and model-use checks are the only active provenance foundation.                                                                                                                                 |
-| Document Studio            | Blank/Assistant/Workflow drafts, canonical Markdown/TipTap projection, CAS save, immutable versions, restore-as-new-version, citations, bounded AI suggestions, accept/reject/stale checks, and DOCX import/export are wired.                                                                       |
+| Capability                 | Current code-backed state                                                                                                                                                                                                                                                                                 |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Desktop lifecycle          | Electron supervises one loopback Next.js renderer and one loopback Express backend.                                                                                                                                                                                                                       |
+| Workspace database         | One SQLCipher database with contiguous, checksum-recorded migrations through v21.                                                                                                                                                                                                                         |
+| Blob storage               | Original and derived payloads use the existing AES-256-GCM local blob boundary.                                                                                                                                                                                                                           |
+| Credentials                | Model-provider secrets use the isolated Keychain worker. Retained Legacy legal-source credentials use an application-envelope-encrypted Legacy store and are not an acceptable new active Workspace credential owner.                                                                                     |
+| Assistant jobs             | `assistant_generate` uses the durable Workspace job repository, pump, fencing, stop, retry, regenerate, recovery, and durable event outbox.                                                                                                                                                               |
+| Streaming and tools        | OpenAI, DeepSeek, Anthropic, Gemini, and hardened OpenAI-compatible adapters support bounded streaming/tool calls through the single model gateway.                                                                                                                                                       |
+| Current Assistant tools    | Production composes Document, Draft, and Workflow modules. Matter-scoped runs register bounded create/read/suggest Draft tools and list/read/run/status Workflow tools in addition to the existing document and compatible Studio tools. Legal research tools remain optional and activation-gated.       |
+| Irreversible Agent actions | Schema v19 records create-Draft, suggest-Draft-edit, and run-Workflow reservations/completions in a per-job action ledger. Stable semantic identities and durable 1/5/2 budgets prevent attempt retries from multiplying actions.                                                                         |
+| Matter                     | A Matter is a Project plus the v15-v17 Matter Profile, explicit workspace classification, six capability projections, and unified inference policy. Project ownership remains canonical.                                                                                                                  |
+| Documents and OCR          | Project/Matter uploads, parsing, native OCR, status, retry, encrypted originals, source capture, and exact-page reopening are wired.                                                                                                                                                                      |
+| Source identity            | Workspace v11-v13 Source Snapshots, source content, Citation Anchors, retention, tombstone, export, and model-use checks are the only active provenance foundation.                                                                                                                                       |
+| Document Studio            | Blank/Assistant/Workflow drafts, canonical Markdown/TipTap projection, CAS save, immutable versions, restore-as-new-version, citations, bounded AI suggestions, accept/reject/stale checks, and DOCX import/export are wired.                                                                             |
 | Matter Drafts              | Schema v20 stores typed Draft origin metadata in the existing Studio create transaction. The Matter Drafts workbench lists real versions, current citations and pending suggestions, and reuses existing create/open/export/delete paths. Legacy Drafts remain unmodified and project as general/unknown. |
-| Backup and restore         | Encrypted backup, restore preflight, restore, failure recovery, and fail-closed desktop startup are wired.                                                                                                                                                                                          |
-| Packaged restart           | Current packaged E2E proves Matter/Profile/Policy/model/chat/document/source persistence and separately proves OCR -> snapshot/anchor -> Studio -> DOCX -> restart. It does not yet prove the new legal-research-to-Draft vertical.                                                                 |
+| Legal document templates   | Schema v21 stores eight immutable built-in templates plus Project-local editable copies and bounded DraftPlans. The Matter Drafts workbench previews real section plans and creates the canonical existing Studio Draft; no second editor or document store is introduced.                                |
+| Backup and restore         | Encrypted backup, restore preflight, restore, failure recovery, and fail-closed desktop startup are wired.                                                                                                                                                                                                |
+| Packaged restart           | Current packaged E2E proves Matter/Profile/Policy/model/chat/document/source persistence and separately proves OCR -> snapshot/anchor -> Studio -> DOCX -> restart. It does not yet prove the new legal-research-to-Draft vertical.                                                                       |
 
 Pre-refactor baseline evidence:
 
@@ -85,13 +86,13 @@ routers, repositories, credentials, or `/aletheia/*` endpoints.
 
 1. Production legal-provider activation is deliberately closed, and no
    repository evidence proves signed retention/export/model-use rights.
-2. Technical-PoC legal-search candidates are not current-Matter durable
-   research-session records and
-   cannot safely back `read_legal_source` ownership checks.
-3. Legal-authority citations still lack an activated durable provider path.
-4. The document-template catalogue and structured multi-section drafting
-   strategy remain incomplete.
-5. No deterministic packaged E2E covers local documents + test legal provider
+2. Production legal-search candidates are not yet durable current-Matter
+   research-session records; the existing bounded ownership implementation is
+   test/transient only.
+3. The Assistant source schema, message-source persistence, and Draft evidence
+   rebuild are still document-only and cannot yet bind a durable legal-authority
+   snapshot/anchor. The boundary audit proves this fails closed.
+4. No deterministic packaged E2E covers local documents + test legal provider
    -> legal citation -> new Draft -> suggestion -> DOCX -> restart.
 
 ## 5. Implementation slices and proposed files
@@ -165,20 +166,21 @@ Assistant action ledger and extends the existing durable event outbox for the
 `draft_created` result; it does not add a second job or artifact store. Schema
 v20 adds immutable type/origin metadata for existing Document Studio Drafts and
 a bounded Matter summary projection; it does not duplicate documents, versions,
-citations, suggestions, or blobs. If later slices require durable legal research
-sessions/candidates or user-copyable templates, the next migration must add only
+citations, suggestions, or blobs. Schema v21 adds the bounded local template
+catalogue and persisted DraftPlan, with immutable built-ins and Project-local
+editable copies. If later slices require durable legal research
+sessions/candidates, the next migration must add only
 demonstrated owners such as:
 
 ```text
 legal_research_sessions
 legal_search_queries
 legal_search_candidates
-legal_document_templates
 ```
 
 Before another schema owner lands, the design must prove that existing source
 snapshots, anchors, documents, versions, suggestions, chats, jobs, workflows,
-profiles, and policies cannot own the required state. Published v1-v20
+profiles, and policies cannot own the required state. Published v1-v21
 migrations remain immutable. Fresh, v14, v17, SQLCipher, backup/restore, and
 injected rollback fixtures are mandatory.
 

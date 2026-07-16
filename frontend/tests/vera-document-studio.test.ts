@@ -9,18 +9,23 @@ import {
 import {
   acceptVeraStudioSuggestion,
   createVeraStudioDraftFromAssistant,
+  createVeraStudioDraftFromTemplate,
   createVeraStudioDraftFromWorkflow,
   createVeraStudioDocument,
   exportVeraStudioDocx,
   getVeraStudioDocument,
   getVeraStudioSuggestion,
+  getVeraStudioTemplate,
   importVeraStudioDocx,
   listVeraStudioDrafts,
   listVeraStudioVersions,
   listVeraStudioSuggestions,
+  listVeraStudioTemplates,
   parseVeraStudioDraftPage,
   parseVeraStudioSuggestion,
   parseVeraStudioSuggestionPreview,
+  parseVeraStudioTemplate,
+  parseVeraStudioTemplateList,
   parseVeraStudioDocument,
   parseVeraStudioDocxImport,
   parseVeraStudioVersions,
@@ -48,6 +53,7 @@ const SOURCE_CHUNK_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const CHAT_ID = "88888888-8888-4888-8888-888888888888";
 const MESSAGE_ID = "99999999-9999-4999-8999-999999999999";
 const WORKFLOW_RUN_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const TEMPLATE_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const SUGGESTION_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const RESULT_VERSION_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const TOKEN = "vdt_1234567890abcdefghijklmnopqrstuvwxyz";
@@ -72,6 +78,46 @@ function studioDraftPage(overrides: Record<string, unknown> = {}) {
     has_more: true,
     next_cursor: "draft-cursor-2",
     ...overrides,
+  };
+}
+
+function studioDraftPlan(overrides: Record<string, unknown> = {}) {
+  return {
+    title: "Contract review memorandum",
+    document_type: "contract_review_memo",
+    sections: [
+      {
+        id: "executive_summary",
+        heading: "Executive summary",
+        purpose: "Summarise the material legal and commercial findings.",
+        required_sources: ["Executed agreement", "Matter instructions"],
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function studioTemplateSummary(overrides: Record<string, unknown> = {}) {
+  return {
+    template_id: TEMPLATE_ID,
+    scope: "builtin",
+    title: "Contract review memorandum",
+    description: "A source-led review of material contract terms and risks.",
+    document_type: "contract_review_memo",
+    section_count: 1,
+    updated_at: "2026-07-16T09:30:00.000Z",
+    ...overrides,
+  };
+}
+
+function studioTemplate(overrides: Record<string, unknown> = {}) {
+  return {
+    template: {
+      ...studioTemplateSummary(),
+      content: "# Contract review memorandum\n\n## Executive summary\n",
+      plan: studioDraftPlan(),
+      ...overrides,
+    },
   };
 }
 
@@ -396,6 +442,117 @@ test("Matter draft page parser is strict, bounded, and preserves typed provenanc
       ),
     VeraApiError,
   );
+});
+
+test("Studio template and DraftPlan parsers fail closed on malformed structure", () => {
+  const list = parseVeraStudioTemplateList({
+    items: [studioTemplateSummary()],
+  });
+  assert.equal(list.items[0]?.template_id, TEMPLATE_ID);
+  assert.equal(list.items[0]?.section_count, 1);
+
+  const template = parseVeraStudioTemplate(studioTemplate());
+  assert.equal(template.plan.sections[0]?.id, "executive_summary");
+  assert.deepEqual(template.plan.sections[0]?.required_sources, [
+    "Executed agreement",
+    "Matter instructions",
+  ]);
+
+  assert.throws(
+    () =>
+      parseVeraStudioTemplateList({
+        items: [studioTemplateSummary({ storage_path: "/private/template" })],
+      }),
+    VeraApiError,
+  );
+  assert.throws(
+    () =>
+      parseVeraStudioTemplate(
+        studioTemplate({
+          plan: studioDraftPlan({ document_type: "legal_opinion" }),
+        }),
+      ),
+    VeraApiError,
+  );
+  assert.throws(
+    () =>
+      parseVeraStudioTemplate(
+        studioTemplate({
+          plan: studioDraftPlan({
+            sections: [
+              {
+                id: "Invalid-ID",
+                heading: "Executive summary",
+                purpose: "Summarise the findings.",
+                required_sources: [],
+              },
+            ],
+          }),
+        }),
+      ),
+    VeraApiError,
+  );
+  assert.throws(
+    () =>
+      parseVeraStudioTemplateList({
+        items: Array.from({ length: 101 }, (_, index) =>
+          studioTemplateSummary({
+            template_id: `${String(index).padStart(8, "0")}-dddd-4ddd-8ddd-dddddddddddd`,
+          }),
+        ),
+      }),
+    VeraApiError,
+  );
+});
+
+test("Studio template reads and draft creation stay Project scoped and bounded", async () => {
+  const restoreDesktop = installDesktop();
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: URL; init?: RequestInit; body: unknown }> = [];
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+    calls.push({ url, init, body });
+    let value: unknown;
+    if (url.pathname.endsWith("/drafts")) {
+      value = { document: studioDocument(), plan: studioDraftPlan() };
+    } else if (url.pathname.endsWith(`/${TEMPLATE_ID}`)) {
+      value = studioTemplate();
+    } else {
+      value = { items: [studioTemplateSummary()] };
+    }
+    return new Response(JSON.stringify(value), {
+      status: init?.method === "POST" ? 201 : 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  try {
+    const templates = await listVeraStudioTemplates(PROJECT_ID);
+    assert.equal(templates.items.length, 1);
+    const template = await getVeraStudioTemplate(PROJECT_ID, TEMPLATE_ID);
+    assert.equal(template.template_id, TEMPLATE_ID);
+    const created = await createVeraStudioDraftFromTemplate(
+      PROJECT_ID,
+      TEMPLATE_ID,
+      { title: "  Review memorandum  " },
+    );
+    assert.equal(created.document.document_id, DOCUMENT_ID);
+    assert.deepEqual(
+      calls.map((call) => call.url.pathname),
+      [
+        `/api/v1/projects/${PROJECT_ID}/studio/templates`,
+        `/api/v1/projects/${PROJECT_ID}/studio/templates/${TEMPLATE_ID}`,
+        `/api/v1/projects/${PROJECT_ID}/studio/templates/${TEMPLATE_ID}/drafts`,
+      ],
+    );
+    assert.equal(calls[0]?.init?.method, "GET");
+    assert.equal(calls[1]?.init?.method, "GET");
+    assert.equal(calls[2]?.init?.method, "POST");
+    assert.deepEqual(calls[2]?.body, { title: "Review memorandum" });
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreDesktop();
+  }
 });
 
 test("Matter draft list and blank creation remain Project-scoped", async () => {

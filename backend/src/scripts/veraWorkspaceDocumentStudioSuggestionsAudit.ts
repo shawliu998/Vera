@@ -298,7 +298,7 @@ async function run() {
   try {
     process.env.ALETHEIA_DATABASE_ENCRYPTION = "metadata_plaintext";
     database = new WorkspaceDatabase(databasePath);
-    assert.equal(database.migration?.currentVersion, 20);
+    assert.equal(database.migration?.currentVersion, 21);
     const projects = new ProjectsRepository(database);
     for (const [id, name] of [
       [PROJECT_ID, "Suggestion Project"],

@@ -6,6 +6,8 @@ import {
   ExternalLink,
   FilePenLine,
   FileText,
+  LayoutTemplate,
+  ListTree,
   Loader2,
   Plus,
   RefreshCw,
@@ -20,11 +22,16 @@ import { useI18n } from "@/app/i18n";
 import { deleteVeraDocument, VeraApiError } from "@/app/lib/veraApi";
 import {
   createVeraStudioDocument,
+  createVeraStudioDraftFromTemplate,
   exportVeraStudioDocx,
+  getVeraStudioTemplate,
   listVeraStudioDrafts,
+  listVeraStudioTemplates,
   VERA_STUDIO_DOCUMENT_TYPES,
   type VeraStudioDocumentType,
   type VeraStudioDraftListItemWire,
+  type VeraStudioTemplateSummaryWire,
+  type VeraStudioTemplateWire,
 } from "@/app/lib/veraDocumentStudioApi";
 import { useMatterWorkspace } from "@/features/matter-overview/MatterWorkspaceShell";
 import { cn } from "@/lib/utils";
@@ -67,6 +74,16 @@ export function MatterDraftsView({ projectId }: MatterDraftsViewProps) {
   const [documentType, setDocumentType] = useState<VeraStudioDocumentType>(
     "general_legal_document",
   );
+  const [templates, setTemplates] = useState<VeraStudioTemplateSummaryWire[]>(
+    [],
+  );
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templatesFailure, setTemplatesFailure] = useState<string | null>(null);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [selectedTemplate, setSelectedTemplate] =
+    useState<VeraStudioTemplateWire | null>(null);
+  const [templateLoading, setTemplateLoading] = useState(false);
+  const [templateFailure, setTemplateFailure] = useState<string | null>(null);
   const [createFailure, setCreateFailure] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] =
     useState<VeraStudioDraftListItemWire | null>(null);
@@ -105,6 +122,75 @@ export function MatterDraftsView({ projectId }: MatterDraftsViewProps) {
     return () => controller.abort();
   }, [loadFirstPage]);
 
+  const loadTemplates = useCallback(
+    async (signal?: AbortSignal) => {
+      setTemplatesLoading(true);
+      setTemplatesFailure(null);
+      try {
+        const result = await listVeraStudioTemplates(projectId, signal);
+        if (!signal?.aborted) {
+          setTemplates(result.items);
+          setSelectedTemplateId((current) =>
+            current &&
+            !result.items.some((template) => template.template_id === current)
+              ? ""
+              : current,
+          );
+        }
+      } catch (cause) {
+        if (!signal?.aborted) {
+          setTemplates([]);
+          setTemplatesFailure(errorMessage(cause as Error));
+        }
+      } finally {
+        if (!signal?.aborted) setTemplatesLoading(false);
+      }
+    },
+    [errorMessage, projectId],
+  );
+
+  useEffect(() => {
+    if (!showCreate || readOnly) return;
+    const controller = new AbortController();
+    void loadTemplates(controller.signal);
+    return () => controller.abort();
+  }, [loadTemplates, readOnly, showCreate]);
+
+  const loadSelectedTemplate = useCallback(
+    async (templateId: string, signal?: AbortSignal) => {
+      setTemplateLoading(true);
+      setTemplateFailure(null);
+      setSelectedTemplate(null);
+      try {
+        const template = await getVeraStudioTemplate(
+          projectId,
+          templateId,
+          signal,
+        );
+        if (!signal?.aborted) setSelectedTemplate(template);
+      } catch (cause) {
+        if (!signal?.aborted) {
+          setTemplateFailure(errorMessage(cause as Error));
+        }
+      } finally {
+        if (!signal?.aborted) setTemplateLoading(false);
+      }
+    },
+    [errorMessage, projectId],
+  );
+
+  useEffect(() => {
+    if (!showCreate || readOnly || !selectedTemplateId) {
+      setSelectedTemplate(null);
+      setTemplateFailure(null);
+      setTemplateLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    void loadSelectedTemplate(selectedTemplateId, controller.signal);
+    return () => controller.abort();
+  }, [loadSelectedTemplate, readOnly, selectedTemplateId, showCreate]);
+
   const loadMore = async () => {
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
@@ -138,15 +224,31 @@ export function MatterDraftsView({ projectId }: MatterDraftsViewProps) {
 
   const createDraft = async () => {
     const title = draftTitle.trim();
-    if (!title || readOnly || busyAction) return;
+    if (
+      !title ||
+      readOnly ||
+      busyAction ||
+      (selectedTemplateId &&
+        selectedTemplate?.template_id !== selectedTemplateId)
+    ) {
+      return;
+    }
     setBusyAction("create");
     setCreateFailure(null);
     try {
-      const created = await createVeraStudioDocument(projectId, {
-        title,
-        document_type: documentType,
-      });
-      router.push(routes.documentStudioHref(projectId, created.document_id));
+      const document = selectedTemplateId
+        ? (
+            await createVeraStudioDraftFromTemplate(
+              projectId,
+              selectedTemplateId,
+              { title },
+            )
+          ).document
+        : await createVeraStudioDocument(projectId, {
+            title,
+            document_type: documentType,
+          });
+      router.push(routes.documentStudioHref(projectId, document.document_id));
     } catch (cause) {
       setCreateFailure(errorMessage(cause as Error));
     } finally {
@@ -206,6 +308,16 @@ export function MatterDraftsView({ projectId }: MatterDraftsViewProps) {
     }
   };
 
+  const selectedTemplateSummary = templates.find(
+    (template) => template.template_id === selectedTemplateId,
+  );
+  const createDisabled =
+    !draftTitle.trim() ||
+    busyAction !== null ||
+    (selectedTemplateId !== "" &&
+      (templateLoading ||
+        selectedTemplate?.template_id !== selectedTemplateId));
+
   return (
     <main className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-5 sm:px-6 lg:px-8">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-5">
@@ -250,51 +362,219 @@ export function MatterDraftsView({ projectId }: MatterDraftsViewProps) {
 
         {showCreate && !readOnly && (
           <form
-            className="grid gap-4 rounded-2xl border border-white/80 bg-white/75 p-4 shadow-sm backdrop-blur-xl sm:grid-cols-[minmax(0,1fr)_minmax(220px,0.55fr)_auto] sm:items-end"
+            className="grid gap-5 rounded-2xl border border-white/80 bg-white/75 p-4 shadow-sm backdrop-blur-xl sm:p-5"
             onSubmit={(event) => {
               event.preventDefault();
               void createDraft();
             }}
           >
-            <label className="grid gap-1.5 text-sm font-medium text-gray-800">
-              {t("matters.drafts.titleLabel")}
-              <input
-                value={draftTitle}
-                onChange={(event) => setDraftTitle(event.target.value)}
-                maxLength={240}
-                autoFocus
-                placeholder={t("matters.drafts.titlePlaceholder")}
-                className="h-10 min-w-0 rounded-xl border border-gray-200 bg-white px-3 font-normal text-gray-950 outline-none transition focus:border-gray-400 focus:ring-2 focus:ring-gray-900/10"
-              />
-            </label>
-            <label className="grid gap-1.5 text-sm font-medium text-gray-800">
-              {t("matters.drafts.typeLabel")}
-              <select
-                value={documentType}
-                onChange={(event) =>
-                  setDocumentType(event.target.value as VeraStudioDocumentType)
-                }
-                className="h-10 min-w-0 rounded-xl border border-gray-200 bg-white px-3 font-normal text-gray-950 outline-none transition focus:border-gray-400 focus:ring-2 focus:ring-gray-900/10"
+            <div className="flex items-start gap-3">
+              <span className="rounded-xl bg-gray-100 p-2 text-gray-700">
+                <LayoutTemplate className="h-4 w-4" aria-hidden="true" />
+              </span>
+              <div>
+                <h2 className="font-medium text-gray-950">
+                  {t("matters.drafts.createTitle")}
+                </h2>
+                <p className="mt-0.5 text-sm text-gray-600">
+                  {t("matters.drafts.createBody")}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="grid min-w-0 gap-1.5 text-sm font-medium text-gray-800">
+                <span className="flex items-center gap-2">
+                  {t("matters.drafts.startingPointLabel")}
+                  {templatesLoading && (
+                    <Loader2
+                      className="h-3.5 w-3.5 animate-spin text-gray-400"
+                      aria-hidden="true"
+                    />
+                  )}
+                </span>
+                <select
+                  value={selectedTemplateId}
+                  onChange={(event) => {
+                    setSelectedTemplateId(event.target.value);
+                    setCreateFailure(null);
+                  }}
+                  className="h-10 min-w-0 rounded-xl border border-gray-200 bg-white px-3 font-normal text-gray-950 outline-none transition focus:border-gray-400 focus:ring-2 focus:ring-gray-900/10"
+                >
+                  <option value="">{t("matters.drafts.blankDraft")}</option>
+                  {templates.map((template) => (
+                    <option
+                      key={template.template_id}
+                      value={template.template_id}
+                    >
+                      {template.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="grid min-w-0 gap-1.5 text-sm font-medium text-gray-800">
+                {t("matters.drafts.titleLabel")}
+                <input
+                  value={draftTitle}
+                  onChange={(event) => setDraftTitle(event.target.value)}
+                  maxLength={240}
+                  autoFocus
+                  placeholder={t("matters.drafts.titlePlaceholder")}
+                  className="h-10 min-w-0 rounded-xl border border-gray-200 bg-white px-3 font-normal text-gray-950 outline-none transition focus:border-gray-400 focus:ring-2 focus:ring-gray-900/10"
+                />
+              </label>
+            </div>
+
+            {templatesFailure && (
+              <div
+                role="alert"
+                className="flex flex-col gap-2 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700 sm:flex-row sm:items-center sm:justify-between"
               >
-                {VERA_STUDIO_DOCUMENT_TYPES.map((type) => (
-                  <option key={type} value={type}>
-                    {t(`matters.drafts.types.${type}`)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="submit"
-              disabled={!draftTitle.trim() || busyAction !== null}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-gray-950 px-4 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {busyAction === "create" && (
+                <span>{templatesFailure}</span>
+                <button
+                  type="button"
+                  onClick={() => void loadTemplates()}
+                  disabled={templatesLoading}
+                  className="inline-flex shrink-0 items-center gap-1.5 self-start font-medium sm:self-auto"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                  {t("common.actions.retry")}
+                </button>
+              </div>
+            )}
+
+            {!selectedTemplateId ? (
+              <label className="grid min-w-0 gap-1.5 text-sm font-medium text-gray-800 md:max-w-md">
+                {t("matters.drafts.typeLabel")}
+                <select
+                  value={documentType}
+                  onChange={(event) =>
+                    setDocumentType(
+                      event.target.value as VeraStudioDocumentType,
+                    )
+                  }
+                  className="h-10 min-w-0 rounded-xl border border-gray-200 bg-white px-3 font-normal text-gray-950 outline-none transition focus:border-gray-400 focus:ring-2 focus:ring-gray-900/10"
+                >
+                  {VERA_STUDIO_DOCUMENT_TYPES.map((type) => (
+                    <option key={type} value={type}>
+                      {t(`matters.drafts.types.${type}`)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : templateLoading ? (
+              <div
+                role="status"
+                className="flex min-h-28 items-center justify-center gap-2 rounded-xl border border-gray-100 bg-gray-50 text-sm text-gray-500"
+              >
                 <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-              )}
-              {t("matters.drafts.create")}
-            </button>
+                {t("matters.drafts.templateLoading")}
+              </div>
+            ) : templateFailure ? (
+              <div className="rounded-xl border border-red-100 bg-red-50 p-3 text-sm text-red-700">
+                <p role="alert">{templateFailure}</p>
+                <button
+                  type="button"
+                  onClick={() => void loadSelectedTemplate(selectedTemplateId)}
+                  className="mt-2 inline-flex items-center gap-1.5 font-medium"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                  {t("common.actions.retry")}
+                </button>
+              </div>
+            ) : selectedTemplate?.template_id === selectedTemplateId ? (
+              <section
+                aria-label={t("matters.drafts.planPreview")}
+                className="rounded-xl border border-gray-200 bg-gray-50/80 p-3 sm:p-4"
+              >
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-medium text-gray-950">
+                        {selectedTemplate.title}
+                      </h3>
+                      <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600">
+                        {t(
+                          `matters.drafts.templateScopes.${selectedTemplate.scope}`,
+                        )}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm text-gray-600">
+                      {selectedTemplate.description}
+                    </p>
+                  </div>
+                  <span className="shrink-0 rounded-full bg-gray-950 px-2.5 py-1 text-xs font-medium text-white">
+                    {t(
+                      `matters.drafts.types.${selectedTemplate.document_type}`,
+                    )}
+                  </span>
+                </div>
+                <div className="mt-4 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.12em] text-gray-500">
+                  <ListTree className="h-4 w-4" aria-hidden="true" />
+                  {t("matters.drafts.planSections", {
+                    count: selectedTemplate.plan.sections.length,
+                  })}
+                </div>
+                <ol className="mt-2 grid gap-2 lg:grid-cols-2">
+                  {selectedTemplate.plan.sections.map((section, index) => (
+                    <li
+                      key={section.id}
+                      className="min-w-0 rounded-lg border border-gray-200 bg-white p-3"
+                    >
+                      <div className="flex items-start gap-2">
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-gray-100 text-[11px] font-semibold text-gray-600">
+                          {index + 1}
+                        </span>
+                        <div className="min-w-0">
+                          <h4 className="text-sm font-medium text-gray-900">
+                            {section.heading}
+                          </h4>
+                          <p className="mt-1 text-xs leading-5 text-gray-600">
+                            {section.purpose}
+                          </p>
+                          {section.required_sources.length > 0 && (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {section.required_sources.map(
+                                (source, sourceIndex) => (
+                                  <span
+                                    key={`${section.id}:${sourceIndex}:${source}`}
+                                    className="rounded-md bg-blue-50 px-1.5 py-0.5 text-[11px] text-blue-700"
+                                  >
+                                    {source}
+                                  </span>
+                                ),
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            ) : selectedTemplateSummary ? (
+              <div className="rounded-xl border border-gray-100 bg-gray-50 p-3 text-sm text-gray-600">
+                {selectedTemplateSummary.description}
+              </div>
+            ) : null}
+
+            <div className="flex flex-col gap-3 border-t border-gray-100 pt-4 sm:flex-row sm:items-center sm:justify-end">
+              <button
+                type="submit"
+                disabled={createDisabled}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-gray-950 px-4 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {busyAction === "create" && (
+                  <Loader2
+                    className="h-4 w-4 animate-spin"
+                    aria-hidden="true"
+                  />
+                )}
+                {t("matters.drafts.create")}
+              </button>
+            </div>
             {createFailure && (
-              <p role="alert" className="text-sm text-red-700 sm:col-span-3">
+              <p role="alert" className="text-sm text-red-700">
                 {createFailure}
               </p>
             )}
