@@ -1,49 +1,70 @@
-# Vera 民商事诉讼工作台
+# Vera 本地通用法律工作空间
 
-Vera 是一个本地优先、由律师主导的民商事诉讼工作台。
+Vera 是一个单用户、本地优先、以 Matter 为中心的 macOS 法律工作空间。它在同一个加密桌面运行时中组合文档、OCR、Assistant、Workflow、Document Studio、引用、DOCX 与备份恢复能力。
 
-它把案卷材料转化为可验证、可复核、可审计的事实、证据、请求权与抗辩、法律研究、程序期限和诉讼文书。
-
-这不是普通法律聊天机器人。V1 只开放 `civil_litigation` 民商事诉讼产品；早期合同审阅、合规、尽调和通用 Agent Studio 能力与导航、设置、Demo 和案件路由隔离，待后续独立验证后再扩展。
-
-## 演示路径
-
-1. 打开 `/aletheia`。
-2. 打开自动创建的 Civil Litigation Demo，或新建一个民商事诉讼案件。
-3. 导入起诉状、合同、付款凭证、往来函件和法院通知。
-4. 依次复核事实与证据、请求权与抗辩、法律研究、程序事件与期限。
-5. 生成诉讼文书或庭审材料，完成人工复核和审批后导出审计包。
-
-## 当前实现
-
-- Civil Litigation：当前唯一产品入口，覆盖接案、案卷导入、事实证据、请求权与抗辩、法律研究、程序期限、文书庭审、人审、审批和审计导出。
-- 本地 SQLite 仓储：包含 matters、documents、work products、evidence、reviews、audit events，以及持久 Agent runs、steps、tool calls 和 human checkpoints。
-- 后端 API：`/aletheia/matters` 和 `/aletheia/tool-adapter`，支持事项列表、创建事项、读取事项详情、保存结构化 work product、添加 review、追加 audit event、本地文档上传与检索、证据落库、Evidence Matrix、Draft Memo、审批 checkpoint、Matter Memory、Matter Playbooks，以及最小权限 Tool Adapter 调用。
-- 新建事项会自动生成 deterministic Initial Agent Plan work product，让真实事项从可复核的工作流脚手架开始。
-- 后端持久化已切到 Aletheia repository 边界；纯本地产品只使用 SQLite/filesystem 实现，支持 matters、work products、source-linked evidence items、reviews、audit events、agent runs、Matter Memory、Matter Playbooks 的本地持久化，并支持本地文档上传、文本解析、chunk、SQLite FTS5 搜索、检索结果证据落库、Evidence Matrix work product 生成、Legal Draft Memo、Compliance Register、Red Flag Memo 生成、Final Memo 人审门控、Agent Run Trace 可视化和 Audit Pack 人审审批门控。
-- Aletheia Tool Adapter 已提供最小权限工具面：`list_matters`、`read_matter`、`search_matter_documents`、`read_evidence_item`、`create_work_product`、`add_review_tag`、`append_audit_event`、`export_audit_pack`。默认不开放 terminal、browser、外部 web search、email 或破坏性文件操作。
-- 本地模式会把 Audit Pack、Feedback Export、Final Memo 等 export 类 work product 写入 `.data/aletheia/exports/<matterId>/`，并在 audit event 中记录路径。
-- Matter Queue 只显示本地数据库中的 `civil_litigation` 案件；旧类型事项保留在存储中但不进入民诉主链路，后端不可用时不会注入 fallback 数据。
-- Demo workspace 支持审批后导出 Audit Pack、Feedback Eval Dataset 和 Final Memo，方便展示可复核交付物与 badcase/eval 闭环。
-
-## 本地运行
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-访问：
+## 当前产品真源
 
 ```text
-http://localhost:3000/aletheia
+Current product:
+Vera local general legal workspace
+
+Current primary navigation:
+Assistant / Matters / Workflows / Review / Settings
+
+Current core:
+Mike-derived local workspace + Vera encrypted desktop runtime
+
+Legacy:
+default-disabled compatibility and reusable implementation source only
+
+Next milestone:
+Agent Tool Expansion
++ One Authorized Legal Research Provider
++ Agent-to-Draft End-to-End Vertical
 ```
 
-当前 demo 不依赖外部 API key。
+当前 `main` 基线是 `5611699e46552a20bf42ce84396a8e65aa139d16`，Workspace migration 最高版本是 v17。`Project` 仍是文档、对话、Workflow run、Tabular Review 与 Studio Draft 的技术所有者；`Matter` 是其上的法律工作语义与 Profile/Policy 投影，不引入第二套数据系统。
 
-当前阶段、阻塞项和发布前验证以 `docs/status.md` 为准。
+## 已接线能力
 
-## 许可证与归因
+- Electron 管理一个 loopback Next.js renderer 和一个 loopback Express backend；renderer 保持 sandbox 与 context isolation。
+- 一个 SQLCipher Workspace 数据库、加密 Blob、Keychain 模型凭证、加法 migration、备份与恢复。
+- 支持 OpenAI、DeepSeek、Anthropic、Gemini 和受约束的 OpenAI-compatible 模型配置。
+- 持久 Assistant job、流式响应、Stop/Retry/Regenerate、跨重启恢复和有界工具循环。
+- Matter/Project 文档上传、解析与 OCR；支持 PDF、扫描 PDF、DOCX、TXT、MD、XLSX。
+- Source Snapshot/Citation Anchor、Document Studio、版本、AI suggestion、接受/拒绝、DOCX 导入导出。
+- Matter Profile、显式 workspace classification 与统一 inference policy。
 
-本项目保留原开源项目许可证和归因说明。详见 `docs/license_attribution.md`。
+当前 Assistant 正式工具仅覆盖本地文档读取/检索以及兼容 Studio 文档的读取和修改建议。法律检索、创建 Draft 与 Workflow 工具仍属于本轮待实现能力，详见 [`docs/local_legal_work_agent_vertical.md`](docs/local_legal_work_agent_vertical.md)。
+
+## 法律数据源状态
+
+仓库保留法宝与元典的 Legacy 适配器和失败处理合同，但生产激活门保持关闭。本机没有足以证明 live acceptance 的官方接口材料、完整授权权利矩阵、合法测试账号或凭证。因此 Vera **不声称任何真实法律 Provider 已接通**，也不会猜测 endpoint、使用浏览器 Cookie、抓包、网页爬虫或私有接口。
+
+测试中的 deterministic fake Provider 只能证明合同和失败处理，不能替代真实 Provider 验收。激活所需材料见 [`docs/legal_provider_activation_requirements.md`](docs/legal_provider_activation_requirements.md)。
+
+## 本地构建
+
+```bash
+npm install
+npm run bootstrap
+npm run build
+```
+
+macOS 本地包：
+
+```bash
+VERA_RELEASE_SIGNING=false ./scripts/package-desktop-mac.sh
+```
+
+当前 packaged acceptance 只证明本机 unsigned、unnotarized、local-only 构建和跨重启链路；它不是 Developer ID 签名、notarized 或可公开分发的发布证明。
+
+## 开发与发布状态
+
+- 简短事实状态：[`docs/status.md`](docs/status.md)
+- 本轮纵向计划：[`docs/local_legal_work_agent_vertical.md`](docs/local_legal_work_agent_vertical.md)
+- 路线图：[`docs/roadmap_legal_workspace.md`](docs/roadmap_legal_workspace.md)
+- 桌面与发布门：[`docs/desktop_app.md`](docs/desktop_app.md)
+- 许可证与来源：[`docs/license_attribution.md`](docs/license_attribution.md)
+
+Legacy `/aletheia/*` 仅在显式兼容开关下使用。它不是当前默认导航、默认运行时或新功能的主存储。

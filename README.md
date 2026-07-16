@@ -1,57 +1,60 @@
 # Vera
 
-Vera is a single-user, local-first macOS legal AI desktop client. Its P0
-product structure, interaction model, and UI are a controlled port of the
-open-source [Mike](https://github.com/Open-Legal-Products/mike) project at the
-pinned commit `e32daad5a4c64a5561e04c53ee12411e3c5e7238`. The UI use has been
-authorised; Mike and this repository are distributed under
-`AGPL-3.0-only`. Vera supplies the local desktop lifecycle, security boundary,
-encrypted persistence, model credentials, backup, and recovery layer.
+Vera is a single-user, local-first macOS workspace for general legal work. It
+combines the controlled, AGPL-3.0-only Mike-derived workspace UI with Vera's
+encrypted desktop runtime, Matter semantics, bounded model execution, source
+provenance, Document Studio, backup, and recovery.
 
-> **P0 status (2026-07-15):** Phases 0-7 are complete. One fresh invocation of
-> `./scripts/package-desktop-mac.sh` exited successfully after the packaged
-> workspace restart E2E, backup bridge, and restore fail-closed gates passed.
-> This closes the local-client P0; it does not make the unsigned, unnotarized
-> artifacts a public release.
+## Current product
 
-The final packaged smoke also proved that the real app exits before starting
-local services when `ALETHEIA_APPLICATION_ENCRYPTION=disabled` or
-`ALETHEIA_DATABASE_ENCRYPTION=metadata_plaintext` is injected. In the packaged
-restore fail-closed cases, the working desktop log recorded `startup_failed`
-and contained no `renderer_window_creating` event, proving that no renderer was
-created before pending-restore validation failed.
+```text
+Current product:
+Vera local general legal workspace
 
-## Current P0 product
+Current primary navigation:
+Assistant / Matters / Workflows / Review / Settings
 
-The P0 product has four core Mike-derived workspaces—Assistant, Projects,
-Workflows, and Tabular Review—plus Settings as the fifth local control surface.
-The desktop opens `/assistant` and exposes exactly these five first-level
-destinations:
+Current core:
+Mike-derived local workspace + Vera encrypted desktop runtime
 
-| Navigation     | Route             | Local capability                                                                                         |
-| -------------- | ----------------- | -------------------------------------------------------------------------------------------------------- |
-| Assistant      | `/assistant`      | Durable streaming chat, stop, retry, regenerate, Project documents, and citations                        |
-| Projects       | `/projects`       | Generic containers for documents, conversations, workflows, and Tabular Reviews                          |
-| Tabular Review | `/tabular-review` | Multi-document, multi-column generation, cell retry/cancel, citations, CSV, and XLSX export              |
-| Workflows      | `/workflows`      | Mike-derived local workflow templates, editing, bounded execution, cancellation, retry, and run history  |
-| Settings       | `/settings`       | Language/theme, model profiles, Keychain credentials, local data, backup, restore, logs, and diagnostics |
+Legacy:
+default-disabled compatibility and reusable implementation source only
 
-Inside a Project, the active tabs are Documents, Assistant, Workflows, and
-Tabular Reviews. `Project` is the general-purpose container; the new product
-path does not reinterpret every Project as a litigation matter.
+Next milestone:
+Agent Tool Expansion
++ One Authorized Legal Research Provider
++ Agent-to-Draft End-to-End Vertical
+```
 
-The packaged P0 runtime does **not** require or start Docker, Supabase,
-PostgreSQL, R2/S3, Cloudflare, a login service, or a manually operated backend.
-Electron owns one loopback-only Express backend and one loopback-only Next.js
-frontend. Workspace metadata is stored in SQLCipher, document/blob content is
-encrypted locally, and provider API keys are stored in the macOS Keychain
-through an isolated credential worker. Demo seeding is off by default.
+The active technical owner remains `projects.id`; a Matter is a Project with
+an explicit Matter Profile and policy. Matter navigation is Overview,
+Documents, Assistant, Review, Workflows, Drafts, and Settings. Review exposes
+only already-wired capabilities; the product does not create empty review
+systems to fill navigation.
 
-Supported external model profile types are OpenAI, DeepSeek, Anthropic,
-Gemini, and OpenAI-compatible endpoints. A profile cannot become the active
-default until its credential is present and its real connection test passes.
-The exact-loopback HTTP provider exception exists only for explicit local
-test/development use; normal custom providers require the hardened transport.
+The current `main` baseline is merge commit `5611699e` with Workspace schema
+v17. It includes one Electron lifecycle, one loopback Next.js renderer, one
+loopback Express backend, one SQLCipher Workspace database, one encrypted blob
+store, one durable job runtime, one model gateway, Source Snapshots/Citation
+Anchors, and one Document Studio. OpenAI, DeepSeek, Anthropic, Gemini, and
+hardened OpenAI-compatible model profiles are wired through the isolated
+Keychain credential boundary.
+
+The default desktop does not start Docker, Supabase, PostgreSQL, R2/S3, Redis,
+a remote login service, or Legacy Aletheia routes/runtime. Legacy source,
+tables, and tests remain for compatibility, migration, and bounded algorithm
+reuse; new product work must not depend on `/aletheia/*`.
+
+Current local packaged acceptance proves Matter/Profile/Policy, Assistant
+document tools and citations, OCR, Studio versions/suggestions, DOCX,
+backup/restore, and restart persistence. Those artifacts are unsigned,
+unnotarized, and local-only—not a public release. A production legal-data
+Provider is also not claimed: retained PKULaw/YuanDian contracts remain
+activation-gated until official endpoint material, credentials, and written
+retention/model-use/export rights are available and live acceptance passes.
+
+The executable plan for the next vertical is
+[docs/local_legal_work_agent_vertical.md](docs/local_legal_work_agent_vertical.md).
 
 ## Build the macOS client
 
@@ -74,22 +77,18 @@ desktop/dist/Vera-<version>-<arch>.zip
 desktop/dist/Vera-<version>-SHA256SUMS.txt
 ```
 
-The accepted fresh arm64 package from 2026-07-15 is recorded using
-repository-relative locations:
+Each successful local arm64 package is recorded using repository-relative
+locations:
 
 ```text
 app:      desktop/dist/mac-arm64/Vera.app
-dmg:      desktop/dist/Vera-1.0.1-arm64.dmg (198122845 bytes)
-zip:      desktop/dist/Vera-1.0.1-arm64.zip (200992113 bytes)
-manifest: desktop/dist/Vera-1.0.1-SHA256SUMS.txt
+dmg:      desktop/dist/Vera-<version>-arm64.dmg
+zip:      desktop/dist/Vera-<version>-arm64.zip
+manifest: desktop/dist/Vera-<version>-SHA256SUMS.txt
 ```
 
-The verified manifest entries are:
-
-```text
-fd246214916b3485e25bb16c8e00bcf6e8be471ed95679190e7685a5c1c49ef8  Vera-1.0.1-arm64.dmg
-7be4a9504151ddd8518141901e3d2753a1cda2fbe13ac27fa7842a9f3d347f1b  Vera-1.0.1-arm64.zip
-```
+Treat `desktop/dist/Vera-<version>-SHA256SUMS.txt` from the same atomic package
+invocation as the checksum authority; do not reuse hashes from an older run.
 
 The default build is intentionally unsigned and unnotarized. It is
 `local-only`, must remain on the Mac that built it, and must not be presented as

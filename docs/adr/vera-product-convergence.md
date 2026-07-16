@@ -9,6 +9,12 @@ information architecture, compatibility, migration, rollback, and security
 
 Recorded baseline: `feat/legal-matter-agent-convergence` at `408333d7`
 
+Implementation status update (2026-07-16): the accepted convergence decision
+is implemented on merged `main` at
+`5611699e46552a20bf42ce84396a8e65aa139d16`, Workspace schema v17. The current
+vertical plan is
+[`docs/local_legal_work_agent_vertical.md`](../local_legal_work_agent_vertical.md).
+
 ## 1. Authority and supersession
 
 This document is the sole forward architecture decision record for the Vera

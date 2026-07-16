@@ -2,6 +2,12 @@
 
 Date: 2026-07-15
 
+Supersession note (2026-07-16): this remains the implementation/acceptance
+record for OCR, Source Foundation and Studio. Current product naming,
+navigation, v17 baseline and the next Agent-to-Draft milestone are governed by
+[`status.md`](status.md) and
+[`local_legal_work_agent_vertical.md`](local_legal_work_agent_vertical.md).
+
 Status: the integrated local-client implementation is complete for local OCR,
 Project Sources, the shared citation viewer, OCR-page reopening,
 Assistant/Workflow-to-Studio actions, Document Studio/DOCX, and explicit AI
@@ -12,9 +18,10 @@ legacy-content cleanup and complete derived-lineage enforcement. The final
 rebuilt arm64 client passed packaged acceptance; its hashes and truthful
 unsigned release state are recorded below.
 
-Product decision: `Project` remains Vera's generic container. OCR, legal
-sources, and Document Studio are Project capabilities; none becomes a sixth
-first-level navigation destination or a replacement litigation workspace.
+Product decision: `Project` remains Vera's generic technical owner. Matter is
+the active legal-workspace projection. OCR, legal sources, and Document Studio
+remain Project-owned capabilities; none becomes a sixth first-level navigation
+destination or a replacement parallel workspace.
 
 ## 1. Scope
 

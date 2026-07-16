@@ -1,88 +1,84 @@
 # Product Status
 
-This document is the authoritative short status for Vera. Keep broader
-design notes in the existing architecture and deployment documents.
+This is Vera's authoritative short status. Code, migrations, and executable
+tests take precedence over historical programme text below.
 
-## Current P0 stage — Mike-derived desktop client
+## Current product — local general legal workspace
 
-Current stage on 2026-07-15: **P0 Phases 0-7 complete; fresh packaged
-verification passed**.
-
-The primary product is now a Vera-branded, single-user, local-first macOS legal
-AI client whose UI, information architecture, and workflow semantics are a
-controlled port of Open Legal Products' Mike at
-`e32daad5a4c64a5561e04c53ee12411e3c5e7238`. Mike UI use is authorised and the
-port retains `AGPL-3.0-only` attribution. Vera supplies the Electron lifecycle,
-loopback authentication, SQLCipher/encrypted-file persistence, isolated
-Keychain credential worker, bounded local job runtime, backup, restore,
-diagnostics, and packaging boundary.
-
-The four core Mike-derived workspaces are Assistant, Projects, Workflows, and
-Tabular Review; Settings is the fifth first-level local control surface. The
-desktop opens `/assistant`. `Project` is the generic container for documents,
-Assistant conversations, workflow runs, and Tabular Reviews. The active local
-`/api/v1` surface covers those resources, model profiles, durable jobs,
-citations, exports, and settings. Workspace migrations are additive through
-v14.
-
-**Implemented in source:** real local Project/document CRUD and parsing;
-packaged Apple Vision OCR with reviewable provenance and exact-page source
-reopening; v13 fail-closed legal-source retention/use/export lifecycle; v14
-Document Studio AI suggestions with explicit user acceptance and immutable
-version history, while real legal connectors remain activation-gated and
-disabled;
-OpenAI, DeepSeek, Anthropic, Gemini, and hardened OpenAI-compatible profiles;
-Keychain-only provider secrets and connection-gated activation; durable
-Assistant streaming/stop/retry/regenerate/recovery and citations; Mike-derived
-workflow templates/editor with bounded persisted execution; multi-document,
-multi-column Tabular generation, cell retry/cancel, citations, CSV/XLSX export;
-encrypted backup/restore; redacted rotating desktop and model-call diagnostics;
-sandboxed renderer, explicit child-process environment allowlists, and
-loopback-only services.
-
-**Packaged P0 acceptance completed:** one full
-`./scripts/package-desktop-mac.sh` invocation exited `0` after package hygiene,
-SQLCipher, legacy migration, packaged startup/port release, workspace restart
-E2E, backup bridge, and restore fail-closed passed.
-
-The final packaged smoke also used the real executable to reject application
-encryption `disabled` and database encryption `metadata_plaintext`; each launch
-exited `1` before local services bound their ports. In the restore fail-closed
-cases, the working desktop log contained `startup_failed` and no
-`renderer_window_creating` event, while both services remained offline.
+Status on 2026-07-16: Matter convergence is merged to `main` at
+`5611699e46552a20bf42ce84396a8e65aa139d16`; Workspace schema is v17. The active
+implementation branch for the next vertical is `feat/local-legal-work-agent`.
 
 ```text
-relative app:      desktop/dist/mac-arm64/Vera.app
-relative DMG:      desktop/dist/Vera-1.0.1-arm64.dmg (198122845 bytes)
-relative ZIP:      desktop/dist/Vera-1.0.1-arm64.zip (200992113 bytes)
-relative manifest: desktop/dist/Vera-1.0.1-SHA256SUMS.txt
+Current product:
+Vera local general legal workspace
+
+Current primary navigation:
+Assistant / Matters / Workflows / Review / Settings
+
+Current core:
+Mike-derived local workspace + Vera encrypted desktop runtime
+
+Legacy:
+default-disabled compatibility and reusable implementation source only
+
+Next milestone:
+Agent Tool Expansion
++ One Authorized Legal Research Provider
++ Agent-to-Draft End-to-End Vertical
 ```
 
-The verified `desktop/dist/Vera-1.0.1-SHA256SUMS.txt` entries are:
+The active product is a single-user, local-first macOS workspace. Electron
+supervises one loopback Next.js renderer and one loopback Express backend. One
+SQLCipher database, encrypted Blob store, Keychain credential boundary,
+durable Job Runtime, model gateway, Source Snapshot/Citation Anchor foundation,
+and Document Studio own the active data and execution paths.
 
-```text
-fd246214916b3485e25bb16c8e00bcf6e8be471ed95679190e7685a5c1c49ef8  Vera-1.0.1-arm64.dmg
-7be4a9504151ddd8518141901e3d2753a1cda2fbe13ac27fa7842a9f3d347f1b  Vera-1.0.1-arm64.zip
-```
+Implemented and wired in source:
 
-This closes P0 local-client acceptance, not public release readiness. The
-accepted package remains unsigned, unnotarized, and local-only.
-See [the P0 migration record](p0_mike_desktop_migration.md),
-[Mike port manifest](mike_port_manifest.md), and
-[desktop guide](desktop_app.md). The completed OCR, legal-source retention, and
-Document Studio scope is recorded in
-[the P1 implementation record](p1_ocr_legal_document_studio.md).
+- Matter creation, Profile/classification, policy, continuous shell, real
+  capability projections, and Project-compatible deep links;
+- uploads and parsing for the supported document set, packaged Apple Vision
+  OCR, provenance, and exact-page reopening;
+- durable Assistant streaming, tool loop, stop/retry/regenerate/recovery, and
+  document citations;
+- OpenAI, DeepSeek, Anthropic, Gemini, and bounded OpenAI-compatible profiles;
+- Workflow and Tabular durable execution using the same local Job Runtime;
+- Document Studio CAS save, immutable versions, restore, exact suggestions,
+  accept/reject/stale handling, and DOCX import/export;
+- encrypted backup/restore, restore fail-closed, sandboxed renderer, loopback
+  authentication, and package/security checks.
 
-Legacy `/aletheia/*` litigation, governance, audit, research, and opinion paths
-remain in the repository for compatibility and regression coverage, but they
-are not the P0 primary navigation.
+Current production Assistant tools are `list_documents`, `read_document`,
+`fetch_documents`, and `find_in_document`, plus `read_studio_document` and
+`suggest_studio_edit` for compatible Studio targets. Legal research tools,
+Agent-created Drafts, and production Workflow tools are not yet wired. The
+immediate refactor composes existing tools behind one registry without changing
+behavior; later slices add the authorized-provider and Agent-to-Draft loop.
+
+No production legal provider is claimed ready. Retained PKULaw/YuanDian Legacy
+adapters and contract tests do not prove a licensed live integration. The
+activation gate remains closed until official endpoint and wire contracts,
+valid credentials, licensed test access, and display/retention/export/model-use
+rights are documented and live acceptance succeeds. Vera will not guess an
+endpoint or substitute scraping, browser cookies, private interfaces, web
+search, or a fake provider.
+
+Current local packaged acceptance remains **unsigned, unnotarized, and
+local-only**. It is not a signed release baseline. Developer ID signing,
+notarization, stapling, Gatekeeper verification, and new artifact hashes remain
+separate distribution requirements.
+
+See [the vertical plan](local_legal_work_agent_vertical.md),
+[provider activation requirements](legal_provider_activation_requirements.md),
+[roadmap](roadmap_legal_workspace.md), and [desktop guide](desktop_app.md).
 
 ## Legacy historical status — Research Agent convergence
 
 The remainder of this document records the earlier civil-litigation and
 Research Agent programme. Statements such as “Current stage”, “Next”, or
 “Available now” below apply to that historical track and are superseded for the
-primary product by the P0 status above.
+primary product by the primary product status above.
 
 Current stage: **Vera Research Agent convergence.** The product is being
 reduced to one local-first Chinese civil-commercial litigation workflow:

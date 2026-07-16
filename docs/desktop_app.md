@@ -1,12 +1,14 @@
 # Vera Desktop App
 
-This document starts with the current Mike-derived Vera P0 client. The legacy
-desktop operations reference is retained below for historical compatibility.
+This document starts with the current Vera local general legal workspace. The
+older P0 and Legacy desktop operations references remain below where they are
+still compatibility-sensitive.
 
 ## Current release status
 
-Status on 2026-07-15: **P0 Phases 0-7 complete; fresh packaged verification
-passed**. One full invocation of `./scripts/package-desktop-mac.sh` exited `0`.
+Status on 2026-07-16: Matter convergence is merged to `main` at
+`5611699e46552a20bf42ce84396a8e65aa139d16`; Workspace schema is v17. The last
+recorded full invocation of `./scripts/package-desktop-mac.sh` exited `0`.
 It built the current backend, frontend, Electron host and credential worker,
 then passed package hygiene, SQLCipher, legacy migration, packaged startup and
 port release, workspace cross-restart E2E, backup bridge, and interrupted
@@ -28,12 +30,11 @@ and checksum verification.
 
 ## Product and routes
 
-Electron opens the real Vera workspace at `/assistant`. Its four core
-Mike-derived workspaces are Assistant (`/assistant`), Projects (`/projects`),
-Tabular Review (`/tabular-review`), and Workflows (`/workflows`); Settings
-(`/settings`) is the fifth first-level local control surface. Project pages make
-Documents, Assistant, Workflows, and Tabular Reviews available within the same
-generic Project container.
+Electron opens the real Vera workspace at `/assistant`. The current primary
+navigation is Assistant (`/assistant`), Matters (`/matters`), Workflows
+(`/workflows`), Review, and Settings (`/settings`). Matter pages reuse the
+Project-owned Documents, Assistant, Workflow, Tabular and Studio capabilities;
+compatibility `/projects/:id/**` and `/tabular-review` deep links remain usable.
 
 The UI and product framework are ported from Open Legal Products' Mike at the
 pinned commit `e32daad5a4c64a5561e04c53ee12411e3c5e7238`, with permission to use
@@ -42,8 +43,9 @@ local adaptations replace cloud authentication, organisations, sharing,
 Supabase/PostgreSQL, R2/S3, MCP/OAuth, and server-wide provider secrets with a
 single-user desktop runtime.
 
-Legacy `/aletheia/*` routes remain compiled for regression and access to
-existing local records. They are not part of the new primary navigation.
+Legacy `/aletheia/*` routes remain compiled for explicit compatibility and
+regression use, but are default-disabled. They are not part of the primary
+navigation or the active product storage path.
 
 ## Build and artifacts
 
@@ -136,13 +138,15 @@ credentials, proxy variables, or Node injection flags.
 
 ## Local persistence and credentials
 
-Workspace schema migrations currently run through v16
-(`v16MatterClassification`). V11 adds the Project source foundation, v12 adds
+Workspace schema migrations currently run through v17
+(`v17MatterInferenceAuthority`). V11 adds the Project source foundation, v12 adds
 Document Studio, v13 adds source-retention lifecycle enforcement, v14 adds
 reviewable Document Studio suggestions, and v15 adds the optional one-to-one
 Matter Profile plus fail-closed Matter Policy foundation. V16 adds explicit
 workspace classification and bounded jurisdiction while leaving existing v15
-rows unclassified instead of guessing a mapping. Projects, folders, document
+rows unclassified instead of guessing a mapping. V17 adds explicit model
+privacy declarations and the unified Matter inference decision authority.
+Projects, folders, document
 versions, chats, messages, jobs, workflow definitions/runs/step runs, Tabular
 Reviews/cells, model-profile metadata, durable Assistant events, source
 provenance, and Studio state use the local Workspace database. The packaged
