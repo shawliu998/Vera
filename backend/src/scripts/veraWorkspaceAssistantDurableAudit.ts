@@ -321,7 +321,7 @@ async function terminalUpgradeReplay(root: string) {
 
   const upgraded = new WorkspaceDatabase(databasePath);
   try {
-    assert.equal(upgraded.migration?.currentVersion, 14);
+    assert.equal(upgraded.migration?.currentVersion, 16);
     const replay = new ChatsRepository(upgraded).listGenerationEvents(jobId);
     assert.equal(replay.terminal, true);
     assert.deepEqual(
@@ -452,7 +452,7 @@ async function run() {
   let database: WorkspaceDatabase | null = new WorkspaceDatabase(databasePath);
   let observer: WorkspaceDatabase | null = null;
   try {
-    assert.equal(database.migration?.currentVersion, 14);
+    assert.equal(database.migration?.currentVersion, 16);
     const profileId = seedEnabledProfile(database);
     const activeControllers = new Map<string, AbortController>();
     const setup = createServices(database, {

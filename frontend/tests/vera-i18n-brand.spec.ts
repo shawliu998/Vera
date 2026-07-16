@@ -57,11 +57,15 @@ test("Vera dictionaries are complete, Chinese-first, and cover the desktop produ
   expect(enKeys).toEqual(zhKeys);
 
   expect(zhKeys).toEqual(expect.arrayContaining([
-    "nav.projects",
     "nav.assistant",
+    "nav.matters",
     "nav.workflows",
-    "nav.tabular",
+    "nav.review",
     "nav.settings",
+    "matters.profile.classificationRequired",
+    "matters.capabilities.inferenceClosed",
+    "matters.capabilities.readOnly",
+    "matters.navigation.drafts",
     "projects.empty.title",
     "projects.deleteConfirm.action",
     "documents.empty.title",
@@ -146,6 +150,7 @@ test("capability copy describes the real Assistant, Workflow, and Tabular surfac
 test("P0 product sources keep user copy in i18n dictionaries", () => {
   const sourceRoot = path.join(process.cwd(), "src", "app");
   const roots = [
+    path.join(process.cwd(), "src", "features", "matter-overview"),
     path.join(sourceRoot, "components", "assistant"),
     path.join(sourceRoot, "components", "models"),
     path.join(sourceRoot, "components", "projects"),
@@ -153,6 +158,7 @@ test("P0 product sources keep user copy in i18n dictionaries", () => {
     path.join(sourceRoot, "components", "vera-shell"),
     path.join(sourceRoot, "components", "workflows"),
     path.join(sourceRoot, "(pages)", "assistant"),
+    path.join(sourceRoot, "(pages)", "matters"),
     path.join(sourceRoot, "(pages)", "projects"),
     path.join(sourceRoot, "(pages)", "settings"),
     path.join(sourceRoot, "(pages)", "tabular-review"),

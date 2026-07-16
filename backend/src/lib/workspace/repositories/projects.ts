@@ -1,4 +1,5 @@
 import type { WorkspaceBlobLocator } from "../blobStore";
+import { z } from "zod";
 import type { WorkspaceDatabaseAdapter } from "../database";
 import {
   assertNoActiveProjectWorkflowForFolder,
@@ -13,6 +14,8 @@ import {
   type PageRequest,
 } from "../pagination";
 import type { Project, ProjectFolder } from "../types";
+import type { WorkspaceInferenceActivityScope } from "../jobs/types";
+import { WorkspaceIdSchema } from "../workspacePersistencePrimitivesV1";
 
 type Row = Record<string, unknown>;
 
@@ -36,6 +39,14 @@ export type ActiveProjectResourceJob = {
   id: string;
   status: "queued" | "running";
 };
+
+/** Narrow read boundary used by the Matter conversion coordinator. */
+export interface ProjectInferenceActivityReadPort {
+  hasBlockingInferenceJobs(
+    projectId: string,
+    activeScopes: readonly WorkspaceInferenceActivityScope[],
+  ): boolean;
+}
 
 export type StagedProjectBlob = {
   recordId: string;
@@ -100,6 +111,33 @@ const PROJECT_JOB_SCOPE_PREDICATE = `
   OR (j.resource_type = 'tabular_review' AND j.resource_id IN (SELECT id FROM project_reviews))
   OR (j.resource_type = 'tabular_cell' AND j.resource_id IN (SELECT id FROM project_cells))
   OR (j.resource_type = 'workflow_run' AND j.resource_id IN (SELECT id FROM project_runs))`;
+
+const ProjectInferenceActivityScopeSchema = z.discriminatedUnion("scope", [
+  z
+    .object({
+      jobId: WorkspaceIdSchema,
+      type: z.enum(["assistant_generate", "workflow_run", "tabular_cell"]),
+      scope: z.literal("project"),
+      projectId: WorkspaceIdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jobId: WorkspaceIdSchema,
+      type: z.enum(["assistant_generate", "workflow_run", "tabular_cell"]),
+      scope: z.literal("global"),
+      projectId: z.null(),
+    })
+    .strict(),
+  z
+    .object({
+      jobId: WorkspaceIdSchema,
+      type: z.enum(["assistant_generate", "workflow_run", "tabular_cell"]),
+      scope: z.literal("unresolved"),
+      projectId: z.null(),
+    })
+    .strict(),
+]);
 
 const FOLDER_SCOPE_CTE = `
   WITH RECURSIVE folder_subtree(id) AS (
@@ -355,6 +393,50 @@ export class ProjectsRepository {
         throw new WorkspaceApiError(409, "CONFLICT", "Project is not active.");
       }
       return value;
+    });
+  }
+
+  /**
+   * Uses the complete Project job-ownership graph. It deliberately returns
+   * only presence: Matter conversion must not expose, mutate, or cancel the
+   * user's queued/running or still-executing inference work.
+   *
+   * `activeScopes` is a bounded snapshot frozen before each handler starts.
+   * It closes the cancellation/owner-deletion window where durable rows have
+   * become terminal or disappeared but a provider call has not unwound yet.
+   */
+  hasBlockingInferenceJobs(
+    projectIdValue: string,
+    activeScopeValues: readonly WorkspaceInferenceActivityScope[],
+  ): boolean {
+    return this.safe(() => {
+      const projectId = WorkspaceIdSchema.parse(projectIdValue);
+      let frozenScopeBlocks = false;
+      for (const value of activeScopeValues) {
+        const parsed = ProjectInferenceActivityScopeSchema.safeParse(value);
+        if (!parsed.success || parsed.data.scope === "unresolved") {
+          frozenScopeBlocks = true;
+          continue;
+        }
+        if (
+          parsed.data.scope === "project" &&
+          parsed.data.projectId === projectId
+        ) {
+          frozenScopeBlocks = true;
+        }
+      }
+      const row = this.database
+        .prepare(
+          `${PROJECT_JOB_SCOPE_CTE}
+           SELECT 1 AS present
+             FROM jobs j
+            WHERE j.type IN ('assistant_generate', 'workflow_run', 'tabular_cell')
+              AND j.status IN ('queued', 'running')
+              AND (${PROJECT_JOB_SCOPE_PREDICATE})
+            LIMIT 1`,
+        )
+        .get(projectId);
+      return frozenScopeBlocks || row?.present === 1 || row?.present === 1n;
     });
   }
 

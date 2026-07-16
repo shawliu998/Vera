@@ -577,7 +577,9 @@ function abortError() {
   return error;
 }
 
-function runtimeAuditModel(): AssistantModelPort {
+function runtimeAuditModel(
+  onRunTurn?: (prompt: string) => void | Promise<void>,
+): AssistantModelPort {
   return {
     async registeredCapabilities() {
       return {
@@ -591,6 +593,7 @@ function runtimeAuditModel(): AssistantModelPort {
       const prompt =
         [...input.messages].reverse().find((message) => message.role === "user")
           ?.content ?? "";
+      await onRunTurn?.(prompt);
       if (prompt.includes("[FAIL]")) {
         throw Object.assign(new Error("raw provider body"), {
           code: "assistant_model_failed",
@@ -650,6 +653,30 @@ async function waitForStatus(
   throw new Error(`Assistant job ${jobId} did not reach the expected status.`);
 }
 
+async function within<T>(promise: Promise<T>, message: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), 10_000);
+      }),
+    ]);
+  } finally {
+    if (timeout !== null) clearTimeout(timeout);
+  }
+}
+
+function deferredSignal() {
+  let resolveSignal: () => void = () => {
+    throw new Error("Deferred signal was not initialized.");
+  };
+  const promise = new Promise<void>((resolve) => {
+    resolveSignal = resolve;
+  });
+  return { promise, resolve: resolveSignal };
+}
+
 async function replay(baseUrl: string, jobId: string, token: string) {
   const response = await fetch(
     `${baseUrl}/api/v1/assistant/jobs/${jobId}/events?cursor=0&limit=100`,
@@ -671,10 +698,25 @@ async function auditRuntimePumpAndRoutes(root: string) {
   const profiles = new ModelProfilesRepository(database);
   const tests = new ModelConnectionTestsRepository(database);
   createProfile(profiles, tests, PROFILE_ID, true);
+  let modelTurnCount = 0;
+  const conversionRaceEntered = deferredSignal();
+  const conversionRaceRelease = deferredSignal();
+  let conversionRaceReleased = false;
+  const releaseConversionRace = () => {
+    if (conversionRaceReleased) return;
+    conversionRaceReleased = true;
+    conversionRaceRelease.resolve();
+  };
   const runtime = new WorkspaceRuntime({
     dataDir: path.join(root, "runtime-data"),
     database,
-    assistantModel: runtimeAuditModel(),
+    assistantModel: runtimeAuditModel(async (prompt) => {
+      modelTurnCount += 1;
+      if (prompt.includes("[CONVERSION-RACE]")) {
+        conversionRaceEntered.resolve();
+        await conversionRaceRelease.promise;
+      }
+    }),
     // The execution audit does not create blobs. Keep the production runtime's
     // existing empty-store test seam instead of weakening encryption policy.
     blobs: { listStagedDeletesSync: () => [] } as never,
@@ -828,7 +870,234 @@ async function auditRuntimePumpAndRoutes(root: string) {
       1,
       "pump cancellation never writes a second terminal after Assistant cancellation commit",
     );
+
+    const genericProjectResponse = await fetch(
+      `${server.baseUrl}/api/v1/projects`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ name: "Generic compatibility Project" }),
+      },
+    );
+    assert.equal(genericProjectResponse.status, 201);
+    const genericProjectId = String(
+      ((await genericProjectResponse.json()) as { id: unknown }).id,
+    );
+    const genericChatResponse = await fetch(
+      `${server.baseUrl}/api/v1/chat/create`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          title: "Generic Project compatibility",
+          project_id: genericProjectId,
+          model_profile_id: PROFILE_ID,
+        }),
+      },
+    );
+    assert.equal(genericChatResponse.status, 201);
+    const genericChatId = String(
+      ((await genericChatResponse.json()) as { id: unknown }).id,
+    );
+    const genericTurnCount = modelTurnCount;
+    const genericSubmit = await fetch(`${server.baseUrl}/api/v1/chat`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        chat_id: genericChatId,
+        model_profile_id: PROFILE_ID,
+        messages: [{ role: "user", content: "Generic Project remains compatible." }],
+      }),
+    });
+    assert.equal(genericSubmit.status, 202);
+    const genericJobId = String(
+      ((await genericSubmit.json()) as { job_id: unknown }).job_id,
+    );
+    await waitForStatus(
+      server.baseUrl,
+      genericJobId,
+      token,
+      (status) => status === "complete",
+    );
+    assert.equal(modelTurnCount, genericTurnCount + 1);
+
+    const raceTurnCount = modelTurnCount;
+    const raceSubmit = await fetch(`${server.baseUrl}/api/v1/chat`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        chat_id: genericChatId,
+        model_profile_id: PROFILE_ID,
+        messages: [
+          {
+            role: "user",
+            content: "[CONVERSION-RACE] Hold the provider boundary.",
+          },
+        ],
+      }),
+    });
+    assert.equal(raceSubmit.status, 202);
+    const raceJobId = String(
+      ((await raceSubmit.json()) as { job_id: unknown }).job_id,
+    );
+    await within(
+      conversionRaceEntered.promise,
+      "Assistant provider boundary was not entered.",
+    );
+    assert.equal(
+      modelTurnCount,
+      raceTurnCount + 1,
+      "the conversion race is held inside an active provider turn",
+    );
+
+    const blockedConversion = await fetch(
+      `${server.baseUrl}/api/v1/projects/${genericProjectId}/matter-profile`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ workspace_type: "general_legal" }),
+      },
+    );
+    assert.equal(
+      blockedConversion.status,
+      409,
+      "conversion must reject while an inference job is already running",
+    );
+    const blockedConversionBody = await blockedConversion.text();
+    assert.equal(blockedConversionBody.includes("raw provider body"), false);
+
+    const stillGeneric = await fetch(
+      `${server.baseUrl}/api/v1/projects/${genericProjectId}/matter-profile`,
+      { headers },
+    );
+    assert.equal(stillGeneric.status, 200);
+    const stillGenericBody = (await stillGeneric.json()) as {
+      matter_profile: unknown;
+      profile_state: string;
+    };
+    assert.equal(stillGenericBody.matter_profile, null);
+    assert.equal(stillGenericBody.profile_state, "absent");
+
+    releaseConversionRace();
+    await waitForStatus(
+      server.baseUrl,
+      raceJobId,
+      token,
+      (status) => status === "complete",
+    );
+
+    const completedConversion = await fetch(
+      `${server.baseUrl}/api/v1/projects/${genericProjectId}/matter-profile`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ workspace_type: "general_legal" }),
+      },
+    );
+    assert.equal(completedConversion.status, 201);
+    const convertedMatter = (await completedConversion.json()) as {
+      profile_state: string;
+      capabilities: { inference: string };
+    };
+    assert.equal(convertedMatter.profile_state, "ready");
+    assert.equal(convertedMatter.capabilities.inference, "policy_gate_closed");
+
+    const beforeConvertedSubmit = modelTurnCount;
+    const convertedSubmit = await fetch(`${server.baseUrl}/api/v1/chat`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        chat_id: genericChatId,
+        model_profile_id: PROFILE_ID,
+        messages: [
+          {
+            role: "user",
+            content: "Converted Matter must now fail closed.",
+          },
+        ],
+      }),
+    });
+    assert.equal(convertedSubmit.status, 202);
+    const convertedJobId = String(
+      ((await convertedSubmit.json()) as { job_id: unknown }).job_id,
+    );
+    await waitForStatus(
+      server.baseUrl,
+      convertedJobId,
+      token,
+      (status) => status === "failed",
+    );
+    assert.equal(
+      modelTurnCount,
+      beforeConvertedSubmit,
+      "a converted Matter must make zero further provider turns",
+    );
+
+    const matterResponse = await fetch(`${server.baseUrl}/api/v1/matters`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        name: "Policy-gated legal Matter",
+        workspace_type: "general_legal",
+      }),
+    });
+    assert.equal(matterResponse.status, 201);
+    const matter = (await matterResponse.json()) as {
+      project: { id: string };
+      profile_state: string;
+      capabilities: { inference: string };
+    };
+    assert.equal(matter.profile_state, "ready");
+    assert.equal(matter.capabilities.inference, "policy_gate_closed");
+    const matterChatResponse = await fetch(
+      `${server.baseUrl}/api/v1/chat/create`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          title: "Matter policy gate",
+          project_id: matter.project.id,
+          model_profile_id: PROFILE_ID,
+        }),
+      },
+    );
+    assert.equal(matterChatResponse.status, 201);
+    const matterChatId = String(
+      ((await matterChatResponse.json()) as { id: unknown }).id,
+    );
+    const beforeClosedMatter = modelTurnCount;
+    const matterSubmit = await fetch(`${server.baseUrl}/api/v1/chat`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        chat_id: matterChatId,
+        model_profile_id: PROFILE_ID,
+        messages: [{ role: "user", content: "This must fail closed." }],
+      }),
+    });
+    assert.equal(matterSubmit.status, 202);
+    const matterJobId = String(
+      ((await matterSubmit.json()) as { job_id: unknown }).job_id,
+    );
+    await waitForStatus(
+      server.baseUrl,
+      matterJobId,
+      token,
+      (status) => status === "failed",
+    );
+    assert.equal(
+      modelTurnCount,
+      beforeClosedMatter,
+      "a Matter without Gate 3 policy must make zero provider turns",
+    );
+    const matterReplay = await replay(server.baseUrl, matterJobId, token);
+    assert.equal(matterReplay.terminal, true);
+    assert.equal(
+      matterReplay.events.some((event) => event.event.type === "content_delta"),
+      false,
+    );
   } finally {
+    releaseConversionRace();
     await server.close();
     await runtime.stop();
   }
@@ -845,7 +1114,7 @@ async function main() {
     adapterDatabase = null;
     await auditRuntimePumpAndRoutes(root);
     console.log(
-      "Vera Assistant execution audit passed (v9-ready provider adapter, bounded snapshot tools, abort/error validation, durable pump, route auth, and single terminal semantics).",
+      "Vera Assistant execution audit passed (provider adapter, bounded snapshot tools, Matter policy fail-closed, generic compatibility, durable pump, route auth, and single terminal semantics).",
     );
   } finally {
     adapterDatabase?.close();

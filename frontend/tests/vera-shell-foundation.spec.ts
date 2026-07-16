@@ -192,15 +192,14 @@ test("AppSidebar keeps Mike DOM and classes while removing cloud-only blocks", (
     const navigation = navArray(source);
     assert.deepEqual(quotedFields(navigation, "href"), [
         "/assistant",
-        "/projects",
-        "/tabular-review",
+        "/matters",
         "/workflows",
     ]);
     assert.deepEqual(quotedFields(navigation, "labelKey"), [
         "nav.assistant",
-        "nav.projects",
-        "nav.tabular",
+        "nav.matters",
         "nav.workflows",
+        "nav.review",
         "nav.settings",
     ]);
     assert.match(source, /t\(labelKey\)/);
@@ -216,6 +215,10 @@ test("AppSidebar keeps Mike DOM and classes while removing cloud-only blocks", (
     assert.match(source, /aria-disabled=\{!isAvailable \|\| undefined\}/);
     assert.match(source, /!isAvailable[\s\S]*text-gray-400/);
     assert.match(source, /aria-current=\{isActive \? "page" : undefined\}/);
+    assert.match(
+        source,
+        /labelKey === "nav\.matters"[\s\S]*pathname\.startsWith\("\/projects\/"\)/,
+    );
     assert.match(source, /className="mt-4 flex min-h-0 flex-1 flex-col gap-4"/);
     assert.doesNotMatch(
         source,
@@ -246,7 +249,7 @@ test("site logo retains Mike typography and sizing with only local Vera branding
     assert.doesNotMatch(source, /mikeoss|MikeIcon|>Mike</i);
 });
 
-test("shell exposes the four local workspaces and capability-gated Settings", () => {
+test("shell exposes the canonical Gate 1 IA and capability-gated Settings", () => {
     const source = [
         current("src/app/components/vera-shell/VeraShell.tsx"),
         current("src/app/components/vera-shell/VeraSidebar.tsx"),
@@ -259,10 +262,11 @@ test("shell exposes the four local workspaces and capability-gated Settings", ()
     assert.doesNotMatch(source, /redirect\(/);
     assert.doesNotMatch(source, /\/aletheia/);
     assert.match(source, /"\/assistant"/);
+    assert.match(source, /"\/matters"/);
     assert.match(source, /"\/projects"/);
-    assert.match(source, /"\/tabular-review"/);
     assert.match(source, /"\/workflows"/);
-    assert.doesNotMatch(source, /"\/tabular-reviews"/);
+    assert.doesNotMatch(source, /"\/tabular-review"/);
+    assert.match(source, /href: null, labelKey: "nav\.review"/);
     assert.equal(source.match(/"\/settings"/g)?.length, 1);
     assert.match(
         source,

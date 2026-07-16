@@ -12,6 +12,8 @@ import { PROJECT_SOURCE_FOUNDATION_V11_MIGRATION } from "./v11ProjectSourceFound
 import { DOCUMENT_STUDIO_V12_MIGRATION } from "./v12DocumentStudio";
 import { SOURCE_RETENTION_LIFECYCLE_V13_MIGRATION } from "./v13SourceRetentionLifecycle";
 import { DOCUMENT_STUDIO_SUGGESTIONS_V14_MIGRATION } from "./v14DocumentStudioSuggestions";
+import { MATTER_PROFILES_V15_MIGRATION } from "./v15MatterProfiles";
+import { MATTER_CLASSIFICATION_V16_MIGRATION } from "./v16MatterClassification";
 
 export {
   detectWorkspaceDatabaseCapabilities,
@@ -41,6 +43,8 @@ export { PROJECT_SOURCE_FOUNDATION_V11_MIGRATION } from "./v11ProjectSourceFound
 export { DOCUMENT_STUDIO_V12_MIGRATION } from "./v12DocumentStudio";
 export { SOURCE_RETENTION_LIFECYCLE_V13_MIGRATION } from "./v13SourceRetentionLifecycle";
 export { DOCUMENT_STUDIO_SUGGESTIONS_V14_MIGRATION } from "./v14DocumentStudioSuggestions";
+export { MATTER_PROFILES_V15_MIGRATION } from "./v15MatterProfiles";
+export { MATTER_CLASSIFICATION_V16_MIGRATION } from "./v16MatterClassification";
 
 export const WORKSPACE_MIGRATIONS = [
   INITIAL_WORKSPACE_MIGRATION,
@@ -57,4 +61,6 @@ export const WORKSPACE_MIGRATIONS = [
   DOCUMENT_STUDIO_V12_MIGRATION,
   SOURCE_RETENTION_LIFECYCLE_V13_MIGRATION,
   DOCUMENT_STUDIO_SUGGESTIONS_V14_MIGRATION,
+  MATTER_PROFILES_V15_MIGRATION,
+  MATTER_CLASSIFICATION_V16_MIGRATION,
 ] as const;

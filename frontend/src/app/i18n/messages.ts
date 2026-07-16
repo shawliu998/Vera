@@ -37,6 +37,7 @@ const zhCN = {
       ready: "就绪",
       saved: "已保存",
       saving: "正在保存…",
+      unavailable: "不可用",
     },
     fields: {
       createdAt: "创建时间",
@@ -45,10 +46,10 @@ const zhCN = {
     },
   },
   nav: {
-    projects: "项目",
     assistant: "助手",
+    matters: "事项",
     workflows: "工作流",
-    tabular: "表格",
+    review: "复核",
     settings: "设置",
   },
   projects: {
@@ -78,6 +79,106 @@ const zhCN = {
       body: "项目、其中的文档及关联本地数据将从本地工作区中永久删除。此操作无法撤销。",
       namePrompt: "输入“{name}”以确认删除。",
       action: "永久删除项目",
+    },
+  },
+  matters: {
+    title: "事项",
+    subtitle: "在一个本地工作区中组织法律事项、文档、助手与工作流。",
+    create: "新建事项",
+    loadMore: "加载更多",
+    loadingMore: "正在加载…",
+    fields: {
+      name: "事项名称",
+      description: "事项说明",
+      workspaceType: "事项分类",
+      clientName: "客户名称",
+      jurisdiction: "司法辖区",
+      representedRole: "代理角色",
+      objective: "事项目标",
+      matterNumber: "事项编号",
+      practiceArea: "业务领域",
+      status: "状态",
+      action: "操作",
+    },
+    workspaceTypes: {
+      general_legal: "通用法律事项",
+      transaction: "交易",
+      dispute: "争议",
+      investigation: "调查",
+      compliance: "合规",
+      research: "研究",
+    },
+    profileStates: {
+      absent: "普通项目",
+      classification_required: "需要分类",
+      ready: "事项资料就绪",
+    },
+    profile: {
+      title: "事项资料",
+      create: "创建事项资料",
+      edit: "编辑事项资料",
+      classify: "完成分类",
+      convert: "转换为事项",
+      genericProject: "普通项目",
+      classificationRequired: "需要选择事项分类",
+      classificationBody:
+        "这是升级前创建的事项资料。选择宽泛的事项分类后，才能继续配置后续事项策略。",
+      classificationReadOnlyBody:
+        "这是升级前创建的事项资料；当前生命周期为只读，因此保留原分类状态且不能修改。",
+      genericTitle: "这是普通项目",
+      genericBody:
+        "现有项目不会被静默转换。创建事项资料后，它才会进入事项策略与后续法律工作区能力。",
+      genericReadOnlyBody:
+        "此普通项目当前为只读；它不会被静默转换，也不能在当前生命周期创建事项资料。",
+      missingBody: "此项目尚未创建事项资料。",
+    },
+    sections: {
+      matters: "法律事项（{count}）",
+      genericProjects: "普通项目（{count}）",
+    },
+    navigation: {
+      label: "事项工作区",
+      overview: "概览",
+      documents: "文档",
+      assistant: "助手",
+      review: "复核",
+      workflows: "工作流",
+      drafts: "草稿",
+    },
+    capabilities: {
+      inferenceClosedTitle: "事项推理策略尚未配置",
+      inferenceClosed:
+        "为避免在未确定事项策略时使用模型，此事项的助手入口当前已安全关闭。普通项目的现有兼容行为不受影响。",
+      readOnlyTitle: "此事项当前只读",
+      readOnly:
+        "已归档或删除的事项仍可查看，但不能转换、分类、编辑事项资料或启动助手模型调用。",
+      readOnlyShort: "只读",
+      reviewUnavailable: "统一复核将在 Gate 2 接入真实复核队列后开放。",
+      draftsDocumentScoped:
+        "草稿目前只存在于具体文档工作室中，尚无事项级草稿列表。",
+    },
+    form: {
+      selectWorkspaceType: "选择事项分类",
+    },
+    status: {
+      active: "进行中",
+      archived: "已归档",
+      deleted: "已删除",
+    },
+    empty: {
+      title: "还没有事项或项目",
+      body: "新建法律事项，或在此显式转换已有普通项目。",
+      action: "新建第一个事项",
+    },
+    errors: {
+      loadTitle: "无法加载事项",
+    },
+    detail: {
+      loading: "正在加载事项…",
+      unavailable: "无法打开此事项",
+      back: "返回事项",
+      activity: "本地内容",
+      tabularReviews: "Tabular 审阅",
     },
   },
   documents: {
@@ -1147,6 +1248,7 @@ const enUS = {
       ready: "Ready",
       saved: "Saved",
       saving: "Saving…",
+      unavailable: "Unavailable",
     },
     fields: {
       createdAt: "Created",
@@ -1155,10 +1257,10 @@ const enUS = {
     },
   },
   nav: {
-    projects: "Projects",
     assistant: "Assistant",
+    matters: "Matters",
     workflows: "Workflows",
-    tabular: "Tabular",
+    review: "Review",
     settings: "Settings",
   },
   projects: {
@@ -1190,6 +1292,108 @@ const enUS = {
       body: "The project, its documents, and associated local data will be permanently removed from the local workspace. This cannot be undone.",
       namePrompt: "Type “{name}” to confirm deletion.",
       action: "Delete project permanently",
+    },
+  },
+  matters: {
+    title: "Matters",
+    subtitle:
+      "Organize legal matters, documents, Assistant work, and workflows in one local workspace.",
+    create: "New matter",
+    loadMore: "Load more",
+    loadingMore: "Loading…",
+    fields: {
+      name: "Matter name",
+      description: "Matter description",
+      workspaceType: "Matter classification",
+      clientName: "Client name",
+      jurisdiction: "Jurisdiction",
+      representedRole: "Represented role",
+      objective: "Matter objective",
+      matterNumber: "Matter number",
+      practiceArea: "Practice area",
+      status: "Status",
+      action: "Action",
+    },
+    workspaceTypes: {
+      general_legal: "General legal",
+      transaction: "Transaction",
+      dispute: "Dispute",
+      investigation: "Investigation",
+      compliance: "Compliance",
+      research: "Research",
+    },
+    profileStates: {
+      absent: "Generic Project",
+      classification_required: "Classification required",
+      ready: "Matter Profile ready",
+    },
+    profile: {
+      title: "Matter Profile",
+      create: "Create Matter Profile",
+      edit: "Edit Matter Profile",
+      classify: "Complete classification",
+      convert: "Convert to Matter",
+      genericProject: "Generic Project",
+      classificationRequired: "Matter classification required",
+      classificationBody:
+        "This profile predates broad Matter classification. Choose a classification before configuring later Matter policies.",
+      classificationReadOnlyBody:
+        "This profile predates broad Matter classification. Its lifecycle is read-only, so the existing classification state is preserved and cannot be changed.",
+      genericTitle: "This is a generic Project",
+      genericBody:
+        "Existing Projects are never converted silently. Create a Matter Profile to opt into Matter policy and future legal-workspace capabilities.",
+      genericReadOnlyBody:
+        "This generic Project is read-only. It will not be converted silently, and a Matter Profile cannot be created in its current lifecycle.",
+      missingBody: "This Project does not have a Matter Profile.",
+    },
+    sections: {
+      matters: "Legal Matters ({count})",
+      genericProjects: "Generic Projects ({count})",
+    },
+    navigation: {
+      label: "Matter workspace",
+      overview: "Overview",
+      documents: "Documents",
+      assistant: "Assistant",
+      review: "Review",
+      workflows: "Workflows",
+      drafts: "Drafts",
+    },
+    capabilities: {
+      inferenceClosedTitle: "Matter inference policy is not configured",
+      inferenceClosed:
+        "Model use is closed for this Matter until its policy is configured. Existing compatibility behavior for generic Projects is unchanged.",
+      readOnlyTitle: "This Matter is read-only",
+      readOnly:
+        "Archived or deleted Matters remain readable, but cannot be converted, classified, edited, or used to start Assistant model calls.",
+      readOnlyShort: "Read-only",
+      reviewUnavailable:
+        "Unified Review will open in Gate 2 after a real review queue is connected.",
+      draftsDocumentScoped:
+        "Drafts currently live only in an individual Document Studio; no Matter-level draft list exists yet.",
+    },
+    form: {
+      selectWorkspaceType: "Choose a Matter classification",
+    },
+    status: {
+      active: "Active",
+      archived: "Archived",
+      deleted: "Deleted",
+    },
+    empty: {
+      title: "No Matters or Projects yet",
+      body: "Create a legal Matter or explicitly convert an existing generic Project here.",
+      action: "Create your first Matter",
+    },
+    errors: {
+      loadTitle: "Matters could not be loaded",
+    },
+    detail: {
+      loading: "Loading Matter…",
+      unavailable: "This Matter could not be opened",
+      back: "Back to Matters",
+      activity: "Local content",
+      tabularReviews: "Tabular reviews",
     },
   },
   documents: {

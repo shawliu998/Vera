@@ -32,7 +32,7 @@ const evidencePath = path.join(
   repositoryDir,
   "docs",
   "evidence",
-  "vera-p0-packaged-restart.png",
+  "vera-gate1-matter-packaged-restart.png",
 );
 
 const DOCUMENT_ONE =
@@ -46,6 +46,60 @@ const DOCUMENT_TWO_PARTY_QUOTE = "乙方名称为远山律师事务所";
 const ASSISTANT_VISIBLE_ANSWER =
   "第一份文件约定甲方三十日内付款[1]；第二份文件约定乙方可在重大违约后解除[2]。";
 const WORKFLOW_ANSWER = "工作流已完成本地合同审查。";
+const GATE1_MATTER = Object.freeze({
+  name: "Vera Gate 1 跨重启交易事项",
+  description: "验证显式 Matter Profile、真实聚合计数与加密工作区跨重启持久化。",
+  workspace_type: "transaction",
+  client_name: "晨星科技有限公司",
+  jurisdiction: "中华人民共和国",
+  represented_role: "买方律师",
+  objective: "审阅本地交易材料并保留可追溯的人工复核边界。",
+  cm_number: "VERA-G1-2026-001",
+  practice: "公司与并购",
+});
+const GATE1_MATTER_HEALTH = Object.freeze({
+  status: "ready",
+  schemaVersion: 16,
+  inferencePolicy: "gate_closed",
+});
+const MATTER_VIEW_KEYS = [
+  "capabilities",
+  "matter_profile",
+  "profile_state",
+  "project",
+];
+const MATTER_PROJECT_KEYS = [
+  "archived_at",
+  "chat_count",
+  "cm_number",
+  "created_at",
+  "default_model_profile_id",
+  "description",
+  "document_count",
+  "id",
+  "name",
+  "practice",
+  "status",
+  "tabular_review_count",
+  "updated_at",
+  "workflow_count",
+];
+const MATTER_PROFILE_KEYS = [
+  "client_name",
+  "created_at",
+  "jurisdiction",
+  "objective",
+  "project_id",
+  "represented_role",
+  "updated_at",
+  "workspace_type",
+];
+const MATTER_CAPABILITY_KEYS = [
+  "drafts",
+  "inference",
+  "matter_profile",
+  "review",
+];
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const API_TIMEOUT_MS = 180_000;
 const POLL_TIMEOUT_MS = 180_000;
@@ -86,6 +140,135 @@ function redact(value) {
 function bounded(value, limit = 4_000) {
   const text = redact(value);
   return text.length <= limit ? text : `${text.slice(0, limit)}…`;
+}
+
+function assertExactKeys(value, expected, label) {
+  assert.ok(
+    value && typeof value === "object" && !Array.isArray(value),
+    `${label} must be an object.`,
+  );
+  assert.deepEqual(Object.keys(value).sort(), [...expected].sort(), `${label} keys drifted.`);
+}
+
+function assertIsoTimestamp(value, label) {
+  assert.equal(typeof value, "string", `${label} must be a timestamp string.`);
+  assert.equal(Number.isNaN(Date.parse(value)), false, `${label} must be a valid timestamp.`);
+}
+
+function assertMatterCounts(project, expected) {
+  for (const [field, count] of Object.entries(expected)) {
+    assert.equal(project[field], count, `Unexpected Matter projection ${field}.`);
+  }
+}
+
+function assertGate1MatterProjection(view, projectId, counts) {
+  assertExactKeys(view, MATTER_VIEW_KEYS, "Matter view");
+  assertExactKeys(view.project, MATTER_PROJECT_KEYS, "Matter project projection");
+  assertExactKeys(view.matter_profile, MATTER_PROFILE_KEYS, "Matter Profile");
+  assertExactKeys(view.capabilities, MATTER_CAPABILITY_KEYS, "Matter capabilities");
+
+  assert.equal(view.project.id, projectId);
+  assert.equal(view.project.name, GATE1_MATTER.name);
+  assert.equal(view.project.description, GATE1_MATTER.description);
+  assert.equal(view.project.cm_number, GATE1_MATTER.cm_number);
+  assert.equal(view.project.practice, GATE1_MATTER.practice);
+  assert.equal(view.project.status, "active");
+  assert.equal(view.project.default_model_profile_id, null);
+  assert.equal(view.project.archived_at, null);
+  assertIsoTimestamp(view.project.created_at, "Matter project created_at");
+  assertIsoTimestamp(view.project.updated_at, "Matter project updated_at");
+  assertMatterCounts(view.project, counts);
+
+  assert.equal(view.matter_profile.project_id, projectId);
+  assert.equal(
+    view.matter_profile.workspace_type,
+    GATE1_MATTER.workspace_type,
+  );
+  assert.equal(view.matter_profile.client_name, GATE1_MATTER.client_name);
+  assert.equal(view.matter_profile.jurisdiction, GATE1_MATTER.jurisdiction);
+  assert.equal(
+    view.matter_profile.represented_role,
+    GATE1_MATTER.represented_role,
+  );
+  assert.equal(view.matter_profile.objective, GATE1_MATTER.objective);
+  assertIsoTimestamp(view.matter_profile.created_at, "Matter Profile created_at");
+  assertIsoTimestamp(view.matter_profile.updated_at, "Matter Profile updated_at");
+  assert.equal(view.profile_state, "ready");
+  assert.deepEqual(view.capabilities, {
+    matter_profile: "edit",
+    inference: "policy_gate_closed",
+    review: "unavailable",
+    drafts: "document_scoped",
+  });
+}
+
+function assertGenericProjectMatterProjection(view, projectId, counts) {
+  assertExactKeys(view, MATTER_VIEW_KEYS, "generic Project Matter projection");
+  assertExactKeys(
+    view.project,
+    MATTER_PROJECT_KEYS,
+    "generic Project projection",
+  );
+  assertExactKeys(
+    view.capabilities,
+    MATTER_CAPABILITY_KEYS,
+    "generic Project capabilities",
+  );
+  assert.equal(view.project.id, projectId);
+  assert.equal(view.project.name, "Vera 打包客户端通用项目");
+  assert.equal(view.project.status, "active");
+  assertMatterCounts(view.project, counts);
+  assert.equal(view.matter_profile, null);
+  assert.equal(view.profile_state, "absent");
+  assert.deepEqual(view.capabilities, {
+    matter_profile: "create",
+    inference: "workspace_compatibility",
+    review: "unavailable",
+    drafts: "document_scoped",
+  });
+}
+
+function providerCallSnapshot(calls) {
+  return {
+    probes: calls.probes,
+    assistantTurns: calls.assistantTurns,
+    assistantToolCalls: calls.assistantToolCalls,
+    workflowTurns: calls.workflowTurns,
+    tabularTurns: calls.tabularTurns,
+    tabularCells: [...calls.tabularCells].sort(),
+  };
+}
+
+function assertMatterListPage(
+  page,
+  genericProjectId,
+  matterProjectId,
+  matterCounts,
+) {
+  assertExactKeys(page, ["items", "next_cursor"], "Matter list page");
+  assert.ok(Array.isArray(page.items), "Matter list items must be an array.");
+  assert.equal(
+    page.items.length,
+    2,
+    "The isolated packaged profile must list exactly the created Project and Matter.",
+  );
+  assert.equal(page.next_cursor, null);
+  const generic = page.items.find(
+    (item) => item?.project?.id === genericProjectId,
+  );
+  const matter = page.items.find(
+    (item) => item?.project?.id === matterProjectId,
+  );
+  assert.ok(generic, "Matter list omitted the generic Project projection.");
+  assert.ok(matter, "Matter list omitted the classified Matter projection.");
+  assertGenericProjectMatterProjection(generic, genericProjectId, {
+    document_count: 2,
+    chat_count: 1,
+    tabular_review_count: 1,
+    workflow_count: 1,
+  });
+  assertGate1MatterProjection(matter, matterProjectId, matterCounts);
+  return { generic, matter };
 }
 
 function captureApplicationLog(application) {
@@ -140,6 +323,20 @@ async function waitForHealth(timeoutMs = 90_000) {
     await delay(250);
   }
   throw new Error("Packaged Vera backend did not become healthy.");
+}
+
+async function assertGate1MatterHealth() {
+  const response = await fetch(`${backendBaseUrl}/health`, {
+    signal: AbortSignal.timeout(5_000),
+  });
+  assert.equal(response.status, 200, "Packaged Vera health must be ready.");
+  const body = await response.json();
+  assert.equal(body?.ok, true);
+  assert.deepEqual(
+    body?.vera?.matter,
+    GATE1_MATTER_HEALTH,
+    "Packaged production health must expose the exact Gate 1 Matter contract.",
+  );
 }
 
 function verifyPrivateWorkspaceDatabase(userDataDir) {
@@ -505,6 +702,60 @@ async function pollUntil(label, operation, timeoutMs = POLL_TIMEOUT_MS) {
   throw new Error(`${label} did not reach a terminal state.`);
 }
 
+async function assertTopNavigation(page) {
+  const navigation = await page.locator("#vera-sidebar").evaluate((sidebar) => {
+    const variants = [
+      ["助手", "Assistant"],
+      ["事项", "Matters"],
+      ["工作流", "Workflows"],
+      ["复核", "Review"],
+      ["设置", "Settings"],
+    ];
+    const oldTopLevelLabels = new Set(["项目", "Projects", "表格", "Tabular"]);
+    const buttons = [...sidebar.querySelectorAll(":scope > div > button")];
+    const entries = buttons
+      .map((button) => {
+        const text = (button.textContent ?? "").replace(/\s+/g, " ").trim();
+        const title = (button.getAttribute("title") ?? "").trim();
+        const label = text || title;
+        const index = variants.findIndex((labels) => labels.includes(label));
+        return {
+          index,
+          label,
+          disabled: button.disabled,
+          ariaDisabled: button.getAttribute("aria-disabled"),
+        };
+      })
+      .filter((entry) => entry.index >= 0);
+    return {
+      entries,
+      oldTopLevelLabels: buttons
+        .map((button) =>
+          ((button.textContent ?? "").replace(/\s+/g, " ").trim() ||
+            (button.getAttribute("title") ?? "").trim()),
+        )
+        .filter((label) => oldTopLevelLabels.has(label)),
+    };
+  });
+  assert.deepEqual(
+    navigation.entries.map((entry) => entry.index),
+    [0, 1, 2, 3, 4],
+    "The packaged top-level navigation must be Assistant, Matters, Workflows, Review, Settings in exact order.",
+  );
+  assert.deepEqual(
+    navigation.oldTopLevelLabels,
+    [],
+    "Projects and Tabular must not remain top-level navigation items.",
+  );
+  const review = navigation.entries[3];
+  assert.equal(review.disabled, true, "Gate 1 Review must remain disabled.");
+  assert.equal(
+    review.ariaDisabled,
+    "true",
+    "Gate 1 Review must expose truthful disabled semantics.",
+  );
+}
+
 async function assertVeraUi(page) {
   await page.locator("#vera-sidebar").waitFor({
     state: "visible",
@@ -515,33 +766,8 @@ async function assertVeraUi(page) {
     timeout: 90_000,
   });
   assert.equal(new URL(page.url()).pathname, "/assistant");
-  await page.waitForFunction(() => {
-    const sidebar = document.querySelector("#vera-sidebar");
-    if (!sidebar) return false;
-    const text = sidebar.textContent ?? "";
-    const labels = [
-      ["助手", "Assistant"],
-      ["项目", "Projects"],
-      ["表格", "Tabular"],
-      ["工作流", "Workflows"],
-      ["设置", "Settings"],
-    ];
-    return labels.every((variants) => variants.some((label) => text.includes(label)));
-  });
-  const sidebarText = await page.locator("#vera-sidebar").innerText();
-  assert.match(sidebarText, /Vera/);
-  for (const variants of [
-    ["助手", "Assistant"],
-    ["项目", "Projects"],
-    ["表格", "Tabular"],
-    ["工作流", "Workflows"],
-    ["设置", "Settings"],
-  ]) {
-    assert.ok(
-      variants.some((label) => sidebarText.includes(label)),
-      `Missing Vera navigation item ${variants.join("/")}.`,
-    );
-  }
+  assert.match(await page.locator("#vera-sidebar").innerText(), /Vera/);
+  await assertTopNavigation(page);
 }
 
 async function navigateAndAssertVisibleText(page, route, expectedTexts) {
@@ -567,6 +793,94 @@ async function assertProjectRenderer(page, projectId) {
     "alpha-contract.txt",
     "beta-contract.txt",
   ]);
+}
+
+async function assertMattersListRenderer(page) {
+  await navigateAndAssertVisibleText(page, "/matters", [
+    "Vera 打包客户端通用项目",
+    GATE1_MATTER.name,
+    GATE1_MATTER.client_name,
+    GATE1_MATTER.jurisdiction,
+    GATE1_MATTER.cm_number,
+    GATE1_MATTER.practice,
+  ]);
+  const visible = await page.locator("body").innerText();
+  assert.match(visible, /法律事项|Legal Matters/);
+  assert.match(visible, /普通项目|Generic Projects/);
+  await assertTopNavigation(page);
+}
+
+async function assertMatterNavigation(page, projectId) {
+  const navigation = page.locator(
+    'nav[aria-label="事项工作区"], nav[aria-label="Matter workspace"]',
+  );
+  await navigation.waitFor({ state: "visible", timeout: 90_000 });
+  const entries = await navigation.evaluate((element) => {
+    const variants = [
+      ["概览", "Overview"],
+      ["文档", "Documents"],
+      ["助手", "Assistant"],
+      ["复核", "Review"],
+      ["工作流", "Workflows"],
+      ["草稿", "Drafts"],
+    ];
+    return [...element.children].map((child) => {
+      const text = (child.textContent ?? "").replace(/\s+/g, " ").trim();
+      const index = variants.findIndex((labels) =>
+        labels.some((label) => text.startsWith(label)),
+      );
+      return {
+        index,
+        tag: child.tagName,
+        disabled: "disabled" in child ? child.disabled : false,
+        ariaDisabled: child.getAttribute("aria-disabled"),
+        ariaCurrent: child.getAttribute("aria-current"),
+        href: child.getAttribute("href"),
+        title: child.getAttribute("title") ?? "",
+      };
+    });
+  });
+  assert.deepEqual(
+    entries.map((entry) => entry.index),
+    [0, 1, 2, 3, 4, 5],
+    "Matter navigation must be Overview, Documents, Assistant, Review, Workflows, Drafts in exact order.",
+  );
+  assert.equal(entries[0].tag, "A");
+  assert.equal(entries[0].ariaCurrent, "page");
+  assert.equal(entries[0].href, `/matters/${projectId}`);
+  assert.equal(entries[1].tag, "A");
+  assert.equal(entries[1].href, `/projects/${projectId}`);
+  assert.equal(entries[2].tag, "BUTTON");
+  assert.equal(entries[2].disabled, true);
+  assert.equal(entries[2].ariaDisabled, "true");
+  assert.match(entries[2].title, /策略|policy/i);
+  assert.equal(entries[3].tag, "BUTTON");
+  assert.equal(entries[3].disabled, true);
+  assert.equal(entries[3].ariaDisabled, "true");
+  assert.match(entries[3].title, /Gate 2/);
+  assert.equal(entries[4].tag, "A");
+  assert.equal(entries[4].href, `/projects/${projectId}/workflows`);
+  assert.equal(entries[5].tag, "BUTTON");
+  assert.equal(entries[5].disabled, true);
+  assert.equal(entries[5].ariaDisabled, "true");
+  assert.match(entries[5].title, /文档|document/i);
+}
+
+async function assertMatterRenderer(page, projectId) {
+  await navigateAndAssertVisibleText(page, `/matters/${projectId}`, [
+    GATE1_MATTER.name,
+    GATE1_MATTER.description,
+    GATE1_MATTER.client_name,
+    GATE1_MATTER.jurisdiction,
+    GATE1_MATTER.represented_role,
+    GATE1_MATTER.objective,
+    GATE1_MATTER.cm_number,
+    GATE1_MATTER.practice,
+  ]);
+  const visible = await page.locator("body").innerText();
+  assert.match(visible, /事项推理策略尚未配置|Matter inference policy is not configured/);
+  await assertMatterNavigation(page, projectId);
+  await assertTopNavigation(page);
 }
 
 async function assertAssistantRenderer(page, projectId, chatId) {
@@ -653,6 +967,8 @@ function launchEnvironment(userDataDir, applicationMasterKey, databaseKey) {
   return {
     ...process.env,
     VERA_DESKTOP_PROFILE_DIR: userDataDir,
+    VERA_ENABLE_LEGACY_ROUTES: "false",
+    VERA_ENABLE_LEGACY_RUNTIME: "false",
     ALETHEIA_DEMO_SEED_ENABLED: "false",
     ALETHEIA_REQUIRE_ENCRYPTED_VOLUME: "false",
     ALETHEIA_APPLICATION_ENCRYPTION: "required",
@@ -774,6 +1090,7 @@ async function main() {
       databaseKey,
     );
     let { token } = packaged;
+    await assertGate1MatterHealth();
     const status = await apiJson(token, "/settings/status");
     assert.equal(status.capabilities.settings_available, true);
     assert.equal(status.capabilities.loopback_http_allowed, true);
@@ -1070,6 +1387,83 @@ async function main() {
     await assertTabularRenderer(packaged.page, project.id, tabular.id);
     await assertModelRenderer(packaged.page);
 
+    const gate1Matter = await apiJson(token, "/matters", {
+      method: "POST",
+      json: GATE1_MATTER,
+      expected: [201],
+    });
+    assertGate1MatterProjection(gate1Matter, gate1Matter.project.id, {
+      document_count: 0,
+      chat_count: 0,
+      tabular_review_count: 0,
+      workflow_count: 0,
+    });
+
+    const callsBeforeMatterInference = providerCallSnapshot(mock.calls);
+    const gatedMatterAssistant = await apiJson(
+      token,
+      `/projects/${gate1Matter.project.id}/chat`,
+      {
+        method: "POST",
+        json: {
+          messages: [
+            {
+              role: "user",
+              content: "Gate 1 Matter 必须在 Provider 边界前安全拒绝本次模型调用。",
+            },
+          ],
+          model_profile_id: modelProfileId,
+          attached_documents: [],
+        },
+        expected: [202],
+      },
+    );
+    const gatedMatterJob = await pollUntil("Matter inference policy gate", async () => {
+      const job = await apiJson(
+        token,
+        `/assistant/jobs/${gatedMatterAssistant.job_id}`,
+      );
+      if (!job.terminal) return undefined;
+      assert.equal(job.status, "failed");
+      return job;
+    });
+    assert.equal(JSON.stringify(gatedMatterJob).includes(providerSecret), false);
+    assert.deepEqual(
+      providerCallSnapshot(mock.calls),
+      callsBeforeMatterInference,
+      "Gate 1 Matter inference must fail before any provider request.",
+    );
+
+    const gate1MatterBeforeRestart = await apiJson(
+      token,
+      `/matters/${gate1Matter.project.id}`,
+    );
+    assertGate1MatterProjection(
+      gate1MatterBeforeRestart,
+      gate1Matter.project.id,
+      {
+        document_count: 0,
+        chat_count: 1,
+        tabular_review_count: 0,
+        workflow_count: 0,
+      },
+    );
+    const matterListBeforeRestart = await apiJson(token, "/matters?limit=100");
+    const listedBeforeRestart = assertMatterListPage(
+      matterListBeforeRestart,
+      project.id,
+      gate1Matter.project.id,
+      {
+        document_count: 0,
+        chat_count: 1,
+        tabular_review_count: 0,
+        workflow_count: 0,
+      },
+    );
+    assert.deepEqual(listedBeforeRestart.matter, gate1MatterBeforeRestart);
+    await assertMattersListRenderer(packaged.page);
+    await assertMatterRenderer(packaged.page, gate1Matter.project.id);
+
     assert.deepEqual(mock.failures, []);
     assert.equal(mock.calls.probes, 1);
     assert.equal(mock.calls.assistantTurns, 2);
@@ -1105,6 +1499,7 @@ async function main() {
       databaseKey,
     );
     token = packaged.token;
+    await assertGate1MatterHealth();
     await assertMockUnavailable(providerPort);
 
     const persistedModel = await apiJson(token, `/model-profiles/${modelProfileId}`);
@@ -1141,6 +1536,34 @@ async function main() {
     assert.equal(persistedTabular.cells.length, 4);
     assert.ok(persistedTabular.cells.every((cell) => cell.status === "done"));
     assert.ok(persistedTabular.cells.every((cell) => cell.sources.length >= 1));
+    const persistedGate1Matter = await apiJson(
+      token,
+      `/matters/${gate1Matter.project.id}`,
+    );
+    assertGate1MatterProjection(persistedGate1Matter, gate1Matter.project.id, {
+      document_count: 0,
+      chat_count: 1,
+      tabular_review_count: 0,
+      workflow_count: 0,
+    });
+    assert.deepEqual(
+      persistedGate1Matter,
+      gate1MatterBeforeRestart,
+      "Matter Profile, metadata, counts, state and capabilities must persist exactly across restart.",
+    );
+    const persistedMatterList = await apiJson(token, "/matters?limit=100");
+    const listedAfterRestart = assertMatterListPage(
+      persistedMatterList,
+      project.id,
+      gate1Matter.project.id,
+      {
+        document_count: 0,
+        chat_count: 1,
+        tabular_review_count: 0,
+        workflow_count: 0,
+      },
+    );
+    assert.deepEqual(listedAfterRestart.matter, gate1MatterBeforeRestart);
 
     await assertAssistantRenderer(
       packaged.page,
@@ -1151,6 +1574,8 @@ async function main() {
     await assertTabularRenderer(packaged.page, project.id, tabular.id);
     await navigateAndAssertVisibleText(packaged.page, "/assistant", []);
     await assertVeraUi(packaged.page);
+    await assertMattersListRenderer(packaged.page);
+    await assertMatterRenderer(packaged.page, gate1Matter.project.id);
     const visibleText = await packaged.page.locator("body").innerText();
     assert.equal(visibleText.includes(providerSecret), false);
     assert.equal(visibleText.includes(DOCUMENT_ONE), false);
@@ -1163,8 +1588,8 @@ async function main() {
       `${JSON.stringify(
         {
           ok: true,
-          suite: "vera-packaged-workspace-e2e-v1",
-          evidence: "docs/evidence/vera-p0-packaged-restart.png",
+          suite: "vera-packaged-workspace-e2e-gate1-v2",
+          evidence: "docs/evidence/vera-gate1-matter-packaged-restart.png",
           isolated_workspace_database_bytes: packaged.workspaceDatabaseBytes,
           provider_calls: {
             connection_probes: mockSummary.probes,
@@ -1173,17 +1598,37 @@ async function main() {
             workflow_turns: mockSummary.workflowTurns,
             tabular_turns: mockSummary.tabularTurns,
           },
+          matter_health: GATE1_MATTER_HEALTH,
+          matter: {
+            project_id: persistedGate1Matter.project.id,
+            workspace_type: persistedGate1Matter.matter_profile.workspace_type,
+            profile_state: persistedGate1Matter.profile_state,
+            capabilities: persistedGate1Matter.capabilities,
+            counts: {
+              documents: persistedGate1Matter.project.document_count,
+              chats: persistedGate1Matter.project.chat_count,
+              tabular_reviews:
+                persistedGate1Matter.project.tabular_review_count,
+              workflows: persistedGate1Matter.project.workflow_count,
+            },
+          },
           checks: [
-            "packaged Vera default Assistant and five-item navigation",
+            "exact production Matter health on both packaged launches",
+            "exact packaged Assistant Matters Workflows Review Settings navigation with truthful Review disablement and no top-level Projects or Tabular",
             "generic OpenAI-compatible profile credential test enable default",
             "generic Project with two locally parsed TXT documents",
             "Assistant streaming fetch_documents and exact persisted citations",
             "prompt plus output Workflow definition with real durable execution I/O",
             "2x2 Tabular structured generation with exact sources and CSV/XLSX export",
+            "atomic classified Matter creation with bounded Project and Profile metadata",
+            "Matter list projection separates the generic Project absent state from the ready classified Matter",
+            "Matter Overview and exact Documents Assistant Review Workflows Drafts navigation with truthful Gate 1 capability disablement",
+            "Matter Assistant job fails at the policy boundary with zero additional provider calls",
             "same SQLCipher data and blob keys across an offline second launch",
             "private non-plaintext SQLCipher database inside the isolated profile",
             "persisted project documents chat messages workflow run and Tabular results",
-            "redacted second-launch Vera UI screenshot evidence",
+            "exact Matter Profile classification metadata counts state and capabilities after offline restart",
+            "redacted second-launch Gate 1 Matter Overview screenshot evidence",
           ],
         },
         null,

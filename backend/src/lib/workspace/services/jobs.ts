@@ -5,7 +5,13 @@ import {
   canReuseCompletedJob,
   projectWorkspaceJobForLogs,
 } from "../jobs/stateMachine";
-import type { WorkspaceJobEvent, WorkspaceJobType } from "../jobs/types";
+import {
+  PROJECT_INFERENCE_JOB_TYPES,
+  type ProjectInferenceScopeResolver,
+  type WorkspaceInferenceActivityScope,
+  type WorkspaceJobEvent,
+  type WorkspaceJobType,
+} from "../jobs/types";
 import {
   DuplicateWorkspaceJobError,
   FinishWorkspaceJobClaimInput,
@@ -18,6 +24,7 @@ import {
   type WorkspaceJobResourceType,
   type WorkspaceJobStoredRecord,
 } from "../repositories/jobs";
+import { WorkspaceIdSchema } from "../workspacePersistencePrimitivesV1";
 
 export type WorkspaceJobExecutionClaim = Readonly<{
   leaseOwner: string;
@@ -71,6 +78,7 @@ export interface WorkspaceJobsServiceOptions {
   now?: () => Date;
   createId?: () => string;
   abortRegistry?: WorkspaceJobAbortRegistry;
+  inferenceScopeResolver?: ProjectInferenceScopeResolver;
 }
 
 const UUID_PATTERN =
@@ -177,30 +185,57 @@ function transitionCancelReason(
 }
 
 export class WorkspaceJobAbortRegistry {
-  private readonly controllers = new Map<string, AbortController>();
+  private readonly entries = new Map<
+    string,
+    Map<AbortController, WorkspaceInferenceActivityScope | null>
+  >();
 
-  register(jobId: string, controller: AbortController): void {
-    this.controllers.set(jobId, controller);
+  /**
+   * Read-only execution snapshot for transaction-local policy checks. The
+   * caller receives copied frozen scope values, never AbortControllers or the
+   * live registry map.
+   */
+  activeInferenceScopes(): readonly WorkspaceInferenceActivityScope[] {
+    return [...this.entries.values()]
+      .flatMap((entries) => [...entries.values()])
+      .filter(
+        (scope): scope is WorkspaceInferenceActivityScope => scope !== null,
+      )
+      .map((scope) => Object.freeze({ ...scope }));
   }
 
-  unregister(jobId: string, controller?: AbortController): void {
-    if (controller) {
-      const current = this.controllers.get(jobId);
-      if (current !== controller) return;
-    }
-    this.controllers.delete(jobId);
+  register(
+    jobId: string,
+    controller: AbortController,
+    activityScope: WorkspaceInferenceActivityScope | null = null,
+  ): void {
+    const entries =
+      this.entries.get(jobId) ??
+      new Map<AbortController, WorkspaceInferenceActivityScope | null>();
+    entries.set(controller, activityScope);
+    this.entries.set(jobId, entries);
+  }
+
+  unregister(jobId: string, controller: AbortController): void {
+    const entries = this.entries.get(jobId);
+    if (!entries) return;
+    entries.delete(controller);
+    if (entries.size === 0) this.entries.delete(jobId);
   }
 
   abort(jobId: string): boolean {
-    const controller = this.controllers.get(jobId);
-    if (!controller) return false;
-    controller.abort();
+    const entries = this.entries.get(jobId);
+    if (!entries || entries.size === 0) return false;
+    for (const controller of entries.keys()) controller.abort();
     return true;
   }
 
   abortAll(): void {
-    for (const controller of this.controllers.values()) controller.abort();
-    this.controllers.clear();
+    // Aborting is not execution completion. Keep every scope registered until
+    // its handler's controller-identity finally block independently unwinds.
+    for (const entries of this.entries.values()) {
+      for (const controller of entries.keys()) controller.abort();
+    }
   }
 }
 
@@ -775,6 +810,41 @@ export class WorkspaceJobRuntime {
     };
   }
 
+  private inferenceActivityScope(
+    claimed: WorkspaceJobStoredRecord,
+  ): WorkspaceInferenceActivityScope | null {
+    const inferenceType = PROJECT_INFERENCE_JOB_TYPES.find(
+      (type) => type === claimed.type,
+    );
+    if (!inferenceType) return null;
+    const unresolved = (): WorkspaceInferenceActivityScope =>
+      Object.freeze({
+        jobId: claimed.id,
+        type: inferenceType,
+        scope: "unresolved" as const,
+        projectId: null,
+      });
+    try {
+      const resolved = this.options.inferenceScopeResolver?.(claimed);
+      if (
+        resolved === undefined ||
+        resolved === null ||
+        resolved.jobId !== claimed.id ||
+        resolved.type !== inferenceType ||
+        !WorkspaceIdSchema.safeParse(resolved.jobId).success ||
+        (resolved.scope === "project"
+          ? !WorkspaceIdSchema.safeParse(resolved.projectId).success
+          : (resolved.scope !== "global" && resolved.scope !== "unresolved") ||
+            resolved.projectId !== null)
+      ) {
+        return unresolved();
+      }
+      return Object.freeze({ ...resolved });
+    } catch {
+      return unresolved();
+    }
+  }
+
   private async runClaimedJob(
     claimed: WorkspaceJobStoredRecord,
     externalSignal?: AbortSignal,
@@ -804,7 +874,11 @@ export class WorkspaceJobRuntime {
     } else {
       externalSignal?.addEventListener("abort", onAbort, { once: true });
     }
-    this.abortRegistry.register(claimed.id, controller);
+    // Scope resolution is deliberately synchronous and precedes registration;
+    // a resolver failure becomes an unresolved fail-closed entry rather than
+    // opening an untracked provider-execution window.
+    const activityScope = this.inferenceActivityScope(claimed);
+    this.abortRegistry.register(claimed.id, controller, activityScope);
     const stopHeartbeat = this.startHeartbeat(claim, controller);
     try {
       if (controller.signal.aborted) {

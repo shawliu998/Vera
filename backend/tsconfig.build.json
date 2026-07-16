@@ -9,7 +9,9 @@
     "src/desktopMigrate.ts",
     "src/desktopBackup.ts",
     "src/lib/workspace/**/*.ts",
+    "src/matter/**/*.ts",
     "src/scripts/desktopBackupAudit.ts",
+    "src/scripts/veraMatter*.ts",
     "src/scripts/veraWorkspace*.ts"
   ],
   "exclude": ["node_modules", "dist"]

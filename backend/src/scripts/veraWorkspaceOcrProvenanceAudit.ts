@@ -185,7 +185,7 @@ function oversizedMetadata(): DocumentChunkMetadata {
 
 function auditV1Upgrade(root: string) {
   assert.equal(WORKSPACE_MIGRATIONS[0]?.version, 1);
-  assert.equal(WORKSPACE_MIGRATIONS.at(-1)?.version, 14);
+  assert.equal(WORKSPACE_MIGRATIONS.at(-1)?.version, 16);
   const file = path.join(root, "v1.sqlite");
   const projectId = randomUUID();
   const documentId = randomUUID();

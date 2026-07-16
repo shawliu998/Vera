@@ -19,6 +19,7 @@ const BACKEND_PORT = Number(
 );
 const FRONTEND_URL = `http://${HOST}:${FRONTEND_PORT}/assistant`;
 const BACKEND_URL = `http://${HOST}:${BACKEND_PORT}/health`;
+const LEGACY_ROUTE_URL = `http://${HOST}:${BACKEND_PORT}/aletheia/local-voice/status`;
 const STARTUP_TIMEOUT_MS = 180_000;
 const SHUTDOWN_TIMEOUT_MS = 20_000;
 const POLL_INTERVAL_MS = 500;
@@ -83,6 +84,25 @@ function requestStatus(url) {
       resolve({ status: 0, error: error.message });
     });
   });
+}
+
+async function assertFormalLegacyDefaults() {
+  const healthResponse = await fetch(BACKEND_URL, {
+    signal: AbortSignal.timeout(3_000),
+  });
+  assert.equal(healthResponse.status, 200);
+  const health = await healthResponse.json();
+  assert.equal(health?.vera?.legacy?.status, "disabled");
+  assert.equal(health?.vera?.legacy?.routesEnabled, false);
+  assert.equal(health?.vera?.legacy?.runtimeEnabled, false);
+
+  const legacyRoute = await requestStatus(LEGACY_ROUTE_URL);
+  assert.equal(
+    legacyRoute.status,
+    404,
+    `formal desktop Legacy route must be absent (error=${legacyRoute.error ?? "none"})`,
+  );
+  return health.vera.legacy;
 }
 
 function requireRegularFile(filePath, label, { privateAccess = false } = {}) {
@@ -239,6 +259,8 @@ async function assertPackagedEncryptionDowngradeRejected({
       env: {
         ...process.env,
         VERA_DESKTOP_PROFILE_DIR: userDataDir,
+        VERA_ENABLE_LEGACY_ROUTES: "false",
+        VERA_ENABLE_LEGACY_RUNTIME: "false",
         ALETHEIA_DEMO_SEED_ENABLED: "false",
         ALETHEIA_REQUIRE_ENCRYPTED_VOLUME: "false",
         ALETHEIA_APPLICATION_ENCRYPTION: applicationEncryption,
@@ -314,6 +336,7 @@ async function main() {
   let child = null;
   let failure = null;
   let isolatedProfile = null;
+  let legacyHealth = null;
   let isolatedLogTail = "";
 
   try {
@@ -323,6 +346,8 @@ async function main() {
       env: {
         ...process.env,
         VERA_DESKTOP_PROFILE_DIR: userDataDir,
+        VERA_ENABLE_LEGACY_ROUTES: "false",
+        VERA_ENABLE_LEGACY_RUNTIME: "false",
         ALETHEIA_DEMO_SEED_ENABLED: "false",
         ALETHEIA_REQUIRE_ENCRYPTED_VOLUME: "false",
         ALETHEIA_APPLICATION_ENCRYPTION: "required",
@@ -349,6 +374,7 @@ async function main() {
     });
 
     await waitForServices(child, processState);
+    legacyHealth = await assertFormalLegacyDefaults();
     isolatedProfile = verifyIsolatedProfile(userDataDir);
   } catch (error) {
     failure = error;
@@ -384,6 +410,8 @@ async function main() {
           applicationEncryptionDowngradeRejected: true,
           databaseEncryptionDowngradeRejected: true,
           demoSeedDisabled: true,
+          legacyHealth,
+          legacyRouteStatus: 404,
           frontendStatus: 200,
           backendHealthStatus: 200,
           isolatedProfile,

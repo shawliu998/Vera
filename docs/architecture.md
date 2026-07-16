@@ -35,7 +35,7 @@ Vera.app (Electron main process)
   `- controlled native backup/restore/log/diagnostic operations
 
 Local persistence
-  |- SQLCipher Workspace metadata (migrations v1-v14)
+  |- SQLCipher Workspace metadata (migrations v1-v16)
   |- AES-256-GCM encrypted originals, extracted content, and exports
   |- FTS5 project/document retrieval
   |- authenticated encrypted backups and restore journal
@@ -51,9 +51,10 @@ state persistence.
 
 `Project` is the general-purpose ownership and context boundary. A Project can
 own folders, documents and versions, chats/messages, and Tabular Reviews/cells,
-and it scopes runs of reusable global workflow definitions. Project ownership
-checks are enforced in the repository/service layer; UI tabs do not create
-separate storage silos.
+and it scopes runs of reusable global workflow definitions. An optional,
+one-to-one `MatterProfile` adds legal intake semantics without renaming or
+splitting that boundary. Project ownership checks are enforced in the
+repository/service layer; UI tabs do not create separate storage silos.
 
 The canonical new product API is mounted once at `/api/v1` by
 `backend/src/veraApplication.ts`:
@@ -81,9 +82,10 @@ process, which binds each item to the model profile, provider, and canonical
 origin in the macOS Keychain. Provider adapters perform the only credential
 resolution and external network calls.
 
-Legacy `/aletheia/*` routes and repositories remain mounted for compatibility
-and regression. They are outside the P0 main navigation and do not replace the
-Workspace `/api/v1` product path.
+Legacy `/aletheia/*` source and resources remain available for controlled
+compatibility and regression, but the routes and background runtime are both
+off by default. Only exact, explicit feature flags mount or start them; they do
+not replace the Workspace `/api/v1` product path.
 
 ## Packaged P0 acceptance
 

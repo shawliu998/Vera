@@ -6,8 +6,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
     PanelLeft,
     MessageSquare,
-    FolderOpen,
-    Table2,
+    BriefcaseBusiness,
+    ClipboardCheck,
     Library,
     Settings,
     ChevronDown,
@@ -27,13 +27,9 @@ const NAV_ITEMS = [
         labelKey: "nav.assistant",
         icon: MessageSquare,
     },
-    { href: "/projects", labelKey: "nav.projects", icon: FolderOpen },
-    {
-        href: "/tabular-review",
-        labelKey: "nav.tabular",
-        icon: Table2,
-    },
+    { href: "/matters", labelKey: "nav.matters", icon: BriefcaseBusiness },
     { href: "/workflows", labelKey: "nav.workflows", icon: Library },
+    { href: null, labelKey: "nav.review", icon: ClipboardCheck },
     { href: null, labelKey: "nav.settings", icon: Settings },
 ] as const;
 
@@ -147,10 +143,16 @@ export function VeraSidebar({ isOpen, onToggle }: VeraSidebarProps) {
                             ? "/settings"
                             : href;
                     const isAvailable = href !== null || resolvedHref !== null;
+                    const isMatterRoute =
+                        labelKey === "nav.matters" &&
+                        (pathname === "/projects" ||
+                            pathname.startsWith("/projects/"));
                     const isActive =
                         isAvailable &&
-                        (pathname === resolvedHref ||
-                            pathname.startsWith(resolvedHref + "/"));
+                        (isMatterRoute ||
+                            (resolvedHref !== null &&
+                                (pathname === resolvedHref ||
+                                    pathname.startsWith(resolvedHref + "/"))));
                     const label = t(labelKey);
                     return (
                         <div key={labelKey} className="py-0.5 px-2.5">

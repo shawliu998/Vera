@@ -68,6 +68,12 @@ echo "==> Verifying Vera P0 backend source gates"
   npm run test:workspace:p0-client
 )
 
+echo "==> Verifying Vera convergence and P1 backend source gates"
+(
+  cd "${ROOT_DIR}/backend"
+  npm run test:vera:convergence
+)
+
 echo "==> Building backend"
 (
   cd "${ROOT_DIR}/backend"

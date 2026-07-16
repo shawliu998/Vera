@@ -14,6 +14,10 @@ const encryptionPolicy = fs.readFileSync(
 const desktopPackage = JSON.parse(
   fs.readFileSync(path.join(desktopRoot, "package.json"), "utf8"),
 );
+const packagedAppSmoke = fs.readFileSync(
+  path.join(desktopRoot, "scripts", "packagedAppSmoke.js"),
+  "utf8",
+);
 const frontendProxy = fs.readFileSync(
   path.join(desktopRoot, "..", "frontend", "src", "proxy.ts"),
   "utf8",
@@ -46,6 +50,19 @@ const genericTransport = fs.readFileSync(
     "hardenedGenericTransport.ts",
   ),
   "utf8",
+);
+
+const backendLocalConfigStart = main.indexOf(
+  "const BACKEND_LOCAL_CONFIG_ENV_KEYS = [",
+);
+const backendLocalConfigEnd = main.indexOf("\n];", backendLocalConfigStart);
+assert.ok(
+  backendLocalConfigStart >= 0 && backendLocalConfigEnd > backendLocalConfigStart,
+  "the backend local configuration allowlist must have an auditable static boundary",
+);
+const backendLocalConfigSource = main.slice(
+  backendLocalConfigStart,
+  backendLocalConfigEnd,
 );
 
 assert.match(
@@ -195,6 +212,47 @@ assert.match(
   /"ALETHEIA_MODEL_PROVIDER_ALLOW_LOOPBACK_HTTP"/,
   "the packaged E2E loopback-provider switch must use the explicit backend environment allowlist",
 );
+assert.doesNotMatch(
+  backendLocalConfigSource,
+  /VERA_ENABLE_LEGACY_(?:ROUTES|RUNTIME)/,
+  "raw Legacy feature values must not enter the backend configuration passthrough allowlist",
+);
+assert.match(
+  main,
+  /VERA_ENABLE_LEGACY_ROUTES:\s*\n?\s*process\.env\.VERA_ENABLE_LEGACY_ROUTES === "true" \? "true" : "false"/,
+  "Legacy routes must default off and require an exact parent true opt-in",
+);
+assert.match(
+  main,
+  /VERA_ENABLE_LEGACY_RUNTIME:\s*\n?\s*process\.env\.VERA_ENABLE_LEGACY_RUNTIME === "true" \? "true" : "false"/,
+  "Legacy runtime must default off and require an exact parent true opt-in",
+);
+assert.match(
+  main,
+  /env:\s*\{[\s\S]*?selectedProcessEnvironment\(BACKEND_LOCAL_CONFIG_ENV_KEYS\),[\s\S]*?\.\.\.legacyFeatureEnvironment\(\),[\s\S]*?NODE_ENV: "production"/,
+  "the formal backend environment must receive both normalized Legacy feature decisions",
+);
+assert.ok(
+  desktopPackage.build.extraResources.some(
+    (entry) => entry.to === "aletheia/backend/voice_sidecar",
+  ),
+  "Legacy voice resources must remain packaged until their removal gate is reached",
+);
+assert.match(
+  packagedAppSmoke,
+  /VERA_ENABLE_LEGACY_ROUTES: "false",[\s\S]*?VERA_ENABLE_LEGACY_RUNTIME: "false"/,
+  "the formal packaged smoke must pin both Legacy surfaces off regardless of its parent shell",
+);
+assert.match(
+  packagedAppSmoke,
+  /health\?\.vera\?\.legacy\?\.status, "disabled"/,
+  "the packaged smoke must require a truthful disabled Legacy health status",
+);
+assert.match(
+  packagedAppSmoke,
+  /legacyRoute\.status,[\s\S]*?404/,
+  "the packaged smoke must prove that a retained Legacy route is not mounted by default",
+);
 assert.match(
   workspaceRuntime,
   /process\.env\.ALETHEIA_MODEL_PROVIDER_ALLOW_LOOPBACK_HTTP === "true"/,
@@ -245,6 +303,9 @@ console.log(
         "packaged encryption downgrade rejection and truthful mode reporting",
         "exact loopback-only renderer connect policy",
         "default-off exact-loopback Generic provider test policy",
+        "default-off exact-opt-in Legacy routes and runtime",
+        "packaged health and route proof for disabled Legacy surfaces",
+        "Legacy compatibility resources retained behind feature gates",
       ],
     },
     null,

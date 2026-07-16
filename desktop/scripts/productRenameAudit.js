@@ -41,6 +41,10 @@ const LEGAL_SOURCE_CONFIG_ENV_KEYS = [
   "VERA_OFFICIAL_LEGAL_API_ENDPOINT",
   "VERA_OFFICIAL_LEGAL_API_ALLOWED_HOSTS",
 ];
+const LEGACY_FEATURE_ENV_KEYS = [
+  "VERA_ENABLE_LEGACY_ROUTES",
+  "VERA_ENABLE_LEGACY_RUNTIME",
+];
 
 function sourceArrayValues(source, declaration) {
   const declarationMatch = source.match(
@@ -71,6 +75,12 @@ function auditLegalSourceConfiguration() {
     LEGAL_SOURCE_CONFIG_ENV_KEYS.length,
     "legal-source configuration keys must not be duplicated",
   );
+  for (const key of LEGACY_FEATURE_ENV_KEYS) {
+    assert.ok(
+      !backendEnvironmentKeys.includes(key),
+      `${key} must be normalized explicitly instead of copying its raw parent value`,
+    );
+  }
   assert.match(
     mainSource,
     /selectedProcessEnvironment\(BACKEND_LOCAL_CONFIG_ENV_KEYS\)/,
@@ -143,6 +153,27 @@ assert.doesNotMatch(
 );
 assert.ok(fs.existsSync(path.join(desktopDir, "build", "icon.icns")));
 assert.ok(fs.existsSync(path.join(desktopDir, "build", "icon.png")));
+assert.match(
+  mainSource,
+  /VERA_ENABLE_LEGACY_ROUTES:\s*\n?\s*process\.env\.VERA_ENABLE_LEGACY_ROUTES === "true" \? "true" : "false"/,
+  "the Vera desktop must keep Legacy routes off unless the parent opts in with exact true",
+);
+assert.match(
+  mainSource,
+  /VERA_ENABLE_LEGACY_RUNTIME:\s*\n?\s*process\.env\.VERA_ENABLE_LEGACY_RUNTIME === "true" \? "true" : "false"/,
+  "the Vera desktop must keep Legacy runtime off unless the parent opts in with exact true",
+);
+assert.match(
+  mainSource,
+  /\.\.\.legacyFeatureEnvironment\(\),/,
+  "the formal backend child must receive normalized Legacy feature decisions",
+);
+assert.ok(
+  packageDocument.build.extraResources.some(
+    (entry) => entry.to === "aletheia/backend/voice_sidecar",
+  ),
+  "Legacy voice resources remain available for explicit compatibility runs",
+);
 auditLegalSourceConfiguration();
 
 console.log(
@@ -157,6 +188,9 @@ console.log(
         userDataDirectory: "aletheia-desktop",
         startupPath: "/assistant",
         legacyRoutesPreserved: true,
+        legacyRoutesDefaultEnabled: false,
+        legacyRuntimeDefaultEnabled: false,
+        legacyOptInValue: "true",
         legalSourceConfiguration: {
           forwardedToBackend: LEGAL_SOURCE_CONFIG_ENV_KEYS,
           composeMapped: true,

@@ -20,6 +20,15 @@ import type {
   WorkspaceProjectSourcesV1Port,
 } from "../../routes/workspaceProjectSourcesV1";
 import type { WorkspaceTabularV1RuntimePort } from "../../routes/workspaceTabularV1";
+import {
+  createMatterProfileModule,
+  type MatterProfileModule,
+} from "../../matter/profile";
+import {
+  MatterInferencePolicyGate,
+  MatterPolicyAssistantToolPort,
+  MatterPolicyWorkflowStepExecutor,
+} from "../../matter/inferencePolicy";
 import type {
   WorkspaceV1Context,
   WorkspaceV1DocumentCapability,
@@ -117,6 +126,7 @@ import {
   WorkspaceJobsService,
 } from "./services/jobs";
 import { WorkspaceJobEnqueuerAdapter } from "./services/jobEnqueuer";
+import { CanonicalProjectInferenceScopeResolver } from "./services/projectInferenceScope";
 import { ProjectsService } from "./services/projects";
 import type { CredentialStorePort } from "./services/credentialStore";
 import { ModelProfilesService } from "./services/modelProfiles";
@@ -243,6 +253,7 @@ export type WorkspaceRuntimeDependencies = {
   credentialStore?: CredentialStorePort;
   modelProviderRegistry?: WorkspaceModelProviderRegistry;
   modelSettings?: WorkspaceModelSettingsRuntime;
+  matterProfiles?: MatterProfileModule;
   modelProviderOptions?: WorkspaceModelProviderRegistryOptions;
   allowLocalDevelopmentModelBaseUrl?: boolean;
   assistantModel?: AssistantModelPort;
@@ -408,6 +419,7 @@ export class WorkspaceRuntime
   readonly modelSettings: WorkspaceModelSettingsRuntime;
   readonly chats: WorkspaceChatsV1Port;
   readonly tabular: WorkspaceTabularV1RuntimePort;
+  readonly matterProfiles: MatterProfileModule;
   private readonly documentService: WorkspaceDocumentsService;
   private readonly documentRepository: WorkspaceDocumentsRepository;
   private readonly documentOcrSummary: WorkspaceDocumentOcrSummaryService;
@@ -512,6 +524,13 @@ export class WorkspaceRuntime
     };
     const projectsRepository =
       dependencies.projectRepository ?? new ProjectsRepository(this.database);
+    this.matterProfiles =
+      dependencies.matterProfiles ??
+      createMatterProfileModule(this.database, projectsRepository, {
+        activeInferenceScopes: () => this.abortRegistry.activeInferenceScopes(),
+        acceptingRequests: () => this.started && !this.draining && !this.closed,
+      });
+    const matterInferencePolicy = new MatterInferencePolicyGate(this.database);
     this.projects =
       dependencies.projects ??
       new ProjectsService(projectsRepository, this.blobs, {
@@ -616,7 +635,8 @@ export class WorkspaceRuntime
       projectId: string;
       documentId: string;
       versionId: string;
-    }) =>
+    }) => {
+      matterInferencePolicy.assertProjectModelUse(input.projectId);
       this.assertStudioVersionRetention({
         ...input,
         action: "model_use",
@@ -625,17 +645,20 @@ export class WorkspaceRuntime
         // licensed as local_only; Project user documents remain permitted.
         modelExecution: "unknown",
       });
-    const assistantTools =
+    };
+    const assistantTools = new MatterPolicyAssistantToolPort(
       dependencies.assistantTools ??
-      new WorkspaceAssistantDocumentTools(
-        this.database,
-        chatsRepository,
-        new AssistantRetrievalRepository(this.database),
-        {
-          studioSuggestions: this.documentStudioService,
-          assertModelUse: assertDocumentModelUse,
-        },
-      );
+        new WorkspaceAssistantDocumentTools(
+          this.database,
+          chatsRepository,
+          new AssistantRetrievalRepository(this.database),
+          {
+            studioSuggestions: this.documentStudioService,
+            assertModelUse: assertDocumentModelUse,
+          },
+        ),
+      matterInferencePolicy,
+    );
     const assistantRuntime = assistantModel
       ? new AssistantRuntimeService(
           chatsRepository,
@@ -645,7 +668,7 @@ export class WorkspaceRuntime
         )
       : null;
     this.assistantGenerationEnabled = assistantRuntime !== null;
-    const workflowExecutor =
+    const unguardedWorkflowExecutor =
       dependencies.workflowExecutor ??
       (assistantModel
         ? new WorkspaceWorkflowStepExecutor(
@@ -656,6 +679,12 @@ export class WorkspaceRuntime
             { assertModelUse: assertDocumentModelUse },
           )
         : null);
+    const workflowExecutor = unguardedWorkflowExecutor
+      ? new MatterPolicyWorkflowStepExecutor(
+          unguardedWorkflowExecutor,
+          matterInferencePolicy,
+        )
+      : null;
     const workflowRuntime = workflowExecutor
       ? new WorkspaceWorkflowRuntime(
           this.workflows,
@@ -742,6 +771,11 @@ export class WorkspaceRuntime
           snapshots: tabularSnapshots,
         })
       : null;
+    const inferenceScopeResolver = new CanonicalProjectInferenceScopeResolver(
+      chatsRepository,
+      this.workflows,
+      tabularRepository,
+    );
     const parser = new WorkspaceDocumentParser(
       this.documentRepository,
       this.blobs,
@@ -754,6 +788,7 @@ export class WorkspaceRuntime
       new WorkspaceJobPump({
         jobs: this.jobs,
         abortRegistry: this.abortRegistry,
+        inferenceScopeResolver: inferenceScopeResolver.resolve,
         concurrency:
           assistantRuntime || workflowRuntime || tabularCellHandler ? 2 : 1,
         handlers: {

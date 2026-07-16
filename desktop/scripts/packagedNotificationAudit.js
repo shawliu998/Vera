@@ -34,6 +34,8 @@ async function main() {
       env: {
         ...process.env,
         VERA_DESKTOP_PROFILE_DIR: userDataDir,
+        VERA_ENABLE_LEGACY_ROUTES: "false",
+        VERA_ENABLE_LEGACY_RUNTIME: "false",
         ALETHEIA_DEMO_SEED_ENABLED: "false",
         ALETHEIA_REQUIRE_ENCRYPTED_VOLUME: "false",
         ALETHEIA_APPLICATION_ENCRYPTION: "required",

@@ -4,7 +4,11 @@ import {
   WorkspaceJobRuntime,
   type WorkspaceJobHandlers,
 } from "../services/jobs";
-import { WORKSPACE_JOB_TYPES, type WorkspaceJobType } from "../jobs/types";
+import {
+  WORKSPACE_JOB_TYPES,
+  type ProjectInferenceScopeResolver,
+  type WorkspaceJobType,
+} from "../jobs/types";
 import type { WorkspaceJobStoredRecord } from "../repositories/jobs";
 
 export interface WorkspaceJobPumpTimerHandle {
@@ -36,6 +40,7 @@ export interface WorkspaceJobPumpOptions {
   drainTimeoutMs?: number;
   leaseOwner?: string;
   leaseDurationMs?: number;
+  inferenceScopeResolver?: ProjectInferenceScopeResolver;
 }
 
 export interface WorkspaceJobPumpStartResult {
@@ -191,6 +196,7 @@ export class WorkspaceJobPump {
         leaseDurationMs: options.leaseDurationMs,
         recoveryMode: "fenced",
         allowedJobTypes,
+        inferenceScopeResolver: options.inferenceScopeResolver,
         manageProcessSignals: false,
         timer: this.timer,
       },

@@ -265,6 +265,18 @@ function selectedProcessEnvironment(keys) {
   }, {});
 }
 
+function legacyFeatureEnvironment() {
+  return {
+    // Legacy surfaces are retained for explicit migration and compatibility
+    // work, but the formal desktop runtime must never activate them through an
+    // ambient or loosely parsed parent value.
+    VERA_ENABLE_LEGACY_ROUTES:
+      process.env.VERA_ENABLE_LEGACY_ROUTES === "true" ? "true" : "false",
+    VERA_ENABLE_LEGACY_RUNTIME:
+      process.env.VERA_ENABLE_LEGACY_RUNTIME === "true" ? "true" : "false",
+  };
+}
+
 function localDataDir() {
   return path.join(app.getPath("userData"), "aletheia-data");
 }
@@ -1150,6 +1162,7 @@ async function startServices() {
       cwd: backendDir,
       env: {
         ...selectedProcessEnvironment(BACKEND_LOCAL_CONFIG_ENV_KEYS),
+        ...legacyFeatureEnvironment(),
         ...auditAnchorEnvironment(),
         NODE_ENV: "production",
         PORT: String(BACKEND_PORT),

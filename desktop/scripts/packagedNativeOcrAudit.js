@@ -442,6 +442,10 @@ async function main() {
   const launchEnvironment = {
     ...process.env,
     VERA_DESKTOP_PROFILE_DIR: userDataDir,
+    // Provider-readiness compatibility remains on the retained Legacy route;
+    // no durable Legacy worker is required by this Project/Studio audit.
+    VERA_ENABLE_LEGACY_ROUTES: "true",
+    VERA_ENABLE_LEGACY_RUNTIME: "false",
     ALETHEIA_DEMO_SEED_ENABLED: "false",
     ALETHEIA_REQUIRE_ENCRYPTED_VOLUME: "false",
     ALETHEIA_APPLICATION_ENCRYPTION: "required",

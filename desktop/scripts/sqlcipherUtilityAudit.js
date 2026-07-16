@@ -66,6 +66,10 @@ async function main() {
       PATH: process.env.PATH || "",
       TMPDIR: process.env.TMPDIR || os.tmpdir(),
       NODE_ENV: "production",
+      // This audit intentionally exercises the retained Legacy security-policy
+      // route. It does not need the durable Legacy runtime.
+      VERA_ENABLE_LEGACY_ROUTES: "true",
+      VERA_ENABLE_LEGACY_RUNTIME: "false",
       PORT: String(port),
       ALETHEIA_BACKEND_HOST: "127.0.0.1",
       FRONTEND_URL: `http://127.0.0.1:${port + 1}`,

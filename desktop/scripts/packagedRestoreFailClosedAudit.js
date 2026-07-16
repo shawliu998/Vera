@@ -54,6 +54,8 @@ async function runCase(args) {
       env: {
         ...process.env,
         VERA_DESKTOP_PROFILE_DIR: userDataDir,
+        VERA_ENABLE_LEGACY_ROUTES: "false",
+        VERA_ENABLE_LEGACY_RUNTIME: "false",
         ALETHEIA_DESKTOP_FRONTEND_PORT: String(args.frontendPort),
         ALETHEIA_DESKTOP_BACKEND_PORT: String(args.backendPort),
         ALETHEIA_DEMO_SEED_ENABLED: "false",

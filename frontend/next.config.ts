@@ -23,6 +23,15 @@ const nextConfig: NextConfig = {
     (process.env.NODE_ENV === "production" ? ".next-build" : ".next"),
   reactCompiler: true,
   devIndicators: false,
+  async redirects() {
+    return [
+      {
+        source: "/projects",
+        destination: "/matters",
+        permanent: false,
+      },
+    ];
+  },
   async rewrites() {
     return [
       {

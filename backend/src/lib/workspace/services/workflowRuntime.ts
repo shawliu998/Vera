@@ -117,7 +117,7 @@ type WorkflowRunJobPayload = {
   retryOfRunId: string | null;
 };
 
-function workflowPayloadFromJob(
+export function workflowPayloadFromJob(
   payload: unknown,
 ): WorkflowRunJobPayload | null {
   if (

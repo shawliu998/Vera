@@ -100,25 +100,30 @@ test("workspace port identifies the exact locked Mike sources", () => {
     }
 });
 
-test("Project stays the Mike container while unavailable sections are explicit", () => {
+test("Project stays the Mike container and preserves every real deep link", () => {
     const workspace = current(
         "src/app/components/projects/ProjectWorkspace.tsx",
     );
     assertInOrder(workspace, [
         'id: "documents"',
         'id: "assistant"',
+        'id: "workflows"',
         'id: "reviews"',
     ]);
-    assert.match(workspace, /assistant[\s\S]*disabled: true/);
-    assert.match(workspace, /reviews[\s\S]*disabled: true/);
+    for (const section of ["documents", "assistant", "workflows", "reviews"]) {
+        assert.match(
+            workspace,
+            new RegExp(`id: "${section}"[^\n]+disabled: false`),
+        );
+    }
     assert.match(workspace, /title=\{item\.disabled \? t\("errors\.unsupported"\)/);
     assert.match(
         current("src/app/(pages)/projects/[id]/assistant/page.tsx"),
-        /UnavailableProjectSection/,
+        /ProjectAssistantTable/,
     );
     assert.match(
         current("src/app/(pages)/projects/[id]/tabular-reviews/page.tsx"),
-        /UnavailableProjectSection/,
+        /ProjectReviewsTable/,
     );
 });
 
@@ -144,8 +149,9 @@ test("document mutations use the single Vera transport helpers", () => {
     assert.doesNotMatch(source, /veraApiRequest|veraApiFetch|\bfetch\s*\(/);
     assert.doesNotMatch(
         source,
-        /FormData|multipart|["'`]\/api\/v1|["'`]\/projects\//,
+        /FormData|multipart|["'`]\/api\/v1/,
     );
+    assert.match(source, /`\/projects\/\$\{projectId\}\/documents\/\$\{/);
 });
 
 test("active document parsing is wired through the mutation-aware coordinator", () => {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { resolve } from "node:path";
-import type { Express } from "express";
+import { Router, type Express } from "express";
 
 import type { MikeWorkflowWire } from "../lib/workspace/workflowCompatibility";
 import { WorkspaceApiError } from "../lib/workspace/errors";
@@ -215,6 +215,7 @@ function fakeRuntime(
     startError?: Error;
     health?: ReturnType<VeraWorkspaceRuntime["health"]>;
     onListProjects?: () => void;
+    matterProfiles?: VeraWorkspaceRuntime["matterProfiles"];
   } = {},
 ): VeraWorkspaceRuntime {
   const base = {
@@ -263,6 +264,9 @@ function fakeRuntime(
       },
     ),
     workflowCrud: fakeWorkflowCrud(),
+    ...(options.matterProfiles
+      ? { matterProfiles: options.matterProfiles }
+      : {}),
   };
   return new Proxy(base, {
     get(target, property, receiver) {
@@ -433,6 +437,7 @@ function assertWorkspaceNoStoreAbsent(response: Response) {
 
 async function auditApplicationSurface(): Promise<void> {
   let listProjectCalls = 0;
+  let disabledLegacyFactoryCalls = 0;
   const runtime = fakeRuntime({
     onListProjects: () => {
       listProjectCalls += 1;
@@ -449,6 +454,10 @@ async function auditApplicationSurface(): Promise<void> {
       last_error: "/Users/private/workspace.db",
       token: "secret-token",
     }),
+    legacyRouterFactory: () => {
+      disabledLegacyFactoryCalls += 1;
+      throw new Error("disabled Legacy router factory must not run");
+    },
   });
 
   await withHttpServer(app, async (baseUrl) => {
@@ -479,11 +488,31 @@ async function auditApplicationSurface(): Promise<void> {
             tabularCell: boolean;
           };
         };
+        matter: { status: string };
+        conversation: { status: string };
+        legacy: {
+          status: string;
+          routesEnabled: boolean;
+          runtimeEnabled: boolean;
+        };
       };
     };
     assert.equal(healthBody.vera.workspace.pump.documentParse, true);
     assert.equal(healthBody.vera.workspace.pump.assistantGenerate, false);
     assert.equal(healthBody.vera.workspace.pump.tabularCell, false);
+    assert.deepEqual(healthBody.vera.matter, { status: "not_configured" });
+    assert.deepEqual(healthBody.vera.conversation, {
+      status: "not_configured",
+    });
+    assert.deepEqual(healthBody.vera.legacy, {
+      status: "disabled",
+      routesEnabled: false,
+      runtimeEnabled: false,
+    });
+
+    const disabledLegacy = await fetch(`${baseUrl}/aletheia/security-policy`);
+    assert.equal(disabledLegacy.status, 404);
+    assert.equal(disabledLegacyFactoryCalls, 0);
 
     const malformed = await fetch(`${baseUrl}/api/v1/projects`, {
       method: "POST",
@@ -502,6 +531,161 @@ async function auditApplicationSurface(): Promise<void> {
       },
     });
   });
+
+  let matterListCalls = 0;
+  let matterCreateCalls = 0;
+  const matterRouter = Router();
+  matterRouter.get("/matters", (_request, response) => {
+    matterListCalls += 1;
+    response.json({ items: [], next_cursor: null });
+  });
+  matterRouter.post("/matters", (_request, response) => {
+    matterCreateCalls += 1;
+    response.status(201).json({ created: true });
+  });
+  const matterProfiles = {
+    createRouter: () => matterRouter,
+    health: () => ({
+      status: "ready" as const,
+      schemaVersion: 16 as const,
+      inferencePolicy: "gate_closed" as const,
+      internalPath: "/private/matter.db",
+    }),
+  } as NonNullable<VeraWorkspaceRuntime["matterProfiles"]>;
+  const matterToken = "m".repeat(64);
+  const matterApp = createVeraApplication({
+    runtime: fakeRuntime({ matterProfiles }),
+    env: testEnvironment({
+      ALETHEIA_AUTH_MODE: "private_token",
+      ALETHEIA_PRIVATE_AUTH_TOKEN: matterToken,
+    }),
+    auditAnchorStatus: () => ({ enabled: false, healthy: true }),
+  });
+  await withHttpServer(matterApp, async (baseUrl) => {
+    const unauthenticated = await fetch(`${baseUrl}/api/v1/matters`);
+    assert.equal(unauthenticated.status, 401);
+    assert.equal(matterListCalls, 0, "Matter router must run after auth");
+    const list = await fetch(`${baseUrl}/api/v1/matters`, {
+      headers: { authorization: `Bearer ${matterToken}` },
+    });
+    assert.equal(list.status, 200);
+    assert.equal(matterListCalls, 1, "Matter route must dispatch exactly once");
+    assertWorkspaceNoStore(list);
+    const health = await fetch(`${baseUrl}/health`);
+    assert.equal(health.status, 200);
+    const payload = (await health.json()) as {
+      vera: { matter: Record<string, unknown> };
+    };
+    assert.deepEqual(payload.vera.matter, {
+      status: "ready",
+      schemaVersion: 16,
+      inferencePolicy: "gate_closed",
+    });
+  });
+
+  const blockedMatterApp = createVeraApplication({
+    runtime: fakeRuntime({ matterProfiles }),
+    env: testEnvironment(),
+    auditAnchorStatus: () => ({ enabled: true, healthy: false }),
+    auditWriteBlocked: () => true,
+  });
+  await withHttpServer(blockedMatterApp, async (baseUrl) => {
+    const blocked = await fetch(`${baseUrl}/api/v1/matters`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(blocked.status, 503);
+    assert.equal(matterCreateCalls, 0, "audit guard must precede Matter routes");
+    const readable = await fetch(`${baseUrl}/api/v1/matters`);
+    assert.equal(readable.status, 200);
+    assert.equal(matterListCalls, 2);
+  });
+
+  const unavailableMatterApp = createVeraApplication({
+    runtime: fakeRuntime({
+      matterProfiles: {
+        createRouter: () => matterRouter,
+        health: () => {
+          throw new Error("/private/matter.db secret");
+        },
+      } as NonNullable<VeraWorkspaceRuntime["matterProfiles"]>,
+    }),
+    env: testEnvironment(),
+    auditAnchorStatus: () => ({ enabled: false, healthy: true }),
+  });
+  await withHttpServer(unavailableMatterApp, async (baseUrl) => {
+    const health = await fetch(`${baseUrl}/health`);
+    assert.equal(health.status, 503);
+    const text = await health.text();
+    assert(!text.includes("matter.db"));
+    assert(!text.includes("secret"));
+    assert.equal(
+      (JSON.parse(text) as { vera: { matter: { status: string } } }).vera
+        .matter.status,
+      "unavailable",
+    );
+  });
+
+  let enabledLegacyFactoryCalls = 0;
+  const legacyProbeRouter = Router();
+  legacyProbeRouter.get("/enabled-probe", (_request, response) => {
+    response.json({ enabled: true });
+  });
+  legacyProbeRouter.post("/guard-audit", (_request, response) => {
+    response.status(204).end();
+  });
+  const enabledLegacyApp = createVeraApplication({
+    runtime: fakeRuntime(),
+    env: testEnvironment({
+      VERA_ENABLE_LEGACY_ROUTES: "true",
+      VERA_ENABLE_LEGACY_RUNTIME: "true",
+    }),
+    auditAnchorStatus: () => ({ enabled: false, healthy: true }),
+    legacyRuntimeConfigured: () => true,
+    legacyRouterFactory: () => {
+      enabledLegacyFactoryCalls += 1;
+      return [legacyProbeRouter];
+    },
+  });
+  assert.equal(enabledLegacyFactoryCalls, 1);
+  await withHttpServer(enabledLegacyApp, async (baseUrl) => {
+    const probe = await fetch(`${baseUrl}/aletheia/enabled-probe`);
+    assert.equal(probe.status, 200);
+    assert.deepEqual(await probe.json(), { enabled: true });
+    const health = (await (await fetch(`${baseUrl}/health`)).json()) as {
+      vera: {
+        legacy: {
+          status: string;
+          routesEnabled: boolean;
+          runtimeEnabled: boolean;
+        };
+      };
+    };
+    assert.deepEqual(health.vera.legacy, {
+      status: "configured",
+      routesEnabled: true,
+      runtimeEnabled: true,
+    });
+  });
+
+  let inexactLegacyFactoryCalls = 0;
+  const inexactLegacyApp = createVeraApplication({
+    runtime: fakeRuntime(),
+    env: testEnvironment({ VERA_ENABLE_LEGACY_ROUTES: "TRUE" }),
+    auditAnchorStatus: () => ({ enabled: false, healthy: true }),
+    legacyRouterFactory: () => {
+      inexactLegacyFactoryCalls += 1;
+      return [Router()];
+    },
+  });
+  await withHttpServer(inexactLegacyApp, async (baseUrl) => {
+    assert.equal(
+      (await fetch(`${baseUrl}/aletheia/enabled-probe`)).status,
+      404,
+    );
+  });
+  assert.equal(inexactLegacyFactoryCalls, 0);
 
   const workflowToken = "vera-workflow-http-audit-token-0123456789";
   const workflowApp = createVeraApplication({
@@ -693,7 +877,7 @@ async function auditApplicationSurface(): Promise<void> {
     auditWriteBlocked: () => true,
   });
   await withHttpServer(blockedApp, async (baseUrl) => {
-    for (const path of ["/api/v1/projects", "/aletheia/guard-audit"]) {
+    for (const path of ["/api/v1/projects"]) {
       const response = await fetch(`${baseUrl}${path}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -711,8 +895,44 @@ async function auditApplicationSurface(): Promise<void> {
     }
     const read = await fetch(`${baseUrl}/api/v1/projects`);
     assert.equal(read.status, 200, "read-only requests remain available");
+    const disabledLegacyMutation = await fetch(
+      `${baseUrl}/aletheia/guard-audit`,
+      { method: "POST" },
+    );
+    assert.equal(
+      disabledLegacyMutation.status,
+      404,
+      "disabled Legacy routes are absent rather than guarded handlers",
+    );
     const health = await fetch(`${baseUrl}/health`);
     assert.equal(health.status, 503);
+  });
+
+  const blockedLegacyRouter = Router();
+  blockedLegacyRouter.get("/guard-audit", (_request, response) => {
+    response.status(200).json({ readable: true });
+  });
+  blockedLegacyRouter.post("/guard-audit", (_request, response) => {
+    response.status(204).end();
+  });
+  const blockedLegacyApp = createVeraApplication({
+    runtime,
+    env: testEnvironment({
+      VERA_ENABLE_LEGACY_ROUTES: "true",
+      VERA_ENABLE_LEGACY_RUNTIME: "true",
+    }),
+    auditAnchorStatus: () => ({ enabled: true, healthy: false }),
+    auditWriteBlocked: () => true,
+    legacyRuntimeConfigured: () => true,
+    legacyRouterFactory: () => [blockedLegacyRouter],
+  });
+  await withHttpServer(blockedLegacyApp, async (baseUrl) => {
+    const blocked = await fetch(`${baseUrl}/aletheia/guard-audit`, {
+      method: "POST",
+    });
+    assert.equal(blocked.status, 503);
+    const read = await fetch(`${baseUrl}/aletheia/guard-audit`);
+    assert.equal(read.status, 200);
   });
 
   const drainingApp = createVeraApplication({
@@ -907,14 +1127,14 @@ async function auditBootstrapFailures(): Promise<void> {
       }),
     }),
   );
-  assert.deepEqual(listenEvents.slice(-6), [
+  assert.deepEqual(listenEvents.slice(-3), [
     "server.close",
     "runtime.stop",
-    "durable.close",
-    "model.close",
-    "voice.close",
     "audit.close",
   ]);
+  assert(!listenEvents.includes("durable.start"));
+  assert(!listenEvents.includes("model.close"));
+  assert(!listenEvents.includes("voice.close"));
 }
 
 async function auditShutdownAndDemo(): Promise<void> {
@@ -925,7 +1145,37 @@ async function auditShutdownAndDemo(): Promise<void> {
     closeTimeoutMs: 10,
     dependencies: fakeDependencies(events, { server }),
   });
-  assert.deepEqual(events.slice(0, 8), [
+  assert.deepEqual(events.slice(0, 7), [
+    "compliance",
+    "encryption",
+    "auth.preflight",
+    "audit.start",
+    "runtime.create",
+    "runtime.start",
+    "listen:127.0.0.1:3001",
+  ]);
+  assert(!events.includes("demo.seed"), "demo seed must be off by default");
+  assert(!events.includes("durable.start"));
+
+  const firstShutdown = application.shutdown();
+  const secondShutdown = application.shutdown();
+  assert.strictEqual(firstShutdown, secondShutdown, "shutdown is idempotent");
+  await firstShutdown;
+  assert.deepEqual(events.slice(-4), [
+    "server.close",
+    "server.closeAllConnections",
+    "runtime.stop",
+    "audit.close",
+  ]);
+  assert(!events.includes("model.close"));
+  assert(!events.includes("voice.close"));
+
+  const legacyEvents: EventLog = [];
+  const legacyApplication = await bootstrapVeraApplication({
+    env: testEnvironment({ VERA_ENABLE_LEGACY_RUNTIME: "true" }),
+    dependencies: fakeDependencies(legacyEvents),
+  });
+  assert.deepEqual(legacyEvents.slice(0, 8), [
     "compliance",
     "encryption",
     "auth.preflight",
@@ -935,15 +1185,9 @@ async function auditShutdownAndDemo(): Promise<void> {
     "durable.start",
     "listen:127.0.0.1:3001",
   ]);
-  assert(!events.includes("demo.seed"), "demo seed must be off by default");
-
-  const firstShutdown = application.shutdown();
-  const secondShutdown = application.shutdown();
-  assert.strictEqual(firstShutdown, secondShutdown, "shutdown is idempotent");
-  await firstShutdown;
-  assert.deepEqual(events.slice(-7), [
+  await legacyApplication.shutdown();
+  assert.deepEqual(legacyEvents.slice(-6), [
     "server.close",
-    "server.closeAllConnections",
     "runtime.stop",
     "durable.close",
     "model.close",
@@ -951,9 +1195,21 @@ async function auditShutdownAndDemo(): Promise<void> {
     "audit.close",
   ]);
 
+  const gatedDemoEvents: EventLog = [];
+  const gatedDemoApplication = await bootstrapVeraApplication({
+    env: testEnvironment({ ALETHEIA_ENABLE_DEMO_SEED: "true" }),
+    dependencies: fakeDependencies(gatedDemoEvents),
+  });
+  assert(!gatedDemoEvents.includes("demo.seed"));
+  assert(!gatedDemoEvents.includes("durable.start"));
+  await gatedDemoApplication.shutdown();
+
   const demoEvents: EventLog = [];
   const demoApplication = await bootstrapVeraApplication({
-    env: testEnvironment({ ALETHEIA_ENABLE_DEMO_SEED: "true" }),
+    env: testEnvironment({
+      VERA_ENABLE_LEGACY_RUNTIME: "true",
+      ALETHEIA_ENABLE_DEMO_SEED: "true",
+    }),
     dependencies: fakeDependencies(demoEvents),
   });
   assert(demoEvents.includes("demo.seed"));
@@ -967,7 +1223,10 @@ async function auditShutdownAndDemo(): Promise<void> {
   const failedDemoEvents: EventLog = [];
   await assert.rejects(
     bootstrapVeraApplication({
-      env: testEnvironment({ ALETHEIA_ENABLE_DEMO_SEED: "true" }),
+      env: testEnvironment({
+        VERA_ENABLE_LEGACY_RUNTIME: "true",
+        ALETHEIA_ENABLE_DEMO_SEED: "true",
+      }),
       dependencies: fakeDependencies(failedDemoEvents, {
         demo: async () => {
           failedDemoEvents.push("demo.seed");
@@ -989,6 +1248,7 @@ async function auditShutdownAndDemo(): Promise<void> {
   const productionApplication = await bootstrapVeraApplication({
     env: testEnvironment({
       NODE_ENV: "production",
+      VERA_ENABLE_LEGACY_RUNTIME: "true",
       ALETHEIA_ENABLE_DEMO_SEED: "true",
     }),
     dependencies: fakeDependencies(productionEvents),
@@ -1078,21 +1338,60 @@ async function auditStaticOwnership(): Promise<void> {
     signalCountsBefore,
     "importing the process entry point must not register signals or bootstrap",
   );
-  for (const legacyRouter of [
-    "aletheiaRouter",
-    "legalResearchRouter",
-    "legalResearchIssuesRouter",
-    "legalOpinionsRouter",
-    "litigationRouter",
-    "durableAgentRunsRouter",
-    "localGovernanceRouter",
-    "localModelsRouter",
-    "createLocalVoiceRouter()",
-    "createAletheiaLocalControlRouter()",
-  ]) {
+  assert(
+    applicationSource.includes(
+      'return env.VERA_ENABLE_LEGACY_ROUTES === "true";',
+    ),
+  );
+  assert(
+    applicationSource.includes(
+      'return env.VERA_ENABLE_LEGACY_RUNTIME === "true";',
+    ),
+  );
+  assert.match(
+    applicationSource,
+    /if \(legacyRoutesAreEnabled\) \{[\s\S]*?app\.use\("\/aletheia", mutationGuard\);[\s\S]*?options\.legacyRouterFactory \?\? loadLegacyRouters/,
+    "Legacy limiters and routers are mounted only inside the explicit route gate",
+  );
+  assert.match(
+    applicationSource,
+    /if \(legacyRuntimeIsEnabled\) \{[\s\S]*?dependencies\.configureDurableRuntime\(\);/,
+    "Legacy runtime configuration is behind the explicit runtime gate",
+  );
+  assert(
+    applicationSource.includes(
+      "if (legacyRuntimeIsEnabled && demoSeedEnabled(env))",
+    ),
+  );
+
+  const staticImports = applicationSource.slice(
+    0,
+    applicationSource.indexOf("const LOOPBACK_HOST"),
+  );
+  const lazyLegacyModules = [
+    "./routes/aletheia",
+    "./routes/legalResearch",
+    "./routes/legalResearchIssues",
+    "./routes/legalOpinions",
+    "./routes/litigation",
+    "./routes/durableAgentRuns",
+    "./routes/localGovernance",
+    "./routes/localModels",
+    "./routes/localVoice",
+    "./routes/aletheiaLocalControl",
+    "./lib/aletheia/durableAgentRuntime",
+    "./lib/aletheia/localModelRuntime",
+    "./lib/aletheia/localVoiceRuntime",
+    "./lib/aletheia/demoSeed",
+  ] as const;
+  for (const modulePath of lazyLegacyModules) {
     assert(
-      applicationSource.includes(`app.use(\"/aletheia\", ${legacyRouter})`),
-      `legacy router missing: ${legacyRouter}`,
+      !staticImports.includes(modulePath),
+      `Legacy module must not be statically imported: ${modulePath}`,
+    );
+    assert(
+      applicationSource.includes(`require(\"${modulePath}\")`),
+      `Legacy module must be loaded through a fixed lazy require: ${modulePath}`,
     );
   }
 }

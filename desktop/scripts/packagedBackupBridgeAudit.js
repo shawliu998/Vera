@@ -273,6 +273,10 @@ async function main() {
       env: {
         ...process.env,
         VERA_DESKTOP_PROFILE_DIR: userDataDir,
+        // This compatibility audit deliberately creates Legacy matters. Keep
+        // the durable model/voice runtime disabled while opting into routes.
+        VERA_ENABLE_LEGACY_ROUTES: "true",
+        VERA_ENABLE_LEGACY_RUNTIME: "false",
         ALETHEIA_DEMO_SEED_ENABLED: "false",
         ALETHEIA_REQUIRE_ENCRYPTED_VOLUME: "false",
         ALETHEIA_APPLICATION_ENCRYPTION: "required",

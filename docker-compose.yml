@@ -12,6 +12,8 @@ services:
       ALETHEIA_AUTH_MODE: ${ALETHEIA_AUTH_MODE:-single_user}
       ALETHEIA_PRIVATE_AUTH_TOKEN: ${ALETHEIA_PRIVATE_AUTH_TOKEN:-}
       ALETHEIA_AUDIT_HMAC_SECRET: ${ALETHEIA_AUDIT_HMAC_SECRET:-}
+      VERA_ENABLE_LEGACY_ROUTES: ${VERA_ENABLE_LEGACY_ROUTES:-false}
+      VERA_ENABLE_LEGACY_RUNTIME: ${VERA_ENABLE_LEGACY_RUNTIME:-false}
       # The default is an admission-controlled compliance deployment. Do not
       # change its attestations to true until the operator has verified them.
       ALETHEIA_DEPLOYMENT_PRESET: ${ALETHEIA_DEPLOYMENT_PRESET:-compliance}
