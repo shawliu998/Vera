@@ -26,6 +26,9 @@ Mike UI 的使用已经获得授权。仓库仍按 AGPL-3.0-only 基线保留来
 执行规则：
 
 1. 不从浮动的 `upstream-mike/main` 复制代码；每个移植批次都从固定 SHA 读取。
+   CI 使用 `frontend/tests/fixtures/mike/e32daad5a4c64a5561e04c53ee12411e3c5e7238/manifest.json`
+   中随仓库版本化的路径和 SHA-256 锁定值复核移植来源，因此干净浅克隆不依赖
+   本地存在不可达的 Mike Git object。更新锁定值时仍须由维护者从固定 SHA 重新生成并审阅。
 2. 当前仓库与该基线按受控移植处理，不执行合并，也不新增嵌套的 `mike/` 应用。
 3. Mike 决定 P0 的页面结构、DOM/样式、交互流程和产品语义；Vera 决定 Electron 生命周期、本地鉴权、SQLCipher、加密 Blob、Keychain、备份和打包边界。UI 采用源码移植，不做“Mike 风格”仿制。
 4. `direct` 用于不依赖 Supabase、组织、分享或云存储的 Mike 组件/纯函数，以及 Vera 已有的安全/桌面算法。
@@ -204,13 +207,15 @@ Phase 7 已在全新包满足以下条件后标记为 `packaged-complete`：
 ### 12.1 固定来源
 
 ```bash
-MIKE_SHA=e32daad5a4c64a5561e04c53ee12411e3c5e7238
-test "$(git cat-file -t "$MIKE_SHA")" = commit
-test "$(git show -s --format=%H "$MIKE_SHA")" = "$MIKE_SHA"
-git show -s --format='source=%H date=%cs subject=%s' "$MIKE_SHA"
+node -e 'const m=require("./frontend/tests/fixtures/mike/e32daad5a4c64a5561e04c53ee12411e3c5e7238/manifest.json"); if(m.commit!=="e32daad5a4c64a5561e04c53ee12411e3c5e7238") process.exit(1)'
+npm run test:shell-source --prefix frontend
 test ! -d mike
 git diff --check
 ```
+
+`test:shell-source` 会从活动 port 反向还原未适配的 Mike 字节并与清单中的
+SHA-256 比较，同时验证允许的路径/i18n 适配。`upstream-mike` remote 和固定 commit
+只用于维护者刷新来源清单，不是 CI checkout 的隐式前置条件。
 
 ### 12.2 Source-complete 聚合门禁
 

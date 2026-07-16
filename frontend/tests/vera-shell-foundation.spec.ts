@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "@playwright/test";
 
 const LOCKED_MIKE_SHA = "e32daad5a4c64a5561e04c53ee12411e3c5e7238";
 const FRONTEND_ROOT = path.resolve(__dirname, "..");
-const REPOSITORY_ROOT = path.resolve(FRONTEND_ROOT, "..");
+const LOCK_MANIFEST_PATH = path.join(
+    FRONTEND_ROOT,
+    "tests/fixtures/mike/e32daad5a4c64a5561e04c53ee12411e3c5e7238/manifest.json",
+);
 
 const SOURCES = {
     layout: "frontend/src/app/(pages)/layout.tsx",
@@ -17,11 +20,40 @@ const SOURCES = {
     sidebarContext: "frontend/src/app/contexts/SidebarContext.tsx",
 } as const;
 
-function upstream(sourcePath: string): string {
-    return execFileSync(
-        "git",
-        ["show", `${LOCKED_MIKE_SHA}:${sourcePath}`],
-        { cwd: REPOSITORY_ROOT, encoding: "utf8" },
+type MikeSourceLock = {
+    sourcePath: string;
+    sha256: string;
+};
+
+type MikeSourceManifest = {
+    schema: string;
+    repository: string;
+    commit: string;
+    files: MikeSourceLock[];
+};
+
+const LOCK_MANIFEST = JSON.parse(
+    readFileSync(LOCK_MANIFEST_PATH, "utf8"),
+) as MikeSourceManifest;
+
+function sha256(source: string): string {
+    return createHash("sha256").update(source, "utf8").digest("hex");
+}
+
+function sourceLock(sourcePath: string): MikeSourceLock {
+    const lock = LOCK_MANIFEST.files.find(
+        (candidate) => candidate.sourcePath === sourcePath,
+    );
+    assert(lock, `missing locked Mike source: ${sourcePath}`);
+    assert.match(lock.sha256, /^[a-f0-9]{64}$/);
+    return lock;
+}
+
+function assertLockedSource(sourcePath: string, source: string): void {
+    assert.equal(
+        sha256(source),
+        sourceLock(sourcePath).sha256,
+        `Mike source bytes changed: ${sourcePath}`,
     );
 }
 
@@ -57,8 +89,42 @@ function quotedFields(block: string, field: string): string[] {
     );
 }
 
-function expectedPageHeaderPort(): string {
-    let source = upstream(SOURCES.pageHeader);
+function pageHeaderMikeSourceFromPort(): string {
+    let source = withoutPortHeader(
+        current("src/app/components/vera-shell/PageHeader.tsx"),
+    );
+    source = source.replace(
+        '"use client";\n\n\nimport',
+        '"use client";\n\nimport',
+    );
+    source = source.replace(
+        'import { useI18n } from "@/app/i18n";\nimport { cn } from "@/lib/utils";',
+        'import { cn } from "@/app/lib/utils";',
+    );
+    source = source.replace(
+        '    const { t } = useI18n();\n    const title = action.title ?? t("common.actions.create");',
+        '    const title = action.title ?? "New";',
+    );
+    source = source.replace(
+        '    const { t } = useI18n();\n    const title = action.title ?? t("common.actions.delete");',
+        '    const title = action.title ?? "Delete";',
+    );
+    source = source.replace(
+        '    const { t } = useI18n();\n    const placeholder = action.placeholder ?? t("common.actions.search");',
+        '    const placeholder = action.placeholder ?? "Search…";',
+    );
+    source = source.replace(
+        "function PageHeaderBreadcrumbs({ items }: { items: PageHeaderBreadcrumb[] }) {\n    const { t } = useI18n();\n",
+        "function PageHeaderBreadcrumbs({ items }: { items: PageHeaderBreadcrumb[] }) {\n",
+    );
+    return source.replaceAll(
+        'parent.title ?? t("common.actions.back")',
+        'parent.title ?? "Back"',
+    );
+}
+
+function expectedPageHeaderPort(mikeSource: string): string {
+    let source = mikeSource;
     source = source.replace(
         '"use client";\n',
         '"use client";\n\n// Direct port of Mike e32daad5a4c64a5561e04c53ee12411e3c5e7238:\n// frontend/src/app/components/shared/PageHeader.tsx\n',
@@ -90,12 +156,16 @@ function expectedPageHeaderPort(): string {
 }
 
 test("all shell files identify their exact locked Mike source", () => {
+    assert.equal(LOCK_MANIFEST.schema, "vera-mike-source-lock-v1");
     assert.equal(
-        execFileSync("git", ["rev-parse", LOCKED_MIKE_SHA], {
-            cwd: REPOSITORY_ROOT,
-            encoding: "utf8",
-        }).trim(),
-        LOCKED_MIKE_SHA,
+        LOCK_MANIFEST.repository,
+        "https://github.com/Open-Legal-Products/mike.git",
+    );
+    assert.equal(LOCK_MANIFEST.commit, LOCKED_MIKE_SHA);
+    assert.equal(
+        new Set(LOCK_MANIFEST.files.map((entry) => entry.sourcePath)).size,
+        LOCK_MANIFEST.files.length,
+        "Mike source lock paths are unique",
     );
 
     for (const [file, sourcePath] of [
@@ -107,6 +177,7 @@ test("all shell files identify their exact locked Mike source", () => {
         ["src/app/contexts/SidebarContext.tsx", SOURCES.sidebarContext],
     ] as const) {
         const source = current(file);
+        sourceLock(sourcePath);
         assert.match(source, new RegExp(LOCKED_MIKE_SHA));
         assert.ok(source.includes(sourcePath));
     }
@@ -124,21 +195,23 @@ test("the pages route group activates the Vera shell without cloud providers", (
     );
 });
 
-test("Mike chrome contexts are byte-equivalent after provenance comments", () => {
-    assert.equal(
+test("Mike chrome contexts match the locked upstream byte hashes after provenance comments", () => {
+    assertLockedSource(
+        SOURCES.pageChrome,
         withoutPortHeader(current("src/app/contexts/PageChromeContext.tsx")),
-        upstream(SOURCES.pageChrome),
     );
-    assert.equal(
+    assertLockedSource(
+        SOURCES.sidebarContext,
         withoutPortHeader(current("src/app/contexts/SidebarContext.tsx")),
-        upstream(SOURCES.sidebarContext),
     );
 });
 
 test("PageHeader is an exact Mike port plus path and i18n substitutions", () => {
+    const mikeSource = pageHeaderMikeSourceFromPort();
+    assertLockedSource(SOURCES.pageHeader, mikeSource);
     assert.equal(
         current("src/app/components/vera-shell/PageHeader.tsx"),
-        expectedPageHeaderPort(),
+        expectedPageHeaderPort(mikeSource),
     );
 });
 

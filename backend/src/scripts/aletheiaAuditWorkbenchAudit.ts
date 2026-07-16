@@ -180,6 +180,7 @@ function main() {
         "save-evidence-snapshot",
         "aletheia-review-registry",
         "review-filter-query",
+        "review-filter-tag",
         "export-filtered-reviews",
         "save-review-snapshot",
         "aletheia-audit-workbench",

@@ -155,7 +155,10 @@ function main() {
     check(
       "ui-and-smoke-provenance",
       hasAll(demoSeed, [
-        "sourceChunkId: result.chunk_id",
+        "listV1SourceIndex",
+        "includeChunks: true",
+        "const evidenceChunks = new Map",
+        "sourceChunkId: String(chunk.id)",
         "documentId: document.id",
       ]) &&
         hasAll(evidenceUi, [

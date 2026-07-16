@@ -28,6 +28,16 @@ function countOccurrences(source: string, value: string) {
   return source.split(value).length - 1;
 }
 
+function hasInOrder(source: string, values: string[]) {
+  let cursor = 0;
+  for (const value of values) {
+    const next = source.indexOf(value, cursor);
+    if (next === -1) return false;
+    cursor = next + value.length;
+  }
+  return true;
+}
+
 function packageScript(root: string, packagePath: string, script: string) {
   if (!fileExists(root, packagePath)) return false;
   const parsed = JSON.parse(readText(root, packagePath)) as {
@@ -80,6 +90,21 @@ function main() {
   const veraApplication = readText(root, "backend/src/veraApplication.ts");
   const repositoryFactory = readText(root, "backend/src/lib/aletheia/index.ts");
   const auth = readText(root, "backend/src/middleware/auth.ts");
+  const legacyRouterModules = [
+    "./routes/aletheia",
+    "./routes/legalResearch",
+    "./routes/legalResearchIssues",
+    "./routes/legalOpinions",
+    "./routes/litigation",
+    "./routes/durableAgentRuns",
+    "./routes/localGovernance",
+    "./routes/localModels",
+    "./routes/localVoice",
+    "./routes/aletheiaLocalControl",
+  ];
+  const legacyRouterSources = legacyRouterModules.map((modulePath) =>
+    readText(root, `backend/src/${modulePath.slice(2)}.ts`),
+  );
   const ci = readText(root, ".github/workflows/aletheia-local-ci.yml");
   const docs = [
     "README.md",
@@ -128,28 +153,40 @@ function main() {
         "if (require.main === module)",
       ]) &&
         countOccurrences(index, "bootstrapVeraApplication") === 2 &&
-        countOccurrences(index, "bootstrapVeraApplication()") === 1 &&
+        countOccurrences(index, "await bootstrapVeraApplication(") === 1 &&
         hasAll(veraApplication, [
-          'app.use("/aletheia", aletheiaRouter)',
-          'app.use("/aletheia", legalResearchRouter)',
-          'app.use("/aletheia", legalResearchIssuesRouter)',
-          'app.use("/aletheia", legalOpinionsRouter)',
-          'app.use("/aletheia", litigationRouter)',
-          'app.use("/aletheia", durableAgentRunsRouter)',
-          'app.use("/aletheia", localGovernanceRouter)',
-          'app.use("/aletheia", localModelsRouter)',
-          'app.use("/aletheia", createLocalVoiceRouter())',
-          'app.use("/aletheia", createAletheiaLocalControlRouter())',
+          'env.VERA_ENABLE_LEGACY_ROUTES === "true"',
+          "function loadLegacyRouters()",
+          "if (legacyRoutesAreEnabled)",
+          'app.use("/aletheia", mutationGuard)',
+          "options.legacyRouterFactory ?? loadLegacyRouters",
+          "for (const legacyRouter of legacyRouters)",
+          'app.use("/aletheia", legacyRouter)',
+        ]) &&
+        legacyRouterModules.every(
+          (modulePath) =>
+            countOccurrences(
+              veraApplication,
+              `require("${modulePath}")`,
+            ) === 1 &&
+            !veraApplication.includes(`from "${modulePath}"`),
+        ) &&
+        legacyRouterSources.every((source) => source.includes("requireAuth")) &&
+        hasInOrder(veraApplication, [
+          "if (legacyRoutesAreEnabled)",
+          'app.use("/aletheia", mutationGuard)',
+          "options.legacyRouterFactory ?? loadLegacyRouters",
+          'app.use("/aletheia", legacyRouter)',
         ]) &&
         !index.includes('app.use("/chat"') &&
         !index.includes('require("./routes/chat")') &&
         repositoryFactory.includes("return new LocalAletheiaRepository()"),
-      "Vera must preserve the product-only legacy router surface, use exactly one bootstrap call, and keep one local repository implementation.",
+      "Vera must keep Legacy routes disabled and unevaluated by default, lazy-load the complete authenticated Legacy surface only behind its explicit switch and mutation guard, use exactly one bootstrap call, and keep one local repository implementation.",
     ),
     check(
       "http-health-and-private-auth",
       hasAll(index, [
-        "console.log(\n    `Vera backend running at http://${application.host}:${application.port}`",
+        "console.log(\n      `Vera backend running at http://${managedApplication.host}:${managedApplication.port}`",
         'process.once("SIGINT"',
         'process.once("SIGTERM"',
       ]) &&
@@ -162,7 +199,7 @@ function main() {
           "helmet",
           "rateLimit",
           'app.use("/aletheia", mutationGuard)',
-          'app.use(\n    "/api/v1",',
+          'app.use("/api/v1", workspaceApi)',
           "createWorkspaceAuthMiddleware",
           "createWorkspaceV1Router",
           'LOOPBACK_HOST = "127.0.0.1"',
@@ -176,6 +213,13 @@ function main() {
           "auditAnchor!.close()",
           "shutdownPromise",
           "protectionActive",
+        ]) &&
+        hasInOrder(veraApplication, [
+          "const workspaceApi = Router()",
+          "workspaceApi.use(createWorkspaceAuthMiddleware(env))",
+          "workspaceApi.use(mutationGuard)",
+          "workspaceApi.use(applyWorkspaceUploadLimit)",
+          'app.use("/api/v1", workspaceApi)',
         ]) &&
         hasAll(auth, [
           'authMode === "single_user"',

@@ -303,6 +303,7 @@ export function AletheiaReviewRegistry() {
           <option value="badcase">Badcase</option>
           <option value="unsupported_claim">Unsupported claim</option>
           <option value="citation_issue">Citation issue</option>
+          <option value="missing_material">Missing material</option>
         </select>
       </div>
 

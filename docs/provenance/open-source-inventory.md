@@ -6,7 +6,7 @@ Scope: source-level and runtime integrations relevant to legal-agent convergence
 | Component | Source / version | License status | Embedded? | Classification | Notes |
 | --- | --- | --- | --- | --- | --- |
 | Vera repository | current repository at `12af6fc5` baseline | AGPL-3.0-only | Yes | `reuse` | Root `LICENSE` retained. |
-| Open Legal Products Mike | `https://github.com/Open-Legal-Products/mike`, commit `e32daad5a4c64a5561e04c53ee12411e3c5e7238` | AGPL-3.0-only | Controlled ports | `reuse` | Exact port rules and paths are in `docs/mike_port_manifest.md`; source object and `upstream-mike` remote are present. |
+| Open Legal Products Mike | `https://github.com/Open-Legal-Products/mike`, commit `e32daad5a4c64a5561e04c53ee12411e3c5e7238` | AGPL-3.0-only | Controlled ports | `reuse` | Exact port rules and paths are in `docs/mike_port_manifest.md`; the versioned SHA-256 source-lock manifest makes CI reproducible in a clean shallow clone, while `upstream-mike` is maintainer-only provenance input. |
 | `@signalapp/sqlcipher` | npm 3.3.9 | AGPL-3.0-only per installed package metadata | Dependency | `reuse` | Provides the SQLCipher binding; linked cipher/runtime attestation remains a release gate. |
 | Electron | npm 39.8.10 | MIT per installed package metadata | Dependency | `reuse` | Desktop runtime; lockfile controls exact dependency graph. |
 | Next.js | npm 16.2.6 | MIT per installed package metadata | Dependency | `reuse` | Renderer/runtime framework; lockfile controls exact dependency graph. |

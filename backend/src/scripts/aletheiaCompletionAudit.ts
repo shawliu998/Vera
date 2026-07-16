@@ -575,7 +575,22 @@ function main() {
           "restoreChecks",
           "sourceAvailabilityDocs",
           "privacyDefaults",
+          "verifyFrontendProductionBuild",
+          "frontendBuildDirName",
         ]),
+        contains(
+          root,
+          "backend/src/scripts/aletheiaFrontendBuildContract.ts",
+          [
+            'buildDirName?.trim() || ".next-build"',
+            '"frontend traced standalone server"',
+            '"frontend traced runtime build id"',
+            '"frontend required server manifest"',
+            '"frontend production dependencies"',
+            '"frontend static assets"',
+            '"frontend build freshness"',
+          ],
+        ),
         contains(root, "docs/private_deployment.md", [
           "private_token",
           "Back up",

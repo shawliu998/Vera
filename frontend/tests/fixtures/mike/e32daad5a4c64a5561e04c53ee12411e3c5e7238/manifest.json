@@ -1,0 +1,31 @@
+{
+  "schema": "vera-mike-source-lock-v1",
+  "repository": "https://github.com/Open-Legal-Products/mike.git",
+  "commit": "e32daad5a4c64a5561e04c53ee12411e3c5e7238",
+  "files": [
+    {
+      "sourcePath": "frontend/src/app/(pages)/layout.tsx",
+      "sha256": "3a36afb132176c0202ba35544b3f65872bee51e12928cd4bd9128cedf93693b9"
+    },
+    {
+      "sourcePath": "frontend/src/app/components/shared/AppSidebar.tsx",
+      "sha256": "f6c50d7c173a8a3819a8388d4b7404c36a24e50b68c126efb0dcbce58b3dbe11"
+    },
+    {
+      "sourcePath": "frontend/src/app/components/shared/PageHeader.tsx",
+      "sha256": "0731475c2621c4be5fdfc43ea5dc8fd2e99d1820b9cc5ee6bec8f34bcc12e384"
+    },
+    {
+      "sourcePath": "frontend/src/app/components/site-logo.tsx",
+      "sha256": "94cdee9e884a7838c837227f59c486d5bb23d37fee25a8bf20f0be446d9a39b0"
+    },
+    {
+      "sourcePath": "frontend/src/app/contexts/PageChromeContext.tsx",
+      "sha256": "3b7c943eb6af897b4555450626d4a1cab4da544742d7fd03f47bf2e129525969"
+    },
+    {
+      "sourcePath": "frontend/src/app/contexts/SidebarContext.tsx",
+      "sha256": "3d78bc84d0e7260ca50770eacfd819bdcdc95c6fcd87d287113fec3205237268"
+    }
+  ]
+}

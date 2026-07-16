@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { verifyFrontendProductionBuild } from "./aletheiaFrontendBuildContract.js";
 
 type PackageCheck = {
   name: string;
@@ -152,6 +153,8 @@ function main() {
   const root = repoRoot();
   const backendDir = process.cwd();
   const frontendDir = path.join(root, "frontend");
+  const frontendBuildDirName =
+    process.env.NEXT_DIST_DIR?.trim() || ".next-build";
   const packageId = `aletheia-local-${timestampSlug()}`;
   const outDir = outputDir(packageId);
   mkdirSync(outDir, { recursive: true });
@@ -172,11 +175,10 @@ function main() {
       path.join(frontendDir, "package.json"),
       "frontend package file",
     ),
-    checkPath(
-      "frontend build",
-      path.join(frontendDir, ".next"),
-      "frontend build output",
-    ),
+    ...verifyFrontendProductionBuild({
+      frontendDir,
+      buildDirName: frontendBuildDirName,
+    }),
     checkPath("project readme", path.join(root, "README.md"), "project readme"),
     checkPath(
       "product status",

@@ -24,14 +24,14 @@ function smokeState(): SmokeState {
   ) as SmokeState;
 }
 
-test("Vera routes matters into the canonical civil-litigation workspace", async ({
+test("Vera routes seeded matters into the canonical civil-litigation workspace", async ({
   page,
 }, testInfo) => {
   const state = smokeState();
   const projectState = state.projects[testInfo.project.name];
-  const legacyMatter = projectState?.workspace;
+  const workspaceMatter = projectState?.workspace;
   const litigationMatter = projectState?.litigation;
-  if (!legacyMatter || !litigationMatter) {
+  if (!workspaceMatter || !litigationMatter) {
     throw new Error(`Missing UI smoke state for ${testInfo.project.name}`);
   }
 
@@ -41,18 +41,15 @@ test("Vera routes matters into the canonical civil-litigation workspace", async 
   });
   page.on("pageerror", (error) => consoleErrors.push(error.message));
 
-  await page.goto(`/aletheia/matters/${legacyMatter.matterId}`);
+  await page.goto(`/aletheia/matters/${workspaceMatter.matterId}`);
   await expect(page).toHaveURL(
     new RegExp(
-      `/aletheia/matters/${legacyMatter.matterId}/litigation\\?view=overview$`,
+      `/aletheia/matters/${workspaceMatter.matterId}/litigation\\?view=overview$`,
     ),
   );
-  await expect(page.getByRole("heading", { name: "案件暂不可用" })).toBeVisible();
-  await expect(page.getByText(/require a civil_litigation matter/)).toBeVisible();
-  await expect(page.getByTestId("aletheia-matter-workspace")).toHaveCount(0);
-  expect(consoleErrors).toEqual(
-    expect.arrayContaining([expect.stringContaining("400 (Bad Request)")]),
-  );
+  await expect(
+    page.getByRole("heading", { name: workspaceMatter.matterTitle }),
+  ).toBeVisible();
 
   await page.goto(`/aletheia/matters/${litigationMatter.matterId}`);
   await expect(page).toHaveTitle(/Vera/);
@@ -81,7 +78,69 @@ test("Vera routes matters into the canonical civil-litigation workspace", async 
   await expect(matterViews.getByRole("button", { name: "Agent Run" })).toHaveCount(0);
   await expect(matterViews.getByRole("button", { name: "Eval Lab" })).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText("Mock mode");
-  expect(
-    consoleErrors.filter((message) => !message.includes("400 (Bad Request)")),
-  ).toEqual([]);
+  expect(consoleErrors).toEqual([]);
+});
+
+test("civil-litigation registries filter, export, and persist snapshots", async ({
+  page,
+}, testInfo) => {
+  const state = smokeState();
+  const workspaceMatter = state.projects[testInfo.project.name]?.workspace;
+  if (!workspaceMatter) {
+    throw new Error(`Missing workspace UI smoke state for ${testInfo.project.name}`);
+  }
+
+  await page.goto("/aletheia/evidence");
+  await expect(page.getByTestId("aletheia-evidence-registry")).toBeVisible();
+  await page
+    .getByTestId("evidence-filter-query")
+    .fill(workspaceMatter.matterTitle);
+  await page.getByTestId("evidence-filter-support").selectOption("supports");
+  await expect(page.getByTestId("evidence-registry-results")).toContainText(
+    workspaceMatter.matterTitle,
+  );
+  const evidenceDownloadPromise = page.waitForEvent("download");
+  await page.getByTestId("export-filtered-evidence").click();
+  expect((await evidenceDownloadPromise).suggestedFilename()).toBe(
+    "aletheia-filtered-evidence-registry.json",
+  );
+  await page.getByTestId("save-evidence-snapshot").click();
+  await expect(page.getByText(/matter-scoped evidence snapshot/)).toBeVisible();
+
+  await page.goto("/aletheia/reviews");
+  await expect(page.getByTestId("aletheia-review-registry")).toBeVisible();
+  await page
+    .getByTestId("review-filter-query")
+    .fill(workspaceMatter.matterTitle);
+  await page.getByTestId("review-filter-tag").selectOption("missing_material");
+  await expect(page.getByTestId("review-registry-results")).toContainText(
+    workspaceMatter.matterTitle,
+  );
+  const reviewDownloadPromise = page.waitForEvent("download");
+  await page.getByTestId("export-filtered-reviews").click();
+  expect((await reviewDownloadPromise).suggestedFilename()).toBe(
+    "aletheia-filtered-review-registry.json",
+  );
+  await page.getByTestId("save-review-snapshot").click();
+  await expect(page.getByText(/matter-scoped review snapshot/)).toBeVisible();
+
+  await page.goto("/aletheia/audit");
+  await expect(page.getByTestId("aletheia-audit-workbench")).toBeVisible();
+  await expect(page.getByTestId("audit-matter-packets")).toContainText(
+    workspaceMatter.matterTitle,
+  );
+  await page.getByTestId("audit-filter-query").fill(workspaceMatter.matterTitle);
+  await page
+    .getByTestId("audit-filter-action")
+    .selectOption("audit_pack_exported");
+  await expect(page.getByTestId("audit-timeline-results")).toContainText(
+    "audit pack exported",
+  );
+  const auditDownloadPromise = page.waitForEvent("download");
+  await page.getByTestId("export-filtered-audit").click();
+  expect((await auditDownloadPromise).suggestedFilename()).toBe(
+    "aletheia-filtered-audit-workbench.json",
+  );
+  await page.getByTestId("save-audit-snapshot").click();
+  await expect(page.getByText(/matter-scoped audit snapshot/)).toBeVisible();
 });

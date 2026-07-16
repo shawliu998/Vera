@@ -9,7 +9,7 @@
     "dev:aletheia:local": "tsx src/scripts/aletheiaLocalLauncher.ts",
     "mcp:aletheia": "tsx src/mcp/aletheiaServer.ts",
     "package:aletheia:local": "tsx src/scripts/aletheiaPackageLocal.ts",
-    "test:aletheia:package": "ALETHEIA_PACKAGE_STRICT=true tsx src/scripts/aletheiaPackageLocal.ts",
+    "test:aletheia:package": "tsx src/scripts/aletheiaFrontendBuildContractAudit.ts && ALETHEIA_PACKAGE_STRICT=true tsx src/scripts/aletheiaPackageLocal.ts",
     "check:aletheia:preflight": "tsx src/scripts/aletheiaPrivatePreflight.ts",
     "start": "node dist/index.js",
     "seed:aletheia:ui-smoke": "tsx src/scripts/aletheiaSeedUiSmoke.ts",
