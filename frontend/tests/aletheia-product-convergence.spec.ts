@@ -36,30 +36,36 @@ async function stubConnectedEmpty(page: Page, backendUrl: string) {
   );
 }
 
-test("Vera entries open Projects while legacy matter links remain compatible", async ({
+test("Vera opens Assistant while the opted-in legacy workspace stays compatible", async ({
   page,
 }, testInfo) => {
   const state = smokeState(testInfo.project.name);
 
   await page.goto("/");
-  await expect(page).toHaveURL(/\/projects$/);
+  await expect(page).toHaveURL(/\/assistant$/);
+
+  // The Playwright backend explicitly opts into VERA_ENABLE_LEGACY_ROUTES.
+  // Its exact legacy landing remains a compatibility redirect to Matters;
+  // it must not replace Vera's canonical Assistant landing.
   await page.goto("/aletheia");
-  await expect(page).toHaveURL(/\/projects$/);
+  await expect(page).toHaveURL(/\/matters$/);
 
   await page.goto("/aletheia/matters");
   await expect(page).toHaveURL(/\/aletheia\/matters$/);
 
-  const desktopNavigation = page
-    .locator("aside")
+  const navigationRoot = testInfo.project.name.startsWith("mobile-")
+    ? page.locator("header")
+    : page.locator("aside");
+  const primaryNavigation = navigationRoot
     .getByRole("navigation", { name: "Primary navigation" });
-  await expect(desktopNavigation.getByRole("link", { name: "Matters" })).toBeVisible();
-  await expect(desktopNavigation.getByRole("link", { name: "Work Queue" })).toBeVisible();
-  await expect(desktopNavigation.getByRole("link", { name: "Templates" })).toHaveCount(0);
-  await expect(desktopNavigation.getByRole("link", { name: "Agent Studio" })).toHaveCount(0);
-  await expect(desktopNavigation.getByRole("link", { name: "Evidence" })).toHaveCount(0);
-  await expect(desktopNavigation.getByRole("link", { name: "Reviews" })).toHaveCount(0);
-  await expect(desktopNavigation.getByRole("link", { name: "Audit" })).toHaveCount(0);
-  await expect(page.locator("aside").getByRole("link", { name: "Settings" })).toBeVisible();
+  await expect(primaryNavigation.getByRole("link", { name: "Matters" })).toBeVisible();
+  await expect(primaryNavigation.getByRole("link", { name: "Work Queue" })).toBeVisible();
+  await expect(primaryNavigation.getByRole("link", { name: "Templates" })).toHaveCount(0);
+  await expect(primaryNavigation.getByRole("link", { name: "Agent Studio" })).toHaveCount(0);
+  await expect(primaryNavigation.getByRole("link", { name: "Evidence" })).toHaveCount(0);
+  await expect(primaryNavigation.getByRole("link", { name: "Reviews" })).toHaveCount(0);
+  await expect(primaryNavigation.getByRole("link", { name: "Audit" })).toHaveCount(0);
+  await expect(navigationRoot.getByRole("link", { name: "Settings" })).toBeVisible();
 
   await page.goto(`/aletheia/matters/${state.litigation.matterId}`);
   await expect(page).toHaveURL(

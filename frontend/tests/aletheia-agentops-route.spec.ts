@@ -2,6 +2,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 
+const HEARING_NOTICE_SOURCE_TITLE = "杭州市中级人民法院开庭通知";
+const PAYMENT_DUE_SOURCE_FACT = "争议款项约定付款日为2026年9月1日";
+
 type SmokeState = {
   projects: Record<
     string,
@@ -60,13 +63,11 @@ test("matter-scoped AgentOps route renders adapter-backed artifacts", async ({
   await expect(commandCenter).toContainText("Gate");
   await expect(commandCenter).toContainText("Audit");
   await expect(commandCenter).toContainText("Eval");
-  await expect(commandCenter).toContainText(
-    "Aletheia local demo source record.",
-  );
-  await expect(commandCenter).toContainText("Termination notice requirement");
-  await expect(commandCenter).toContainText("Draft Memo");
+  await expect(commandCenter).toContainText(HEARING_NOTICE_SOURCE_TITLE);
+  await expect(commandCenter).toContainText(PAYMENT_DUE_SOURCE_FACT);
+  await expect(commandCenter).toContainText("Draft professional work product");
   await expect(commandCenter).toContainText("audit_pack_exported");
-  await expect(commandCenter).toContainText("memo_generated");
+  await expect(commandCenter).toContainText("litigation_brief_generated");
   await expect(page.getByTestId("external-source-workpaper-panel")).toContainText(
     "Captures remain review-only. Automatic retrieval requires a configured HTTPS allowlist.",
   );
@@ -98,7 +99,9 @@ test("matter-scoped AgentOps route renders adapter-backed artifacts", async ({
   );
   await expect(
     commandCenter
-      .getByRole("link", { name: /Aletheia local demo source record/ })
+      .getByRole("link", {
+        name: new RegExp(HEARING_NOTICE_SOURCE_TITLE),
+      })
       .first(),
   ).toHaveAttribute(
     "href",

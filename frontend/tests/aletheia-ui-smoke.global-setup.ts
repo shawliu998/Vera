@@ -22,6 +22,47 @@ function parseSeedOutput(output: string) {
   };
 }
 
+function seedCommandOutput(
+  backendDir: string,
+  seedScript: string,
+  env: NodeJS.ProcessEnv,
+) {
+  const sleepState = new Int32Array(new SharedArrayBuffer(4));
+  const maximumAttempts = 8;
+  for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+    try {
+      return execFileSync(npmCommand(), ["run", seedScript], {
+        cwd: backendDir,
+        env,
+        encoding: "utf8",
+      });
+    } catch (error) {
+      const failure = error as {
+        message?: unknown;
+        stdout?: unknown;
+        stderr?: unknown;
+      };
+      const detail = [failure.message, failure.stdout, failure.stderr]
+        .filter((value): value is string => typeof value === "string")
+        .join("\n");
+      const databaseBusy =
+        detail.includes("database is locked") || detail.includes("SQLITE_BUSY");
+      if (!databaseBusy || attempt === maximumAttempts) throw error;
+
+      // Playwright starts the backend before globalSetup. Its initial local
+      // database work can briefly overlap this separate seed process, so only
+      // the explicit SQLite busy condition receives a bounded retry.
+      Atomics.wait(
+        sleepState,
+        0,
+        0,
+        Math.min(250 * 2 ** (attempt - 1), 2_000),
+      );
+    }
+  }
+  throw new Error("UI smoke seed exhausted its bounded retry loop.");
+}
+
 export default async function globalSetup() {
   const frontendDir = process.cwd();
   const repoRoot = path.resolve(frontendDir, "..");
@@ -84,16 +125,12 @@ export default async function globalSetup() {
             fixture === "litigation"
               ? "seed:aletheia:litigation-demo"
               : "seed:aletheia:ui-smoke";
-          const output = execFileSync(npmCommand(), ["run", seedScript], {
-            cwd: backendDir,
-            env: {
-              ...env,
-              ALETHEIA_DEMO_SEED_ID: `aletheia-ui-smoke-${fixtureKey}`,
-              ALETHEIA_DEMO_SEED_TITLE_SUFFIX: fixtureKey,
-              ALETHEIA_DEMO_LOW_OCR:
-                fixture === "litigation" ? "true" : "false",
-            },
-            encoding: "utf8",
+          const output = seedCommandOutput(backendDir, seedScript, {
+            ...env,
+            ALETHEIA_DEMO_SEED_ID: `aletheia-ui-smoke-${fixtureKey}`,
+            ALETHEIA_DEMO_SEED_TITLE_SUFFIX: fixtureKey,
+            ALETHEIA_DEMO_LOW_OCR:
+              fixture === "litigation" ? "true" : "false",
           });
           const state = parseSeedOutput(output);
           if (!state.ok || !state.matterId) {

@@ -98,7 +98,7 @@ test("法律研究 imports manual sources through the real local backend and fai
   await issueTree.getByLabel("子争点").fill("解除通知的到达与生效时间");
   await issueTree.getByLabel("状态").last().selectOption("needs_material");
   const providerSelect = page.getByLabel("授权数据源");
-  await expect(providerSelect.locator('option[value="official"]')).toHaveText("官方法律来源 API");
+  await expect(providerSelect.locator('option[value="official"]')).toHaveText("官方来源（仅明确授权的来源专属接口）");
   await providerSelect.selectOption("official");
   await page.getByPlaceholder("仅填写公开法律概念，不粘贴案件事实").fill("民法典 买卖合同 解除通知 生效 举证责任 某某公司");
   await page.getByPlaceholder("当事人、项目代号、案号").fill("某某公司");
@@ -232,7 +232,7 @@ test("法律研究 imports manual sources through the real local backend and fai
   await expect(page.getByRole("button", { name: "执行一次检索" })).toBeVisible();
   await expect(page.getByRole("status")).toContainText("仍需点击执行才会联网");
   await page.getByRole("button", { name: "执行一次检索" }).click();
-  await expect(workbench.getByRole("alert")).toContainText("授权法律数据源当前不可用");
+  await expect(workbench.getByRole("alert")).toContainText("受控法律数据源当前不可用");
 
   await page.locator("main").last().evaluate((element) => element.scrollTo(0, 0));
   await captureScreenshot(
