@@ -209,29 +209,40 @@ export class WorkspaceDocumentStudioRepositoryAdapter implements WorkspaceDocume
   ): DocumentStudioPersistenceResult {
     assertPreparedBlob(input);
     this.assertRetentionBindings(input.projectId, input.citationAnchorIds);
+    const createdAt = this.now();
     return mapCommit(
-      this.studio.createMarkdownDraft({
-        projectId: input.projectId,
-        documentId: input.documentId,
-        versionId: input.versionId,
-        jobId: input.jobId,
-        folderId: input.folderId,
-        documentKind: "draft",
-        title: input.title,
-        filename: input.filename,
-        source: input.source,
-        summary: null,
-        operationId: input.operationId ?? null,
-        draftDocumentType: input.documentType,
-        draftOriginType: input.originType,
-        draftOriginRef: input.originRef,
-        citationAnchorIds: input.citationAnchorIds,
-        createdAt: this.now(),
-        blobRecordId: input.blobRecord.id,
-        contentSha256: input.contentSha256,
-        sizeBytes: input.sizeBytes,
-        storedSizeBytes: input.blobRecord.storedSizeBytes,
-      }),
+      this.studio.createMarkdownDraft(
+        {
+          projectId: input.projectId,
+          documentId: input.documentId,
+          versionId: input.versionId,
+          jobId: input.jobId,
+          folderId: input.folderId,
+          documentKind: "draft",
+          title: input.title,
+          filename: input.filename,
+          source: input.source,
+          summary: null,
+          operationId: input.operationId ?? null,
+          draftDocumentType: input.documentType,
+          draftOriginType: input.originType,
+          draftOriginRef: input.originRef,
+          citationAnchorIds: input.citationAnchorIds,
+          createdAt,
+          blobRecordId: input.blobRecord.id,
+          contentSha256: input.contentSha256,
+          sizeBytes: input.sizeBytes,
+          storedSizeBytes: input.blobRecord.storedSizeBytes,
+        },
+        input.tabularReviewHandoff
+          ? {
+              ...input.tabularReviewHandoff,
+              documentId: input.documentId,
+              versionId: input.versionId,
+              createdAt,
+            }
+          : undefined,
+      ),
     );
   }
 

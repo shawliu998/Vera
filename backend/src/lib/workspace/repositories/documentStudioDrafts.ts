@@ -26,7 +26,7 @@ export type DocumentStudioDraftSummary = Readonly<{
   updatedAt: string;
   sourceCount: number;
   pendingSuggestionCount: number;
-  originType: DocumentStudioDraftOriginV20;
+  originType: DocumentStudioDraftOriginV20 | "tabular";
 }>;
 
 export type DocumentStudioDraftSummaryPage = Readonly<{
@@ -65,7 +65,12 @@ export class WorkspaceDocumentStudioDraftsRepository {
                 document.current_version_id AS current_version_id,
                 version.version_number AS current_version_number,
                 document.updated_at AS updated_at,
-                coalesce(metadata.origin_type, 'unknown') AS origin_type,
+                CASE WHEN EXISTS (
+                  SELECT 1 FROM tabular_review_studio_handoffs handoff
+                   WHERE handoff.project_id = document.project_id
+                     AND handoff.document_id = document.id
+                ) THEN 'tabular'
+                ELSE coalesce(metadata.origin_type, 'unknown') END AS origin_type,
                 (
                   SELECT count(*)
                     FROM document_version_citation_anchors citation
@@ -137,6 +142,10 @@ export class WorkspaceDocumentStudioDraftsRepository {
       ) {
         throw new Error("Draft summary counters are invalid.");
       }
+      const originType: DocumentStudioDraftOriginV20 | "tabular" =
+        row.origin_type === "tabular"
+          ? "tabular"
+          : DocumentStudioDraftOriginV20Schema.parse(row.origin_type);
       return {
         documentId: Id.parse(row.document_id),
         projectId,
@@ -147,7 +156,7 @@ export class WorkspaceDocumentStudioDraftsRepository {
         updatedAt: IsoDateTime.parse(row.updated_at),
         sourceCount,
         pendingSuggestionCount,
-        originType: DocumentStudioDraftOriginV20Schema.parse(row.origin_type),
+        originType,
       };
     });
     const last = drafts.at(-1) ?? null;

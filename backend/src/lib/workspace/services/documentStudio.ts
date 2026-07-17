@@ -23,6 +23,7 @@ import type {
   DocumentStudioDraftOriginV20,
   DocumentStudioDraftTypeV20,
 } from "../documentStudioDraftMetadataV20";
+import type { TabularReviewStudioHandoffPersistenceV23 } from "../tabularReviewStudioHandoffV23";
 
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -102,6 +103,10 @@ export type DocumentStudioCreatePersistenceInput = {
   originType: DocumentStudioDraftOriginV20;
   originRef: string | null;
   citationAnchorIds: string[];
+  tabularReviewHandoff?: Omit<
+    TabularReviewStudioHandoffPersistenceV23,
+    "documentId" | "versionId" | "createdAt"
+  >;
   blobRecord: DocumentStudioStoredBlobInput;
 };
 
@@ -233,6 +238,11 @@ export type CreateDocumentStudioDraftInput = {
   documentType?: DocumentStudioDraftTypeV20;
   originType?: DocumentStudioDraftOriginV20;
   originRef?: string | null;
+  /** Trusted backend-only immutable evidence handoff. */
+  tabularReviewHandoff?: Omit<
+    TabularReviewStudioHandoffPersistenceV23,
+    "documentId" | "versionId" | "createdAt"
+  >;
   /** Trusted backend-only identity used to make an Agent action replay-safe. */
   writeIdentity?: Readonly<{
     documentId: string;
@@ -662,6 +672,7 @@ export class WorkspaceDocumentStudioService {
           operationId: input.writeIdentity.operationId.trim(),
         }
       : null;
+    const tabularReviewHandoff = input.tabularReviewHandoff;
     if (
       writeIdentity &&
       (writeIdentity.operationId.length < 1 ||
@@ -692,6 +703,7 @@ export class WorkspaceDocumentStudioService {
       documentType,
       originType,
       originRef,
+      tabularReviewHandoff,
       writeIdentity,
       buffer: contentBuffer(content),
     };
@@ -720,6 +732,7 @@ export class WorkspaceDocumentStudioService {
         documentType,
         originType,
         originRef,
+        tabularReviewHandoff,
         writeIdentity,
         buffer,
       } = this.normalizeCreateDraftInput(input);
@@ -742,6 +755,7 @@ export class WorkspaceDocumentStudioService {
           documentType,
           originType,
           originRef,
+          tabularReviewHandoff,
           citationAnchorIds,
           blobRecord: stored,
         });

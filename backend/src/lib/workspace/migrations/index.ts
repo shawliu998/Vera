@@ -20,6 +20,7 @@ import { ASSISTANT_ACTION_LEDGER_V19_MIGRATION } from "./v19AssistantActionLedge
 import { DOCUMENT_STUDIO_DRAFT_METADATA_V20_MIGRATION } from "./v20DocumentStudioDraftMetadata";
 import { DOCUMENT_STUDIO_TEMPLATES_V21_MIGRATION } from "./v21DocumentStudioTemplates";
 import { LEGAL_RESEARCH_PERSISTENCE_V22_MIGRATION } from "./v22LegalResearchPersistence";
+import { TABULAR_REVIEW_STUDIO_HANDOFFS_V23_MIGRATION } from "./v23TabularReviewStudioHandoffs";
 
 export {
   detectWorkspaceDatabaseCapabilities,
@@ -57,6 +58,7 @@ export { ASSISTANT_ACTION_LEDGER_V19_MIGRATION } from "./v19AssistantActionLedge
 export { DOCUMENT_STUDIO_DRAFT_METADATA_V20_MIGRATION } from "./v20DocumentStudioDraftMetadata";
 export { DOCUMENT_STUDIO_TEMPLATES_V21_MIGRATION } from "./v21DocumentStudioTemplates";
 export { LEGAL_RESEARCH_PERSISTENCE_V22_MIGRATION } from "./v22LegalResearchPersistence";
+export { TABULAR_REVIEW_STUDIO_HANDOFFS_V23_MIGRATION } from "./v23TabularReviewStudioHandoffs";
 
 export const WORKSPACE_MIGRATIONS = [
   INITIAL_WORKSPACE_MIGRATION,
@@ -81,4 +83,5 @@ export const WORKSPACE_MIGRATIONS = [
   DOCUMENT_STUDIO_DRAFT_METADATA_V20_MIGRATION,
   DOCUMENT_STUDIO_TEMPLATES_V21_MIGRATION,
   LEGAL_RESEARCH_PERSISTENCE_V22_MIGRATION,
+  TABULAR_REVIEW_STUDIO_HANDOFFS_V23_MIGRATION,
 ] as const;

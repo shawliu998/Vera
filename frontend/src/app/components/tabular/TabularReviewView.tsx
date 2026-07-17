@@ -5,6 +5,7 @@
 // frontend/src/app/components/tabular/TabularReviewView.tsx
 import {
   Download,
+  FilePenLine,
   FilePlus2,
   Loader2,
   Pencil,
@@ -24,6 +25,7 @@ import { PageHeader } from "@/app/components/vera-shell/PageHeader";
 import { useWorkspaceRoutes } from "@/app/components/projects/WorkspaceRouteAdapter";
 import { useI18n } from "@/app/i18n";
 import { listVeraProjects, VeraApiError } from "@/app/lib/veraApi";
+import { createVeraStudioDraftFromTabularReview } from "@/app/lib/veraDocumentStudioApi";
 import {
   getVeraModelSettingsStatus,
   type VeraModelProfile,
@@ -207,6 +209,10 @@ export function TabularReviewView({
   }, [errorMessage, reload]);
 
   const boundWorkflowId = detail?.review.workflow_id ?? null;
+  const supportsContractReviewMemo =
+    presetWorkflow?.is_system === true &&
+    (presetWorkflow.id === "builtin-coc-dd-tabular-review" ||
+      presetWorkflow.id === "builtin-commercial-agreement-tabular-review");
 
   useEffect(() => {
     if (!boundWorkflowId) {
@@ -470,6 +476,19 @@ export function TabularReviewView({
       );
     });
 
+  const createContractReviewMemo = () =>
+    runMutation("create-contract-review-memo", async () => {
+      const currentReview = detail?.review;
+      if (!projectId || !currentReview || currentReview.status !== "complete") {
+        return;
+      }
+      const draft = await createVeraStudioDraftFromTabularReview(
+        projectId,
+        currentReview.id,
+      );
+      router.push(routes.documentStudioHref(projectId, draft.document_id));
+    });
+
   if (!loading && !detail) {
     return (
       <div className="flex h-full items-center justify-center p-8">
@@ -554,6 +573,27 @@ export function TabularReviewView({
                       onSelect: () => setDetailsModalOpen(true),
                       disabled: !review || running,
                     },
+                    ...(routes.kind === "matter" && supportsContractReviewMemo
+                      ? [
+                          {
+                            label:
+                              busyAction === "create-contract-review-memo"
+                                ? t(
+                                    "workflows.contractReview.memo.creating",
+                                  )
+                                : t(
+                                    "workflows.contractReview.memo.create",
+                                  ),
+                            icon: FilePenLine,
+                            onSelect: () =>
+                              void createContractReviewMemo(),
+                            disabled:
+                              running ||
+                              busyAction !== null ||
+                              review?.status !== "complete",
+                          },
+                        ]
+                      : []),
                     {
                       label: t("tabular.exportCsv"),
                       icon: Download,

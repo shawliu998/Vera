@@ -55,7 +55,7 @@ function auditUpgradeAndRollback(root: string) {
   const projectId = insertProject(v20);
   v20.close();
   const upgraded = new WorkspaceDatabase(upgradePath);
-  assert.equal(upgraded.migration?.currentVersion, 22);
+  assert.equal(upgraded.migration?.currentVersion, 23);
   assert.equal(
     upgraded
       .prepare(
@@ -216,7 +216,7 @@ async function run() {
     );
     assert.deepEqual(
       WORKSPACE_MIGRATIONS.map((migration) => migration.version),
-      Array.from({ length: 22 }, (_, index) => index + 1),
+      Array.from({ length: 23 }, (_, index) => index + 1),
     );
     assert.equal(BUILTIN_DOCUMENT_STUDIO_TEMPLATES_V21.length, 8);
     assert.equal(

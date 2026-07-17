@@ -9,6 +9,7 @@ import {
 import {
   acceptVeraStudioSuggestion,
   createVeraStudioDraftFromAssistant,
+  createVeraStudioDraftFromTabularReview,
   createVeraStudioDraftFromTemplate,
   createVeraStudioDraftFromWorkflow,
   createVeraStudioDocument,
@@ -53,6 +54,7 @@ const SOURCE_CHUNK_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const CHAT_ID = "88888888-8888-4888-8888-888888888888";
 const MESSAGE_ID = "99999999-9999-4999-8999-999999999999";
 const WORKFLOW_RUN_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const TABULAR_REVIEW_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 const TEMPLATE_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const SUGGESTION_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const RESULT_VERSION_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
@@ -400,6 +402,18 @@ test("Matter draft page parser is strict, bounded, and preserves typed provenanc
   assert.equal(parsed.items[0]?.origin_type, "assistant");
   assert.equal(parsed.items[0]?.source_count, 3);
   assert.equal(parsed.next_cursor, "draft-cursor-2");
+  const tabular = parseVeraStudioDraftPage(
+    studioDraftPage({
+      items: [
+        {
+          ...((studioDraftPage().items as Array<Record<string, unknown>>)[0] ??
+            {}),
+          origin_type: "tabular",
+        },
+      ],
+    }),
+  );
+  assert.equal(tabular.items[0]?.origin_type, "tabular");
 
   assert.throws(
     () => parseVeraStudioDraftPage(studioDraftPage({ storage_key: "/tmp/x" })),
@@ -819,7 +833,7 @@ test("Studio transport uses only Project-scoped create, load, CAS save, list, an
   }
 });
 
-test("Assistant and Workflow handoffs submit identity only and accept a real immutable Studio document", async () => {
+test("Assistant, Workflow, and Tabular handoffs submit identity only and accept a real immutable Studio document", async () => {
   const restoreDesktop = installDesktop();
   const originalFetch = globalThis.fetch;
   const calls: Array<{ url: URL; init?: RequestInit; body: unknown }> = [];
@@ -850,10 +864,15 @@ test("Assistant and Workflow handoffs submit identity only and accept a real imm
     const workflowDraft = await createVeraStudioDraftFromWorkflow(PROJECT_ID, {
       workflow_run_id: WORKFLOW_RUN_ID,
     });
+    const tabularDraft = await createVeraStudioDraftFromTabularReview(
+      PROJECT_ID,
+      TABULAR_REVIEW_ID,
+    );
     assert.equal(assistantDraft.version.version_number, 1);
     assert.equal(assistantDraft.version.source, "assistant_edit");
     assert.equal(workflowDraft.version.source, "assistant_edit");
-    assert.equal(calls.length, 2);
+    assert.equal(tabularDraft.version.source, "assistant_edit");
+    assert.equal(calls.length, 3);
     assert.equal(
       calls[0]?.url.pathname,
       `/api/v1/projects/${PROJECT_ID}/studio/drafts/from-assistant`,
@@ -867,13 +886,20 @@ test("Assistant and Workflow handoffs submit identity only and accept a real imm
       `/api/v1/projects/${PROJECT_ID}/studio/drafts/from-workflow`,
     );
     assert.deepEqual(calls[1]?.body, { workflow_run_id: WORKFLOW_RUN_ID });
+    assert.equal(
+      calls[2]?.url.pathname,
+      `/api/v1/projects/${PROJECT_ID}/studio/drafts/from-tabular`,
+    );
+    assert.deepEqual(calls[2]?.body, { review_id: TABULAR_REVIEW_ID });
     for (const call of calls) {
       assert.equal(call.init?.method, "POST");
       assert.deepEqual(
         Object.keys(call.body as object).sort(),
         call === calls[0]
           ? ["assistant_message_id", "chat_id"]
-          : ["workflow_run_id"],
+          : call === calls[1]
+            ? ["workflow_run_id"]
+            : ["review_id"],
       );
       assert.equal(
         new Headers(call.init?.headers).get("Authorization"),
@@ -886,7 +912,7 @@ test("Assistant and Workflow handoffs submit identity only and accept a real imm
         assistant_message_id: "not-a-message-id",
       }),
     );
-    assert.equal(calls.length, 2, "invalid identity never reaches fetch");
+    assert.equal(calls.length, 3, "invalid identity never reaches fetch");
   } finally {
     globalThis.fetch = originalFetch;
     restoreDesktop();

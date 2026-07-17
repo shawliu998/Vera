@@ -295,7 +295,7 @@ try {
   // repository now persists additive v20 Draft provenance in the same
   // transaction, while the isolated v11 -> v12 checks above remain pinned.
   const database = new WorkspaceDatabase(path.join(root, "fresh.db"));
-  assert.equal(database.migration?.currentVersion, 22);
+  assert.equal(database.migration?.currentVersion, 23);
   assert.ok(hasColumn(database, "documents", "document_kind"));
   assert.ok(hasSchemaObject(database, "document_studio_versions"));
   assert.ok(hasSchemaObject(database, "document_version_citation_anchors"));
@@ -633,7 +633,7 @@ try {
       {
         ok: true,
         suite: "vera-workspace-document-studio-v12",
-        current_version: 22,
+        current_version: 23,
         checks: [
           "real v11 upgrade preserves legacy documents, versions, and edits",
           "v12 DDL and migration record roll back atomically",

@@ -79,6 +79,7 @@ const CreateDraftFromAssistant = z
   .object({ chat_id: Id, assistant_message_id: Id })
   .strict();
 const CreateDraftFromWorkflow = z.object({ workflow_run_id: Id }).strict();
+const CreateDraftFromTabular = z.object({ review_id: Id }).strict();
 const CopyTemplate = z.object({ title: Title.optional() }).strict();
 const CreateDraftFromTemplate = z
   .object({ title: Title.optional(), folder_id: Id.nullable().optional() })
@@ -392,7 +393,13 @@ const StudioDraftSummaryResponse = z
     updated_at: z.string().datetime({ precision: 3 }),
     source_count: z.number().int().nonnegative(),
     pending_suggestion_count: z.number().int().nonnegative(),
-    origin_type: z.enum(["manual", "assistant", "workflow", "unknown"]),
+    origin_type: z.enum([
+      "manual",
+      "assistant",
+      "workflow",
+      "tabular",
+      "unknown",
+    ]),
   })
   .strict();
 const StudioDraftSummaryListResponse = z
@@ -641,6 +648,11 @@ export interface WorkspaceDocumentStudioV1Port {
     context: WorkspaceV1Context,
     projectId: string,
     workflowRunId: string,
+  ): Promise<unknown>;
+  createStudioDocumentFromTabularReview?(
+    context: WorkspaceV1Context,
+    projectId: string,
+    reviewId: string,
   ): Promise<unknown>;
   getStudioDocument(
     context: WorkspaceV1Context,
@@ -1273,7 +1285,12 @@ export function createWorkspaceDocumentStudioV1Router(
           updatedAt: string;
           sourceCount: number;
           pendingSuggestionCount: number;
-          originType: "manual" | "assistant" | "workflow" | "unknown";
+          originType:
+            | "manual"
+            | "assistant"
+            | "workflow"
+            | "tabular"
+            | "unknown";
         }[];
         hasMore: boolean;
         nextCursor: { updatedAt: string; documentId: string } | null;
@@ -1331,6 +1348,25 @@ export function createWorkspaceDocumentStudioV1Router(
           contextFor(request, options),
           idParam(request, "projectId"),
           input.workflow_run_id,
+        ),
+      );
+    }),
+  );
+
+  router.post(
+    "/projects/:projectId/studio/drafts/from-tabular",
+    asyncRoute(async (request, response) => {
+      const input = CreateDraftFromTabular.parse(request.body ?? {});
+      const method = requireDraftOriginMethod(
+        port.createStudioDocumentFromTabularReview,
+      );
+      sendCreatedDraft(
+        response,
+        await method.call(
+          port,
+          contextFor(request, options),
+          idParam(request, "projectId"),
+          input.review_id,
         ),
       );
     }),

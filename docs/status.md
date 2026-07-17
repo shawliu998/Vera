@@ -5,9 +5,9 @@ tests take precedence over historical programme text below.
 
 ## Current product — local general legal workspace
 
-Status on 2026-07-16: Matter convergence is merged to `main` at
+Status on 2026-07-17: Matter convergence is merged to `main` at
 `5611699e46552a20bf42ce84396a8e65aa139d16`; the active feature branch now uses
-Workspace schema v22. The active
+Workspace schema v23. The active
 implementation branch for the next vertical is `feat/local-legal-work-agent`.
 
 ```text
@@ -82,6 +82,16 @@ Assistant and Draft citations accept only authority excerpts actually read and
 reverified in the current attempt. The API/UI projection exposes only bounded
 title, source type, locator, exact quote, and citation number; internal IDs,
 URLs, credentials, provider payloads, and full text stay private.
+
+Schema v23 adds an immutable, source-preserving handoff from a completed,
+supported contract Tabular Review to a typed `contract_review_memo` Studio
+Draft. The server derives the canonical review state, validates every cell's
+Job payload/result lineage and exact document-version citation, and commits the
+Draft, v1 version, citation bindings, parse job/blob metadata, and handoff in one
+transaction. Replays return the same frozen handoff version even after later
+lawyer edits or an application restart. The generated memo is an AI draft that
+requires lawyer review; persisted color flags are extraction markers, not risk
+ratings, and this slice does not claim Harvey or Legora feature parity.
 
 The deterministic legal-work vertical uses the test-only Provider to verify
 search -> durable read -> cited Assistant answer -> cited Studio Draft -> user

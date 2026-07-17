@@ -31,6 +31,13 @@ import {
   type DocumentStudioSuggestionPreviewV14,
   type RejectDocumentStudioSuggestionV14,
 } from "../documentStudioSuggestionContractsV14";
+import { TabularRepository } from "./tabular";
+import {
+  prepareTabularReviewStudioSourceV23,
+  readTabularReviewStudioJobLineageV23,
+  TabularReviewStudioHandoffPersistenceV23Schema,
+  type TabularReviewStudioHandoffPersistenceV23,
+} from "../tabularReviewStudioHandoffV23";
 import {
   workspaceBlobStorageKey,
   WorkspaceBlobRecordsRepository,
@@ -746,18 +753,80 @@ export class WorkspaceDocumentStudioRepository {
     });
   }
 
-  createMarkdownDraft(input: CreateMarkdownDraftV12): StudioVersionCommitV12 {
+  createMarkdownDraft(
+    input: CreateMarkdownDraftV12,
+    handoffInput?: TabularReviewStudioHandoffPersistenceV23,
+  ): StudioVersionCommitV12 {
     const parsed = parseInput(
       CreateMarkdownDraftV12Schema,
       input,
       "Studio draft input",
     );
+    const handoff = handoffInput
+      ? parseInput(
+          TabularReviewStudioHandoffPersistenceV23Schema,
+          handoffInput,
+          "Tabular Studio handoff",
+        )
+      : null;
     return this.persist(() => {
       const project = this.database
         .prepare("SELECT id FROM projects WHERE id = ? AND status = 'active'")
         .get(parsed.projectId);
       if (!project) {
         studioError("DOCUMENT_STUDIO_NOT_FOUND", "Project was not found.");
+      }
+      if (handoff) {
+        if (
+          handoff.projectId !== parsed.projectId ||
+          handoff.documentId !== parsed.documentId ||
+          handoff.versionId !== parsed.versionId ||
+          handoff.createdAt !== parsed.createdAt ||
+          parsed.documentKind !== "draft" ||
+          parsed.draftDocumentType !== "contract_review_memo" ||
+          parsed.draftOriginType !== "unknown" ||
+          parsed.draftOriginRef !== null ||
+          parsed.citationAnchorIds.length === 0
+        ) {
+          studioError(
+            "DOCUMENT_STUDIO_OPERATION_CONFLICT",
+            "Prepared Tabular handoff does not match the Studio Draft.",
+          );
+        }
+        const current = new TabularRepository(this.database).requireDetail(
+          handoff.reviewId,
+        );
+        let prepared: ReturnType<typeof prepareTabularReviewStudioSourceV23>;
+        try {
+          const jobLineage = readTabularReviewStudioJobLineageV23({
+            database: this.database,
+            projectId: handoff.projectId,
+            detail: current,
+          });
+          prepared = prepareTabularReviewStudioSourceV23({
+            projectId: handoff.projectId,
+            detail: current,
+            jobLineage,
+          });
+        } catch (error) {
+          studioError(
+            "DOCUMENT_STUDIO_OPERATION_CONFLICT",
+            "Tabular review changed before its Studio Draft was committed.",
+            error,
+          );
+        }
+        if (
+          current.review.updatedAt !== handoff.expectedReviewUpdatedAt ||
+          prepared.reviewStateSha256 !== handoff.reviewStateSha256 ||
+          prepared.sourceManifestJson !== handoff.sourceManifestJson ||
+          prepared.sourceManifestSha256 !== handoff.sourceManifestSha256 ||
+          prepared.identitySha256 !== handoff.identitySha256
+        ) {
+          studioError(
+            "DOCUMENT_STUDIO_OPERATION_CONFLICT",
+            "Tabular review changed before its Studio Draft was committed.",
+          );
+        }
       }
       if (parsed.folderId !== null) {
         const folder = this.database
@@ -852,6 +921,31 @@ export class WorkspaceDocumentStudioRepository {
           parsed.draftOriginRef,
           parsed.createdAt,
         );
+      if (handoff) {
+        this.database
+          .prepare(
+            `INSERT INTO tabular_review_studio_handoffs (
+               id, identity_sha256, project_id, review_id,
+               review_state_sha256, source_manifest_json,
+               source_manifest_sha256, template_reducer_revision_sha256,
+               document_id, version_id, document_type, created_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            handoff.id,
+            handoff.identitySha256,
+            handoff.projectId,
+            handoff.reviewId,
+            handoff.reviewStateSha256,
+            handoff.sourceManifestJson,
+            handoff.sourceManifestSha256,
+            handoff.templateReducerRevisionSha256,
+            handoff.documentId,
+            handoff.versionId,
+            handoff.documentType,
+            handoff.createdAt,
+          );
+      }
       this.insertParseJob(
         parsed.jobId,
         parsed.documentId,

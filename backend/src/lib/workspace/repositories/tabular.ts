@@ -773,6 +773,25 @@ export class TabularRepository {
         "Cancel the running review first.",
       );
     }
+    const handoffTable = this.database
+      .prepare(
+        "SELECT 1 AS present FROM sqlite_schema WHERE type = 'table' AND name = 'tabular_review_studio_handoffs'",
+      )
+      .get();
+    if (
+      handoffTable &&
+      this.database
+        .prepare(
+          "SELECT 1 AS present FROM tabular_review_studio_handoffs WHERE review_id = ? LIMIT 1",
+        )
+        .get(id)
+    ) {
+      throw new WorkspaceApiError(
+        409,
+        "CONFLICT",
+        "A review with a Studio handoff must be archived, not deleted.",
+      );
+    }
     this.database.prepare("DELETE FROM tabular_reviews WHERE id = ?").run(id);
   }
 
@@ -1322,7 +1341,8 @@ export class TabularRepository {
       for (const row of rows) {
         const cellId = String(row.cell_id);
         const reviewId = String(row.review_id);
-        const jobStatus = row.job_status == null ? null : String(row.job_status);
+        const jobStatus =
+          row.job_status == null ? null : String(row.job_status);
         if (jobStatus === "queued" || jobStatus === "running") {
           if (row.cell_status !== jobStatus) {
             this.database
@@ -1704,8 +1724,7 @@ export class TabularRepository {
     const counts = new Map<TabularCellStatus, number>(
       rows.map((row) => [row.status as TabularCellStatus, Number(row.count)]),
     );
-    const active =
-      (counts.get("queued") ?? 0) + (counts.get("running") ?? 0);
+    const active = (counts.get("queued") ?? 0) + (counts.get("running") ?? 0);
     const status =
       active > 0
         ? "running"

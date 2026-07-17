@@ -50,6 +50,7 @@ export const VERA_STUDIO_DRAFT_ORIGIN_TYPES = [
   "manual",
   "assistant",
   "workflow",
+  "tabular",
   "unknown",
 ] as const;
 export type VeraStudioDraftOriginType =
@@ -1631,6 +1632,23 @@ export async function createVeraStudioDraftFromWorkflow(
         json: {
           workflow_run_id: safeId(input.workflow_run_id, "Workflow run id"),
         },
+        signal,
+      },
+    ),
+  );
+}
+
+export async function createVeraStudioDraftFromTabularReview(
+  projectId: string,
+  reviewId: string,
+  signal?: AbortSignal,
+): Promise<VeraStudioDocumentWire> {
+  return parseCurrentVeraStudioDocument(
+    await veraApiRequest<unknown>(
+      `/projects/${safeId(projectId, "project id")}/studio/drafts/from-tabular`,
+      {
+        method: "POST",
+        json: { review_id: safeId(reviewId, "Tabular review id") },
         signal,
       },
     ),

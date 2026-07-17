@@ -215,6 +215,7 @@ const zhCN = {
         manual: "手动创建",
         assistant: "助手生成",
         workflow: "工作流生成",
+        tabular: "Tabular 审阅生成",
         unknown: "历史草稿",
       },
       types: {
@@ -801,6 +802,10 @@ const zhCN = {
     contractReview: {
       create: "合同审阅",
       loadingPreset: "正在恢复合同审阅列预设…",
+      memo: {
+        create: "生成合同审查备忘录",
+        creating: "正在生成备忘录…",
+      },
       views: {
         issues: "提取状态",
         matrix: "审阅矩阵",
@@ -1685,6 +1690,7 @@ const enUS = {
         manual: "Manual",
         assistant: "Assistant",
         workflow: "Workflow",
+        tabular: "Tabular review",
         unknown: "Legacy draft",
       },
       types: {
@@ -2307,6 +2313,10 @@ const enUS = {
     contractReview: {
       create: "Contract review",
       loadingPreset: "Restoring the contract review column preset…",
+      memo: {
+        create: "Create contract review memo",
+        creating: "Creating memo…",
+      },
       views: {
         issues: "Extraction status",
         matrix: "Review matrix",

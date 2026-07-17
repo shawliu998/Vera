@@ -1,12 +1,12 @@
 # Vera Legal Workspace Roadmap
 
-Date: 2026-07-16
+Date: 2026-07-17
 
 Status: canonical forward plan
 
 Current merged `main`: `5611699e46552a20bf42ce84396a8e65aa139d16`
 
-Current feature-branch Workspace schema: v22
+Current feature-branch Workspace schema: v23
 
 ## 1. Product truth source
 
@@ -40,7 +40,7 @@ The following capability families are merged and available in the active
 Workspace runtime:
 
 - one Electron-managed loopback Next.js/Express lifecycle;
-- one SQLCipher Workspace database with additive migrations through v22;
+- one SQLCipher Workspace database with additive migrations through v23;
 - encrypted local Blob storage and isolated Keychain credential handling;
 - Project-owned Matter Profile, explicit workspace classification, capability
   projections, continuous Matter shell, and unified inference policy;
@@ -204,7 +204,7 @@ while the live stage remains explicitly blocked.
 
 ### Stage 7 — Matter contract bulk extraction preset
 
-Status: implemented on the current feature branch without a schema migration.
+Status: implemented on the current feature branch through Workspace schema v23.
 
 One active built-in Tabular workflow can open the current Matter Review with a
 server-managed column preset. Creation omits renderer-owned columns; the
@@ -214,17 +214,27 @@ scope are immutable after creation, while custom Tabular reviews remain
 editable. The UI groups only persisted cell status/flags, preserves the matrix
 and exact-source views, and states that every output requires lawyer review.
 
-This stage is a contract bulk-extraction workflow, not a legal risk rubric,
-approved review state, or Tabular-to-contract-memo handoff. The next controlled
-slice is a source-preserving Tabular-to-`contract_review_memo` Studio handoff.
+The source-preserving Tabular-to-`contract_review_memo` Studio handoff is now
+implemented. Only completed reviews bound to the two supported global built-in
+contract presets qualify. The server revalidates the unchanged preset snapshot,
+every cell's generation Job payload/result lineage, and every exact
+document/version/chunk/quote/offset source before atomically creating the typed
+Draft, immutable source bindings, and v23 handoff record. Server-derived replay
+returns the original handoff version after later edits and restart.
+
+The result remains an AI-generated draft requiring lawyer review. Persisted
+color flags are extraction markers, not legal risk ratings, approval states, or
+proof that unflagged clauses are safe. This stage does not claim Harvey or
+Legora feature parity.
 
 ## 4. Migration order
 
-Migrations v1-v22 are published and immutable. The Tool Registry needed no
+Migrations v1-v23 are published and immutable. The Tool Registry needed no
 migration. v18 owns Provider configuration, v19 owns the Assistant action
 ledger, v20 owns Draft type/origin metadata, v21 owns the local template
-catalogue plus bounded DraftPlans, and v22 owns bounded durable legal-research
-replay/read/message-source bindings:
+catalogue plus bounded DraftPlans, v22 owns bounded durable legal-research
+replay/read/message-source bindings, and v23 owns immutable Tabular Review to
+Studio Draft evidence handoffs:
 
 ```text
 legal_research_sessions
@@ -233,6 +243,7 @@ legal_search_candidates
 legal_research_reads
 legal_research_read_anchors
 assistant_legal_authority_message_sources
+tabular_review_studio_handoffs
 ```
 
 Before v18 lands, the design must prove that existing documents, source

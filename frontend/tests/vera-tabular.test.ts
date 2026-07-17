@@ -446,6 +446,10 @@ test("Matter Contract Review keeps generic creation and binds a server-managed t
     path.join(root, "src/app/components/workflows/VeraWorkflowRunPanel.tsx"),
     "utf8",
   );
+  const studioApi = await readFile(
+    path.join(root, "src/app/lib/veraDocumentStudioApi.ts"),
+    "utf8",
+  );
 
   assert.match(modal, /listVeraWorkflows\("tabular"/);
   assert.match(modal, /listHiddenVeraWorkflows/);
@@ -461,6 +465,10 @@ test("Matter Contract Review keeps generic creation and binds a server-managed t
   assert.match(workflowPanel, /encodeURIComponent\(workflow\.id\)/);
   assert.match(view, /getVeraWorkflow\(boundWorkflowId/);
   assert.match(view, /reviewView === "issues"/);
+  assert.match(view, /createVeraStudioDraftFromTabularReview/);
+  assert.match(view, /currentReview\.status !== "complete"/);
+  assert.match(studioApi, /studio\/drafts\/from-tabular/);
+  assert.match(studioApi, /json: \{ review_id:/);
   assert.match(view, /canEditColumns=\{columnsMutable\}/);
   assert.match(issues, /detail\.cells/);
   assert.match(issues, /cell\.content\?\.flag \?\? "grey"/);

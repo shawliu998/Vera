@@ -189,7 +189,7 @@ function main() {
   const database = new WorkspaceDatabase(path.join(root, "workspace.db"));
   try {
     auditSourceBoundaries();
-    assert.equal(database.migration?.currentVersion, 22);
+    assert.equal(database.migration?.currentVersion, 23);
     assert.equal(
       Number(
         database

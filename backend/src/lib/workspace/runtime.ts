@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -88,6 +88,12 @@ import {
 import { SettingsRepository } from "./repositories/settings";
 import { TabularRepository } from "./repositories/tabular";
 import {
+  prepareTabularReviewStudioSourceV23,
+  readTabularReviewStudioJobLineageV23,
+  reduceTabularReviewToContractMemoV23,
+  TABULAR_REVIEW_STUDIO_REDUCER_REVISION_SHA256_V23,
+} from "./tabularReviewStudioHandoffV23";
+import {
   WorkspaceBlobReconciliation,
   WorkspaceBlobStartupRecovery,
 } from "./services/blobReconciliation";
@@ -157,6 +163,8 @@ import { WorkflowsRepository } from "./repositories/workflows";
 import { WorkflowDocumentContextRepository } from "./repositories/workflowDocumentContext";
 import {
   MikeWorkflowCrudPortAdapter,
+  mikeColumnFormat,
+  mikeColumnTags,
   seedPinnedMikeSystemWorkflows,
 } from "./workflowCompatibility";
 import {
@@ -1832,6 +1840,202 @@ export class WorkspaceRuntime
         originRef: workflowRunId,
       }),
     );
+  }
+  async createStudioDocumentFromTabularReview(
+    context: WorkspaceV1Context,
+    projectId: string,
+    reviewId: string,
+  ) {
+    this.requireAccess(context);
+    const project = this.projects.get(projectId);
+    if (project.status !== "active") {
+      throw new WorkspaceApiError(
+        409,
+        "CONFLICT",
+        "Archived Projects are read-only.",
+      );
+    }
+    const detail = new TabularRepository(this.database).requireDetail(reviewId);
+    if (detail.review.projectId !== projectId) {
+      throw new WorkspaceApiError(
+        404,
+        "NOT_FOUND",
+        "Tabular review was not found in this Project.",
+      );
+    }
+    if (detail.review.workflowId === null) {
+      throw new WorkspaceApiError(
+        409,
+        "PRECONDITION_FAILED",
+        "Only a workflow-bound Tabular review can create a contract-review memo.",
+      );
+    }
+    const workflow = this.workflows.get(detail.review.workflowId);
+    const workflowMapping = this.workflows.getMikeBuiltinMapping(workflow.id);
+    const supportedContractPreset =
+      workflowMapping?.upstreamId === "builtin-coc-dd-tabular-review" ||
+      workflowMapping?.upstreamId ===
+        "builtin-commercial-agreement-tabular-review";
+    const reviewColumnsMatchWorkflow =
+      workflow.type === "tabular" &&
+      workflow.columns.length === detail.columns.length &&
+      workflow.columns.every((column, index) => {
+        const reviewColumn = detail.columns[index];
+        return (
+          reviewColumn !== undefined &&
+          column.ordinal === reviewColumn.ordinal &&
+          column.title === reviewColumn.title &&
+          column.outputType === reviewColumn.outputType &&
+          mikeColumnFormat(workflow, column) === reviewColumn.format &&
+          column.prompt === reviewColumn.prompt &&
+          isDeepStrictEqual(column.enumValues, reviewColumn.enumValues) &&
+          isDeepStrictEqual(mikeColumnTags(workflow, column), reviewColumn.tags)
+        );
+      });
+    if (
+      workflow.type !== "tabular" ||
+      !workflow.isBuiltin ||
+      workflow.status !== "active" ||
+      workflow.projectId !== null ||
+      !supportedContractPreset ||
+      !reviewColumnsMatchWorkflow
+    ) {
+      throw new WorkspaceApiError(
+        409,
+        "PRECONDITION_FAILED",
+        "The review is not bound to an active global contract-review preset with an unchanged column snapshot.",
+      );
+    }
+    let prepared: ReturnType<typeof prepareTabularReviewStudioSourceV23>;
+    try {
+      const jobLineage = readTabularReviewStudioJobLineageV23({
+        database: this.database,
+        projectId,
+        detail,
+      });
+      prepared = prepareTabularReviewStudioSourceV23({
+        projectId,
+        detail,
+        jobLineage,
+      });
+    } catch (error) {
+      throw new WorkspaceApiError(
+        409,
+        "PRECONDITION_FAILED",
+        error instanceof Error
+          ? error.message
+          : "Tabular review evidence cannot create a Studio Draft.",
+      );
+    }
+    const existing = this.database
+      .prepare(
+        `SELECT identity_sha256, review_state_sha256,
+                source_manifest_sha256, document_id, version_id
+           FROM tabular_review_studio_handoffs
+          WHERE project_id = ? AND review_id = ? AND identity_sha256 = ?`,
+      )
+      .get(projectId, reviewId, prepared.identitySha256);
+    if (existing) {
+      if (
+        existing.review_state_sha256 !== prepared.reviewStateSha256 ||
+        existing.source_manifest_sha256 !== prepared.sourceManifestSha256
+      ) {
+        throw new WorkspaceApiError(
+          409,
+          "CONFLICT",
+          "Persisted Tabular handoff identity is inconsistent.",
+        );
+      }
+      return this.studioDocumentWire(
+        await this.documentStudioService.getDocument(
+          projectId,
+          String(existing.document_id),
+          String(existing.version_id),
+        ),
+      );
+    }
+    const reduced = reduceTabularReviewToContractMemoV23(prepared);
+    const citationSources = prepared.orderedUniqueSources.map(
+      (source, index) => ({
+        ...source,
+        locator: {
+          startOffset: source.startOffset,
+          endOffset: source.endOffset,
+        },
+        rank: index,
+        score: null,
+        citationOrdinal: index,
+        citationMetadata: { citationNumber: index + 1 },
+      }),
+    );
+    const citationAnchorIds = this.studioCitationAnchorIds(
+      projectId,
+      reduced.content,
+      citationSources,
+    );
+    if (citationAnchorIds.length !== prepared.orderedUniqueSources.length) {
+      throw new WorkspaceApiError(
+        409,
+        "PRECONDITION_FAILED",
+        "Tabular citations could not be bound one-to-one to the Studio Draft.",
+      );
+    }
+    const createInput = {
+      projectId,
+      title: reduced.title,
+      content: reduced.content,
+      source: "assistant_edit",
+      citationAnchorIds,
+      documentType: "contract_review_memo",
+      // v20 has no tabular origin enum. The immutable v23 handoff is the
+      // source of truth; read projections expose it as `tabular`.
+      originType: "unknown",
+      originRef: null,
+      tabularReviewHandoff: {
+        id: randomUUID(),
+        identitySha256: prepared.identitySha256,
+        projectId,
+        reviewId,
+        expectedReviewUpdatedAt: detail.review.updatedAt,
+        reviewStateSha256: prepared.reviewStateSha256,
+        sourceManifestJson: prepared.sourceManifestJson,
+        sourceManifestSha256: prepared.sourceManifestSha256,
+        templateReducerRevisionSha256:
+          TABULAR_REVIEW_STUDIO_REDUCER_REVISION_SHA256_V23,
+        documentType: "contract_review_memo",
+      },
+    } as const;
+    try {
+      return this.studioDocumentWire(
+        await this.documentStudioService.createDraft(createInput),
+      );
+    } catch (error) {
+      // A concurrent request may have committed the same server-derived
+      // identity after our preflight. Studio compensated this request's blob
+      // before throwing; replay only an exact, fully committed handoff.
+      const replay = this.database
+        .prepare(
+          `SELECT review_state_sha256, source_manifest_sha256, document_id,
+                  version_id
+             FROM tabular_review_studio_handoffs
+            WHERE project_id = ? AND review_id = ? AND identity_sha256 = ?`,
+        )
+        .get(projectId, reviewId, prepared.identitySha256);
+      if (
+        replay &&
+        replay.review_state_sha256 === prepared.reviewStateSha256 &&
+        replay.source_manifest_sha256 === prepared.sourceManifestSha256
+      ) {
+        return this.studioDocumentWire(
+          await this.documentStudioService.getDocument(
+            projectId,
+            String(replay.document_id),
+            String(replay.version_id),
+          ),
+        );
+      }
+      throw error;
+    }
   }
   private assertStudioVersionRetention(input: {
     projectId: string;
