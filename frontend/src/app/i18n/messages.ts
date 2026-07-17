@@ -540,6 +540,8 @@ const zhCN = {
     customExtraction: {
       title: "自定义信息提取",
       description: "选择需要从材料中提取并比较的字段。",
+      generatedPrompt:
+        "请从我选择的材料中提取以下字段，并生成一份可导出的结构化比较表。请严格按照字段名称、说明和格式执行。仅使用材料中有明确依据的信息；缺失内容标记为“未发现”，不确定内容列入待确认事项，不要推测。\n\n字段（名称 | 格式 | 提取说明）：\n{fields}",
       readyHint:
         "建议至少选择 2 份已解析完成的 Matter 文档，以便生成可比较的结果。",
       fieldLabel: "提取字段 {number}",
@@ -2125,6 +2127,8 @@ const enUS = {
       title: "Custom extraction",
       description:
         "Choose the fields to extract and compare from the selected materials.",
+      generatedPrompt:
+        "Extract the following fields from my selected materials and produce an exportable structured comparison table. Follow each field name, instruction, and format exactly. Use only information explicitly supported by the materials; mark missing content as “Not found”, list uncertainty for confirmation, and do not infer.\n\nFields (name | format | instruction):\n{fields}",
       readyHint:
         "For a useful comparison, select at least two ready Matter documents.",
       fieldLabel: "Extraction field {number}",

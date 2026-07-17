@@ -17,7 +17,7 @@ export function AssistantStarterPanel({
   showReadyHint: boolean;
   scopeAvailable: boolean;
 }) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const [customExtractionOpen, setCustomExtractionOpen] = useState(false);
   const starters = [
     {
@@ -59,16 +59,15 @@ export function AssistantStarterPanel({
             `${index + 1}. ${field.name} | ${field.format} | ${field.instruction}`,
         )
         .join("\n");
-      const prompt =
-        locale === "zh-CN"
-          ? `请从我选择的材料中提取以下字段，并生成一份可导出的结构化比较表。请严格按照字段名称、说明和格式执行。仅使用材料中有明确依据的信息；缺失内容标记为“未发现”，不确定内容列入待确认事项，不要推测。\n\n字段（名称 | 格式 | 提取说明）：\n${fieldList}`
-          : `Extract the following fields from my selected materials and produce an exportable structured comparison table. Follow each field name, instruction, and format exactly. Use only information explicitly supported by the materials; mark missing content as “Not found”, list uncertainty for confirmation, and do not infer.\n\nFields (name | format | instruction):\n${fieldList}`;
+      const prompt = t("assistant.customExtraction.generatedPrompt", {
+        fields: fieldList,
+      });
       setCustomExtractionOpen(false);
       inputRef.current?.setMinimumDocuments(2);
       inputRef.current?.setPrompt(prompt);
       inputRef.current?.openDocumentPicker();
     },
-    [inputRef, locale],
+    [inputRef, t],
   );
 
   return (
