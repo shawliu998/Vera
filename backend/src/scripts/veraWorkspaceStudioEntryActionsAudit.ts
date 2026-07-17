@@ -206,7 +206,12 @@ async function run() {
     const generation = await post(`/projects/${PROJECT_ID}/chat`, {
       chat_id: chatId,
       model_profile_id: PROFILE_ID,
-      messages: [{ role: "user", content: "Prepare a Project memo." }],
+      messages: [
+        {
+          role: "user",
+          content: "Summarize the Project context in this chat.",
+        },
+      ],
     });
     assert.equal(generation.status, 202);
     const generationBody = await json(generation);
