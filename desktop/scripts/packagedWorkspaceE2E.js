@@ -42,6 +42,23 @@ const FLAGSHIP_DOCUMENTS = Object.freeze([
 ]);
 const FLAGSHIP_PROMPT =
   "请审查我选择的合同，比较控制权变更、责任上限、自动续期和适用法条款；生成一份比较表，并起草一份风险备忘录。";
+const CUSTOM_EXTRACTION_COLUMNS = Object.freeze([
+  "当事人",
+  "签署日期",
+  "合同金额",
+  "付款期限",
+  "解除权",
+  "管辖法院",
+]);
+const TIMELINE_COLUMNS = Object.freeze([
+  "Date",
+  "Event",
+  "Participants",
+  "Source file",
+  "Original evidence",
+  "Potential significance",
+  "Open questions",
+]);
 const DOCUMENT_ONE_PAYMENT_QUOTE = "甲方应在三十日内支付全部服务费";
 const DOCUMENT_ONE_PARTY_QUOTE = "甲方名称为晨星科技";
 const DOCUMENT_TWO_TERMINATION_QUOTE = "乙方有权在重大违约后解除协议";
@@ -51,7 +68,8 @@ const ASSISTANT_VISIBLE_ANSWER =
 const WORKFLOW_ANSWER = "工作流已完成本地合同审查。";
 const GATE1_MATTER = Object.freeze({
   name: "Vera Gate 1 跨重启交易事项",
-  description: "验证显式 Matter Profile、真实聚合计数与加密工作区跨重启持久化。",
+  description:
+    "验证显式 Matter Profile、真实聚合计数与加密工作区跨重启持久化。",
   workspace_type: "transaction",
   client_name: "晨星科技有限公司",
   jurisdiction: "中华人民共和国",
@@ -168,7 +186,8 @@ function escapeRegExp(value) {
 function redact(value) {
   let text = String(value);
   for (const secret of redactionValues) {
-    if (secret) text = text.replace(new RegExp(escapeRegExp(secret), "g"), "[redacted]");
+    if (secret)
+      text = text.replace(new RegExp(escapeRegExp(secret), "g"), "[redacted]");
   }
   return text
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
@@ -189,17 +208,29 @@ function assertExactKeys(value, expected, label) {
     value && typeof value === "object" && !Array.isArray(value),
     `${label} must be an object.`,
   );
-  assert.deepEqual(Object.keys(value).sort(), [...expected].sort(), `${label} keys drifted.`);
+  assert.deepEqual(
+    Object.keys(value).sort(),
+    [...expected].sort(),
+    `${label} keys drifted.`,
+  );
 }
 
 function assertIsoTimestamp(value, label) {
   assert.equal(typeof value, "string", `${label} must be a timestamp string.`);
-  assert.equal(Number.isNaN(Date.parse(value)), false, `${label} must be a valid timestamp.`);
+  assert.equal(
+    Number.isNaN(Date.parse(value)),
+    false,
+    `${label} must be a valid timestamp.`,
+  );
 }
 
 function assertMatterCounts(project, expected) {
   for (const [field, count] of Object.entries(expected)) {
-    assert.equal(project[field], count, `Unexpected Matter projection ${field}.`);
+    assert.equal(
+      project[field],
+      count,
+      `Unexpected Matter projection ${field}.`,
+    );
   }
 }
 
@@ -210,9 +241,17 @@ function assertGate1MatterProjection(
   capabilities = MATTER_AVAILABLE_CAPABILITIES,
 ) {
   assertExactKeys(view, MATTER_VIEW_KEYS, "Matter view");
-  assertExactKeys(view.project, MATTER_PROJECT_KEYS, "Matter project projection");
+  assertExactKeys(
+    view.project,
+    MATTER_PROJECT_KEYS,
+    "Matter project projection",
+  );
   assertExactKeys(view.matter_profile, MATTER_PROFILE_KEYS, "Matter Profile");
-  assertExactKeys(view.capabilities, MATTER_CAPABILITY_KEYS, "Matter capabilities");
+  assertExactKeys(
+    view.capabilities,
+    MATTER_CAPABILITY_KEYS,
+    "Matter capabilities",
+  );
 
   assert.equal(view.project.id, projectId);
   assert.equal(view.project.name, GATE1_MATTER.name);
@@ -227,10 +266,7 @@ function assertGate1MatterProjection(
   assertMatterCounts(view.project, counts);
 
   assert.equal(view.matter_profile.project_id, projectId);
-  assert.equal(
-    view.matter_profile.workspace_type,
-    GATE1_MATTER.workspace_type,
-  );
+  assert.equal(view.matter_profile.workspace_type, GATE1_MATTER.workspace_type);
   assert.equal(view.matter_profile.client_name, GATE1_MATTER.client_name);
   assert.equal(view.matter_profile.jurisdiction, GATE1_MATTER.jurisdiction);
   assert.equal(
@@ -238,8 +274,14 @@ function assertGate1MatterProjection(
     GATE1_MATTER.represented_role,
   );
   assert.equal(view.matter_profile.objective, GATE1_MATTER.objective);
-  assertIsoTimestamp(view.matter_profile.created_at, "Matter Profile created_at");
-  assertIsoTimestamp(view.matter_profile.updated_at, "Matter Profile updated_at");
+  assertIsoTimestamp(
+    view.matter_profile.created_at,
+    "Matter Profile created_at",
+  );
+  assertIsoTimestamp(
+    view.matter_profile.updated_at,
+    "Matter Profile updated_at",
+  );
   assert.equal(view.profile_state, "ready");
   assert.deepEqual(view.capabilities, capabilities);
 }
@@ -365,14 +407,23 @@ function portOpen(port) {
 
 async function assertPortsFree() {
   assert.notEqual(frontendPort, backendPort, "Desktop ports must be distinct.");
-  assert.equal(await portOpen(frontendPort), false, "Frontend port is already in use.");
-  assert.equal(await portOpen(backendPort), false, "Backend port is already in use.");
+  assert.equal(
+    await portOpen(frontendPort),
+    false,
+    "Frontend port is already in use.",
+  );
+  assert.equal(
+    await portOpen(backendPort),
+    false,
+    "Backend port is already in use.",
+  );
 }
 
 async function waitForPortsClosed(timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (!(await portOpen(frontendPort)) && !(await portOpen(backendPort))) return;
+    if (!(await portOpen(frontendPort)) && !(await portOpen(backendPort)))
+      return;
     await delay(200);
   }
   throw new Error("Packaged Vera did not release its local service ports.");
@@ -411,9 +462,19 @@ async function assertGate1MatterHealth() {
 function verifyPrivateWorkspaceDatabase(userDataDir) {
   const databasePath = path.join(userDataDir, "aletheia-data", "aletheia.db");
   const info = fs.lstatSync(databasePath, { throwIfNoEntry: false });
-  assert.ok(info?.isFile(), "The isolated profile must contain its workspace database.");
-  assert.equal(info.isSymbolicLink(), false, "The workspace database must not be a symlink.");
-  assert.ok(info.size > 0, "The isolated workspace database must not be empty.");
+  assert.ok(
+    info?.isFile(),
+    "The isolated profile must contain its workspace database.",
+  );
+  assert.equal(
+    info.isSymbolicLink(),
+    false,
+    "The workspace database must not be a symlink.",
+  );
+  assert.ok(
+    info.size > 0,
+    "The isolated workspace database must not be empty.",
+  );
   assert.equal(
     info.mode & 0o077,
     0,
@@ -432,7 +493,8 @@ async function readRequestJson(request) {
   let bytes = 0;
   for await (const chunk of request) {
     bytes += chunk.length;
-    if (bytes > 2 * 1024 * 1024) throw new Error("Mock provider request is too large.");
+    if (bytes > 2 * 1024 * 1024)
+      throw new Error("Mock provider request is too large.");
     chunks.push(chunk);
   }
   const text = Buffer.concat(chunks).toString("utf8");
@@ -534,6 +596,35 @@ function sendContractReviewCall(response) {
   response.end("data: [DONE]\n\n");
 }
 
+function sendToolCall(response, id, name, argumentsValue) {
+  response.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache, no-store",
+    connection: "close",
+  });
+  writeSseRecord(
+    response,
+    completionChunk(
+      {
+        tool_calls: [
+          {
+            index: 0,
+            id,
+            type: "function",
+            function: { name, arguments: JSON.stringify(argumentsValue) },
+          },
+        ],
+      },
+      "tool_calls",
+    ),
+  );
+  writeSseRecord(response, {
+    choices: [],
+    usage: { prompt_tokens: 24, completion_tokens: 8 },
+  });
+  response.end("data: [DONE]\n\n");
+}
+
 function assistantAnswer(messages) {
   const toolMessage = [...messages]
     .reverse()
@@ -542,8 +633,13 @@ function assistantAnswer(messages) {
         typeof message?.content === "string" &&
         message.content.startsWith("[Tool result]\n"),
     );
-  assert.ok(toolMessage, "Assistant final turn must receive a real tool result.");
-  const result = JSON.parse(toolMessage.content.slice("[Tool result]\n".length));
+  assert.ok(
+    toolMessage,
+    "Assistant final turn must receive a real tool result.",
+  );
+  const result = JSON.parse(
+    toolMessage.content.slice("[Tool result]\n".length),
+  );
   assert.ok(Array.isArray(result.documents));
   const findDocument = (marker) =>
     result.documents.find((entry) =>
@@ -557,7 +653,9 @@ function assistantAnswer(messages) {
   assert.ok(first?.document?.doc_id, "First tool document is missing.");
   assert.ok(second?.document?.doc_id, "Second tool document is missing.");
   assert.ok(
-    first.evidence.some((item) => item.text.includes(DOCUMENT_ONE_PAYMENT_QUOTE)),
+    first.evidence.some((item) =>
+      item.text.includes(DOCUMENT_ONE_PAYMENT_QUOTE),
+    ),
   );
   assert.ok(
     second.evidence.some((item) =>
@@ -587,12 +685,28 @@ function tabularAnswer(request, calls) {
   const second = userContent.includes("VERA-E2E-BETA");
   const party = userContent.includes("Column title: 当事方");
   const clause = userContent.includes("Column title: 核心条款");
-  assert.equal(first || second, true, "Tabular request omitted authoritative text.");
-  assert.equal(first && second, false, "A Tabular cell must bind one document.");
-  assert.equal(party || clause, true, "Tabular request omitted the column title.");
+  assert.equal(
+    first || second,
+    true,
+    "Tabular request omitted authoritative text.",
+  );
+  assert.equal(
+    first && second,
+    false,
+    "A Tabular cell must bind one document.",
+  );
+  assert.equal(
+    party || clause,
+    true,
+    "Tabular request omitted the column title.",
+  );
   assert.equal(party && clause, false, "A Tabular cell must bind one column.");
   const key = `${first ? "alpha" : "beta"}:${party ? "party" : "clause"}`;
-  assert.equal(calls.tabularCells.has(key), false, `Duplicate Tabular cell ${key}.`);
+  assert.equal(
+    calls.tabularCells.has(key),
+    false,
+    `Duplicate Tabular cell ${key}.`,
+  );
   calls.tabularCells.add(key);
   let value;
   let quote;
@@ -609,7 +723,10 @@ function tabularAnswer(request, calls) {
     value = DOCUMENT_TWO_TERMINATION_QUOTE;
     quote = DOCUMENT_TWO_TERMINATION_QUOTE;
   }
-  assert.ok(userContent.includes(quote), "Tabular quote must be exact evidence.");
+  assert.ok(
+    userContent.includes(quote),
+    "Tabular quote must be exact evidence.",
+  );
   return JSON.stringify({
     value,
     reasoning: "该结果来自当前文档中的精确文本。",
@@ -646,8 +763,12 @@ function flagshipTabularAnswer(request, calls) {
       : documentKey === "beta"
         ? DOCUMENT_TWO_TERMINATION_QUOTE
         : "This Agreement is governed by English law";
-  assert.ok(userContent.includes(quote), "Flagship cell quote must be exact evidence.");
-  const valueSchema = request.response_format.json_schema?.schema?.properties?.value;
+  assert.ok(
+    userContent.includes(quote),
+    "Flagship cell quote must be exact evidence.",
+  );
+  const valueSchema =
+    request.response_format.json_schema?.schema?.properties?.value;
   const value =
     valueSchema?.type === "boolean"
       ? false
@@ -664,6 +785,62 @@ function flagshipTabularAnswer(request, calls) {
   });
 }
 
+function generalTabularAnswer(request, calls) {
+  const userContent = request.messages
+    .filter((message) => message.role === "user")
+    .map((message) => message.content)
+    .join("\n");
+  const documentKey = userContent.includes("VERA-E2E-ALPHA")
+    ? "alpha"
+    : userContent.includes("VERA-E2E-BETA")
+      ? "beta"
+      : null;
+  assert.ok(
+    documentKey,
+    "General extraction cell omitted its authoritative document.",
+  );
+  const column = /Column title: ([^\n]+)/.exec(userContent)?.[1]?.trim();
+  assert.ok(column, "General extraction cell omitted its column title.");
+  const key = `${documentKey}:${column}`;
+  assert.equal(
+    calls.generalTabularCells.has(key),
+    false,
+    `Duplicate general cell ${key}.`,
+  );
+  calls.generalTabularCells.add(key);
+  const quote =
+    documentKey === "alpha"
+      ? DOCUMENT_ONE_PAYMENT_QUOTE
+      : DOCUMENT_TWO_TERMINATION_QUOTE;
+  assert.ok(
+    userContent.includes(quote),
+    "General extraction quote must be exact evidence.",
+  );
+  return JSON.stringify({
+    value: `${documentKey} ${column}: captured from the agreement.`,
+    reasoning: "The value is limited to exact reviewed agreement text.",
+    flag: "grey",
+    quotes: [quote],
+  });
+}
+
+function generalReviewId(messages) {
+  for (const message of messages) {
+    if (typeof message?.content !== "string") continue;
+    if (!message.content.startsWith("[Tool result]\n")) continue;
+    try {
+      const result = JSON.parse(
+        message.content.slice("[Tool result]\n".length),
+      );
+      if (typeof result?.review?.review_id === "string")
+        return result.review.review_id;
+    } catch {
+      // Ignore unrelated tool results.
+    }
+  }
+  throw new Error("Timeline memo call did not receive the durable Review ID.");
+}
+
 async function createMockProvider(secret) {
   const failures = [];
   const control = { holdFlagshipTabular: false };
@@ -678,7 +855,9 @@ async function createMockProvider(secret) {
     tabularTurns: 0,
     tabularCells: new Set(),
     flagshipTabularCells: new Set(),
+    generalTabularCells: new Set(),
     flagshipTabularTurns: 0,
+    generalTabularTurns: 0,
     heldFlagshipTabularTurns: 0,
   };
   const server = http.createServer((request, response) => {
@@ -720,8 +899,14 @@ async function createMockProvider(secret) {
           .join("\n");
         const requestedColumn =
           /Column title: ([^\n]+)/.exec(userContent)?.[1]?.trim() ?? "";
-        const flagship = !["当事方", "核心条款"].includes(requestedColumn);
+        const general = [
+          ...CUSTOM_EXTRACTION_COLUMNS,
+          ...TIMELINE_COLUMNS,
+        ].includes(requestedColumn);
+        const flagship =
+          !general && !["当事方", "核心条款"].includes(requestedColumn);
         if (flagship) calls.flagshipTabularTurns += 1;
+        if (general) calls.generalTabularTurns += 1;
         if (flagship && control.holdFlagshipTabular) {
           calls.heldFlagshipTabularTurns += 1;
           await new Promise((resolve) => {
@@ -738,9 +923,11 @@ async function createMockProvider(secret) {
         }
         sendTextCompletion(
           response,
-          flagship
-            ? flagshipTabularAnswer(body, calls)
-            : tabularAnswer(body, calls),
+          general
+            ? generalTabularAnswer(body, calls)
+            : flagship
+              ? flagshipTabularAnswer(body, calls)
+              : tabularAnswer(body, calls),
         );
         return;
       }
@@ -755,6 +942,16 @@ async function createMockProvider(secret) {
           (message) =>
             typeof message?.content === "string" &&
             message.content.includes(FLAGSHIP_PROMPT),
+        );
+        const timeline = body.messages.some(
+          (message) =>
+            typeof message?.content === "string" &&
+            message.content.includes("事件时间线"),
+        );
+        const customExtraction = body.messages.some(
+          (message) =>
+            typeof message?.content === "string" &&
+            message.content.includes("字段（名称 | 格式 | 提取说明）："),
         );
         const toolResults = body.messages.filter(
           (message) =>
@@ -771,7 +968,9 @@ async function createMockProvider(secret) {
             ),
             "Matter Assistant must register run_contract_review.",
           );
-          const system = body.messages.find((message) => message.role === "system");
+          const system = body.messages.find(
+            (message) => message.role === "system",
+          );
           assert.match(system?.content ?? "", /doc-0/);
           assert.match(system?.content ?? "", /doc-1/);
           assert.match(system?.content ?? "", /doc-2/);
@@ -789,11 +988,70 @@ async function createMockProvider(secret) {
             toolResults.at(-1).content.slice("[Tool result]\n".length),
           );
           assert.equal(result.review.status, "complete");
-          assert.ok(result.memo?.draft_id, "Completed review must create a Studio memo.");
+          assert.ok(
+            result.memo?.draft_id,
+            "Completed review must create a Studio memo.",
+          );
           sendTextCompletion(response, "合同审阅与风险备忘录已完成。");
+        } else if ((timeline || customExtraction) && toolResults.length === 0) {
+          calls.assistantToolCalls += 1;
+          assert.ok(
+            body.tools.some(
+              (tool) => tool?.function?.name === "run_custom_extraction",
+            ),
+            "General Assistant must register run_custom_extraction.",
+          );
+          sendFetchDocumentsCall(response, ["doc-0", "doc-1"]);
+        } else if ((timeline || customExtraction) && toolResults.length === 1) {
+          calls.assistantToolCalls += 1;
+          if (timeline) {
+            sendToolCall(
+              response,
+              "vera-e2e-timeline",
+              "run_custom_extraction",
+              {
+                mode: "timeline",
+                title: "Matter Timeline",
+              },
+            );
+          } else {
+            sendToolCall(response, "vera-e2e-custom", "run_custom_extraction", {
+              mode: "custom",
+              title: "Matter Custom Extraction",
+              columns: CUSTOM_EXTRACTION_COLUMNS.map((name) => ({
+                name,
+                instruction: `Extract ${name} only from the attached evidence.`,
+              })),
+            });
+          }
+        } else if (timeline && toolResults.length === 2) {
+          calls.assistantToolCalls += 1;
+          const reviewId = generalReviewId(toolResults);
+          sendToolCall(
+            response,
+            "vera-e2e-timeline-memo",
+            "create_memo_from_tabular_review",
+            { review_id: reviewId, title: "Matter Timeline Facts Memo" },
+          );
+        } else if (timeline) {
+          const result = JSON.parse(
+            toolResults.at(-1).content.slice("[Tool result]\n".length),
+          );
+          assert.ok(
+            result.memo?.draft_id,
+            "Timeline must create a Draft from its Review.",
+          );
+          sendTextCompletion(response, "案件时间线和事实摘要已完成。");
+        } else if (customExtraction) {
+          sendTextCompletion(
+            response,
+            "自定义信息提取已完成，可查看并导出结构化表格。",
+          );
         } else if (toolResults.length === 0) {
           calls.assistantToolCalls += 1;
-          const system = body.messages.find((message) => message.role === "system");
+          const system = body.messages.find(
+            (message) => message.role === "system",
+          );
           assert.match(system?.content ?? "", /doc-0/);
           assert.match(system?.content ?? "", /doc-1/);
           sendFetchDocumentsCall(response);
@@ -817,7 +1075,9 @@ async function createMockProvider(secret) {
         });
       }
       if (!response.writableEnded) {
-        response.end(JSON.stringify({ error: { message: "mock_provider_failed" } }));
+        response.end(
+          JSON.stringify({ error: { message: "mock_provider_failed" } }),
+        );
       }
     });
   });
@@ -881,7 +1141,9 @@ async function apiJson(token, route, options = {}) {
   if (response.status === 204) return null;
   const text = await response.text();
   if (Buffer.byteLength(text) > MAX_RESPONSE_BYTES) {
-    throw new Error(`Local API response for ${route} exceeded the test budget.`);
+    throw new Error(
+      `Local API response for ${route} exceeded the test budget.`,
+    );
   }
   try {
     return JSON.parse(text);
@@ -894,7 +1156,9 @@ async function apiText(token, route, options = {}) {
   const response = await apiResponse(token, route, options);
   const text = await response.text();
   if (Buffer.byteLength(text) > MAX_RESPONSE_BYTES) {
-    throw new Error(`Local API response for ${route} exceeded the test budget.`);
+    throw new Error(
+      `Local API response for ${route} exceeded the test budget.`,
+    );
   }
   return { response, text };
 }
@@ -903,11 +1167,15 @@ async function apiBytes(token, route, options = {}) {
   const response = await apiResponse(token, route, options);
   const length = Number(response.headers.get("content-length") ?? 0);
   if (length > MAX_RESPONSE_BYTES) {
-    throw new Error(`Local API response for ${route} exceeded the test budget.`);
+    throw new Error(
+      `Local API response for ${route} exceeded the test budget.`,
+    );
   }
   const bytes = Buffer.from(await response.arrayBuffer());
   if (bytes.length > MAX_RESPONSE_BYTES) {
-    throw new Error(`Local API response for ${route} exceeded the test budget.`);
+    throw new Error(
+      `Local API response for ${route} exceeded the test budget.`,
+    );
   }
   return { response, bytes };
 }
@@ -950,9 +1218,10 @@ async function assertTopNavigation(page) {
     return {
       entries,
       oldTopLevelLabels: buttons
-        .map((button) =>
-          ((button.textContent ?? "").replace(/\s+/g, " ").trim() ||
-            (button.getAttribute("title") ?? "").trim()),
+        .map(
+          (button) =>
+            (button.textContent ?? "").replace(/\s+/g, " ").trim() ||
+            (button.getAttribute("title") ?? "").trim(),
         )
         .filter((label) => oldTopLevelLabels.has(label)),
     };
@@ -1103,21 +1372,22 @@ async function assertMatterRenderer(page, projectId) {
   await assertTopNavigation(page);
 }
 
-async function assertAssistantRenderer(page, projectId, chatId, kind = "project") {
+async function assertAssistantRenderer(
+  page,
+  projectId,
+  chatId,
+  kind = "project",
+) {
   const route =
     kind === "matter"
       ? `/matters/${projectId}/assistant/chat/${chatId}`
       : `/projects/${projectId}/assistant/chat/${chatId}`;
-  await navigateAndAssertVisibleText(
-    page,
-    route,
-    [
-      "第一份文件约定甲方三十日内付款",
-      "第二份文件约定乙方可在重大违约后解除",
-      "alpha-contract.txt",
-      "beta-contract.txt",
-    ],
-  );
+  await navigateAndAssertVisibleText(page, route, [
+    "第一份文件约定甲方三十日内付款",
+    "第二份文件约定乙方可在重大违约后解除",
+    "alpha-contract.txt",
+    "beta-contract.txt",
+  ]);
   const firstSource = page.getByRole("button", {
     name: /\[1\].*alpha-contract\.txt/,
   });
@@ -1138,7 +1408,9 @@ async function assertWorkflowRenderer(page, workflowId) {
   ]);
   await page.waitForFunction(
     (values) => {
-      const controls = [...document.querySelectorAll("input, textarea, select")];
+      const controls = [
+        ...document.querySelectorAll("input, textarea, select"),
+      ];
       return values.every((value) =>
         controls.some((control) => control.value === value),
       );
@@ -1181,28 +1453,31 @@ async function startFlagshipContractReviewInUi(page, projectId) {
     "新建对话",
   ]);
   const emptyChatNavigation = page.waitForURL(
-    (url) =>
-      url.pathname.startsWith(`/matters/${projectId}/assistant/chat/`),
+    (url) => url.pathname.startsWith(`/matters/${projectId}/assistant/chat/`),
     { timeout: 90_000 },
   );
   await page.getByRole("button", { name: /新建对话|New chat/ }).click();
   await emptyChatNavigation;
-  await page.getByRole("button", { name: /审查一批合同|Review contracts/ }).waitFor({
-    state: "visible",
-    timeout: 90_000,
-  });
-  await page.getByRole("button", { name: /审查一批合同|Review contracts/ }).click();
+  await page
+    .getByRole("button", { name: /审查一批合同|Review contracts/ })
+    .waitFor({
+      state: "visible",
+      timeout: 90_000,
+    });
+  await page
+    .getByRole("button", { name: /审查一批合同|Review contracts/ })
+    .click();
   const textarea = page.locator("textarea");
   await textarea.waitFor({ state: "visible", timeout: 90_000 });
   assert.equal(await textarea.inputValue(), FLAGSHIP_PROMPT);
   await page.getByRole("button", { name: /添加文档|Add documents/ }).click();
   for (const filename of FLAGSHIP_DOCUMENTS) {
-    const checkbox = page.locator("label", { hasText: filename }).locator('input[type="checkbox"]');
+    const checkbox = page
+      .locator("label", { hasText: filename })
+      .locator('input[type="checkbox"]');
     await checkbox.check();
   }
-  await page
-    .getByRole("button", { name: /添加.*3|Add \(3\)/ })
-    .click();
+  await page.getByRole("button", { name: /添加.*3|Add \(3\)/ }).click();
   for (const filename of FLAGSHIP_DOCUMENTS) {
     await page.getByText(filename, { exact: true }).last().waitFor({
       state: "visible",
@@ -1210,8 +1485,7 @@ async function startFlagshipContractReviewInUi(page, projectId) {
     });
   }
   const chatNavigation = page.waitForURL(
-    (url) =>
-      url.pathname.startsWith(`/matters/${projectId}/assistant/chat/`),
+    (url) => url.pathname.startsWith(`/matters/${projectId}/assistant/chat/`),
     { timeout: 90_000 },
   );
   await page.getByRole("button", { name: /发送|Send/ }).click();
@@ -1219,6 +1493,90 @@ async function startFlagshipContractReviewInUi(page, projectId) {
   const chatId = new URL(page.url()).pathname.split("/").at(-1);
   assert.match(chatId ?? "", /^[0-9a-f-]{36}$/i);
   return chatId;
+}
+
+async function selectAssistantDocuments(page, filenames) {
+  for (const filename of filenames) {
+    await page
+      .locator("label", { hasText: filename })
+      .locator('input[type="checkbox"]')
+      .check();
+  }
+  await page
+    .getByRole("button", {
+      name: new RegExp(
+        `添加.*${filenames.length}|Add \\(${filenames.length}\\)`,
+      ),
+    })
+    .click();
+  for (const filename of filenames) {
+    await page.getByText(filename, { exact: true }).last().waitFor({
+      state: "visible",
+      timeout: 30_000,
+    });
+  }
+}
+
+async function startGeneralExtractionInUi(page, projectId, kind) {
+  await navigateAndAssertVisibleText(page, `/matters/${projectId}/assistant`, [
+    "新建对话",
+  ]);
+  const emptyChatNavigation = page.waitForURL(
+    (url) => url.pathname.startsWith(`/matters/${projectId}/assistant/chat/`),
+    { timeout: 90_000 },
+  );
+  await page.getByRole("button", { name: /新建对话|New chat/ }).click();
+  await emptyChatNavigation;
+  const timeline = kind === "timeline";
+  await page
+    .getByRole("button", {
+      name: timeline
+        ? /整理案件时间线|Build a case timeline/
+        : /自定义信息提取|Extract information/,
+    })
+    .click();
+  if (!timeline) {
+    await page
+      .getByRole("dialog")
+      .waitFor({ state: "visible", timeout: 30_000 });
+    await page
+      .getByRole("button", { name: /生成提取提示|Prepare extraction/ })
+      .click();
+  }
+  const textarea = page.locator("textarea");
+  await textarea.waitFor({ state: "visible", timeout: 30_000 });
+  const prompt = await textarea.inputValue();
+  assert.match(
+    prompt,
+    timeline
+      ? /事件时间线|case timeline/i
+      : /字段（名称 \| 格式 \| 提取说明）：|Fields \(name \| format \| instruction\):/,
+  );
+  await selectAssistantDocuments(page, FLAGSHIP_DOCUMENTS.slice(0, 2));
+  const chatNavigation = page.waitForURL(
+    (url) => url.pathname.startsWith(`/matters/${projectId}/assistant/chat/`),
+    { timeout: 90_000 },
+  );
+  await page.getByRole("button", { name: /发送|Send/ }).click();
+  await chatNavigation;
+  const chatId = new URL(page.url()).pathname.split("/").at(-1);
+  assert.match(chatId ?? "", /^[0-9a-f-]{36}$/i);
+  return chatId;
+}
+
+async function assertGeneralTaskPlan(page, expectDraft) {
+  const steps = [
+    "Inspect the relevant sources",
+    "Create the tabular review",
+    ...(expectDraft ? ["Create the legal draft"] : []),
+    "Check deliverables and report results",
+  ];
+  for (const title of steps) {
+    await page.getByText(title, { exact: true }).waitFor({
+      state: "visible",
+      timeout: 30_000,
+    });
+  }
 }
 
 async function assertUiDownload(page, responseMatch, click, extension, mime) {
@@ -1316,7 +1674,11 @@ function launchEnvironment(userDataDir, applicationMasterKey, databaseKey) {
   };
 }
 
-async function launchPackagedVera(userDataDir, applicationMasterKey, databaseKey) {
+async function launchPackagedVera(
+  userDataDir,
+  applicationMasterKey,
+  databaseKey,
+) {
   const app = await electron.launch({
     executablePath,
     env: launchEnvironment(userDataDir, applicationMasterKey, databaseKey),
@@ -1386,12 +1748,17 @@ async function assertMockUnavailable(port) {
 }
 
 async function main() {
-  if (process.platform !== "darwin") throw new Error("This audit requires macOS.");
+  if (process.platform !== "darwin")
+    throw new Error("This audit requires macOS.");
   fs.accessSync(executablePath, fs.constants.X_OK);
   await assertPortsFree();
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vera-packaged-workspace-e2e-"));
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), "vera-packaged-workspace-e2e-"),
+  );
   fs.chmodSync(root, 0o700);
-  evidencePath = process.env.VERA_PACKAGED_E2E_EVIDENCE_PATH ?? path.join(root, "evidence.png");
+  evidencePath =
+    process.env.VERA_PACKAGED_E2E_EVIDENCE_PATH ??
+    path.join(root, "evidence.png");
   fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
   fs.rmSync(evidencePath, { force: true });
   const userDataDir = path.join(root, "user-data");
@@ -1418,6 +1785,12 @@ async function main() {
   let flagshipMemoDocumentId = null;
   let flagshipReviewBeforeRestart = null;
   let flagshipMemoBeforeRestart = null;
+  let customExtractionReviewId = null;
+  let customExtractionReviewBeforeRestart = null;
+  let timelineReviewId = null;
+  let timelineReviewBeforeRestart = null;
+  let timelineMemoDocumentId = null;
+  let timelineMemoBeforeRestart = null;
   let cancelledFlagshipReviewId = null;
   let gate1MatterSourcesBeforeRestart = null;
   let gate1MatterBeforeRestart = null;
@@ -1461,10 +1834,14 @@ async function main() {
       expected: [201],
     });
     modelProfileId = model.id;
-    model = await apiJson(token, `/model-profiles/${modelProfileId}/credential`, {
-      method: "PUT",
-      json: { secret: providerSecret },
-    });
+    model = await apiJson(
+      token,
+      `/model-profiles/${modelProfileId}/credential`,
+      {
+        method: "PUT",
+        json: { secret: providerSecret },
+      },
+    );
     assert.equal(model.credential.status, "configured");
     model = await apiJson(token, `/model-profiles/${modelProfileId}/test`, {
       method: "POST",
@@ -1507,7 +1884,8 @@ async function main() {
       method: "POST",
       json: {
         name: "Vera 打包客户端通用项目",
-        description: "验证 Project 作为文档、助手、工作流和表格的通用本地容器。",
+        description:
+          "验证 Project 作为文档、助手、工作流和表格的通用本地容器。",
         cm_number: null,
         practice: null,
         shared_with: [],
@@ -1534,55 +1912,71 @@ async function main() {
         token,
         `/projects/${project.id}/documents?limit=100`,
       );
-      for (const document of documents.filter((item) => documentIds.includes(item.id))) {
+      for (const document of documents.filter((item) =>
+        documentIds.includes(item.id),
+      )) {
         if (document.status === "error") {
           throw new Error("A packaged TXT document failed local parsing.");
         }
       }
       return documentIds.every(
-        (id) => documents.find((document) => document.id === id)?.status === "ready",
+        (id) =>
+          documents.find((document) => document.id === id)?.status === "ready",
       )
         ? documents.filter((document) => documentIds.includes(document.id))
         : undefined;
     });
     assert.equal(readyDocuments.length, 2);
 
-    const acceptedAssistant = await apiJson(token, `/projects/${project.id}/chat`, {
-      method: "POST",
-      json: {
-        messages: [
-          {
-            role: "user",
-            content: "请比较两份合同中的核心付款或解除约定，并给出精确引用。",
-          },
-        ],
-        model_profile_id: modelProfileId,
-        attached_documents: [
-          {
-            filename: "alpha-contract.txt",
-            document_id: documentIds[0],
-          },
-          {
-            filename: "beta-contract.txt",
-            document_id: documentIds[1],
-          },
-        ],
+    const acceptedAssistant = await apiJson(
+      token,
+      `/projects/${project.id}/chat`,
+      {
+        method: "POST",
+        json: {
+          messages: [
+            {
+              role: "user",
+              content: "请比较两份合同中的核心付款或解除约定，并给出精确引用。",
+            },
+          ],
+          model_profile_id: modelProfileId,
+          attached_documents: [
+            {
+              filename: "alpha-contract.txt",
+              document_id: documentIds[0],
+            },
+            {
+              filename: "beta-contract.txt",
+              document_id: documentIds[1],
+            },
+          ],
+        },
+        expected: [202],
       },
-      expected: [202],
-    });
+    );
     await pollUntil("Assistant generation", async () => {
       const job = await apiJson(
         token,
         `/assistant/jobs/${acceptedAssistant.job_id}`,
       );
       if (!job.terminal) return undefined;
-      assert.equal(job.status, "complete", "Assistant generation did not complete.");
+      assert.equal(
+        job.status,
+        "complete",
+        "Assistant generation did not complete.",
+      );
       return job;
     });
     const chat = await apiJson(token, `/chat/${acceptedAssistant.chat_id}`);
-    const assistantMessage = chat.messages.find((message) => message.role === "assistant");
+    const assistantMessage = chat.messages.find(
+      (message) => message.role === "assistant",
+    );
     assert.ok(assistantMessage);
-    assert.equal(assistantMessageText(assistantMessage), ASSISTANT_VISIBLE_ANSWER);
+    assert.equal(
+      assistantMessageText(assistantMessage),
+      ASSISTANT_VISIBLE_ANSWER,
+    );
     assert.equal(assistantMessage.citations.length, 2);
     assert.deepEqual(
       assistantMessage.citations.map((citation) => citation.document_id).sort(),
@@ -1629,10 +2023,14 @@ async function main() {
         },
       ],
     };
-    const definition = await apiJson(token, `/workflows/${workflow.id}/definition`, {
-      method: "PUT",
-      json: definitionInput,
-    });
+    const definition = await apiJson(
+      token,
+      `/workflows/${workflow.id}/definition`,
+      {
+        method: "PUT",
+        json: definitionInput,
+      },
+    );
     assert.equal(definition.type, "assistant");
     assert.deepEqual(definition.steps, definitionInput.steps);
     const preparedRun = await apiJson(token, `/workflows/${workflow.id}/runs`, {
@@ -1654,12 +2052,20 @@ async function main() {
       if (["queued", "waiting", "running"].includes(detail.run.status)) {
         return undefined;
       }
-      assert.equal(detail.run.status, "complete", "Workflow run did not complete.");
+      assert.equal(
+        detail.run.status,
+        "complete",
+        "Workflow run did not complete.",
+      );
       return detail;
     });
     assert.equal(workflowRun.steps.length, 2);
     assert.deepEqual(
-      workflowRun.steps.map((step) => [step.step.id, step.step.kind, step.status]),
+      workflowRun.steps.map((step) => [
+        step.step.id,
+        step.step.kind,
+        step.status,
+      ]),
       [
         [promptStepId, "prompt", "complete"],
         [outputStepId, "output", "complete"],
@@ -1696,11 +2102,15 @@ async function main() {
       },
       expected: [201],
     });
-    const generated = await apiText(token, `/tabular-review/${tabular.id}/generate`, {
-      method: "POST",
-      json: {},
-      timeoutMs: POLL_TIMEOUT_MS,
-    });
+    const generated = await apiText(
+      token,
+      `/tabular-review/${tabular.id}/generate`,
+      {
+        method: "POST",
+        json: {},
+        timeoutMs: POLL_TIMEOUT_MS,
+      },
+    );
     assert.match(generated.text, /data: \[DONE\]/);
     const tabularEvents = parseSseData(generated.text).filter(
       (event) => event.type === "cell_update" && event.status === "done",
@@ -1720,23 +2130,36 @@ async function main() {
     assert.ok(
       tabularDetail.cells.every((cell) =>
         cell.sources.every(
-          (source) => typeof source.quote === "string" && source.quote.length > 0,
+          (source) =>
+            typeof source.quote === "string" && source.quote.length > 0,
         ),
       ),
     );
 
-    const csv = await apiBytes(token, `/tabular-review/${tabular.id}/export.csv`);
+    const csv = await apiBytes(
+      token,
+      `/tabular-review/${tabular.id}/export.csv`,
+    );
     assert.match(csv.response.headers.get("content-type") ?? "", /^text\/csv/);
-    assert.match(csv.response.headers.get("content-disposition") ?? "", /\.csv/);
+    assert.match(
+      csv.response.headers.get("content-disposition") ?? "",
+      /\.csv/,
+    );
     const csvText = csv.bytes.toString("utf8");
     assert.match(csvText, /晨星科技/);
     assert.match(csvText, /远山律师事务所/);
-    const xlsx = await apiBytes(token, `/tabular-review/${tabular.id}/export.xlsx`);
+    const xlsx = await apiBytes(
+      token,
+      `/tabular-review/${tabular.id}/export.xlsx`,
+    );
     assert.match(
       xlsx.response.headers.get("content-type") ?? "",
       /spreadsheetml\.sheet/,
     );
-    assert.match(xlsx.response.headers.get("content-disposition") ?? "", /\.xlsx/);
+    assert.match(
+      xlsx.response.headers.get("content-disposition") ?? "",
+      /\.xlsx/,
+    );
     assert.equal(xlsx.bytes.subarray(0, 4).toString("hex"), "504b0304");
 
     await assertProjectRenderer(packaged.page, project.id);
@@ -1755,12 +2178,17 @@ async function main() {
       expected: [201],
     });
     gate1MatterId = gate1Matter.project.id;
-    assertGate1MatterProjection(gate1Matter, gate1Matter.project.id, {
-      document_count: 0,
-      chat_count: 0,
-      tabular_review_count: 0,
-      workflow_count: 0,
-    }, MATTER_CLOSED_CAPABILITIES);
+    assertGate1MatterProjection(
+      gate1Matter,
+      gate1Matter.project.id,
+      {
+        document_count: 0,
+        chat_count: 0,
+        tabular_review_count: 0,
+        workflow_count: 0,
+      },
+      MATTER_CLOSED_CAPABILITIES,
+    );
 
     const matterDefaults = await apiJson(token, "/settings", {
       method: "PATCH",
@@ -1836,11 +2264,14 @@ async function main() {
         gate1MatterDocumentIds.includes(item.id),
       )) {
         if (document.status === "error") {
-          throw new Error("A packaged Matter TXT document failed local parsing.");
+          throw new Error(
+            "A packaged Matter TXT document failed local parsing.",
+          );
         }
       }
       return gate1MatterDocumentIds.every(
-        (id) => documents.find((document) => document.id === id)?.status === "ready",
+        (id) =>
+          documents.find((document) => document.id === id)?.status === "ready",
       )
         ? documents
         : undefined;
@@ -1873,18 +2304,19 @@ async function main() {
           messages: [
             {
               role: "user",
-              content: "请为当前事项比较两份合同中的付款和解除约定，并给出精确引用。",
+              content:
+                "请为当前事项比较两份合同中的付款和解除约定，并给出精确引用。",
             },
           ],
           model_profile_id: modelProfileId,
           attached_documents: [
-          {
-            filename: "alpha-contract.txt",
-            document_id: gate1MatterAssistantDocumentIds[0],
-          },
-          {
-            filename: "beta-contract.txt",
-            document_id: gate1MatterAssistantDocumentIds[1],
+            {
+              filename: "alpha-contract.txt",
+              document_id: gate1MatterAssistantDocumentIds[0],
+            },
+            {
+              filename: "beta-contract.txt",
+              document_id: gate1MatterAssistantDocumentIds[1],
             },
           ],
         },
@@ -1898,7 +2330,11 @@ async function main() {
         `/assistant/jobs/${acceptedMatterAssistant.job_id}`,
       );
       if (!job.terminal) return undefined;
-      assert.equal(job.status, "complete", "Matter Assistant generation did not complete.");
+      assert.equal(
+        job.status,
+        "complete",
+        "Matter Assistant generation did not complete.",
+      );
       return job;
     });
     assert.equal(
@@ -1917,9 +2353,14 @@ async function main() {
       (message) => message.role === "assistant",
     );
     assert.ok(matterAssistantMessage);
-    assert.equal(assistantMessageText(matterAssistantMessage), ASSISTANT_VISIBLE_ANSWER);
+    assert.equal(
+      assistantMessageText(matterAssistantMessage),
+      ASSISTANT_VISIBLE_ANSWER,
+    );
     assert.deepEqual(
-      matterAssistantMessage.citations.map((citation) => citation.document_id).sort(),
+      matterAssistantMessage.citations
+        .map((citation) => citation.document_id)
+        .sort(),
       [...gate1MatterAssistantDocumentIds].sort(),
     );
     assert.deepEqual(
@@ -1939,16 +2380,12 @@ async function main() {
       token,
       `/matters/${gate1MatterId}`,
     );
-    assertGate1MatterProjection(
-      gate1MatterBeforeRestart,
-      gate1MatterId,
-      {
-        document_count: 3,
-        chat_count: 1,
-        tabular_review_count: 0,
-        workflow_count: 0,
-      },
-    );
+    assertGate1MatterProjection(gate1MatterBeforeRestart, gate1MatterId, {
+      document_count: 3,
+      chat_count: 1,
+      tabular_review_count: 0,
+      workflow_count: 0,
+    });
     const matterListBeforeRestart = await apiJson(token, "/matters?limit=100");
     const listedBeforeRestart = assertMatterListPage(
       matterListBeforeRestart,
@@ -1975,18 +2412,21 @@ async function main() {
       packaged.page,
       gate1MatterId,
     );
-    const reviewCard = packaged.page.locator('[data-testid^="assistant-review-result-"]');
-    const draftCard = packaged.page.locator('[data-testid^="assistant-draft-result-"]');
+    const reviewCard = packaged.page.locator(
+      '[data-testid^="assistant-review-result-"]',
+    );
+    const draftCard = packaged.page.locator(
+      '[data-testid^="assistant-draft-result-"]',
+    );
     await reviewCard.waitFor({ state: "visible", timeout: POLL_TIMEOUT_MS });
     await draftCard.waitFor({ state: "visible", timeout: POLL_TIMEOUT_MS });
     flagshipReviewId = (await reviewCard.getAttribute("data-testid"))?.replace(
       "assistant-review-result-",
       "",
     );
-    flagshipMemoDocumentId = (await draftCard.getAttribute("data-testid"))?.replace(
-      "assistant-draft-result-",
-      "",
-    );
+    flagshipMemoDocumentId = (
+      await draftCard.getAttribute("data-testid")
+    )?.replace("assistant-draft-result-", "");
     assert.match(flagshipReviewId ?? "", /^[0-9a-f-]{36}$/i);
     assert.match(flagshipMemoDocumentId ?? "", /^[0-9a-f-]{36}$/i);
     const flagshipReview = await apiJson(
@@ -2004,7 +2444,9 @@ async function main() {
       `/projects/${gate1MatterId}/studio/documents/${flagshipMemoDocumentId}`,
     );
 
-    await reviewCard.getByRole("button", { name: /打开 Review|Open Review/ }).click();
+    await reviewCard
+      .getByRole("button", { name: /打开 Review|Open Review/ })
+      .click();
     await packaged.page.waitForURL(
       (url) =>
         url.pathname ===
@@ -2020,9 +2462,14 @@ async function main() {
     await assertUiDownload(
       packaged.page,
       (response) =>
-        response.url().includes(`/tabular-review/${flagshipReviewId}/export.xlsx`) &&
+        response
+          .url()
+          .includes(`/tabular-review/${flagshipReviewId}/export.xlsx`) &&
         response.status() === 200,
-      () => packaged.page.getByRole("menuitem", { name: /导出 XLSX|Export XLSX/ }).click(),
+      () =>
+        packaged.page
+          .getByRole("menuitem", { name: /导出 XLSX|Export XLSX/ })
+          .click(),
       /\.xlsx$/i,
       /spreadsheetml\.sheet/,
     );
@@ -2033,20 +2480,201 @@ async function main() {
       ["合同审阅与风险备忘录已完成。"],
     );
     await packaged.page
-      .locator(`[data-testid="assistant-draft-result-${flagshipMemoDocumentId}"]`)
+      .locator(
+        `[data-testid="assistant-draft-result-${flagshipMemoDocumentId}"]`,
+      )
       .getByRole("button", { name: /打开文稿|Open Draft/ })
       .click();
     await packaged.page.waitForURL(
-      (url) => url.pathname.includes(`/documents/${flagshipMemoDocumentId}/studio`),
+      (url) =>
+        url.pathname.includes(`/documents/${flagshipMemoDocumentId}/studio`),
       { timeout: 90_000 },
     );
     await assertUiDownload(
       packaged.page,
       (response) =>
-        response.url().includes(
-          `/projects/${gate1MatterId}/studio/documents/${flagshipMemoDocumentId}/export-docx`,
-        ) && response.status() === 200,
-      () => packaged.page.getByRole("button", { name: /导出 DOCX|Export DOCX/ }).click(),
+        response
+          .url()
+          .includes(
+            `/projects/${gate1MatterId}/studio/documents/${flagshipMemoDocumentId}/export-docx`,
+          ) && response.status() === 200,
+      () =>
+        packaged.page
+          .getByRole("button", { name: /导出 DOCX|Export DOCX/ })
+          .click(),
+      /\.docx$/i,
+      /wordprocessingml\.document/,
+    );
+
+    const customExtractionChatId = await startGeneralExtractionInUi(
+      packaged.page,
+      gate1MatterId,
+      "custom",
+    );
+    const customReviewCard = packaged.page.locator(
+      '[data-testid^="assistant-review-result-"]',
+    );
+    await customReviewCard.waitFor({
+      state: "visible",
+      timeout: POLL_TIMEOUT_MS,
+    });
+    await assertGeneralTaskPlan(packaged.page, false);
+    customExtractionReviewId = (
+      await customReviewCard.getAttribute("data-testid")
+    )?.replace("assistant-review-result-", "");
+    assert.match(customExtractionReviewId ?? "", /^[0-9a-f-]{36}$/i);
+    const customExtractionReview = await apiJson(
+      token,
+      `/tabular-review/${customExtractionReviewId}`,
+    );
+    assert.equal(customExtractionReview.review.status, "complete");
+    assert.deepEqual(
+      customExtractionReview.review.document_ids.sort(),
+      gate1MatterDocumentIds.slice(0, 2).sort(),
+    );
+    assert.equal(customExtractionReview.cells.length, 12);
+    assert.ok(
+      customExtractionReview.cells.every((cell) => cell.status === "done"),
+    );
+    assert.ok(
+      customExtractionReview.cells.every((cell) => cell.sources.length >= 1),
+    );
+    customExtractionReviewBeforeRestart = customExtractionReview;
+    await customReviewCard
+      .getByRole("button", { name: /打开 Review|Open Review/ })
+      .click();
+    await packaged.page.waitForURL(
+      (url) =>
+        url.pathname ===
+        `/matters/${gate1MatterId}/review/${customExtractionReviewId}`,
+      { timeout: 90_000 },
+    );
+    await navigateAndAssertVisibleText(
+      packaged.page,
+      `/matters/${gate1MatterId}/assistant/chat/${customExtractionChatId}`,
+      ["自定义信息提取已完成"],
+    );
+    const persistedCustomReviewCard = packaged.page.locator(
+      `[data-testid="assistant-review-result-${customExtractionReviewId}"]`,
+    );
+    await assertUiDownload(
+      packaged.page,
+      (response) =>
+        response
+          .url()
+          .includes(
+            `/tabular-review/${customExtractionReviewId}/export.xlsx`,
+          ) && response.status() === 200,
+      () =>
+        persistedCustomReviewCard
+          .getByRole("button", { name: /导出 XLSX|Export XLSX/ })
+          .click(),
+      /\.xlsx$/i,
+      /spreadsheetml\.sheet/,
+    );
+
+    const timelineChatId = await startGeneralExtractionInUi(
+      packaged.page,
+      gate1MatterId,
+      "timeline",
+    );
+    const timelineReviewCard = packaged.page.locator(
+      '[data-testid^="assistant-review-result-"]',
+    );
+    const timelineDraftCard = packaged.page.locator(
+      '[data-testid^="assistant-draft-result-"]',
+    );
+    await timelineReviewCard.waitFor({
+      state: "visible",
+      timeout: POLL_TIMEOUT_MS,
+    });
+    await timelineDraftCard.waitFor({
+      state: "visible",
+      timeout: POLL_TIMEOUT_MS,
+    });
+    await assertGeneralTaskPlan(packaged.page, true);
+    timelineReviewId = (
+      await timelineReviewCard.getAttribute("data-testid")
+    )?.replace("assistant-review-result-", "");
+    timelineMemoDocumentId = (
+      await timelineDraftCard.getAttribute("data-testid")
+    )?.replace("assistant-draft-result-", "");
+    assert.match(timelineReviewId ?? "", /^[0-9a-f-]{36}$/i);
+    assert.match(timelineMemoDocumentId ?? "", /^[0-9a-f-]{36}$/i);
+    const timelineReview = await apiJson(
+      token,
+      `/tabular-review/${timelineReviewId}`,
+    );
+    assert.equal(timelineReview.review.status, "complete");
+    assert.equal(timelineReview.cells.length, 14);
+    assert.ok(timelineReview.cells.every((cell) => cell.status === "done"));
+    assert.ok(timelineReview.cells.every((cell) => cell.sources.length >= 1));
+    timelineReviewBeforeRestart = timelineReview;
+    timelineMemoBeforeRestart = await apiJson(
+      token,
+      `/projects/${gate1MatterId}/studio/documents/${timelineMemoDocumentId}`,
+    );
+    await timelineReviewCard
+      .getByRole("button", { name: /打开 Review|Open Review/ })
+      .click();
+    await packaged.page.waitForURL(
+      (url) =>
+        url.pathname === `/matters/${gate1MatterId}/review/${timelineReviewId}`,
+      { timeout: 90_000 },
+    );
+    await navigateAndAssertVisibleText(
+      packaged.page,
+      `/matters/${gate1MatterId}/assistant/chat/${timelineChatId}`,
+      ["案件时间线和事实摘要已完成。"],
+    );
+    const persistedTimelineReviewCard = packaged.page.locator(
+      `[data-testid="assistant-review-result-${timelineReviewId}"]`,
+    );
+    await assertUiDownload(
+      packaged.page,
+      (response) =>
+        response
+          .url()
+          .includes(`/tabular-review/${timelineReviewId}/export.xlsx`) &&
+        response.status() === 200,
+      () =>
+        persistedTimelineReviewCard
+          .getByRole("button", { name: /导出 XLSX|Export XLSX/ })
+          .click(),
+      /\.xlsx$/i,
+      /spreadsheetml\.sheet/,
+    );
+    const persistedTimelineDraftCard = packaged.page.locator(
+      `[data-testid="assistant-draft-result-${timelineMemoDocumentId}"]`,
+    );
+    await persistedTimelineDraftCard
+      .getByRole("button", { name: /打开文稿|Open Draft/ })
+      .click();
+    await packaged.page.waitForURL(
+      (url) =>
+        url.pathname.includes(`/documents/${timelineMemoDocumentId}/studio`),
+      { timeout: 90_000 },
+    );
+    await navigateAndAssertVisibleText(
+      packaged.page,
+      `/matters/${gate1MatterId}/assistant/chat/${timelineChatId}`,
+      ["案件时间线和事实摘要已完成。"],
+    );
+    await assertUiDownload(
+      packaged.page,
+      (response) =>
+        response
+          .url()
+          .includes(
+            `/projects/${gate1MatterId}/studio/documents/${timelineMemoDocumentId}/export-docx`,
+          ) && response.status() === 200,
+      () =>
+        packaged.page
+          .locator(
+            `[data-testid="assistant-draft-result-${timelineMemoDocumentId}"]`,
+          )
+          .getByRole("button", { name: /导出 DOCX|Export DOCX/ })
+          .click(),
       /\.docx$/i,
       /wordprocessingml\.document/,
     );
@@ -2055,10 +2683,10 @@ async function main() {
       token,
       `/projects/${gate1MatterId}/documents?limit=100`,
     );
-    assert.equal(documentsBeforeCancelledReview.length, 4);
-    const documentIdsBeforeCancelledReview = documentsBeforeCancelledReview.map(
-      (document) => document.id,
-    ).sort();
+    assert.equal(documentsBeforeCancelledReview.length, 5);
+    const documentIdsBeforeCancelledReview = documentsBeforeCancelledReview
+      .map((document) => document.id)
+      .sort();
     const reviewsBeforeCancelledReview = await apiJson(
       token,
       `/tabular-review?project_id=${gate1MatterId}`,
@@ -2071,35 +2699,42 @@ async function main() {
       packaged.page,
       gate1MatterId,
     );
-    await pollUntil("Cancelled contract review reaches an in-flight cell", () =>
-      mock.calls.heldFlagshipTabularTurns > 0 ? true : undefined,
+    await pollUntil(
+      "Cancelled contract review reaches an in-flight cell",
+      () => (mock.calls.heldFlagshipTabularTurns > 0 ? true : undefined),
     );
     await packaged.page
       .getByRole("button", { name: /停止生成|Stop generating/ })
       .click();
-    const cancelledJob = await pollUntil("Cancelled contract review job", async () => {
-      const jobs = await apiJson(
-        token,
-        `/assistant/jobs?chat_id=${cancelledChatId}&limit=20`,
-      );
-      const job = jobs.items?.[0];
-      if (!job?.terminal) return undefined;
-      assert.equal(job.status, "cancelled");
-      return job;
-    });
+    const cancelledJob = await pollUntil(
+      "Cancelled contract review job",
+      async () => {
+        const jobs = await apiJson(
+          token,
+          `/assistant/jobs?chat_id=${cancelledChatId}&limit=20`,
+        );
+        const job = jobs.items?.[0];
+        if (!job?.terminal) return undefined;
+        assert.equal(job.status, "cancelled");
+        return job;
+      },
+    );
     assert.equal(cancelledJob.cancel_requested, true);
     mock.setHoldFlagshipTabular(false);
-    const cancelledReview = await pollUntil("Cancelled contract Review", async () => {
-      const reviews = await apiJson(
-        token,
-        `/tabular-review?project_id=${gate1MatterId}`,
-      );
-      const review = reviews.find(
-        (item) => !reviewIdsBeforeCancelledReview.has(item.id),
-      );
-      if (!review || review.status !== "cancelled") return undefined;
-      return apiJson(token, `/tabular-review/${review.id}`);
-    });
+    const cancelledReview = await pollUntil(
+      "Cancelled contract Review",
+      async () => {
+        const reviews = await apiJson(
+          token,
+          `/tabular-review?project_id=${gate1MatterId}`,
+        );
+        const review = reviews.find(
+          (item) => !reviewIdsBeforeCancelledReview.has(item.id),
+        );
+        if (!review || review.status !== "cancelled") return undefined;
+        return apiJson(token, `/tabular-review/${review.id}`);
+      },
+    );
     cancelledFlagshipReviewId = cancelledReview.review.id;
     assert.equal(cancelledReview.review.status, "cancelled");
     const documentsAfterCancelledReview = await apiJson(
@@ -2111,42 +2746,50 @@ async function main() {
       documentIdsBeforeCancelledReview,
       "Cancelled contract review must not create a memo document.",
     );
-    gate1MatterBeforeRestart = await apiJson(token, `/matters/${gate1MatterId}`);
+    gate1MatterBeforeRestart = await apiJson(
+      token,
+      `/matters/${gate1MatterId}`,
+    );
     assertGate1MatterProjection(gate1MatterBeforeRestart, gate1MatterId, {
-      document_count: 4,
-      chat_count: 3,
-      tabular_review_count: 2,
+      document_count: 5,
+      chat_count: 5,
+      tabular_review_count: 4,
       workflow_count: 0,
     });
     const flagshipMatterList = await apiJson(token, "/matters?limit=100");
     assert.deepEqual(
-      assertMatterListPage(
-        flagshipMatterList,
-        project.id,
-        gate1MatterId,
-        {
-          document_count: 4,
-          chat_count: 3,
-          tabular_review_count: 2,
-          workflow_count: 0,
-        },
-      ).matter,
+      assertMatterListPage(flagshipMatterList, project.id, gate1MatterId, {
+        document_count: 5,
+        chat_count: 5,
+        tabular_review_count: 4,
+        workflow_count: 0,
+      }).matter,
       gate1MatterBeforeRestart,
     );
 
     assert.deepEqual(mock.failures, []);
     assert.equal(mock.calls.probes, 1);
-    assert.equal(mock.calls.assistantTurns - mock.calls.contractAssistantTurns, 4);
+    assert.equal(
+      mock.calls.assistantTurns - mock.calls.contractAssistantTurns,
+      11,
+    );
     assert.equal(mock.calls.contractToolCalls, 4);
     assert.ok(mock.calls.contractAssistantTurns >= 5);
-    assert.equal(mock.calls.assistantToolCalls - mock.calls.contractToolCalls, 2);
-    assert.equal(mock.calls.workflowTurns, 1);
-    assert.equal(mock.calls.tabularTurns - mock.calls.flagshipTabularTurns, 4);
-    assert.deepEqual(
-      [...mock.calls.tabularCells].sort(),
-      ["alpha:clause", "alpha:party", "beta:clause", "beta:party"],
+    assert.equal(
+      mock.calls.assistantToolCalls - mock.calls.contractToolCalls,
+      7,
     );
+    assert.equal(mock.calls.workflowTurns, 1);
+    assert.equal(mock.calls.tabularTurns - mock.calls.flagshipTabularTurns, 30);
+    assert.deepEqual([...mock.calls.tabularCells].sort(), [
+      "alpha:clause",
+      "alpha:party",
+      "beta:clause",
+      "beta:party",
+    ]);
     assert.equal(mock.calls.flagshipTabularCells.size, 54);
+    assert.equal(mock.calls.generalTabularTurns, 26);
+    assert.equal(mock.calls.generalTabularCells.size, 26);
     assert.ok(mock.calls.heldFlagshipTabularTurns > 0);
     mockSummary = mock.calls;
     await mock.close();
@@ -2166,7 +2809,10 @@ async function main() {
     await assertGate1MatterHealth();
     await assertMockUnavailable(providerPort);
 
-    const persistedModel = await apiJson(token, `/model-profiles/${modelProfileId}`);
+    const persistedModel = await apiJson(
+      token,
+      `/model-profiles/${modelProfileId}`,
+    );
     assert.equal(persistedModel.enabled, true);
     assert.equal(persistedModel.is_default, true);
     assert.equal(persistedModel.credential.status, "configured");
@@ -2185,12 +2831,22 @@ async function main() {
       persistedProject.documents.map((document) => document.id).sort(),
       [...documentIds].sort(),
     );
-    assert.ok(persistedProject.documents.every((document) => document.status === "ready"));
-    const persistedChat = await apiJson(token, `/chat/${acceptedAssistant.chat_id}`);
+    assert.ok(
+      persistedProject.documents.every(
+        (document) => document.status === "ready",
+      ),
+    );
+    const persistedChat = await apiJson(
+      token,
+      `/chat/${acceptedAssistant.chat_id}`,
+    );
     const persistedAssistant = persistedChat.messages.find(
       (message) => message.role === "assistant",
     );
-    assert.equal(assistantMessageText(persistedAssistant), ASSISTANT_VISIBLE_ANSWER);
+    assert.equal(
+      assistantMessageText(persistedAssistant),
+      ASSISTANT_VISIBLE_ANSWER,
+    );
     assert.equal(persistedAssistant.citations.length, 2);
     const persistedWorkflow = await apiJson(token, `/workflows/${workflow.id}`);
     assert.equal(persistedWorkflow.metadata.title, "Vera 本地合同审查");
@@ -2205,7 +2861,10 @@ async function main() {
     );
     assert.equal(persistedRun.run.status, "complete");
     assert.equal(persistedRun.run.output.content, WORKFLOW_ANSWER);
-    const persistedTabular = await apiJson(token, `/tabular-review/${tabular.id}`);
+    const persistedTabular = await apiJson(
+      token,
+      `/tabular-review/${tabular.id}`,
+    );
     assert.equal(persistedTabular.cells.length, 4);
     assert.ok(persistedTabular.cells.every((cell) => cell.status === "done"));
     assert.ok(persistedTabular.cells.every((cell) => cell.sources.length >= 1));
@@ -2214,9 +2873,9 @@ async function main() {
       `/matters/${gate1MatterId}`,
     );
     assertGate1MatterProjection(persistedGate1Matter, gate1MatterId, {
-      document_count: 4,
-      chat_count: 3,
-      tabular_review_count: 2,
+      document_count: 5,
+      chat_count: 5,
+      tabular_review_count: 4,
       workflow_count: 0,
     });
     assert.deepEqual(
@@ -2230,9 +2889,9 @@ async function main() {
       project.id,
       gate1MatterId,
       {
-        document_count: 4,
-        chat_count: 3,
-        tabular_review_count: 2,
+        document_count: 5,
+        chat_count: 5,
+        tabular_review_count: 4,
         workflow_count: 0,
       },
     );
@@ -2247,15 +2906,22 @@ async function main() {
       token,
       `/projects/${gate1MatterId}`,
     );
-    assert.equal(persistedMatterProject.documents.length, 4);
+    assert.equal(persistedMatterProject.documents.length, 5);
     assert.ok(
       gate1MatterDocumentIds.every((documentId) =>
-        persistedMatterProject.documents.some((document) => document.id === documentId),
+        persistedMatterProject.documents.some(
+          (document) => document.id === documentId,
+        ),
       ),
     );
     assert.ok(
       persistedMatterProject.documents.some(
         (document) => document.id === flagshipMemoDocumentId,
+      ),
+    );
+    assert.ok(
+      persistedMatterProject.documents.some(
+        (document) => document.id === timelineMemoDocumentId,
       ),
     );
     assert.ok(
@@ -2290,10 +2956,7 @@ async function main() {
       token,
       `/projects/${gate1MatterId}/sources?limit=100`,
     );
-    assert.deepEqual(
-      persistedMatterSources,
-      gate1MatterSourcesBeforeRestart,
-    );
+    assert.deepEqual(persistedMatterSources, gate1MatterSourcesBeforeRestart);
     assert.deepEqual(
       persistedMatterSources.sources.map((source) => source.id).sort(),
       [...gate1MatterSourceIds].sort(),
@@ -2337,6 +3000,24 @@ async function main() {
       `/projects/${gate1MatterId}/studio/documents/${flagshipMemoDocumentId}`,
     );
     assert.deepEqual(persistedFlagshipMemo, flagshipMemoBeforeRestart);
+    const persistedCustomExtractionReview = await apiJson(
+      token,
+      `/tabular-review/${customExtractionReviewId}`,
+    );
+    assert.deepEqual(
+      persistedCustomExtractionReview,
+      customExtractionReviewBeforeRestart,
+    );
+    const persistedTimelineReview = await apiJson(
+      token,
+      `/tabular-review/${timelineReviewId}`,
+    );
+    assert.deepEqual(persistedTimelineReview, timelineReviewBeforeRestart);
+    const persistedTimelineMemo = await apiJson(
+      token,
+      `/projects/${gate1MatterId}/studio/documents/${timelineMemoDocumentId}`,
+    );
+    assert.deepEqual(persistedTimelineMemo, timelineMemoBeforeRestart);
     const persistedCancelledFlagshipReview = await apiJson(
       token,
       `/tabular-review/${cancelledFlagshipReviewId}`,
@@ -2373,6 +3054,109 @@ async function main() {
     assert.equal(
       persistedFlagshipDocx.bytes.subarray(0, 4).toString("hex"),
       "504b0304",
+    );
+    const persistedCustomExtractionXlsx = await apiBytes(
+      token,
+      `/tabular-review/${customExtractionReviewId}/export.xlsx`,
+    );
+    assert.match(
+      persistedCustomExtractionXlsx.response.headers.get("content-type") ?? "",
+      /spreadsheetml\.sheet/,
+    );
+    assert.equal(
+      persistedCustomExtractionXlsx.bytes.subarray(0, 4).toString("hex"),
+      "504b0304",
+    );
+    const persistedTimelineXlsx = await apiBytes(
+      token,
+      `/tabular-review/${timelineReviewId}/export.xlsx`,
+    );
+    assert.match(
+      persistedTimelineXlsx.response.headers.get("content-type") ?? "",
+      /spreadsheetml\.sheet/,
+    );
+    assert.equal(
+      persistedTimelineXlsx.bytes.subarray(0, 4).toString("hex"),
+      "504b0304",
+    );
+    const persistedTimelineDocx = await apiBytes(
+      token,
+      `/projects/${gate1MatterId}/studio/documents/${timelineMemoDocumentId}/export-docx`,
+    );
+    assert.match(
+      persistedTimelineDocx.response.headers.get("content-type") ?? "",
+      /wordprocessingml\.document/,
+    );
+    assert.equal(
+      persistedTimelineDocx.bytes.subarray(0, 4).toString("hex"),
+      "504b0304",
+    );
+
+    await navigateAndAssertVisibleText(
+      packaged.page,
+      `/matters/${gate1MatterId}/assistant/chat/${customExtractionChatId}`,
+      ["自定义信息提取已完成"],
+    );
+    await assertGeneralTaskPlan(packaged.page, false);
+    const restartedCustomReviewCard = packaged.page.locator(
+      `[data-testid="assistant-review-result-${customExtractionReviewId}"]`,
+    );
+    await assertUiDownload(
+      packaged.page,
+      (response) =>
+        response
+          .url()
+          .includes(
+            `/tabular-review/${customExtractionReviewId}/export.xlsx`,
+          ) && response.status() === 200,
+      () =>
+        restartedCustomReviewCard
+          .getByRole("button", { name: /导出 XLSX|Export XLSX/ })
+          .click(),
+      /\.xlsx$/i,
+      /spreadsheetml\.sheet/,
+    );
+
+    await navigateAndAssertVisibleText(
+      packaged.page,
+      `/matters/${gate1MatterId}/assistant/chat/${timelineChatId}`,
+      ["案件时间线和事实摘要已完成。"],
+    );
+    await assertGeneralTaskPlan(packaged.page, true);
+    const restartedTimelineReviewCard = packaged.page.locator(
+      `[data-testid="assistant-review-result-${timelineReviewId}"]`,
+    );
+    const restartedTimelineDraftCard = packaged.page.locator(
+      `[data-testid="assistant-draft-result-${timelineMemoDocumentId}"]`,
+    );
+    await assertUiDownload(
+      packaged.page,
+      (response) =>
+        response
+          .url()
+          .includes(`/tabular-review/${timelineReviewId}/export.xlsx`) &&
+        response.status() === 200,
+      () =>
+        restartedTimelineReviewCard
+          .getByRole("button", { name: /导出 XLSX|Export XLSX/ })
+          .click(),
+      /\.xlsx$/i,
+      /spreadsheetml\.sheet/,
+    );
+    await assertUiDownload(
+      packaged.page,
+      (response) =>
+        response
+          .url()
+          .includes(
+            `/projects/${gate1MatterId}/studio/documents/${timelineMemoDocumentId}/export-docx`,
+          ) && response.status() === 200,
+      () =>
+        restartedTimelineDraftCard
+          .getByRole("button", { name: /导出 DOCX|Export DOCX/ })
+          .click(),
+      /\.docx$/i,
+      /wordprocessingml\.document/,
     );
 
     await assertAssistantRenderer(
@@ -2428,6 +3212,8 @@ async function main() {
             workflow_turns: mockSummary.workflowTurns,
             tabular_turns: mockSummary.tabularTurns,
             flagship_tabular_cells: mockSummary.flagshipTabularCells.size,
+            general_extraction_tabular_cells:
+              mockSummary.generalTabularCells.size,
           },
           matter_health: GATE1_MATTER_HEALTH,
           matter: {
@@ -2446,8 +3232,7 @@ async function main() {
               sensitive_data_allowed: persistedPrivacy.sensitive_data_allowed,
             },
             policy: {
-              external_egress_mode:
-                persistedMatterPolicy.external_egress_mode,
+              external_egress_mode: persistedMatterPolicy.external_egress_mode,
               execution_locations: persistedMatterPolicy.execution_locations,
             },
             source_snapshot_ids: [...gate1MatterSourceIds],
@@ -2458,6 +3243,17 @@ async function main() {
               cancelled_review_id: cancelledFlagshipReviewId,
               documents: 3,
               cells_complete: 54,
+            },
+            custom_extraction: {
+              review_id: customExtractionReviewId,
+              documents: 2,
+              cells_complete: 12,
+            },
+            timeline_extraction: {
+              review_id: timelineReviewId,
+              memo_document_id: timelineMemoDocumentId,
+              documents: 2,
+              cells_complete: 14,
             },
             counts: {
               documents: persistedGate1Matter.project.document_count,
@@ -2484,9 +3280,12 @@ async function main() {
             "Matter Assistant reaches the provider for tool and final turns and persists exact citations",
             "Matter Assistant starter selects exactly three ready documents in the packaged UI and calls fetch_documents followed by run_contract_review",
             "built-in Commercial Agreement Review completes all 54 cells and renders durable Review and Draft cards",
+            "custom extraction Starter opens its field dialog, attaches two Matter documents, calls canonical mode=custom, and exports its durable XLSX Review",
+            "timeline Starter attaches two Matter documents, calls canonical mode=timeline, creates its Memo from that exact Review, and exports XLSX/DOCX",
             "packaged UI captures and validates XLSX and DOCX downloads by filename MIME and ZIP signature",
             "second in-flight Assistant contract review is stopped from the packaged UI, leaving a cancelled Review and no new Studio memo",
             "durable flagship Review and Studio memo persist unchanged across offline restart",
+            "custom extraction Review plus timeline Review and Review-derived Studio memo persist unchanged and export again after offline restart",
             "Matter-owned document source snapshots retain exact local content across restart",
             "same SQLCipher data and blob keys across an offline second launch",
             "private non-plaintext SQLCipher database inside the isolated profile",
@@ -2519,7 +3318,9 @@ async function main() {
 
 main().catch((error) => {
   const primary = bounded(error instanceof Error ? error.stack : error, 12_000);
-  const logs = applicationLog ? `\nPackaged application log (redacted):\n${bounded(applicationLog, 8_000)}` : "";
+  const logs = applicationLog
+    ? `\nPackaged application log (redacted):\n${bounded(applicationLog, 8_000)}`
+    : "";
   process.stderr.write(`${primary}${logs}\n`);
   process.exitCode = 1;
 });
