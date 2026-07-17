@@ -143,6 +143,7 @@ test("refresh recovery and terminal controls are explicit in the hook", () => {
   assert.match(hook, /detail\.messages\.map\(toUiMessage\)/);
   assert.match(api, /MAX_MESSAGE_DURABLE_EVENTS = 10/);
   assert.match(api, /event\.type !== "draft_created"/);
+  assert.match(api, /event\.type !== "tabular_review_created"/);
   assert.match(api, /Assistant message durable event ownership/);
   assert.match(hook, /status === "failed"/);
   assert.match(hook, /status === "interrupted"/);
@@ -163,6 +164,25 @@ test("Agent-created Draft events render a Matter-safe open action", () => {
   assert.match(assistantMessage, /assistant-draft-result-/);
   assert.match(assistantMessage, /router\.push\(draft\.route\)/);
   assert.doesNotMatch(assistantMessage, /window\.open\(draft\.route/);
+});
+
+test("Agent-created Tabular Review events persist, render, and open the Matter Review route", () => {
+  const api = source("src/app/lib/veraAssistantApi.ts");
+  const hook = source("src/app/hooks/useAssistantChat.ts");
+  const assistantMessage = source(
+    "src/app/components/assistant/AssistantMessage.tsx",
+  );
+  const summary = source("src/app/components/assistant/TaskRunSummary.tsx");
+
+  assert.match(api, /case "tabular_review_created"/);
+  assert.match(api, /tabular-reviews\/\$\{reviewId\}/);
+  assert.match(hook, /type: "tabular_review_created"/);
+  assert.match(assistantMessage, /assistant-review-result-/);
+  assert.match(assistantMessage, /routes\.tabularReviewHref/);
+  assert.match(assistantMessage, /assistant\.artifacts\.reviewDescription/);
+  assert.match(summary, /MAX_TASK_PROGRESS_ITEMS = 6/);
+  assert.match(summary, /run_contract_review/);
+  assert.match(summary, /get_contract_review/);
 });
 
 test("Project Assistant document citations reuse the scoped source viewer and exact version", () => {
@@ -195,6 +215,24 @@ test("Project Assistant document citations reuse the scoped source viewer and ex
     `${assistantMessage}\n${sourceViewer}`,
     /window\.open|target="_blank"|file:\/\//,
   );
+});
+
+test("Matter Assistant offers a contract-review starter without submitting it", () => {
+  const chatView = source("src/app/components/assistant/ChatView.tsx");
+  const chatInput = source("src/app/components/assistant/ChatInput.tsx");
+
+  assert.match(chatView, /pathname\.startsWith\("\/matters\/"\)/);
+  assert.match(
+    chatView,
+    /availableDocuments\?\.filter\(\(document\) => document\.status === "ready"\)\.length/,
+  );
+  assert.match(chatView, />= 2/);
+  assert.match(chatView, /chatInputRef\.current\?\.setPrompt/);
+  assert.doesNotMatch(chatView, /startContractReview[\s\S]{0,240}handleChat/);
+  assert.match(chatInput, /setPrompt: \(prompt: string\) => void/);
+  assert.equal(MESSAGES["zh-CN"].assistant.starters.contractReview.label, "审查一批合同");
+  assert.equal(MESSAGES["en-US"].assistant.starters.contractReview.label, "Review contracts");
+  assert.match(MESSAGES["en-US"].assistant.starters.contractReview.prompt, /change-of-control/);
 });
 
 test("Assistant source viewer opens one exact page excerpt for multi-page citations", () => {

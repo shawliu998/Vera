@@ -405,8 +405,8 @@ const MikeServerMessageSchema = z
     citations: z.array(MikeAssistantCitationSchema).max(1_000).optional(),
     events: z
       .array(
-        z
-          .object({
+        z.discriminatedUnion("type", [
+          z.object({
             type: z.literal("draft_created"),
             draft_id: Id,
             version_id: Id,
@@ -416,8 +416,19 @@ const MikeServerMessageSchema = z
               .regex(
                 /^\/projects\/[0-9a-f-]{36}\/documents\/[0-9a-f-]{36}\/studio$/,
               ),
-          })
-          .strict(),
+          }).strict(),
+          z.object({
+            type: z.literal("tabular_review_created"),
+            review_id: Id,
+            title: z.string().min(1).max(240),
+            route: z
+              .string()
+              .regex(
+                /^\/projects\/[0-9a-f-]{36}\/tabular-reviews\/[0-9a-f-]{36}$/,
+              ),
+            document_count: z.number().int().min(2).max(50),
+          }).strict(),
+        ]),
       )
       .max(10)
       .optional(),
@@ -541,6 +552,8 @@ export const MikeAssistantStreamEventSchema = z.discriminatedUnion("type", [
         "get_workflow_run",
         "search_legal_sources",
         "read_legal_source",
+        "run_contract_review",
+        "get_contract_review",
       ]),
     })
     .strict(),
@@ -588,6 +601,19 @@ export const MikeAssistantStreamEventSchema = z.discriminatedUnion("type", [
       route: z
         .string()
         .regex(/^\/projects\/[0-9a-f-]{36}\/documents\/[0-9a-f-]{36}\/studio$/),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("tabular_review_created"),
+      review_id: Id,
+      title: z.string().min(1).max(240),
+      route: z
+        .string()
+        .regex(
+          /^\/projects\/[0-9a-f-]{36}\/tabular-reviews\/[0-9a-f-]{36}$/,
+        ),
+      document_count: z.number().int().min(2).max(50),
     })
     .strict(),
   MikeDocumentCitationSchema,
@@ -667,7 +693,7 @@ export function toMikeChatDetail(input: {
     legalAuthoritySources?: readonly AssistantLegalAuthoritySourceV22[];
     events?: readonly Extract<
       MikeAssistantStreamEvent,
-      { type: "draft_created" }
+      { type: "draft_created" | "tabular_review_created" }
     >[];
   })[];
 }) {

@@ -229,8 +229,9 @@ export function createTabularCellJobHandler(input: {
       at,
       payload: fixed,
     });
-    input.tabular.startClaimedCell(fixed.cellId, now(), () =>
-      input.jobs.assertClaimInCurrentTransaction(claimInput(now())),
+    const startedAt = now();
+    input.tabular.startClaimedCell(fixed.cellId, startedAt, () =>
+      input.jobs.assertClaimInCurrentTransaction(claimInput(startedAt)),
     );
 
     try {
@@ -298,17 +299,21 @@ export function createTabularCellJobHandler(input: {
         }),
         sourceCount: generated.sources.length,
       };
+      // Cell and Job are one durable generation lineage. Reuse the exact
+      // timestamp in the same settlement transaction so the v23 handoff can
+      // prove that neither side was completed independently.
+      const completedAt = now();
       input.tabular.completeClaimedCell(
         fixed.cellId,
         generated.content,
         generated.sources,
         result,
-        now(),
-        () => input.jobs.assertClaimInCurrentTransaction(claimInput(now())),
+        completedAt,
+        () => input.jobs.assertClaimInCurrentTransaction(claimInput(completedAt)),
         () =>
           input.jobs.finishClaimInCurrentTransaction({
-            ...claimInput(now()),
-            event: { type: "complete", at: now(), result },
+            ...claimInput(completedAt),
+            event: { type: "complete", at: completedAt, result },
           }),
       );
       return result;
@@ -325,17 +330,18 @@ export function createTabularCellJobHandler(input: {
       const interrupted = abortLike(error, signal);
       const safeError = safeRuntimeError(error, interrupted);
       try {
+        const failedAt = now();
         input.tabular.failClaimedCell(
           fixed.cellId,
           safeError,
-          now(),
-          () => input.jobs.assertClaimInCurrentTransaction(claimInput(now())),
+          failedAt,
+          () => input.jobs.assertClaimInCurrentTransaction(claimInput(failedAt)),
           () =>
             input.jobs.finishClaimInCurrentTransaction({
-              ...claimInput(now()),
+              ...claimInput(failedAt),
               event: interrupted
-                ? { type: "interrupt", at: now(), error: safeError }
-                : { type: "fail", at: now(), error: safeError },
+                ? { type: "interrupt", at: failedAt, error: safeError }
+                : { type: "fail", at: failedAt, error: safeError },
             }),
         );
       } catch (settlementError) {

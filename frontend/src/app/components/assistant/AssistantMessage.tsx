@@ -9,16 +9,11 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Check,
-  ChevronDown,
   Copy,
-  FileSearch,
-  FileText,
   FilePenLine,
   Loader2,
   RefreshCw,
   RotateCcw,
-  Search,
-  Wrench,
 } from "lucide-react";
 import type {
   AssistantEvent,
@@ -35,116 +30,12 @@ import {
   ProjectCitationSourceViewer,
   type ProjectAssistantCitationSource,
 } from "@/app/components/projects/ProjectCitationSourceViewer";
-import { useI18n, type MessageKey, type Translate } from "@/app/i18n";
+import { useWorkspaceRoutes } from "@/app/components/projects/WorkspaceRouteAdapter";
+import { useI18n, type Translate } from "@/app/i18n";
 import { createVeraStudioDraftFromAssistant } from "@/app/lib/veraDocumentStudioApi";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import { ResponseStatus } from "./ResponseStatus";
-
-const TOOL_LABEL_KEYS: Readonly<Record<string, MessageKey>> = {
-  list_documents: "assistant.events.listDocuments",
-  read_document: "assistant.events.readDocument",
-  fetch_documents: "assistant.events.fetchDocuments",
-  find_in_document: "assistant.events.findInDocument",
-  read_studio_document: "assistant.events.readStudioDocument",
-  suggest_studio_edit: "assistant.events.suggestStudioEdit",
-  create_draft: "assistant.events.createDraft",
-  read_draft: "assistant.events.readDraft",
-  suggest_draft_edit: "assistant.events.suggestDraftEdit",
-  list_workflows: "assistant.events.listWorkflows",
-  read_workflow: "assistant.events.readWorkflow",
-  run_workflow: "assistant.events.runWorkflow",
-  get_workflow_run: "assistant.events.getWorkflowRun",
-  search_legal_sources: "assistant.events.searchLegalSources",
-  read_legal_source: "assistant.events.readLegalSource",
-};
-
-function preEventLabel(
-  event: AssistantEvent,
-  t: Translate,
-): {
-  icon: React.ReactNode;
-  title: string;
-  detail?: string;
-  active?: boolean;
-} | null {
-  switch (event.type) {
-    case "status":
-      return {
-        icon: <Loader2 className="h-3.5 w-3.5" />,
-        title:
-          event.status === "retrying"
-            ? t("assistant.events.retrying")
-            : event.status === "queued"
-              ? t("assistant.events.queued")
-              : t("assistant.events.generating"),
-        active: true,
-      };
-    case "reasoning":
-      return {
-        icon: <ChevronDown className="h-3.5 w-3.5" />,
-        title: t("assistant.events.reasoning"),
-        detail: event.text,
-        active: event.isStreaming,
-      };
-    case "tool_call_start":
-      return {
-        icon: <Wrench className="h-3.5 w-3.5" />,
-        title: t(TOOL_LABEL_KEYS[event.name] ?? "assistant.events.localTool"),
-        active: event.isStreaming,
-      };
-    case "doc_read_start":
-      return {
-        icon: <FileText className="h-3.5 w-3.5" />,
-        title: t("assistant.events.readingDocument", {
-          filename: event.filename,
-        }),
-        active: true,
-      };
-    case "doc_read":
-      return {
-        icon: <FileText className="h-3.5 w-3.5" />,
-        title: t("assistant.events.documentRead", {
-          filename: event.filename,
-        }),
-      };
-    case "doc_find_start":
-      return {
-        icon: <Search className="h-3.5 w-3.5" />,
-        title: t("assistant.events.findingDocument", {
-          filename: event.filename,
-        }),
-        detail: event.query,
-        active: true,
-      };
-    case "doc_find":
-      return {
-        icon: <FileSearch className="h-3.5 w-3.5" />,
-        title: t("assistant.events.matches", {
-          filename: event.filename,
-          count: event.total_matches,
-        }),
-        detail: event.query,
-      };
-    case "workflow_applied":
-      return {
-        icon: <Wrench className="h-3.5 w-3.5" />,
-        title: t("assistant.events.workflowApplied", { title: event.title }),
-      };
-    case "draft_created":
-      return {
-        icon: <FilePenLine className="h-3.5 w-3.5" />,
-        title: t("assistant.events.draftCreated", { title: event.title }),
-      };
-    case "thinking":
-      return {
-        icon: <Loader2 className="h-3.5 w-3.5" />,
-        title: t("assistant.events.thinking"),
-        active: true,
-      };
-    default:
-      return null;
-  }
-}
+import { TaskRunSummary } from "./TaskRunSummary";
 
 function citationLocation(citation: CitationAnnotation, t: Translate): string {
   if (citation.kind === "case") {
@@ -213,6 +104,7 @@ export function AssistantMessage({
   }>;
 }) {
   const router = useRouter();
+  const routes = useWorkspaceRoutes();
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const [creatingDraft, setCreatingDraft] = useState(false);
@@ -232,6 +124,14 @@ export function AssistantMessage({
       ),
     [events],
   );
+  const createdReviews = useMemo(
+    () =>
+      events.filter(
+        (event): event is Extract<AssistantEvent, { type: "tabular_review_created" }> =>
+          event.type === "tabular_review_created",
+      ),
+    [events],
+  );
   const contentEvents = events.filter(
     (event): event is Extract<AssistantEvent, { type: "content" }> =>
       event.type === "content",
@@ -239,13 +139,6 @@ export function AssistantMessage({
   const content = contentEvents.length
     ? contentEvents.map((event) => event.text).join("")
     : message.content;
-  const preEvents = useMemo(
-    () =>
-      events
-        .map((event) => preEventLabel(event, t))
-        .filter((item): item is NonNullable<typeof item> => !!item),
-    [events, t],
-  );
   const generation = message.generation;
   const canRetry =
     isLatest &&
@@ -322,38 +215,7 @@ export function AssistantMessage({
     <div className="w-full" data-message-id={message.id}>
       <ResponseStatus state={responseState(message, isStreaming)} />
 
-      {preEvents.length > 0 && (
-        <div className="mb-4 overflow-hidden rounded-xl border border-white/70 bg-white/55 shadow-[0_3px_9px_rgba(15,23,42,0.03),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl">
-          {preEvents.map((item, index) =>
-            item.detail ? (
-              <details
-                key={`${item.title}-${index}`}
-                className="group border-b border-gray-100 px-3 py-2 text-xs text-gray-600 last:border-b-0"
-              >
-                <summary className="flex cursor-pointer list-none items-center gap-2">
-                  <span className={item.active ? "animate-spin" : undefined}>
-                    {item.icon}
-                  </span>
-                  <span className="font-medium">{item.title}</span>
-                </summary>
-                <p className="mt-2 whitespace-pre-wrap border-l border-gray-200 pl-5 leading-5 text-gray-500">
-                  {item.detail}
-                </p>
-              </details>
-            ) : (
-              <div
-                key={`${item.title}-${index}`}
-                className="flex items-center gap-2 border-b border-gray-100 px-3 py-2 text-xs text-gray-600 last:border-b-0"
-              >
-                <span className={item.active ? "animate-spin" : undefined}>
-                  {item.icon}
-                </span>
-                <span className="font-medium">{item.title}</span>
-              </div>
-            ),
-          )}
-        </div>
-      )}
+      <TaskRunSummary events={events} />
 
       {content && (
         <AssistantMarkdown
@@ -385,6 +247,38 @@ export function AssistantMessage({
             <FilePenLine className="h-3.5 w-3.5" />
             {t("assistant.openDraft")}
           </button>
+        </div>
+      ))}
+
+      {createdReviews.map((review) => (
+        <div
+          key={review.review_id}
+          className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-emerald-100 bg-emerald-50/70 p-3"
+          data-testid={`assistant-review-result-${review.review_id}`}
+        >
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium text-gray-900">{review.title}</p>
+            <p className="mt-0.5 text-xs text-gray-500">
+              {t("assistant.artifacts.reviewDescription", {
+                count: review.document_count,
+              })}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() =>
+              router.push(
+                studioHandoff
+                  ? routes.tabularReviewHref(studioHandoff.projectId, review.review_id)
+                  : review.route,
+              )
+            }
+            className="flex shrink-0 items-center gap-1 rounded-md bg-white px-2.5 py-1.5 text-xs font-medium text-emerald-700 shadow-sm ring-1 ring-emerald-100 transition-colors hover:bg-emerald-50"
+          >
+            <Check className="h-3.5 w-3.5" />
+            {t("assistant.artifacts.openReview")}
+          </button>
+          <p className="sr-only">{t("assistant.artifacts.reviewXlsxHint")}</p>
         </div>
       ))}
 

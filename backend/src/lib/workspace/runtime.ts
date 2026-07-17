@@ -195,6 +195,7 @@ import {
 import { WorkspaceAssistantDraftToolModule } from "./services/assistantDraftTools";
 import { WorkspaceAssistantWorkflowToolModule } from "./services/assistantWorkflowTools";
 import { WorkspaceAssistantActionLedger } from "./services/assistantActionLedger";
+import { WorkspaceAssistantContractReviewToolModule } from "./services/assistantContractReviewTools";
 import { WorkspaceChatsRuntimePort } from "./services/assistantChatsPort";
 import { ChatsService } from "./services/chats";
 import {
@@ -794,6 +795,25 @@ export class WorkspaceRuntime
             this.workflows,
             assistantActions,
           ),
+          new WorkspaceAssistantContractReviewToolModule(
+            this.database,
+            () => this.tabularService,
+            this.workflows,
+            assistantActions,
+            async (projectId, reviewId) => {
+              const result = await this.createStudioDocumentFromTabularReview(
+                { principalId: WORKSPACE_LOCAL_PRINCIPAL_ID },
+                projectId,
+                reviewId,
+              );
+              return {
+                documentId: result.document_id,
+                versionId: result.version.id,
+                title: result.title,
+              };
+            },
+            () => this.tabularGenerationEnabled,
+          ),
           ...(dependencies.assistantToolModules ?? []),
         ]);
       })();
@@ -935,7 +955,7 @@ export class WorkspaceRuntime
         abortRegistry: this.abortRegistry,
         inferenceScopeResolver: inferenceScopeResolver.resolve,
         concurrency:
-          assistantRuntime || workflowRuntime || tabularCellHandler ? 2 : 1,
+          assistantRuntime || workflowRuntime || tabularCellHandler ? 4 : 1,
         handlers: {
           document_parse: (context) => parser.handleJob(context),
           ...(assistantRuntime

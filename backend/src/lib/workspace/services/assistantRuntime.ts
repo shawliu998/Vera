@@ -45,6 +45,8 @@ const AssistantToolNameSchema = z.enum([
   "get_workflow_run",
   "search_legal_sources",
   "read_legal_source",
+  "run_contract_review",
+  "get_contract_review",
 ]);
 const TOOL_EVENT_TYPES = new Set([
   "doc_read_start",
@@ -53,6 +55,7 @@ const TOOL_EVENT_TYPES = new Set([
   "doc_find",
   "workflow_applied",
   "draft_created",
+  "tabular_review_created",
 ]);
 
 export type AssistantToolName = z.infer<typeof AssistantToolNameSchema>;
@@ -64,6 +67,8 @@ const TOOL_CALL_BUDGETS: Partial<Record<AssistantToolName, number>> = {
   suggest_draft_edit: 5,
   run_workflow: 2,
   get_workflow_run: 8,
+  run_contract_review: 1,
+  get_contract_review: 8,
 };
 
 export const AssistantModelSourceSchema = z
@@ -494,6 +499,7 @@ CORE RULES:
 - For Draft citations, submit only evidenceSources returned by document or legal-authority read tools in this attempt, using the returned evidence id and its exact quote. Never submit sourceSnapshotIds, citationAnchorIds, or identifiers outside the current evidence; the backend reverifies durable ownership.
 - Use at most 10 tool-use rounds per response. Batch independent tool calls and leave room for the final answer.
 - Per response, use at most 4 legal searches, 12 legal-source reads, 1 Draft creation, 5 Draft suggestions, 2 Workflow runs, and 8 Workflow status reads. When a budget is exhausted, stop that activity, answer from evidence already read, and disclose the limitation.
+- If run_contract_review or get_contract_review returns asynchronous=true, immediately call get_contract_review with that exact review id; never start a replacement Review. Continue until the Review is terminal or the 8-read budget is exhausted. Do not present a normal final answer while the Review is still running; if the read budget is exhausted, state that it remains in progress and direct the user to the returned Review route.
 - Use only the registered tools listed below. Never directly attempt shell, Python, arbitrary network access, MCP, CourtListener, cloud storage, dynamic tools, or multi-agent delegation. A registered legal-research tool may use its fixed backend provider boundary; do not invent or call provider tools directly.
 - Read each relevant document/version at most once per response. After a read/fetch tool returns document text, use that result or find_in_document for targeted checks.
 - Chat-local labels such as "doc-0" are internal. Use them only in tool arguments and citation data; refer to documents by filename in prose.
@@ -1211,6 +1217,18 @@ export class AssistantRuntimeService {
                 502,
                 "JOB_FAILED",
                 "Assistant Draft event is outside the current Matter.",
+              );
+            }
+            if (
+              parsed.type === "tabular_review_created" &&
+              (snapshot.payload.projectId === null ||
+                parsed.route !==
+                  `/projects/${snapshot.payload.projectId}/tabular-reviews/${parsed.review_id}`)
+            ) {
+              throw new WorkspaceApiError(
+                502,
+                "JOB_FAILED",
+                "Assistant Tabular Review event is outside the current Matter.",
               );
             }
             assertMikeSafePayload(parsed);

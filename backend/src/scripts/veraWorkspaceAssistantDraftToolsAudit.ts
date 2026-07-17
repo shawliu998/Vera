@@ -175,7 +175,7 @@ async function run() {
   try {
     process.env.ALETHEIA_DATABASE_ENCRYPTION = "metadata_plaintext";
     database = new WorkspaceDatabase(path.join(root, "workspace.sqlite"));
-    assert.equal(database.migration?.currentVersion, 23);
+    assert.equal(database.migration?.currentVersion, 24);
 
     const projects = new ProjectsRepository(database);
     projects.create({

@@ -6,13 +6,15 @@ export const ASSISTANT_ACTION_BUDGETS = {
   create_draft: 1,
   suggest_draft_edit: 5,
   run_workflow: 2,
+  run_contract_review: 1,
 } as const;
 
 export type AssistantActionType = keyof typeof ASSISTANT_ACTION_BUDGETS;
 export type AssistantActionResourceType =
   | "draft"
   | "draft_suggestion"
-  | "workflow_run";
+  | "workflow_run"
+  | "tabular_review";
 export type AssistantActionLedgerStatus = "reserved" | "complete";
 
 export type AssistantActionLedgerRecord = Readonly<{
@@ -80,6 +82,7 @@ const ACTION_RESOURCE_TYPES: Readonly<
   create_draft: "draft",
   suggest_draft_edit: "draft_suggestion",
   run_workflow: "workflow_run",
+  run_contract_review: "tabular_review",
 };
 const MAX_CANONICAL_INPUT_CHARACTERS = 1_000_000;
 const MAX_ATTEMPTS = 100;

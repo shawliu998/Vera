@@ -1287,7 +1287,7 @@ export class ChatsRepository {
     if (!this.hasV10AssistantEventSchema()) {
       return [] as Extract<
         MikeAssistantStreamEvent,
-        { type: "draft_created" }
+        { type: "draft_created" | "tabular_review_created" }
       >[];
     }
     const rows = this.database
@@ -1305,20 +1305,30 @@ export class ChatsRepository {
               WHEN job.status='queued' THEN job.attempt+1
               ELSE max(job.attempt,1)
             END
-            AND event.event_type='draft_created'
+            AND event.event_type IN ('draft_created','tabular_review_created')
            JOIN chats chat
              ON chat.id=snapshot.chat_id
             AND chat.scope='project'
             AND chat.project_id IS NOT NULL
-           JOIN documents document
-             ON document.id=json_extract(event.event_json,'$.draft_id')
+           LEFT JOIN documents document
+             ON event.event_type='draft_created'
+            AND document.id=json_extract(event.event_json,'$.draft_id')
             AND document.project_id=chat.project_id
             AND document.deleted_at IS NULL
-           JOIN document_versions version
-             ON version.id=json_extract(event.event_json,'$.version_id')
+           LEFT JOIN document_versions version
+             ON event.event_type='draft_created'
+            AND version.id=json_extract(event.event_json,'$.version_id')
             AND version.document_id=document.id
             AND version.deleted_at IS NULL
+           LEFT JOIN tabular_reviews review
+             ON event.event_type='tabular_review_created'
+            AND review.id=json_extract(event.event_json,'$.review_id')
+            AND review.project_id=chat.project_id
           WHERE snapshot.output_message_id=?
+            AND (
+              (event.event_type='draft_created' AND document.id IS NOT NULL AND version.id IS NOT NULL) OR
+              (event.event_type='tabular_review_created' AND review.id IS NOT NULL)
+            )
           ORDER BY event.sequence
           LIMIT 10`,
       )
@@ -1336,17 +1346,21 @@ export class ChatsRepository {
       } catch {
         corrupt("Invalid persisted Assistant durable UI event.");
       }
-      if (event.type !== "draft_created") {
+      if (
+        event.type !== "draft_created" &&
+        event.type !== "tabular_review_created"
+      ) {
         corrupt("Unsupported persisted Assistant durable UI event.");
       }
       const projectId = requiredString(
         row.project_id,
         "Assistant durable UI event Matter id",
       );
-      if (
-        event.route !==
-        `/projects/${projectId}/documents/${event.draft_id}/studio`
-      ) {
+      const expectedRoute =
+        event.type === "draft_created"
+          ? `/projects/${projectId}/documents/${event.draft_id}/studio`
+          : `/projects/${projectId}/tabular-reviews/${event.review_id}`;
+      if (event.route !== expectedRoute) {
         corrupt("Invalid persisted Assistant durable UI event route.");
       }
       return event;

@@ -7,7 +7,7 @@ tests take precedence over historical programme text below.
 
 Status on 2026-07-17: Matter convergence is merged to `main` at
 `5611699e46552a20bf42ce84396a8e65aa139d16`; the active feature branch now uses
-Workspace schema v23. The active
+Workspace schema v24. The active
 implementation branch for the next vertical is `feat/local-legal-work-agent`.
 
 ```text
@@ -43,6 +43,8 @@ Implemented and wired in source:
   OCR, provenance, and exact-page reopening;
 - durable Assistant streaming, tool loop, stop/retry/regenerate/recovery, and
   document citations;
+- Matter Assistant contract-review orchestration over explicit current
+  attachments, with durable Tabular Review progress and Studio result cards;
 - OpenAI, DeepSeek, Anthropic, Gemini, and bounded OpenAI-compatible profiles;
 - Workflow and Tabular durable execution using the same local Job Runtime;
 - Document Studio CAS save, immutable versions, restore, exact suggestions,
@@ -92,6 +94,19 @@ transaction. Replays return the same frozen handoff version even after later
 lawyer edits or an application restart. The generated memo is an AI draft that
 requires lawyer review; persisted color flags are extraction markers, not risk
 ratings, and this slice does not claim Harvey or Legora feature parity.
+
+Schema v24 lets the existing Matter Assistant start or resume either supported
+built-in contract-review preset without introducing a second Agent runtime or
+Plan/Artifact database. A deterministic Assistant action creates one durable
+Tabular Review from 2–50 explicitly attached current document versions, waits
+for bounded progress, cascades user cancellation, and reuses the v23 handoff to
+create one Studio Memo only after every Cell succeeds. Review/XLSX and
+Memo/DOCX remain user-opened artifacts; binary exports never enter model
+context, and retries or application restarts reuse the same Review identity.
+If an unusually long Review outlives the same Assistant generation's bounded
+tool loop, the Review remains durable and can use the existing manual Studio
+handoff; cross-generation background Memo finalization is not claimed in this
+slice.
 
 The deterministic legal-work vertical uses the test-only Provider to verify
 search -> durable read -> cited Assistant answer -> cited Studio Draft -> user

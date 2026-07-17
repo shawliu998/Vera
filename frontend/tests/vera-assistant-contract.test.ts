@@ -318,6 +318,37 @@ test("completed chat detail restores its bounded durable Draft projection on ref
   }
 });
 
+test("completed chat detail restores its bounded Tabular Review projection on refresh", () => {
+  const reviewEvent = {
+    type: "tabular_review_created" as const,
+    review_id: documentId,
+    title: "Contract comparison",
+    route: `/projects/${chatId}/tabular-reviews/${documentId}`,
+    document_count: 3,
+  };
+  const detail = parseVeraAssistantChatDetail({
+    chat: {
+      id: chatId,
+      project_id: chatId,
+      user_id: localUserId,
+      title: "Matter chat",
+      created_at: now,
+    },
+    messages: [
+      {
+        id: outputId,
+        chat_id: chatId,
+        role: "assistant",
+        content: "Review complete.",
+        events: [reviewEvent],
+        created_at: now,
+      },
+    ],
+  });
+  const restored = toUiMessage(detail.messages[0]);
+  assert.deepEqual(restored.events?.find((event) => event.type === "tabular_review_created"), reviewEvent);
+});
+
 test("JSON recovery drains more than 100 durable events through the terminal event", async () => {
   const firstPageEvents = Array.from({ length: 100 }, (_, index) => ({
     cursor: index + 1,
@@ -430,6 +461,8 @@ test("Assistant parser rejects secrets and raw provider payloads recursively", (
     "suggest_draft_edit",
     "run_workflow",
     "get_workflow_run",
+    "run_contract_review",
+    "get_contract_review",
     "search_legal_sources",
     "read_legal_source",
   ] as const) {
@@ -449,11 +482,27 @@ test("Assistant parser rejects secrets and raw provider payloads recursively", (
     route: `/projects/${chatId}/documents/${documentId}/studio`,
   };
   assert.deepEqual(parseVeraAssistantStreamEvent(draftEvent), draftEvent);
+  const reviewEvent = {
+    type: "tabular_review_created" as const,
+    review_id: documentId,
+    title: "Contract comparison",
+    route: `/projects/${chatId}/tabular-reviews/${documentId}`,
+    document_count: 3,
+  };
+  assert.deepEqual(parseVeraAssistantStreamEvent(reviewEvent), reviewEvent);
   assert.throws(
     () =>
       parseVeraAssistantStreamEvent({
         ...draftEvent,
         route: `/projects/${chatId}/documents/${versionId}/studio`,
+      }),
+    VeraApiError,
+  );
+  assert.throws(
+    () =>
+      parseVeraAssistantStreamEvent({
+        ...reviewEvent,
+        route: `/projects/${chatId}/tabular-reviews/${versionId}`,
       }),
     VeraApiError,
   );

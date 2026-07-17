@@ -510,6 +510,13 @@ const zhCN = {
       modelRequired: "请先在设置中配置并启用模型",
       modelSettings: "模型设置",
     },
+    starters: {
+      contractReview: {
+        label: "审查一批合同",
+        prompt:
+          "请审查我选择的合同，比较控制权变更、责任上限、自动续期和适用法条款；生成一份比较表，并起草一份风险备忘录。",
+      },
+    },
     model: {
       choose: "选择模型",
       requireReady: "请先在设置中启用已通过连接测试的模型",
@@ -535,6 +542,8 @@ const zhCN = {
       readWorkflow: "读取工作流",
       runWorkflow: "启动工作流",
       getWorkflowRun: "读取工作流运行状态",
+      runContractReview: "正在启动合同审查",
+      getContractReview: "正在检查合同审查",
       searchLegalSources: "检索授权法律数据源",
       readLegalSource: "读取法律来源",
       readingDocument: "正在读取 {filename}",
@@ -543,7 +552,14 @@ const zhCN = {
       matches: "{filename} · {count} 处匹配",
       workflowApplied: "已应用 {title}",
       draftCreated: "已创建文稿 {title}",
+      reviewCreated: "已创建合同审查 {title}（{count} 份文档）",
+      taskProgress: "任务进度",
       thinking: "正在思考",
+    },
+    artifacts: {
+      reviewDescription: "已审查 {count} 份文档；可在 Review 中导出 XLSX。",
+      openReview: "打开 Review",
+      reviewXlsxHint: "可在 Review 中导出 XLSX。",
     },
     empty: {
       title: "开始和 Vera 对话",
@@ -2005,6 +2021,13 @@ const enUS = {
       modelRequired: "Configure and enable a model in Settings first",
       modelSettings: "Model settings",
     },
+    starters: {
+      contractReview: {
+        label: "Review contracts",
+        prompt:
+          "Review the selected contracts. Compare change-of-control, limitation-of-liability, auto-renewal, and governing-law clauses; produce a comparison table and draft a risk memorandum.",
+      },
+    },
     model: {
       choose: "Choose model",
       requireReady: "Enable a connection-tested model in Settings first",
@@ -2030,6 +2053,8 @@ const enUS = {
       readWorkflow: "Reading workflow",
       runWorkflow: "Starting workflow",
       getWorkflowRun: "Reading workflow run status",
+      runContractReview: "Starting contract review",
+      getContractReview: "Checking contract review",
       searchLegalSources: "Searching authorized legal sources",
       readLegalSource: "Reading legal authority",
       readingDocument: "Reading {filename}",
@@ -2038,7 +2063,14 @@ const enUS = {
       matches: "{filename} · {count} matches",
       workflowApplied: "Applied {title}",
       draftCreated: "Created draft {title}",
+      reviewCreated: "Created contract review {title} ({count} documents)",
+      taskProgress: "Task progress",
       thinking: "Thinking",
+    },
+    artifacts: {
+      reviewDescription: "Reviewed {count} documents; export XLSX from Review.",
+      openReview: "Open Review",
+      reviewXlsxHint: "Export XLSX from Review.",
     },
     empty: {
       title: "Start a conversation with Vera",

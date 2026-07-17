@@ -170,6 +170,13 @@ export type AssistantEvent =
       route: string;
     }
   | {
+      type: "tabular_review_created";
+      review_id: string;
+      title: string;
+      route: string;
+      document_count: number;
+    }
+  | {
       type: "doc_edited";
       filename: string;
       document_id: string;

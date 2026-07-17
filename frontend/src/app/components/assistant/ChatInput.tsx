@@ -24,6 +24,7 @@ import { ModelToggle } from "./ModelToggle";
 
 export interface ChatInputHandle {
   addDoc: (document: VeraDocumentWire) => void;
+  setPrompt: (prompt: string) => void;
   focus: () => void;
 }
 
@@ -80,6 +81,15 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
           ? current
           : [...current, document],
       );
+    },
+    setPrompt(prompt) {
+      setValue(prompt);
+      window.requestAnimationFrame(() => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        resize(textarea);
+        textarea.focus();
+      });
     },
     focus() {
       textareaRef.current?.focus();

@@ -217,12 +217,12 @@ function schemaNames(
 function auditFreshInstallAndStrictConstraints() {
   const database = new WorkspaceDatabase(path.join(root, "fresh.db"));
   try {
-    assert.equal(database.migration?.currentVersion, 23);
+    assert.equal(database.migration?.currentVersion, 24);
     assert.deepEqual(
       database.migration?.applied.map((entry) => entry.version),
       [
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-        21, 22, 23,
+        21, 22, 23, 24,
       ],
     );
     assert.equal(WORKSPACE_MIGRATIONS.at(14), MATTER_PROFILES_V15_MIGRATION);
@@ -859,10 +859,10 @@ function auditV14UpgradeChecksumAndIdempotence() {
 
   const upgraded = new WorkspaceDatabase(databasePath);
   try {
-    assert.equal(upgraded.migration?.currentVersion, 23);
+    assert.equal(upgraded.migration?.currentVersion, 24);
     assert.deepEqual(
       upgraded.migration?.applied.map((entry) => entry.version),
-      [15, 16, 17, 18, 19, 20, 21, 22, 23],
+      [15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
     );
     assert.deepEqual(
       upgraded
@@ -937,7 +937,7 @@ function auditV14UpgradeChecksumAndIdempotence() {
       checksum: workspaceMigrationChecksum(MATTER_CLASSIFICATION_V16_MIGRATION),
     });
     const rerun = upgraded.runMigrations();
-    assert.equal(rerun.currentVersion, 23);
+    assert.equal(rerun.currentVersion, 24);
     assert.deepEqual(rerun.applied, []);
 
     const driftedV15: WorkspaceMigration = {
@@ -983,7 +983,7 @@ function auditV14UpgradeChecksumAndIdempotence() {
 
   const reopened = new WorkspaceDatabase(databasePath);
   try {
-    assert.equal(reopened.migration?.currentVersion, 23);
+    assert.equal(reopened.migration?.currentVersion, 24);
     assert.deepEqual(reopened.migration?.applied, []);
     assert.equal(
       reopened
@@ -1053,10 +1053,10 @@ function auditV15ClassificationUpgradeAndRestart() {
 
   const upgraded = new WorkspaceDatabase(databasePath);
   try {
-    assert.equal(upgraded.migration?.currentVersion, 23);
+    assert.equal(upgraded.migration?.currentVersion, 24);
     assert.deepEqual(
       upgraded.migration?.applied.map((entry) => entry.version),
-      [16, 17, 18, 19, 20, 21, 22, 23],
+      [16, 17, 18, 19, 20, 21, 22, 23, 24],
     );
     assert.deepEqual(
       object(
@@ -1148,7 +1148,7 @@ function auditV15ClassificationUpgradeAndRestart() {
 
   const classificationRequiredRestart = new WorkspaceDatabase(databasePath);
   try {
-    assert.equal(classificationRequiredRestart.migration?.currentVersion, 23);
+    assert.equal(classificationRequiredRestart.migration?.currentVersion, 24);
     assert.deepEqual(classificationRequiredRestart.migration?.applied, []);
     assert.deepEqual(
       object(
@@ -1191,7 +1191,7 @@ function auditV15ClassificationUpgradeAndRestart() {
 
   const classifiedRestart = new WorkspaceDatabase(databasePath);
   try {
-    assert.equal(classifiedRestart.migration?.currentVersion, 23);
+    assert.equal(classifiedRestart.migration?.currentVersion, 24);
     assert.deepEqual(
       object(
         classifiedRestart
@@ -1228,7 +1228,7 @@ function auditV15ClassificationUpgradeAndRestart() {
   );
   const currentBinaryRecovery = new WorkspaceDatabase(databasePath);
   try {
-    assert.equal(currentBinaryRecovery.migration?.currentVersion, 23);
+    assert.equal(currentBinaryRecovery.migration?.currentVersion, 24);
     assert.deepEqual(currentBinaryRecovery.migration?.applied, []);
     assert.deepEqual(
       object(
@@ -1418,10 +1418,10 @@ function auditSqlcipherV15UpgradeAndRestart() {
 
   const upgraded = new WorkspaceDatabase(databasePath);
   try {
-    assert.equal(upgraded.migration?.currentVersion, 23);
+    assert.equal(upgraded.migration?.currentVersion, 24);
     assert.deepEqual(
       upgraded.migration?.applied.map((entry) => entry.version),
-      [16, 17, 18, 19, 20, 21, 22, 23],
+      [16, 17, 18, 19, 20, 21, 22, 23, 24],
     );
     assert.equal(upgraded.migration?.capabilities.sqlcipherEncrypted, true);
     assert.deepEqual(
@@ -1471,7 +1471,7 @@ function auditSqlcipherV15UpgradeAndRestart() {
   }
   const reopened = new WorkspaceDatabase(databasePath);
   try {
-    assert.equal(reopened.migration?.currentVersion, 23);
+    assert.equal(reopened.migration?.currentVersion, 24);
     assert.deepEqual(reopened.migration?.applied, []);
     assert.equal(reopened.migration?.capabilities.sqlcipherEncrypted, true);
     assert.deepEqual(
@@ -1513,7 +1513,7 @@ try {
   process.env.ALETHEIA_DATABASE_ENCRYPTION = "metadata_plaintext";
   assert.deepEqual(
     WORKSPACE_MIGRATIONS.map((migration) => migration.version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
   );
   assert.deepEqual(
     V14_MIGRATIONS.map((migration) => migration.version),
@@ -1538,9 +1538,9 @@ try {
       {
         ok: true,
         suite: "vera-matter-profile-migration-audit-v16",
-        current_version: 23,
+        current_version: 24,
         checks: [
-          "clean SQLite v21 install with additive inference-policy, Legal Provider, Assistant action, Draft metadata, and local template slices",
+          "clean SQLite v24 install with additive inference-policy, Legal Provider, Assistant action, Draft metadata, templates, research, Tabular handoff, and contract-review slices",
           "additive v14-to-v16 upgrade without Project backfill",
           "additive v15-to-v16 classification upgrade without inferred backfill",
           "legacy classification_required survives restart until explicitly selected",

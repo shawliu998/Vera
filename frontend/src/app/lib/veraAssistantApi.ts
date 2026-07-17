@@ -159,6 +159,8 @@ export type VeraAssistantStreamEvent =
         | "read_workflow"
         | "run_workflow"
         | "get_workflow_run"
+        | "run_contract_review"
+        | "get_contract_review"
         | "search_legal_sources"
         | "read_legal_source";
     }
@@ -179,13 +181,20 @@ export type VeraAssistantStreamEvent =
       title: string;
       route: string;
     }
+  | {
+      type: "tabular_review_created";
+      review_id: string;
+      title: string;
+      route: string;
+      document_count: number;
+    }
   | VeraAssistantCitation
   | { type: "complete"; message_id: string; job_id: string }
   | { type: "error"; code?: string; message: string };
 
 export type VeraAssistantMessageEvent = Extract<
   VeraAssistantStreamEvent,
-  { type: "draft_created" }
+  { type: "draft_created" | "tabular_review_created" }
 >;
 
 export interface VeraAssistantDurableEvent {
@@ -623,7 +632,10 @@ function parseMessage(value: unknown): VeraAssistantMessage {
   }
   const durableEvents = events?.map((item) => {
     const event = parseVeraAssistantStreamEvent(item);
-    if (event.type !== "draft_created") {
+    if (
+      event.type !== "draft_created" &&
+      event.type !== "tabular_review_created"
+    ) {
       return invalid("Assistant message durable event type");
     }
     return event;
@@ -657,12 +669,22 @@ export function parseVeraAssistantChatDetail(
   }
   for (const message of messages) {
     for (const event of message.events ?? []) {
+      if (chat.project_id === null) {
+        return invalid("Assistant message artifact Matter ownership");
+      }
       if (
-        chat.project_id === null ||
+        event.type === "draft_created" &&
         event.route !==
           `/projects/${chat.project_id}/documents/${event.draft_id}/studio`
       ) {
         return invalid("Assistant message Draft Matter ownership");
+      }
+      if (
+        event.type === "tabular_review_created" &&
+        event.route !==
+          `/projects/${chat.project_id}/tabular-reviews/${event.review_id}`
+      ) {
+        return invalid("Assistant message Tabular Review Matter ownership");
       }
     }
   }
@@ -776,6 +798,8 @@ const TOOL_NAMES = [
   "read_workflow",
   "run_workflow",
   "get_workflow_run",
+  "run_contract_review",
+  "get_contract_review",
   "search_legal_sources",
   "read_legal_source",
 ] as const;
@@ -901,6 +925,35 @@ export function parseVeraAssistantStreamEvent(
         version_id: uuid(raw.version_id, "Assistant Draft version id"),
         title: stringValue(raw.title, "Assistant Draft title", 240),
         route,
+      };
+    }
+    case "tabular_review_created": {
+      exactKeys(
+        raw,
+        ["type", "review_id", "title", "route", "document_count"],
+        [],
+        "Assistant Tabular Review event",
+      );
+      const reviewId = uuid(raw.review_id, "Assistant Tabular Review id");
+      const route = stringValue(raw.route, "Assistant Tabular Review route", 240);
+      if (
+        !new RegExp(
+          `^/projects/[0-9a-f-]{36}/tabular-reviews/${reviewId}$`,
+        ).test(route)
+      ) {
+        return invalid("Assistant Tabular Review route ownership");
+      }
+      return {
+        type,
+        review_id: reviewId,
+        title: stringValue(raw.title, "Assistant Tabular Review title", 240),
+        route,
+        document_count: integer(
+          raw.document_count,
+          "Assistant Tabular Review document count",
+          2,
+          50,
+        ),
       };
     }
     case "citation_data":

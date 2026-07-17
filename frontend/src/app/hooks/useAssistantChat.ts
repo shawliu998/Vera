@@ -156,13 +156,23 @@ export function toUiMessage(message: VeraAssistantMessage): Message {
       ? {
           events: [
             ...(content ? [{ type: "content" as const, text: content }] : []),
-            ...(message.events ?? []).map((event): AssistantEvent => ({
-              type: "draft_created",
-              draft_id: event.draft_id,
-              version_id: event.version_id,
-              title: event.title,
-              route: event.route,
-            })),
+            ...(message.events ?? []).map((event): AssistantEvent =>
+              event.type === "draft_created"
+                ? {
+                    type: "draft_created",
+                    draft_id: event.draft_id,
+                    version_id: event.version_id,
+                    title: event.title,
+                    route: event.route,
+                  }
+                : {
+                    type: "tabular_review_created",
+                    review_id: event.review_id,
+                    title: event.title,
+                    route: event.route,
+                    document_count: event.document_count,
+                  },
+            ),
           ],
           annotations: citations,
           citationStatus: citations.length ? ("final" as const) : undefined,
@@ -390,6 +400,20 @@ function applyStreamEvent(
             version_id: wire.version_id,
             title: wire.title,
             route: wire.route,
+          },
+        ],
+      };
+    case "tabular_review_created":
+      return {
+        ...message,
+        events: [
+          ...finaliseStreamingEvents(events),
+          {
+            type: "tabular_review_created",
+            review_id: wire.review_id,
+            title: wire.title,
+            route: wire.route,
+            document_count: wire.document_count,
           },
         ],
       };

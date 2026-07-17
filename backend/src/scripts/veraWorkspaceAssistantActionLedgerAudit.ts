@@ -216,7 +216,7 @@ function auditUpgrade(root: string) {
   }
   const upgraded = new WorkspaceDatabase(pathName);
   try {
-    assert.equal(upgraded.migration?.currentVersion, 23);
+    assert.equal(upgraded.migration?.currentVersion, 24);
     assert.deepEqual(
       {
         ...upgraded
@@ -325,12 +325,13 @@ function run() {
     );
     assert.deepEqual(
       WORKSPACE_MIGRATIONS.map((migration) => migration.version),
-      Array.from({ length: 23 }, (_, index) => index + 1),
+      Array.from({ length: 24 }, (_, index) => index + 1),
     );
     assert.deepEqual(ASSISTANT_ACTION_BUDGETS, {
       create_draft: 1,
       suggest_draft_edit: 5,
       run_workflow: 2,
+      run_contract_review: 1,
     });
     assert.equal(
       hashAssistantActionInput({ b: 2, a: [true, null] }),
@@ -340,7 +341,7 @@ function run() {
 
     auditUpgrade(root);
     database = new WorkspaceDatabase(path.join(root, "fresh.sqlite"));
-    assert.equal(database.migration?.currentVersion, 23);
+    assert.equal(database.migration?.currentVersion, 24);
     for (const name of [
       "assistant_action_ledger_v19_insert_guard",
       "assistant_action_ledger_v19_update_guard",

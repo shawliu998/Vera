@@ -1058,7 +1058,7 @@ async function run() {
     );
 
     const currentMigration = database.runMigrations(WORKSPACE_MIGRATIONS);
-    assert.equal(currentMigration.currentVersion, 23);
+    assert.equal(currentMigration.currentVersion, 24);
     markProfileReady(database, profileId);
 
     const projects = new ProjectsRepository(database);
@@ -1701,6 +1701,10 @@ async function run() {
       /form a bounded Draft Plan with a title, document type, and ordered sections/,
     );
     assert.match(capturedSystemPrompt, /mark material gaps explicitly/);
+    assert.match(
+      capturedSystemPrompt,
+      /asynchronous=true, immediately call get_contract_review/,
+    );
     assert.match(capturedSystemPrompt, /read_document/);
     assert.match(
       capturedSystemPrompt,
@@ -3158,7 +3162,7 @@ async function run() {
     migrations: WORKSPACE_MIGRATIONS,
   });
   try {
-    assert.equal(reopened.migration?.currentVersion, 23);
+    assert.equal(reopened.migration?.currentVersion, 24);
     assert.equal(
       reopened
         .prepare("SELECT value FROM assistant_legacy_sentinel WHERE id=1")

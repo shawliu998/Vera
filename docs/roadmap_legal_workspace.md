@@ -6,7 +6,7 @@ Status: canonical forward plan
 
 Current merged `main`: `5611699e46552a20bf42ce84396a8e65aa139d16`
 
-Current feature-branch Workspace schema: v23
+Current feature-branch Workspace schema: v24
 
 ## 1. Product truth source
 
@@ -40,7 +40,7 @@ The following capability families are merged and available in the active
 Workspace runtime:
 
 - one Electron-managed loopback Next.js/Express lifecycle;
-- one SQLCipher Workspace database with additive migrations through v23;
+- one SQLCipher Workspace database with additive migrations through v24;
 - encrypted local Blob storage and isolated Keychain credential handling;
 - Project-owned Matter Profile, explicit workspace classification, capability
   projections, continuous Matter shell, and unified inference policy;
@@ -204,7 +204,7 @@ while the live stage remains explicitly blocked.
 
 ### Stage 7 — Matter contract bulk extraction preset
 
-Status: implemented on the current feature branch through Workspace schema v23.
+Status: implemented on the current feature branch through Workspace schema v24.
 
 One active built-in Tabular workflow can open the current Matter Review with a
 server-managed column preset. Creation omits renderer-owned columns; the
@@ -222,6 +222,21 @@ document/version/chunk/quote/offset source before atomically creating the typed
 Draft, immutable source bindings, and v23 handoff record. Server-derived replay
 returns the original handoff version after later edits and restart.
 
+The same existing Matter Assistant now exposes only two additional high-level
+tools: `run_contract_review` and `get_contract_review`. The server derives one
+deterministic Review from 2–50 explicitly attached current document versions,
+runs the existing durable Cell jobs, supports bounded wait/resume and
+cancellation, and emits durable Review and Draft cards. It reuses the v23
+handoff for the Studio Memo and does not add a second runtime, fake Plan,
+multi-Agent layer, or parallel artifact database.
+
+The autonomous boundary is intentionally bounded: `get_contract_review`
+resumes within the same durable generation or its retry/restart. If that tool
+loop ends before an unusually long Review finishes, the Review remains usable
+and the existing manual Studio handoff remains available; a separate
+cross-generation background finalizer is deferred rather than hidden behind a
+fake Plan.
+
 The result remains an AI-generated draft requiring lawyer review. Persisted
 color flags are extraction markers, not legal risk ratings, approval states, or
 proof that unflagged clauses are safe. This stage does not claim Harvey or
@@ -229,12 +244,15 @@ Legora feature parity.
 
 ## 4. Migration order
 
-Migrations v1-v23 are published and immutable. The Tool Registry needed no
-migration. v18 owns Provider configuration, v19 owns the Assistant action
+Migrations v1-v23 are published and immutable; v24 is the current additive
+feature-branch migration. The Tool Registry needed no migration. v18 owns
+Provider configuration, v19 owns the Assistant action
 ledger, v20 owns Draft type/origin metadata, v21 owns the local template
 catalogue plus bounded DraftPlans, v22 owns bounded durable legal-research
 replay/read/message-source bindings, and v23 owns immutable Tabular Review to
-Studio Draft evidence handoffs:
+Studio Draft evidence handoffs. v24 strictly extends the existing Assistant
+event and action-ledger enums for durable contract-review orchestration without
+adding another state table:
 
 ```text
 legal_research_sessions

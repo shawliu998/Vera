@@ -363,9 +363,8 @@ export class TabularService {
     return this.repository.requireDetail(id);
   }
 
-  create(value: unknown) {
+  private createWithId(value: unknown, reviewId: string) {
     const input = CreateTabularDraftSchema.parse(value);
-    const reviewId = this.idFactory();
     let requestedColumns = input.columns;
     let resolvedWorkflowId: string | null = null;
     if (input.workflowId) {
@@ -466,6 +465,22 @@ export class TabularService {
       cells,
       now,
     });
+  }
+
+  create(value: unknown) {
+    return this.createWithId(value, this.idFactory());
+  }
+
+  /**
+   * Server-owned id seam for durable Assistant actions. Public routes continue
+   * to use create(), while the Assistant derives this UUID from its immutable
+   * generation snapshot so a crashed attempt can replay without duplicating a
+   * review. An existing id is never silently accepted here; the Assistant
+   * module must revalidate the complete immutable binding before reuse.
+   */
+  createPresetReviewWithId(reviewId: string, value: unknown) {
+    WorkspaceIdSchema.parse(reviewId);
+    return this.createWithId(value, reviewId);
   }
 
   updateDraftMatrix(id: string, value: unknown) {

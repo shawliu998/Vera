@@ -178,7 +178,7 @@ function auditUpgradeAndRollback(root: string) {
     migrations: WORKSPACE_MIGRATIONS.slice(0, 21),
   }).close();
   const upgraded = new WorkspaceDatabase(upgradePath);
-  assert.equal(upgraded.migration?.currentVersion, 23);
+  assert.equal(upgraded.migration?.currentVersion, 24);
   assert.equal(
     upgraded
       .prepare("SELECT count(*) AS count FROM legal_research_sessions")
@@ -233,7 +233,7 @@ async function run() {
     );
     assert.deepEqual(
       WORKSPACE_MIGRATIONS.map((migration) => migration.version),
-      Array.from({ length: 23 }, (_, index) => index + 1),
+      Array.from({ length: 24 }, (_, index) => index + 1),
     );
     auditUpgradeAndRollback(root);
 

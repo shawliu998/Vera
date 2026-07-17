@@ -5,6 +5,7 @@
 // frontend/src/app/components/assistant/ChatView.tsx
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowDown, RefreshCw } from "lucide-react";
+import { usePathname } from "next/navigation";
 import type { Message } from "@/app/components/shared/types";
 import type { VeraDocumentWire } from "@/app/lib/veraWireTypes";
 import { AssistantMessage } from "./AssistantMessage";
@@ -47,6 +48,7 @@ export function ChatView({
   chatId?: string;
 }) {
   const { t } = useI18n();
+  const pathname = usePathname();
   const containerRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const latestUserRef = useRef<HTMLDivElement>(null);
@@ -54,6 +56,13 @@ export function ChatView({
   const chatInputRef = useRef<ChatInputHandle>(null);
   const [inputHeight, setInputHeight] = useState(0);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const showContractReviewStarter =
+    pathname.startsWith("/matters/") &&
+    (availableDocuments?.filter((document) => document.status === "ready").length ?? 0) >= 2;
+
+  const startContractReview = useCallback(() => {
+    chatInputRef.current?.setPrompt(t("assistant.starters.contractReview.prompt"));
+  }, [t]);
 
   useEffect(() => {
     const input = inputContainerRef.current;
@@ -121,11 +130,22 @@ export function ChatView({
         >
           <div className="space-y-6 md:space-y-8">
             {messages.length === 0 && (
-              <div className="flex min-h-[55dvh] items-center justify-center gap-3 text-gray-900">
-                <VeraMark size={28} decorative />
-                <p className="font-serif text-3xl font-light">
-                  {projectName ?? t("assistant.empty.title")}
-                </p>
+              <div className="flex min-h-[55dvh] flex-col items-center justify-center gap-5 text-gray-900">
+                <div className="flex items-center gap-3">
+                  <VeraMark size={28} decorative />
+                  <p className="font-serif text-3xl font-light">
+                    {projectName ?? t("assistant.empty.title")}
+                  </p>
+                </div>
+                {showContractReviewStarter && (
+                  <button
+                    type="button"
+                    onClick={startContractReview}
+                    className="rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-900 focus-visible:ring-offset-2"
+                  >
+                    {t("assistant.starters.contractReview.label")}
+                  </button>
+                )}
               </div>
             )}
             {messages.map((message, index) => (
