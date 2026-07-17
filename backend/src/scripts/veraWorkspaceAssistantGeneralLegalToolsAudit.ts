@@ -140,7 +140,24 @@ async function main() {
       "create_memo_from_tabular_review",
     ],
   );
+  const extractionSchema = tools[0]?.inputSchema as any;
+  assert.equal(extractionSchema.type, "object");
+  assert.equal(extractionSchema.oneOf.length, 2);
+  assert.deepEqual(
+    extractionSchema.oneOf.map((branch: any) => branch.properties.mode.enum),
+    [["custom"], ["timeline"]],
+  );
+  assert.deepEqual(extractionSchema.oneOf[0].required, [
+    "mode",
+    "title",
+    "columns",
+  ]);
+  assert.deepEqual(extractionSchema.oneOf[1].required, ["mode"]);
+  assert.equal(extractionSchema.oneOf[0].additionalProperties, false);
+  assert.equal(extractionSchema.oneOf[1].additionalProperties, false);
+  assert.equal(JSON.stringify(extractionSchema).includes('"preset"'), false);
   const custom = await call(module, context(), "run_custom_extraction", {
+    mode: "custom",
     title: "Fact extraction",
     columns: [{ name: "Party", instruction: "Extract parties." }],
   });
@@ -159,6 +176,7 @@ async function main() {
   assert.equal(tabular.creates, 1);
   await rejects(() =>
     call(module, context(), "run_custom_extraction", {
+      mode: "custom",
       title: "bad",
       columns: [
         { name: "Duplicate", instruction: "x" },
@@ -170,11 +188,44 @@ async function main() {
     module,
     context(),
     "run_custom_extraction",
-    { preset: "timeline" },
+    { mode: "timeline" },
     "timeline-call",
   );
   const timelineId = JSON.parse(timeline.content).review.review_id;
   assert.equal(tabular.get(timelineId).columns.length, 7);
+  const legacyTimeline = await call(
+    module,
+    context(),
+    "run_custom_extraction",
+    { preset: "timeline" },
+    "legacy-timeline-call",
+  );
+  assert.equal(JSON.parse(legacyTimeline.content).review.review_id, timelineId);
+  assert.equal(tabular.creates, 2);
+  await rejects(() => call(module, context(), "run_custom_extraction", {}));
+  await rejects(() =>
+    call(module, context(), "run_custom_extraction", {
+      mode: "custom",
+      title: "Missing columns",
+    }),
+  );
+  await rejects(() =>
+    call(module, context(), "run_custom_extraction", {
+      mode: "timeline",
+      columns: [{ name: "Unexpected", instruction: "Reject this." }],
+    }),
+  );
+  await rejects(() =>
+    call(module, context(), "run_custom_extraction", {
+      mode: "other",
+    }),
+  );
+  await rejects(() =>
+    call(module, context(), "run_custom_extraction", {
+      mode: "timeline",
+      preset: "timeline",
+    }),
+  );
   await rejects(() =>
     call(module, context(), "create_memo_from_tabular_review", {
       review_id: customResult.review.review_id,

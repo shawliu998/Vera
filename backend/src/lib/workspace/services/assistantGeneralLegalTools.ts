@@ -37,31 +37,62 @@ const ExtractionColumn = z
     format: ColumnFormat.default("text"),
   })
   .strict();
-const CustomExtractionInput = z
-  .object({
-    title: z.string().trim().min(1).max(240),
-    columns: z.array(ExtractionColumn).min(1).max(MAX_COLUMNS),
-  })
-  .strict()
-  .superRefine((value, context) => {
-    const names = value.columns.map((column) =>
-      column.name.toLocaleLowerCase(),
-    );
+const ExtractionColumns = z
+  .array(ExtractionColumn)
+  .min(1)
+  .max(MAX_COLUMNS)
+  .superRefine((columns, context) => {
+    const names = columns.map((column) => column.name.toLocaleLowerCase());
     if (new Set(names).size !== names.length) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ["columns"],
         message: "Extraction column names must be unique.",
       });
     }
   });
-const TimelineInput = z
+const CanonicalCustomExtractionInput = z
+  .object({
+    mode: z.literal("custom"),
+    title: z.string().trim().min(1).max(240),
+    columns: ExtractionColumns,
+  })
+  .strict();
+const CanonicalTimelineInput = z
+  .object({
+    mode: z.literal("timeline"),
+    title: z.string().trim().min(1).max(240).optional(),
+  })
+  .strict();
+const LegacyCustomExtractionInput = z
+  .object({
+    title: z.string().trim().min(1).max(240),
+    columns: ExtractionColumns,
+  })
+  .strict();
+const LegacyTimelineInput = z
   .object({
     preset: z.literal("timeline"),
     title: z.string().trim().min(1).max(240).optional(),
   })
   .strict();
-const RunExtractionInput = z.union([CustomExtractionInput, TimelineInput]);
+const RunExtractionInput = z
+  .union([
+    CanonicalCustomExtractionInput,
+    CanonicalTimelineInput,
+    LegacyCustomExtractionInput,
+    LegacyTimelineInput,
+  ])
+  .transform((input) => {
+    if ("mode" in input) return input;
+    if ("preset" in input) {
+      return { mode: "timeline" as const, title: input.title };
+    }
+    return {
+      mode: "custom" as const,
+      title: input.title,
+      columns: input.columns,
+    };
+  });
 const CreateMemoInput = z
   .object({
     title: z.string().trim().min(1).max(240),
@@ -233,22 +264,51 @@ const COLUMN_SCHEMA = Object.freeze({
   additionalProperties: false,
 });
 
+const TITLE_SCHEMA = Object.freeze({
+  type: "string",
+  minLength: 1,
+  maxLength: 240,
+});
+
+const CUSTOM_EXTRACTION_SCHEMA = Object.freeze({
+  type: "object",
+  properties: Object.freeze({
+    mode: Object.freeze({ type: "string", enum: Object.freeze(["custom"]) }),
+    title: TITLE_SCHEMA,
+    columns: Object.freeze({
+      type: "array",
+      minItems: 1,
+      maxItems: MAX_COLUMNS,
+      items: COLUMN_SCHEMA,
+    }),
+  }),
+  required: Object.freeze(["mode", "title", "columns"]),
+  additionalProperties: false,
+});
+
+const TIMELINE_EXTRACTION_SCHEMA = Object.freeze({
+  type: "object",
+  properties: Object.freeze({
+    mode: Object.freeze({
+      type: "string",
+      enum: Object.freeze(["timeline"]),
+    }),
+    title: TITLE_SCHEMA,
+  }),
+  required: Object.freeze(["mode"]),
+  additionalProperties: false,
+});
+
 const TOOLS = Object.freeze([
-  toolDefinition(
-    "run_custom_extraction",
-    "Create and run a durable Tabular Review over the attached Matter documents. Provide a title and 1-15 custom columns, or use preset=timeline. The runtime waits for terminal completion; do not poll or create a duplicate Review.",
-    {
-      preset: { type: "string", enum: ["timeline"] },
-      title: { type: "string", minLength: 1, maxLength: 240 },
-      columns: {
-        type: "array",
-        minItems: 1,
-        maxItems: MAX_COLUMNS,
-        items: COLUMN_SCHEMA,
-      },
+  {
+    name: "run_custom_extraction" as const,
+    description:
+      "Create and run a durable Tabular Review over the attached Matter documents. Use mode=custom with a title and 1-15 custom columns, or mode=timeline for the timeline preset. The runtime waits for terminal completion; do not poll or create a duplicate Review.",
+    inputSchema: {
+      type: "object",
+      oneOf: [CUSTOM_EXTRACTION_SCHEMA, TIMELINE_EXTRACTION_SCHEMA],
     },
-    [],
-  ),
+  },
   toolDefinition(
     "create_legal_memo",
     "Create a new, non-overwriting Studio legal memo from Markdown already prepared from the evidence read in this run. The returned Draft can be exported as DOCX.",
@@ -375,7 +435,7 @@ function reviewBinding(
   input: z.infer<typeof RunExtractionInput>,
 ): ReviewBinding {
   const documents = attachedDocuments(context);
-  const timeline = "preset" in input;
+  const timeline = input.mode === "timeline";
   const title = timeline ? (input.title ?? "Matter Timeline") : input.title;
   const columns = normalizeColumns(timeline ? TIMELINE_COLUMNS : input.columns);
   const material = {

@@ -119,44 +119,75 @@ function failedToolResult(content: string) {
   );
 }
 
+function withoutNegatedDeliverableClauses(content: string) {
+  return content
+    .replace(
+      /\b(?:do\s+not|don['’]t|dont|no\s+need\s+to|need\s+not|without|not(?=\s)(?!\s+only\b))\b[\s\S]*?(?=$|[,.;!?，。；！？—–\n]|\b(?:but|instead)\b)/gi,
+      " ",
+    )
+    .replace(
+      /(?:不要|无需|无须|不需要|不用|不必|别|勿)[\s\S]*?(?=$|[,.;!?，。；！？—–\n]|但(?:是)?|而是|改为)/g,
+      " ",
+    );
+}
+
+function informationalQuestion(content: string) {
+  return (
+    /^(?:how|what|why|when|where|who|which|explain|tell\s+me)\b/i.test(
+      content,
+    ) ||
+    /^(?:(?:can|could|would)\s+you\s+(?:explain|tell)\b|(?:should|must|can|could|would|do|does|did|is|are|was|were)\s+(?:i|we)\b)/i.test(
+      content,
+    ) ||
+    /^(?:please\s+)?(?:explain|tell\s+me)\b/i.test(content) ||
+    /^(?:如何|怎么|为什么|什么|谁|哪|是否|请问(?:如何|怎么|为什么|什么|谁|哪|是否)|请(?:解释|说明|告诉)|能否(?:解释|说明|告诉))/.test(
+      content,
+    )
+  );
+}
+
 function requestedDeliverables(content: string) {
   const request = content
     .replace(/^\[The user attached[\s\S]*?\]\n\n/, "")
     .trim();
   const kinds = new Set<AssistantDeliverableKind>();
-  if (
-    /^(?:how|what|why|when|where|explain)\b/i.test(request) ||
-    /^(?:如何|怎么|为什么|什么|解释)/.test(request)
-  ) {
-    return kinds;
-  }
+  const affirmative = withoutNegatedDeliverableClauses(request).trim();
+  if (!affirmative || informationalQuestion(affirmative)) return kinds;
   const action =
-    /create|generate|prepare|produce|export|draft|write|build|make|起草|草拟|生成|制作|创建|导出|输出|整理|形成|做一份|写一份/i;
-  if (/\b(?:draft|write)\b|起草|草拟/i.test(request)) {
+    /\b(?:create|generate|prepare|produce|export|draft|write|build|make|provide)\b|\b(?:i\s+)?(?:only\s+|just\s+)?(?:need|want)\b|起草|草拟|生成|制作|创建|导出|输出|整理|形成|做一份|写一份|做成|提供|给我(?:一份)?|我要(?:一份)?|只要|仅要|只需(?:要)?/i;
+  const draftWorkProduct =
+    /\b(?:legal\s+)?memo(?:randum)?\b|\b(?:fact|facts|factual)\s+summary\b|\banalysis\s+report\b|备忘录|事实摘要|事实梳理|分析报告|法律意见书?/i;
+  if (
+    /\b(?:draft|write)\b|起草|草拟/i.test(affirmative) ||
+    (action.test(affirmative) && draftWorkProduct.test(affirmative))
+  ) {
     kinds.add("draft");
   }
   if (
-    (action.test(request) &&
+    (action.test(affirmative) &&
       /contract review|review matrix|合同审查|合同审核|风险审查/i.test(
-        request,
+        affirmative,
       )) ||
     /\b(?:review|analyze)\b[\s\S]{0,40}\bcontracts?\b|(?:审查|审核)[\s\S]{0,20}合同/i.test(
-      request,
+      affirmative,
     )
   ) {
     kinds.add("review");
   }
+  const tableRequest = affirmative.replace(/\btable\s+of\s+contents\b/gi, "");
   if (
-    action.test(request) &&
-    /\bxlsx\b|\bexcel\b|spreadsheet|比较表|对比表|电子表格|时间线表/i.test(
-      request,
+    action.test(tableRequest) &&
+    /\bxlsx\b|\bexcel\b|\bspreadsheet\b|\btable\b|\btabular\b|表格|比较表|对比表|电子表格|时间线表/i.test(
+      tableRequest,
     )
   ) {
     kinds.add("xlsx");
   }
   if (
-    action.test(request) &&
-    /\bdocx\b|\bword document\b|Word 文档|Word文件/i.test(request)
+    action.test(affirmative) &&
+    /\bdocx\b|\bword\s+(?:document|file)\b|Word\s*文档|Word\s*文件/i.test(
+      affirmative,
+    )
   ) {
     kinds.add("docx");
   }
@@ -700,7 +731,7 @@ CORE RULES:
 - Use at most 10 tool-use rounds and 32 total tool calls per response. Batch independent tool calls and leave room for the final answer.
 - Per response, use at most 4 legal searches, 12 legal-source reads, 1 direct Draft creation, 2 custom extractions, 1 legal memo, 1 memo-from-Review handoff, 5 Draft suggestions, 2 Workflow runs, and 8 Workflow status reads. When a budget is exhausted, stop that activity, answer from evidence already read, and disclose the limitation.
 - If run_contract_review or get_contract_review returns asynchronous=true, immediately call get_contract_review with that exact review id; never start a replacement Review. Continue until the Review is terminal or the 8-read budget is exhausted. Do not present a normal final answer while the Review is still running; if the read budget is exhausted, state that it remains in progress and direct the user to the returned Review route.
-- For custom field extraction or a case timeline, call run_custom_extraction once. Use preset=timeline for timelines. The runtime waits for the exact Review to become terminal; never invent a polling tool or start a duplicate Review.
+- For custom field extraction or a case timeline, call run_custom_extraction once. Use mode=custom with explicit columns for custom extraction, or mode=timeline for timelines. The runtime waits for the exact Review to become terminal; never invent a polling tool or start a duplicate Review.
 - When the user also requests a memo from a completed custom extraction or timeline, call create_memo_from_tabular_review with that exact Review id. For a standalone memo based on evidence read in this run, call create_legal_memo. Do not use either tool to replace the automatic contract-review memo handoff.
 - Use only the registered tools listed below. Never directly attempt shell, Python, arbitrary network access, MCP, CourtListener, cloud storage, dynamic tools, or multi-agent delegation. A registered legal-research tool may use its fixed backend provider boundary; do not invent or call provider tools directly.
 - Read each relevant document/version at most once per response. After a read/fetch tool returns document text, use that result or find_in_document for targeted checks.

@@ -205,11 +205,12 @@ function fakeOpenAiFetch(control: ProviderControl): typeof fetch {
       ) {
         if (scenario === "timeline-memo") {
           return toolResponse("timeline", "run_custom_extraction", {
-            preset: "timeline",
+            mode: "timeline",
             title: "Matter Timeline",
           });
         }
         return toolResponse("custom-extraction", "run_custom_extraction", {
+          mode: "custom",
           title: "Notice facts",
           columns: [
             {

@@ -2457,6 +2457,176 @@ async function run() {
       "complete",
     );
 
+    const deliverableIntentCases = [
+      {
+        prompt: "把结果做成表格。",
+        expected: ["xlsx"],
+      },
+      {
+        prompt: "Can you make a table?",
+        expected: ["xlsx"],
+      },
+      {
+        prompt: "请问可以把结果做成表格吗？",
+        expected: ["xlsx"],
+      },
+      {
+        prompt: "Prepare a legal memo.",
+        expected: ["draft"],
+      },
+      {
+        prompt: "请起草一份案件备忘录。",
+        expected: ["draft"],
+      },
+      {
+        prompt: "根据材料整理一份事实摘要。",
+        expected: ["draft"],
+      },
+      {
+        prompt: "生成一份分析报告。",
+        expected: ["draft"],
+      },
+      {
+        prompt: "不要生成 Word 文档或备忘录，直接在聊天里回答。",
+        expected: [],
+      },
+      {
+        prompt: "Do not draft a memo or make a spreadsheet; answer in chat.",
+        expected: [],
+      },
+      {
+        prompt: "不要生成 Word 文档，把结果做成表格。",
+        expected: ["xlsx"],
+      },
+      {
+        prompt: "不要备忘录，只要表格。",
+        expected: ["xlsx"],
+      },
+      {
+        prompt: "I do not need a memo; I only need a table.",
+        expected: ["xlsx"],
+      },
+      {
+        prompt: "整理一份事实摘要，不要生成 Word 文档。",
+        expected: ["draft"],
+      },
+      {
+        prompt: "Can you explain how a legal memo is structured?",
+        expected: [],
+      },
+      {
+        prompt: "这个备忘录讲了什么？",
+        expected: [],
+      },
+      {
+        prompt: "Not only make a table but also explain it.",
+        expected: ["xlsx"],
+      },
+      {
+        prompt: "Make a table of contents.",
+        expected: [],
+      },
+    ] as const;
+    for (const [index, testCase] of deliverableIntentCases.entries()) {
+      const chat = service.create({
+        projectId: budgetAuditProject,
+        modelProfileId: profileId,
+        title: `Deliverable intent audit ${index + 1}`,
+      });
+      const generation = service.requestGeneration({
+        chatId: chat.id,
+        prompt: testCase.prompt,
+      });
+      const worker = `deliverable-intent-worker-${index + 1}`;
+      const claim = jobs.claimNextQueued(
+        "2026-07-14T08:03:29.500Z",
+        worker,
+        "2026-07-14T08:20:00.000Z",
+      );
+      assert.equal(claim?.id, generation.jobId);
+      const runtime = new AssistantRuntimeService(
+        chats,
+        jobs,
+        {
+          async registeredCapabilities() {
+            return {
+              adapterId: `deliverable-intent-model-${index + 1}`,
+              streaming: true,
+              toolCalling: true,
+            };
+          },
+          async runTurn({ messages, onTextDelta }) {
+            assert.equal(
+              messages.some(
+                (message) =>
+                  message.role === "user" &&
+                  message.content.startsWith("Delivery recovery:"),
+              ),
+              false,
+            );
+            await onTextDelta("Intent classification audit answer.");
+            return {
+              content: "Intent classification audit answer.",
+              toolCalls: [],
+              sources: [],
+            };
+          },
+        },
+        {
+          clock: () => new Date("2026-07-14T08:03:29.500Z"),
+          tools: {
+            async registeredTools() {
+              return {
+                adapterId: `deliverable-intent-tools-${index + 1}`,
+                tools: [loopGuardTool],
+              };
+            },
+            async execute() {
+              throw new Error(
+                "Deliverable intent audits must not execute tools.",
+              );
+            },
+          },
+        },
+      );
+      const execution = runtime.execute({
+        jobId: generation.jobId,
+        leaseOwner: worker,
+        attempt: claim!.attempt,
+        signal: new AbortController().signal,
+      });
+      if (testCase.expected.length === 0) {
+        await execution;
+        assert.equal(jobs.getJob(generation.jobId)?.status, "complete");
+      } else {
+        await assert.rejects(
+          execution,
+          new RegExp(`requested deliverables: ${testCase.expected.join(", ")}`),
+        );
+        assert.equal(jobs.getJob(generation.jobId)?.status, "failed");
+      }
+      const planEvents = database
+        .prepare(
+          `SELECT event_json FROM assistant_generation_events
+            WHERE job_id=? AND event_type='task_plan' ORDER BY sequence`,
+        )
+        .all(generation.jobId)
+        .map((row) =>
+          MikeAssistantStreamEventSchema.parse(
+            JSON.parse(String(row.event_json)),
+          ),
+        );
+      assert.deepEqual(
+        planEvents.flatMap((event) =>
+          event.type === "task_plan"
+            ? event.deliverables.map((deliverable) => deliverable.kind)
+            : [],
+        ),
+        [...testCase.expected],
+        testCase.prompt,
+      );
+    }
+
     const missingDeliverableChat = service.create({
       projectId: budgetAuditProject,
       modelProfileId: profileId,
