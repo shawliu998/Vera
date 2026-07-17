@@ -2527,7 +2527,6 @@ async function main() {
       state: "visible",
       timeout: POLL_TIMEOUT_MS,
     });
-    await assertGeneralTaskPlan(packaged.page, false);
     customExtractionReviewId = (
       await customReviewCard.getAttribute("data-testid")
     )?.replace("assistant-review-result-", "");
@@ -2563,6 +2562,7 @@ async function main() {
       `/matters/${gate1MatterId}/assistant/chat/${customExtractionChatId}`,
       ["自定义信息提取已完成"],
     );
+    await assertGeneralTaskPlan(packaged.page, false);
     const persistedCustomReviewCard = packaged.page.locator(
       `[data-testid="assistant-review-result-${customExtractionReviewId}"]`,
     );
@@ -2601,7 +2601,6 @@ async function main() {
       state: "visible",
       timeout: POLL_TIMEOUT_MS,
     });
-    await assertGeneralTaskPlan(packaged.page, true);
     timelineReviewId = (
       await timelineReviewCard.getAttribute("data-testid")
     )?.replace("assistant-review-result-", "");
@@ -2636,6 +2635,7 @@ async function main() {
       `/matters/${gate1MatterId}/assistant/chat/${timelineChatId}`,
       ["案件时间线和事实摘要已完成。"],
     );
+    await assertGeneralTaskPlan(packaged.page, true);
     const persistedTimelineReviewCard = packaged.page.locator(
       `[data-testid="assistant-review-result-${timelineReviewId}"]`,
     );
