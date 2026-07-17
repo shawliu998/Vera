@@ -1470,7 +1470,6 @@ async function startFlagshipContractReviewInUi(page, projectId) {
   const textarea = page.locator("textarea");
   await textarea.waitFor({ state: "visible", timeout: 90_000 });
   assert.equal(await textarea.inputValue(), FLAGSHIP_PROMPT);
-  await page.getByRole("button", { name: /添加文档|Add documents/ }).click();
   for (const filename of FLAGSHIP_DOCUMENTS) {
     const checkbox = page
       .locator("label", { hasText: filename })
