@@ -843,7 +843,10 @@ function generalReviewId(messages) {
 
 async function createMockProvider(secret) {
   const failures = [];
-  const control = { holdFlagshipTabular: false };
+  const control = {
+    holdFlagshipTabular: false,
+    holdGeneralTabular: false,
+  };
   const heldReleases = new Set();
   const calls = {
     probes: 0,
@@ -859,6 +862,7 @@ async function createMockProvider(secret) {
     flagshipTabularTurns: 0,
     generalTabularTurns: 0,
     heldFlagshipTabularTurns: 0,
+    heldGeneralTabularTurns: 0,
   };
   const server = http.createServer((request, response) => {
     void (async () => {
@@ -907,8 +911,12 @@ async function createMockProvider(secret) {
           !general && !["当事方", "核心条款"].includes(requestedColumn);
         if (flagship) calls.flagshipTabularTurns += 1;
         if (general) calls.generalTabularTurns += 1;
-        if (flagship && control.holdFlagshipTabular) {
-          calls.heldFlagshipTabularTurns += 1;
+        if (
+          (flagship && control.holdFlagshipTabular) ||
+          (general && control.holdGeneralTabular)
+        ) {
+          if (flagship) calls.heldFlagshipTabularTurns += 1;
+          if (general) calls.heldGeneralTabularTurns += 1;
           await new Promise((resolve) => {
             const release = () => {
               heldReleases.delete(release);
@@ -1099,10 +1107,17 @@ async function createMockProvider(secret) {
         for (const release of [...heldReleases]) release();
       }
     },
+    setHoldGeneralTabular(value) {
+      control.holdGeneralTabular = value === true;
+      if (!control.holdGeneralTabular) {
+        for (const release of [...heldReleases]) release();
+      }
+    },
     async close() {
       if (closed) return;
       closed = true;
       control.holdFlagshipTabular = false;
+      control.holdGeneralTabular = false;
       for (const release of [...heldReleases]) release();
       const closing = new Promise((resolve) => server.close(resolve));
       server.closeIdleConnections?.();
@@ -1800,7 +1815,7 @@ async function main() {
   let timelineReviewBeforeRestart = null;
   let timelineMemoDocumentId = null;
   let timelineMemoBeforeRestart = null;
-  let cancelledFlagshipReviewId = null;
+  let cancelledCustomExtractionReviewId = null;
   let gate1MatterSourcesBeforeRestart = null;
   let gate1MatterBeforeRestart = null;
   let gate1MatterPolicyBeforeRestart = null;
@@ -2703,20 +2718,21 @@ async function main() {
     const reviewIdsBeforeCancelledReview = new Set(
       reviewsBeforeCancelledReview.map((review) => review.id),
     );
-    mock.setHoldFlagshipTabular(true);
-    const cancelledChatId = await startFlagshipContractReviewInUi(
+    mock.setHoldGeneralTabular(true);
+    const cancelledChatId = await startGeneralExtractionInUi(
       packaged.page,
       gate1MatterId,
+      "custom",
     );
     await pollUntil(
-      "Cancelled contract review reaches an in-flight cell",
-      () => (mock.calls.heldFlagshipTabularTurns > 0 ? true : undefined),
+      "Cancelled custom extraction reaches an in-flight cell",
+      () => (mock.calls.heldGeneralTabularTurns > 0 ? true : undefined),
     );
     await packaged.page
       .getByRole("button", { name: /停止生成|Stop generating/ })
       .click();
     const cancelledJob = await pollUntil(
-      "Cancelled contract review job",
+      "Cancelled custom extraction job",
       async () => {
         const jobs = await apiJson(
           token,
@@ -2729,9 +2745,9 @@ async function main() {
       },
     );
     assert.equal(cancelledJob.cancel_requested, true);
-    mock.setHoldFlagshipTabular(false);
+    mock.setHoldGeneralTabular(false);
     const cancelledReview = await pollUntil(
-      "Cancelled contract Review",
+      "Cancelled custom extraction Review",
       async () => {
         const reviews = await apiJson(
           token,
@@ -2744,8 +2760,26 @@ async function main() {
         return apiJson(token, `/tabular-review/${review.id}`);
       },
     );
-    cancelledFlagshipReviewId = cancelledReview.review.id;
+    cancelledCustomExtractionReviewId = cancelledReview.review.id;
     assert.equal(cancelledReview.review.status, "cancelled");
+    assert.equal(
+      cancelledReview.cells.some((cell) => cell.status === "running"),
+      false,
+      "Cancelled custom extraction must not leave a Review cell running.",
+    );
+    const cancelledChatText = await packaged.page.locator("body").innerText();
+    assert.equal(
+      cancelledChatText.includes("自定义信息提取已完成"),
+      false,
+      "Cancelled custom extraction must not render a completed Assistant answer.",
+    );
+    assert.equal(
+      await packaged.page
+        .locator('[data-testid^="assistant-draft-result-"]')
+        .count(),
+      0,
+      "Cancelled custom extraction must not render a Draft card.",
+    );
     const documentsAfterCancelledReview = await apiJson(
       token,
       `/projects/${gate1MatterId}/documents?limit=100`,
@@ -2753,7 +2787,7 @@ async function main() {
     assert.deepEqual(
       documentsAfterCancelledReview.map((document) => document.id).sort(),
       documentIdsBeforeCancelledReview,
-      "Cancelled contract review must not create a memo document.",
+      "Cancelled custom extraction must not create a Draft document.",
     );
     gate1MatterBeforeRestart = await apiJson(
       token,
@@ -2780,16 +2814,20 @@ async function main() {
     assert.equal(mock.calls.probes, 1);
     assert.equal(
       mock.calls.assistantTurns - mock.calls.contractAssistantTurns,
-      11,
+      13,
     );
-    assert.equal(mock.calls.contractToolCalls, 4);
-    assert.ok(mock.calls.contractAssistantTurns >= 5);
+    assert.equal(mock.calls.contractToolCalls, 2);
+    assert.equal(mock.calls.contractAssistantTurns, 3);
     assert.equal(
       mock.calls.assistantToolCalls - mock.calls.contractToolCalls,
-      7,
+      9,
     );
     assert.equal(mock.calls.workflowTurns, 1);
-    assert.equal(mock.calls.tabularTurns - mock.calls.flagshipTabularTurns, 30);
+    assert.equal(
+      mock.calls.tabularTurns - mock.calls.flagshipTabularTurns,
+      mock.calls.tabularCells.size + mock.calls.generalTabularTurns,
+      "Only the baseline 2x2 review and general extraction Reviews may use non-flagship Tabular turns.",
+    );
     assert.deepEqual([...mock.calls.tabularCells].sort(), [
       "alpha:clause",
       "alpha:party",
@@ -2797,9 +2835,12 @@ async function main() {
       "beta:party",
     ]);
     assert.equal(mock.calls.flagshipTabularCells.size, 54);
-    assert.equal(mock.calls.generalTabularTurns, 26);
+    assert.ok(
+      mock.calls.generalTabularTurns > mock.calls.generalTabularCells.size,
+      "Stopping custom extraction must interrupt at least one in-flight Tabular cell.",
+    );
     assert.equal(mock.calls.generalTabularCells.size, 26);
-    assert.ok(mock.calls.heldFlagshipTabularTurns > 0);
+    assert.ok(mock.calls.heldGeneralTabularTurns > 0);
     mockSummary = mock.calls;
     await mock.close();
     mock = null;
@@ -3027,11 +3068,14 @@ async function main() {
       `/projects/${gate1MatterId}/studio/documents/${timelineMemoDocumentId}`,
     );
     assert.deepEqual(persistedTimelineMemo, timelineMemoBeforeRestart);
-    const persistedCancelledFlagshipReview = await apiJson(
+    const persistedCancelledCustomExtractionReview = await apiJson(
       token,
-      `/tabular-review/${cancelledFlagshipReviewId}`,
+      `/tabular-review/${cancelledCustomExtractionReviewId}`,
     );
-    assert.equal(persistedCancelledFlagshipReview.review.status, "cancelled");
+    assert.equal(
+      persistedCancelledCustomExtractionReview.review.status,
+      "cancelled",
+    );
     const persistedFlagshipXlsx = await apiBytes(
       token,
       `/tabular-review/${flagshipReviewId}/export.xlsx`,
@@ -3249,7 +3293,6 @@ async function main() {
             flagship_contract_review: {
               review_id: flagshipReviewId,
               memo_document_id: flagshipMemoDocumentId,
-              cancelled_review_id: cancelledFlagshipReviewId,
               documents: 3,
               cells_complete: 54,
             },
@@ -3257,6 +3300,11 @@ async function main() {
               review_id: customExtractionReviewId,
               documents: 2,
               cells_complete: 12,
+            },
+            stopped_custom_extraction: {
+              review_id: cancelledCustomExtractionReviewId,
+              documents: 2,
+              status: "cancelled",
             },
             timeline_extraction: {
               review_id: timelineReviewId,
@@ -3292,7 +3340,7 @@ async function main() {
             "custom extraction Starter opens its field dialog, attaches two Matter documents, calls canonical mode=custom, and exports its durable XLSX Review",
             "timeline Starter attaches two Matter documents, calls canonical mode=timeline, creates its Memo from that exact Review, and exports XLSX/DOCX",
             "packaged UI captures and validates XLSX and DOCX downloads by filename MIME and ZIP signature",
-            "second in-flight Assistant contract review is stopped from the packaged UI, leaving a cancelled Review and no new Studio memo",
+            "second in-flight Assistant custom extraction is stopped from the packaged UI, leaving a cancelled Review with no running cells, completed answer, or Draft",
             "durable flagship Review and Studio memo persist unchanged across offline restart",
             "custom extraction Review plus timeline Review and Review-derived Studio memo persist unchanged and export again after offline restart",
             "Matter-owned document source snapshots retain exact local content across restart",
