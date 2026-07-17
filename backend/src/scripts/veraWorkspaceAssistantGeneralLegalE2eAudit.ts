@@ -114,6 +114,7 @@ function requestScenario(
   const user = messages.find((message) => message.role === "user");
   const prompt = typeof user?.content === "string" ? user.content : "";
   if (prompt.includes("[timeline-memo]")) return "timeline-memo" as const;
+  if (prompt.includes("[custom-memo]")) return "custom-memo" as const;
   return "custom" as const;
 }
 
@@ -176,13 +177,16 @@ function fakeOpenAiFetch(control: ProviderControl): typeof fetch {
           content.includes('"run_custom_extraction"'),
         )
       ) {
-        if (scenario === "timeline-memo") {
+        if (scenario === "timeline-memo" || scenario === "custom-memo") {
           return toolResponse(
-            "timeline-memo",
+            `${scenario}-draft`,
             "create_memo_from_tabular_review",
             {
               review_id: toolReviewId(messages),
-              title: "Matter Timeline Facts Memo",
+              title:
+                scenario === "timeline-memo"
+                  ? "Matter Timeline Facts Memo"
+                  : "Notice Facts Extraction Summary",
             },
           );
         }
@@ -683,6 +687,65 @@ async function main() {
       "the persisted Review has a real XLSX resource",
     );
 
+    const customMemo = await requestAssistant({
+      ...fixture,
+      runtime,
+      title: "Custom extraction with memo",
+      prompt:
+        "[custom-memo] Extract the notice facts from the attached documents and create a memo from the completed Review.",
+    });
+    const customMemoStatus = await waitForTerminalGeneration({
+      runtime,
+      context: fixture.context,
+      jobId: customMemo.jobId,
+      label: "the complete custom extraction and memo",
+    });
+    const customMemoReplay = await chats.generationEvents(
+      fixture.context,
+      customMemo.jobId,
+      { cursor: 0, limit: 100 },
+    );
+    if (customMemoStatus !== "complete") {
+      const job = database
+        .prepare("SELECT error_code,error_json FROM jobs WHERE id=?")
+        .get(customMemo.jobId);
+      assert.fail(
+        `Custom extraction memo failed: ${JSON.stringify({ events: customMemoReplay.events, job })}`,
+      );
+    }
+    const customMemoArtifacts = eventIds(customMemoReplay.events);
+    assert.ok(customMemoArtifacts.reviewId);
+    assert.ok(customMemoArtifacts.draftId);
+    const customMemoDraft = await runtime.getStudioDocument(
+      fixture.context,
+      fixture.projectId,
+      customMemoArtifacts.draftId,
+    );
+    assert.match(
+      customMemoDraft.content,
+      /\| Source document \| Notice date \| Notice fact \|/,
+    );
+    assert.match(customMemoDraft.content, new RegExp(QUOTE));
+    assert.equal(
+      database
+        .prepare(
+          "SELECT document_type FROM document_studio_draft_metadata WHERE document_id=?",
+        )
+        .get(customMemoArtifacts.draftId)?.document_type,
+      "general_legal_document",
+    );
+    assert.equal(
+      Number(
+        database
+          .prepare(
+            "SELECT count(*) AS count FROM tabular_review_studio_handoffs",
+          )
+          .get()?.count,
+      ),
+      0,
+      "custom extraction summaries reuse the handoff foundation without writing the contract-only v23 table",
+    );
+
     const timeline = await requestAssistant({
       ...fixture,
       runtime,
@@ -761,6 +824,17 @@ async function main() {
       memoDocx.bytes.length > 128,
       "the Studio Draft meets the real DOCX export precondition",
     );
+    assert.equal(
+      Number(
+        database
+          .prepare(
+            "SELECT count(*) AS count FROM tabular_review_studio_handoffs",
+          )
+          .get()?.count,
+      ),
+      0,
+      "timeline fact summaries do not write the contract-only v23 handoff table",
+    );
 
     assert.equal(
       control.requests.every(
@@ -777,6 +851,7 @@ async function main() {
           checks: [
             "one Assistant instruction fetches attached evidence then invokes run_custom_extraction through the real model tool-call loop",
             "the durable pump runs actual Tabular cell jobs and the persisted Review produces a real XLSX resource",
+            "custom extraction summaries use the shared prepared Review-to-Studio path without writing the v23 contract-only table",
             "the timeline preset waits to completion before create_memo_from_tabular_review creates an evidence-based Studio Draft with a real DOCX export precondition",
           ],
         },

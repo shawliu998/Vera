@@ -156,7 +156,7 @@ function requestedDeliverables(content: string) {
   const action =
     /\b(?:create|generate|prepare|produce|export|draft|write|build|make|provide)\b|\b(?:i\s+)?(?:only\s+|just\s+)?(?:need|want)\b|起草|草拟|生成|制作|创建|导出|输出|整理|形成|做一份|写一份|做成|提供|给我(?:一份)?|我要(?:一份)?|只要|仅要|只需(?:要)?/i;
   const draftWorkProduct =
-    /\b(?:legal\s+)?memo(?:randum)?\b|\b(?:fact|facts|factual)\s+summary\b|\banalysis\s+report\b|备忘录|事实摘要|事实梳理|分析报告|法律意见书?/i;
+    /\b(?:legal\s+)?memo(?:randum)?\b|\b(?:fact|facts|factual)\s+summary\b|\banalysis\s+report\b|备忘录|事实摘要|事实梳理|分析报告|法律意见书?|可编辑(?:的)?(?:文档|文件)/i;
   if (
     /\b(?:draft|write)\b|起草|草拟/i.test(affirmative) ||
     (action.test(affirmative) && draftWorkProduct.test(affirmative))

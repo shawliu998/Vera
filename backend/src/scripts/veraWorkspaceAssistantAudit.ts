@@ -2483,11 +2483,27 @@ async function run() {
         expected: ["draft"],
       },
       {
+        prompt: "形成一份事实摘要。",
+        expected: ["draft"],
+      },
+      {
+        prompt: "做成表格。",
+        expected: ["xlsx"],
+      },
+      {
+        prompt: "整理为可编辑文档。",
+        expected: ["draft"],
+      },
+      {
         prompt: "生成一份分析报告。",
         expected: ["draft"],
       },
       {
         prompt: "不要生成 Word 文档或备忘录，直接在聊天里回答。",
+        expected: [],
+      },
+      {
+        prompt: "只需要聊天回答。",
         expected: [],
       },
       {
@@ -2497,6 +2513,22 @@ async function run() {
       {
         prompt: "不要生成 Word 文档，把结果做成表格。",
         expected: ["xlsx"],
+      },
+      {
+        prompt: "不要生成 Word，做成表格。",
+        expected: ["xlsx"],
+      },
+      {
+        prompt: "不需要 Excel，形成一份事实摘要。",
+        expected: ["draft"],
+      },
+      {
+        prompt: "无需创建文件，只需要聊天回答。",
+        expected: [],
+      },
+      {
+        prompt: "仅分析，不生成文档。",
+        expected: [],
       },
       {
         prompt: "不要备忘录，只要表格。",

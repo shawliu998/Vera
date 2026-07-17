@@ -87,12 +87,12 @@ import {
 } from "./repositories/projects";
 import { SettingsRepository } from "./repositories/settings";
 import { TabularRepository } from "./repositories/tabular";
+import { TABULAR_REVIEW_STUDIO_REDUCER_REVISION_SHA256_V23 } from "./tabularReviewStudioHandoffV23";
 import {
-  prepareTabularReviewStudioSourceV23,
-  readTabularReviewStudioJobLineageV23,
-  reduceTabularReviewToContractMemoV23,
-  TABULAR_REVIEW_STUDIO_REDUCER_REVISION_SHA256_V23,
-} from "./tabularReviewStudioHandoffV23";
+  createStudioDraftFromTabular,
+  prepareTabularStudioHandoff,
+  type PreparedTabularStudioHandoff,
+} from "./tabularStudioHandoff";
 import {
   WorkspaceBlobReconciliation,
   WorkspaceBlobStartupRecovery,
@@ -929,6 +929,132 @@ export class WorkspaceRuntime
                   versionId: created.version.id,
                   title: created.document.title,
                 };
+              },
+              createDraftFromTabularReview: async (context, input) => {
+                if (!context.projectId) {
+                  throw new WorkspaceApiError(
+                    409,
+                    "PRECONDITION_FAILED",
+                    "A Matter is required to create a Review-based memo.",
+                  );
+                }
+                const detail = new TabularRepository(
+                  this.database,
+                ).requireDetail(input.reviewId);
+                if (
+                  detail.review.projectId !== context.projectId ||
+                  detail.review.workflowId !== null
+                ) {
+                  throw new WorkspaceApiError(
+                    409,
+                    "PRECONDITION_FAILED",
+                    "The extraction Review cannot create this Studio Draft.",
+                  );
+                }
+                let prepared: PreparedTabularStudioHandoff;
+                try {
+                  prepared = prepareTabularStudioHandoff({
+                    database: this.database,
+                    projectId: context.projectId,
+                    detail,
+                    kind: input.kind,
+                  });
+                } catch (error) {
+                  throw new WorkspaceApiError(
+                    409,
+                    "PRECONDITION_FAILED",
+                    error instanceof Error
+                      ? error.message
+                      : "Tabular review evidence cannot create a Studio Draft.",
+                  );
+                }
+                return createStudioDraftFromTabular({
+                  prepared,
+                  projectId: context.projectId,
+                  title: input.title,
+                  create: async (draft, citations) => {
+                    try {
+                      const existing =
+                        await this.documentStudioService.getDocument(
+                          context.projectId!,
+                          input.documentId,
+                          input.versionId,
+                        );
+                      if (
+                        existing.document.title !== draft.title ||
+                        existing.version.id !== input.versionId ||
+                        existing.content !== draft.content
+                      ) {
+                        throw new WorkspaceApiError(
+                          409,
+                          "CONFLICT",
+                          "The existing Review-based Draft does not match this operation.",
+                        );
+                      }
+                      return {
+                        documentId: existing.document.id,
+                        versionId: existing.version.id,
+                        title: existing.document.title,
+                      };
+                    } catch (error) {
+                      if (
+                        !(error instanceof WorkspaceApiError) ||
+                        error.status !== 404
+                      ) {
+                        throw error;
+                      }
+                    }
+                    const generation = chatsRepository.generationStatus(
+                      context.jobId,
+                    );
+                    if (
+                      generation.chatId !== context.chatId ||
+                      generation.activeAttempt !== context.attempt
+                    ) {
+                      throw new WorkspaceApiError(
+                        409,
+                        "CONFLICT",
+                        "Assistant Draft generation ownership changed.",
+                      );
+                    }
+                    const citationAnchorIds = this.studioCitationAnchorIds(
+                      context.projectId!,
+                      draft.content,
+                      citations,
+                    );
+                    if (citationAnchorIds.length !== citations.length) {
+                      throw new WorkspaceApiError(
+                        409,
+                        "PRECONDITION_FAILED",
+                        "Tabular citations could not be bound one-to-one to the Studio Draft.",
+                      );
+                    }
+                    const created =
+                      await this.documentStudioService.createDraft({
+                        projectId: context.projectId!,
+                        title: draft.title,
+                        content: draft.content,
+                        source: "assistant_edit",
+                        citationAnchorIds,
+                        documentType: draft.documentType,
+                        originType: "assistant",
+                        originRef: generation.outputMessageId,
+                        writeIdentity: {
+                          documentId: input.documentId,
+                          versionId: input.versionId,
+                          jobId: deterministicRuntimeUuid(
+                            `vera-general-legal-draft-parse-job\0${input.operationId}`,
+                          ),
+                          operationId: input.operationId,
+                        },
+                      });
+                    return {
+                      documentId: created.document.id,
+                      versionId: created.version.id,
+                      title: created.document.title,
+                    };
+                  },
+                });
               },
             },
           ),
@@ -2044,17 +2170,13 @@ export class WorkspaceRuntime
         "The review is not bound to an active global contract-review preset with an unchanged column snapshot.",
       );
     }
-    let prepared: ReturnType<typeof prepareTabularReviewStudioSourceV23>;
+    let handoffPrepared: PreparedTabularStudioHandoff;
     try {
-      const jobLineage = readTabularReviewStudioJobLineageV23({
+      handoffPrepared = prepareTabularStudioHandoff({
         database: this.database,
         projectId,
         detail,
-      });
-      prepared = prepareTabularReviewStudioSourceV23({
-        projectId,
-        detail,
-        jobLineage,
+        kind: "contract_review_memo",
       });
     } catch (error) {
       throw new WorkspaceApiError(
@@ -2065,6 +2187,7 @@ export class WorkspaceRuntime
           : "Tabular review evidence cannot create a Studio Draft.",
       );
     }
+    const prepared = handoffPrepared.source;
     const existing = this.database
       .prepare(
         `SELECT identity_sha256, review_state_sha256,
@@ -2092,61 +2215,52 @@ export class WorkspaceRuntime
         ),
       );
     }
-    const reduced = reduceTabularReviewToContractMemoV23(prepared);
-    const citationSources = prepared.orderedUniqueSources.map(
-      (source, index) => ({
-        ...source,
-        locator: {
-          startOffset: source.startOffset,
-          endOffset: source.endOffset,
-        },
-        rank: index,
-        score: null,
-        citationOrdinal: index,
-        citationMetadata: { citationNumber: index + 1 },
-      }),
-    );
-    const citationAnchorIds = this.studioCitationAnchorIds(
-      projectId,
-      reduced.content,
-      citationSources,
-    );
-    if (citationAnchorIds.length !== prepared.orderedUniqueSources.length) {
-      throw new WorkspaceApiError(
-        409,
-        "PRECONDITION_FAILED",
-        "Tabular citations could not be bound one-to-one to the Studio Draft.",
-      );
-    }
-    const createInput = {
-      projectId,
-      title: reduced.title,
-      content: reduced.content,
-      source: "assistant_edit",
-      citationAnchorIds,
-      documentType: "contract_review_memo",
-      // v20 has no tabular origin enum. The immutable v23 handoff is the
-      // source of truth; read projections expose it as `tabular`.
-      originType: "unknown",
-      originRef: null,
-      tabularReviewHandoff: {
-        id: randomUUID(),
-        identitySha256: prepared.identitySha256,
-        projectId,
-        reviewId,
-        expectedReviewUpdatedAt: detail.review.updatedAt,
-        reviewStateSha256: prepared.reviewStateSha256,
-        sourceManifestJson: prepared.sourceManifestJson,
-        sourceManifestSha256: prepared.sourceManifestSha256,
-        templateReducerRevisionSha256:
-          TABULAR_REVIEW_STUDIO_REDUCER_REVISION_SHA256_V23,
-        documentType: "contract_review_memo",
-      },
-    } as const;
     try {
-      return this.studioDocumentWire(
-        await this.documentStudioService.createDraft(createInput),
-      );
+      return createStudioDraftFromTabular({
+        prepared: handoffPrepared,
+        projectId,
+        create: async (draft, citationSources) => {
+          const citationAnchorIds = this.studioCitationAnchorIds(
+            projectId,
+            draft.content,
+            citationSources,
+          );
+          if (citationAnchorIds.length !== citationSources.length) {
+            throw new WorkspaceApiError(
+              409,
+              "PRECONDITION_FAILED",
+              "Tabular citations could not be bound one-to-one to the Studio Draft.",
+            );
+          }
+          return this.studioDocumentWire(
+            await this.documentStudioService.createDraft({
+              projectId,
+              title: draft.title,
+              content: draft.content,
+              source: "assistant_edit",
+              citationAnchorIds,
+              documentType: draft.documentType,
+              // v20 has no tabular origin enum. The immutable v23 handoff is
+              // the source of truth; read projections expose it as `tabular`.
+              originType: "unknown",
+              originRef: null,
+              tabularReviewHandoff: {
+                id: randomUUID(),
+                identitySha256: prepared.identitySha256,
+                projectId,
+                reviewId,
+                expectedReviewUpdatedAt: detail.review.updatedAt,
+                reviewStateSha256: prepared.reviewStateSha256,
+                sourceManifestJson: prepared.sourceManifestJson,
+                sourceManifestSha256: prepared.sourceManifestSha256,
+                templateReducerRevisionSha256:
+                  TABULAR_REVIEW_STUDIO_REDUCER_REVISION_SHA256_V23,
+                documentType: "contract_review_memo",
+              },
+            }),
+          );
+        },
+      });
     } catch (error) {
       // A concurrent request may have committed the same server-derived
       // identity after our preflight. Studio compensated this request's blob

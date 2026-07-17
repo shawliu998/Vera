@@ -293,15 +293,19 @@ export function prepareTabularReviewStudioSourceV23(input: {
   projectId: string;
   detail: TabularReviewDetail;
   jobLineage: readonly TabularReviewStudioJobLineageV23[];
+  requireWorkflowBound?: boolean;
 }) {
   const { review, columns, cells } = input.detail;
+  const requireWorkflowBound = input.requireWorkflowBound ?? true;
   if (
     review.projectId !== input.projectId ||
     review.status !== "complete" ||
-    review.workflowId == null
+    (requireWorkflowBound && review.workflowId == null)
   ) {
     throw new Error(
-      "Only a completed workflow-bound review in this Matter can create a contract-review memo.",
+      requireWorkflowBound
+        ? "Only a completed workflow-bound review in this Matter can create a contract-review memo."
+        : "Only a completed review in this Matter can create a Studio Draft.",
     );
   }
   const completed = cells.filter((cell) => cell.status === "complete");

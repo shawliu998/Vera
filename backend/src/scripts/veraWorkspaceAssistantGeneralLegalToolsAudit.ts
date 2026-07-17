@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 
 import type { AssistantToolContext } from "../lib/workspace/services/assistantRuntime";
+import { reduceTabularStudioHandoff } from "../lib/workspace/tabularStudioHandoff";
 import {
   AssistantGeneralLegalToolError,
   WorkspaceAssistantGeneralLegalToolModule,
@@ -107,6 +108,7 @@ async function rejects(fn: () => Promise<unknown>) {
 async function main() {
   const tabular = new FakeTabular();
   const writes: any[] = [];
+  const tabularWrites: any[] = [];
   const module = new WorkspaceAssistantGeneralLegalToolModule(
     () => tabular as any,
     {
@@ -123,6 +125,14 @@ async function main() {
       },
       async createDraft(_context, input) {
         writes.push(input);
+        return {
+          documentId: input.documentId,
+          versionId: input.versionId,
+          title: input.title,
+        };
+      },
+      async createDraftFromTabularReview(_context, input) {
+        tabularWrites.push(input);
         return {
           documentId: input.documentId,
           versionId: input.versionId,
@@ -237,6 +247,29 @@ async function main() {
     cell.status = "complete";
     cell.content = { summary: "Acme Ltd." };
   }
+  const customReduced = reduceTabularStudioHandoff(
+    {
+      kind: "custom_extraction_summary",
+      detail: completed,
+      source: {
+        orderedUniqueSources: [
+          {
+            documentId: DOC,
+            versionId: VERSION,
+            chunkId: "chunk-1",
+            quote: "Acme Ltd.",
+            startOffset: 0,
+            endOffset: 9,
+          },
+        ],
+      },
+    } as any,
+    { projectId: PROJECT, title: "Extraction summary" },
+  );
+  assert.equal(customReduced.documentType, "general_legal_document");
+  assert.match(customReduced.content, /\| Source document \| Party \|/);
+  assert.match(customReduced.content, /Acme Ltd\./);
+  assert.match(customReduced.content, /\[1\]/);
   const lifecycle = await module.settleLifecycle?.({
     phase: "after_execution",
     context: context(),
@@ -258,9 +291,12 @@ async function main() {
     "create_memo_from_tabular_review",
     { review_id: customResult.review.review_id },
   );
-  assert.equal(JSON.parse(memo.content).memo.draft_id, writes[0].documentId);
-  assert.match(writes[0].content, /Acme Ltd\./);
-  assert.match(writes[0].content, /\| Source document \| Party \|/);
+  assert.equal(
+    JSON.parse(memo.content).memo.draft_id,
+    tabularWrites[0].documentId,
+  );
+  assert.equal(tabularWrites[0].reviewId, customResult.review.review_id);
+  assert.equal(tabularWrites[0].kind, "custom_extraction_summary");
   const completedTimeline = tabular.get(timelineId);
   completedTimeline.review.status = "complete";
   const timelineValues: Record<string, string> = {
@@ -279,6 +315,29 @@ async function main() {
     cell.status = "complete";
     cell.content = { summary: timelineValues[column.title] };
   }
+  const timelineReduced = reduceTabularStudioHandoff(
+    {
+      kind: "case_fact_summary",
+      detail: completedTimeline,
+      source: {
+        orderedUniqueSources: [
+          {
+            documentId: DOC,
+            versionId: VERSION,
+            chunkId: "chunk-2",
+            quote: "Payment is due within seven days.",
+            startOffset: 0,
+            endOffset: 34,
+          },
+        ],
+      },
+    } as any,
+    { projectId: PROJECT, title: "Matter facts" },
+  );
+  assert.equal(timelineReduced.documentType, "general_legal_document");
+  assert.match(timelineReduced.content, /## 核心时间线/);
+  assert.match(timelineReduced.content, /Payment is due within seven days\./);
+  assert.match(timelineReduced.content, /## 证据引用/);
   const factSummary = await call(
     module,
     context(),
@@ -288,24 +347,19 @@ async function main() {
   );
   assert.equal(
     JSON.parse(factSummary.content).memo.draft_id,
-    writes[1].documentId,
+    tabularWrites[1].documentId,
   );
-  assert.match(writes[1].title, /案件事实摘要/);
-  assert.match(writes[1].content, /## 核心时间线/);
-  assert.match(writes[1].content, /The claimant sent a payment demand\./);
-  assert.match(writes[1].content, /## 主要参与方/);
-  assert.match(writes[1].content, /Claimant; Respondent/);
-  assert.match(writes[1].content, /## 已明确事实/);
-  assert.match(writes[1].content, /Payment is due within seven days\./);
-  assert.match(writes[1].content, /## 待律师确认事项/);
-  assert.match(writes[1].content, /Confirm the delivery receipt\./);
+  assert.equal(tabularWrites[1].reviewId, timelineId);
+  assert.equal(tabularWrites[1].kind, "case_fact_summary");
+  assert.match(tabularWrites[1].title, /案件事实摘要/);
   const direct = await call(module, context(), "create_legal_memo", {
     title: "Legal note",
     documentType: "general_legal_document",
     contentMarkdown: "# Note",
   });
   assert.equal(JSON.parse(direct.content).memo.title, "Legal note");
-  assert.equal(writes.length, 3);
+  assert.equal(writes.length, 1);
+  assert.equal(tabularWrites.length, 2);
   await module.registeredTools(context(2));
   await rejects(() => module.registeredTools(context(1)));
   const foreign = new WorkspaceAssistantGeneralLegalToolModule(
@@ -315,6 +369,9 @@ async function main() {
         if (projectId === OTHER) throw new Error("foreign");
       },
       async createDraft() {
+        throw new Error("not reached");
+      },
+      async createDraftFromTabularReview() {
         throw new Error("not reached");
       },
     },
