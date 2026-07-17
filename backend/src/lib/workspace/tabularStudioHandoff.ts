@@ -65,11 +65,17 @@ export function prepareTabularStudioHandoff(input: {
 }
 
 function cleanMemoText(value: string) {
-  return value
-    .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
-    .replace(/\s+/gu, " ")
-    .trim()
-    .slice(0, 2_000);
+  return (
+    value
+      .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
+      .replace(/\s+/gu, " ")
+      .trim()
+      .slice(0, 2_000)
+      // Only evidenceIndex emits durable Studio citation markers.  Normal Review
+      // text can itself contain legal references such as "[12]", which must not
+      // be mistaken for an anchor by the Studio runtime.
+      .replace(/\[(\d+)\]/gu, "［$1］")
+  );
 }
 
 function cellText(cell: TabularReviewDetail["cells"][number] | undefined) {
@@ -85,7 +91,11 @@ function cellText(cell: TabularReviewDetail["cells"][number] | undefined) {
 }
 
 function escapeTableCell(value: string) {
-  return value.replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>").slice(0, 2_000);
+  return value
+    .replace(/\|/g, "\\|")
+    .replace(/\r?\n/g, "<br>")
+    .slice(0, 2_000)
+    .replace(/\[(\d+)\]/gu, "［$1］");
 }
 
 function missingMemoValue(value: string) {
@@ -109,6 +119,52 @@ function evidenceIndex(prepared: PreparedTabularStudioHandoff) {
     (source, index) =>
       `- [${index + 1}] 来源材料 ${documentNumber.get(source.documentId) ?? "未知"}，持久化原文：${cleanMemoText(source.quote)}`,
   );
+}
+
+/**
+ * Keeps the evidence section at the end of general Studio drafts so a size
+ * limit can never leave a partial marker behind.  The returned entries are
+ * always a contiguous prefix, so their [n] markers match the source records
+ * passed to Studio by createStudioDraftFromTabular.
+ */
+function withBoundedEvidenceSection(input: {
+  prefix: string;
+  evidenceHeading: string;
+  prepared: PreparedTabularStudioHandoff;
+  suffix: readonly string[];
+}) {
+  const entries = evidenceIndex(input.prepared);
+  const opening = `\n\n${input.evidenceHeading}\n\n`;
+  const closing = `\n\n${input.suffix.join("\n")}`;
+  // Reserve a complete first entry before trimming the body. Every evidence
+  // quote is bounded by cleanMemoText, so this also guarantees progress for a
+  // valid source list.
+  const reserved = opening.length + closing.length + (entries[0]?.length ?? 0);
+  let content = input.prefix.slice(0, Math.max(0, MAX_MEMO_CHARS - reserved));
+  content += opening;
+  for (const entry of entries) {
+    const separator = content.endsWith("\n\n") ? "" : "\n";
+    if (
+      content.length + separator.length + entry.length + closing.length >
+      MAX_MEMO_CHARS
+    ) {
+      break;
+    }
+    content += `${separator}${entry}`;
+  }
+  return `${content}${closing}`;
+}
+
+function visibleCitationCount(content: string) {
+  const numbers = [...content.matchAll(/\[(\d+)\]/gu)].map((match) =>
+    Number(match[1]),
+  );
+  if (!numbers.every((number, index) => number === index + 1)) {
+    throw new Error(
+      "Tabular Studio evidence markers are not a contiguous prefix.",
+    );
+  }
+  return numbers.length;
 }
 
 function reduceTimeline(
@@ -198,9 +254,9 @@ function reduceTimeline(
       : []),
   ];
   const lines = [
-    `# ${title}`,
+    `# ${cleanMemoText(title)}`,
     "",
-    `本摘要仅整理已完成结构化 Review [${detail.review.title}](${reviewRoute(projectId, detail.review.id)}) 中持久化的单元结果，不补充或推测材料外事实。`,
+    `本摘要仅整理已完成结构化 Review [${cleanMemoText(detail.review.title)}](${reviewRoute(projectId, detail.review.id)}) 中持久化的单元结果，不补充或推测材料外事实。`,
     "",
     "## 材料范围",
     "",
@@ -232,15 +288,17 @@ function reduceTimeline(
     "",
     ...bullets(confirmationItems, "Review 未提取到明确待确认事项。"),
     "",
-    "## 证据引用",
-    "",
-    ...evidenceIndex(prepared),
-    "",
-    "请在对外使用前回到 Review 和源文件核对日期、原文及材料完整性。",
   ];
   return {
     title,
-    content: lines.join("\n").slice(0, MAX_MEMO_CHARS),
+    content: withBoundedEvidenceSection({
+      prefix: lines.join("\n"),
+      evidenceHeading: "## 证据引用",
+      prepared,
+      suffix: [
+        "请在对外使用前回到 Review 和源文件核对日期、原文及材料完整性。",
+      ],
+    }),
     documentType: "general_legal_document",
   };
 }
@@ -255,9 +313,9 @@ function reduceCustomExtraction(
     (left, right) => left.ordinal - right.ordinal,
   );
   const lines = [
-    `# ${title}`,
+    `# ${cleanMemoText(title)}`,
     "",
-    `This memo summarizes the completed structured review [${detail.review.title}](${reviewRoute(projectId, detail.review.id)}).`,
+    `This memo summarizes the completed structured review [${cleanMemoText(detail.review.title)}](${reviewRoute(projectId, detail.review.id)}).`,
     "",
     `| Source document | ${columns.map((column) => escapeTableCell(column.title)).join(" | ")} |`,
     `| --- | ${columns.map(() => "---").join(" | ")} |`,
@@ -290,19 +348,18 @@ function reduceCustomExtraction(
       `_${omitted} additional source-document rows remain available in the linked Review._`,
     );
   }
-  lines.push(
-    "",
-    "## Evidence citations",
-    "",
-    ...evidenceIndex(prepared),
-    "",
-    "## Follow-up",
-    "",
-    "Confirm material gaps and conclusions against the linked Review and source documents before relying on this memo.",
-  );
   return {
     title,
-    content: lines.join("\n").slice(0, MAX_MEMO_CHARS),
+    content: withBoundedEvidenceSection({
+      prefix: lines.join("\n"),
+      evidenceHeading: "## Evidence citations",
+      prepared,
+      suffix: [
+        "## Follow-up",
+        "",
+        "Confirm material gaps and conclusions against the linked Review and source documents before relying on this memo.",
+      ],
+    }),
     documentType: "general_legal_document",
   };
 }
@@ -347,18 +404,20 @@ export async function createStudioDraftFromTabular<T>(input: {
   ) {
     throw new Error("Tabular Studio citations are not unique.");
   }
-  const citations = sources.map(
-    (source, index) => ({
-      ...source,
-      locator: {
-        startOffset: source.startOffset,
-        endOffset: source.endOffset,
-      },
-      rank: index,
-      score: null,
-      citationOrdinal: index,
-      citationMetadata: { citationNumber: index + 1 },
-    }),
-  );
+  const visibleSources =
+    input.prepared.kind === "contract_review_memo"
+      ? sources
+      : sources.slice(0, visibleCitationCount(draft.content));
+  const citations = visibleSources.map((source, index) => ({
+    ...source,
+    locator: {
+      startOffset: source.startOffset,
+      endOffset: source.endOffset,
+    },
+    rank: index,
+    score: null,
+    citationOrdinal: index,
+    citationMetadata: { citationNumber: index + 1 },
+  }));
   return input.create(draft, citations);
 }

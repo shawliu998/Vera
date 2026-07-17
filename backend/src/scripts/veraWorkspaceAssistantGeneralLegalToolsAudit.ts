@@ -352,6 +352,50 @@ async function main() {
   assert.equal(tabularWrites[1].reviewId, timelineId);
   assert.equal(tabularWrites[1].kind, "case_fact_summary");
   assert.match(tabularWrites[1].title, /案件事实摘要/);
+  const restarted = new WorkspaceAssistantGeneralLegalToolModule(
+    () => tabular as any,
+    {
+      assertCurrentDocuments(projectId, docs) {
+        assert.equal(projectId, PROJECT);
+        assert.deepEqual(docs, [
+          { documentId: DOC, versionId: VERSION },
+          { documentId: DOC_2, versionId: VERSION_2 },
+        ]);
+      },
+      async createDraft() {
+        throw new Error("not reached");
+      },
+      async createDraftFromTabularReview(_context, input) {
+        tabularWrites.push(input);
+        return {
+          documentId: input.documentId,
+          versionId: input.versionId,
+          title: input.title,
+        };
+      },
+    },
+  );
+  await restarted.registeredTools(context());
+  await call(
+    restarted,
+    context(),
+    "create_memo_from_tabular_review",
+    { review_id: timelineId },
+    "restarted-timeline-memo",
+  );
+  assert.equal(tabularWrites[2].kind, "case_fact_summary");
+  assert.match(tabularWrites[2].title, /案件事实摘要/);
+  tabular.get(timelineId).columns[0].key = "date_changed_1";
+  await rejects(() =>
+    call(
+      restarted,
+      context(),
+      "create_memo_from_tabular_review",
+      { review_id: timelineId },
+      "ambiguous-timeline-memo",
+    ),
+  );
+  assert.equal(tabularWrites.length, 3);
   const direct = await call(module, context(), "create_legal_memo", {
     title: "Legal note",
     documentType: "general_legal_document",
@@ -359,7 +403,7 @@ async function main() {
   });
   assert.equal(JSON.parse(direct.content).memo.title, "Legal note");
   assert.equal(writes.length, 1);
-  assert.equal(tabularWrites.length, 2);
+  assert.equal(tabularWrites.length, 3);
   await module.registeredTools(context(2));
   await rejects(() => module.registeredTools(context(1)));
   const foreign = new WorkspaceAssistantGeneralLegalToolModule(
@@ -386,7 +430,7 @@ async function main() {
     ),
   );
   console.log(
-    "veraWorkspaceAssistantGeneralLegalToolsAudit passed: custom and timeline extraction, deterministic replay, lifecycle settlement, deterministic case fact summary, generation fencing, completed-review memo origin, direct memo, and input rejection.",
+    "veraWorkspaceAssistantGeneralLegalToolsAudit passed: custom and timeline extraction, deterministic replay, lifecycle settlement, durable timeline classification across restart, ambiguous snapshot rejection, generation fencing, completed-review memo origin, direct memo, and input rejection.",
   );
 }
 void main();

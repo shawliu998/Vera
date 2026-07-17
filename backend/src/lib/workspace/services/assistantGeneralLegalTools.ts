@@ -472,6 +472,28 @@ function reviewBinding(
   };
 }
 
+function hasTimelineColumnSnapshot(detail: TabularReviewDetail) {
+  const persisted = [...detail.columns]
+    .sort((left, right) => left.ordinal - right.ordinal)
+    .map((column) => ({
+      ordinal: column.ordinal,
+      key: column.key,
+      name: column.title,
+      instruction: column.prompt,
+      outputType: column.outputType,
+    }));
+  const timeline = normalizeColumns(TIMELINE_COLUMNS).map(
+    (column, ordinal) => ({
+      ordinal,
+      key: column.key,
+      name: column.name,
+      instruction: column.instruction,
+      outputType: column.outputType,
+    }),
+  );
+  return isDeepStrictEqual(persisted, timeline);
+}
+
 export class WorkspaceAssistantGeneralLegalToolModule implements AssistantToolModule {
   readonly id = ASSISTANT_GENERAL_LEGAL_TOOL_MODULE_ID;
   readonly adapterId = ASSISTANT_GENERAL_LEGAL_TOOL_ADAPTER_ID;
@@ -799,7 +821,26 @@ export class WorkspaceAssistantGeneralLegalToolModule implements AssistantToolMo
       );
     }
     const binding = state.reviews.get(input.review_id);
-    const timeline = binding?.kind === "timeline";
+    if (binding) this.assertBinding(detail, binding);
+    if (detail.review.workflowId !== null) {
+      throw new AssistantGeneralLegalToolError(
+        "A memo can only be created from a completed Assistant custom extraction or timeline Review.",
+      );
+    }
+    const timeline =
+      binding?.kind === "custom_extraction"
+        ? false
+        : hasTimelineColumnSnapshot(detail);
+    if (!binding && !timeline) {
+      throw new AssistantGeneralLegalToolError(
+        "Cannot safely determine this Review's extraction preset. Re-run the custom extraction or timeline before creating a memo.",
+      );
+    }
+    if (binding?.kind === "timeline" && !timeline) {
+      throw new AssistantGeneralLegalToolError(
+        "The persisted Review columns no longer match the timeline preset.",
+      );
+    }
     const title =
       input.title ??
       (timeline
