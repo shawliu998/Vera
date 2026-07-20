@@ -64,7 +64,7 @@ create trigger on_auth_user_created
 create table if not exists public.user_api_keys (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
-  provider text not null check (provider in ('claude', 'gemini', 'openai', 'openrouter', 'courtlistener')),
+  provider text not null check (provider in ('claude', 'gemini', 'openai', 'deepseek', 'openrouter', 'courtlistener')),
   encrypted_key text not null,
   iv text not null,
   auth_tag text not null,
@@ -221,6 +221,8 @@ create table if not exists public.agent_tasks (
   mode text not null default 'work' check (mode in ('ask', 'work')),
   status text not null default 'queued'
     check (status in ('queued', 'running', 'waiting_input', 'verifying', 'paused', 'completed', 'failed')),
+  execution_model text not null default 'gemini-3-flash-preview'
+    check (char_length(btrim(execution_model)) between 1 and 100),
   deliverables jsonb not null default '[]'::jsonb,
   current_step uuid,
   latest_checkpoint jsonb,

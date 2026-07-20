@@ -38,6 +38,7 @@ export type AgentTask = {
   goal: string;
   mode: AgentMode;
   status: AgentTaskStatus;
+  execution_model: string;
   deliverables: AgentDeliverable[];
   current_plan: AgentStep[];
   current_step: string | null;

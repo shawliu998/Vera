@@ -32,6 +32,11 @@ const MODEL_API_KEY_FIELDS = [
         placeholder: "sk-...",
     },
     {
+        provider: "deepseek",
+        label: "DeepSeek API Key",
+        placeholder: "sk-...",
+    },
+    {
         provider: "openrouter",
         label: "OpenRouter API Key",
         placeholder: "sk-or-...",

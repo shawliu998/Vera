@@ -164,6 +164,7 @@ export function InitialView({ onSubmit }: InitialViewProps) {
             const snapshot = await createAgentTask({
                 goal: submission.goal,
                 matterId: matter.id,
+                model: submission.model,
                 documentIds: submission.documentIds,
             });
             router.push(`/agent-tasks/${snapshot.task.id}`);
@@ -298,6 +299,7 @@ export function InitialView({ onSubmit }: InitialViewProps) {
                         const snapshot = await createAgentTask({
                             goal: pendingWork.goal,
                             matterId: project.id,
+                            model: pendingWork.model,
                             documentIds: pendingWork.documentIds,
                         });
                         setPendingWork(null);

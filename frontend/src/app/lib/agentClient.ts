@@ -33,6 +33,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export function createAgentTask(input: {
   goal: string;
   matterId: string;
+  model: string;
   documentIds?: string[];
 }) {
   return request<AgentTaskSnapshot>("/agent-tasks", {
@@ -40,6 +41,7 @@ export function createAgentTask(input: {
     body: JSON.stringify({
       goal: input.goal,
       matter_id: input.matterId,
+      model: input.model,
       document_ids: input.documentIds ?? [],
     }),
   });
@@ -88,6 +90,16 @@ export function retryAgentTask(taskId: string) {
     `/agent-tasks/${encodeURIComponent(taskId)}/retry`,
     {
       method: "POST",
+    },
+  );
+}
+
+export function updateAgentTaskModel(taskId: string, model: string) {
+  return request<AgentTaskSnapshot>(
+    `/agent-tasks/${encodeURIComponent(taskId)}/model`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ model }),
     },
   );
 }

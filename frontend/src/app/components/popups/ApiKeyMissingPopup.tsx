@@ -24,7 +24,7 @@ export function ApiKeyMissingPopup({ open, onClose, provider, message }: Props) 
 
     const handleGoToAccount = () => {
         onClose();
-        router.push("/account/models");
+        router.push("/account/api-keys");
     };
 
     return (

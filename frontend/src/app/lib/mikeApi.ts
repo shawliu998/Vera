@@ -277,6 +277,7 @@ export type ApiKeyProvider =
     | "claude"
     | "gemini"
     | "openai"
+    | "deepseek"
     | "openrouter"
     | "courtlistener";
 export type ApiKeySource = "user" | "env" | null;

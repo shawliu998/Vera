@@ -8,9 +8,14 @@ import remarkGfm from "remark-gfm";
 import { AlertCircle, ArrowUpRight, Check, CheckCircle2, ChevronRight, Circle, Clock3, FileText, Grid2X2, Loader2, Pause, Play, ShieldCheck } from "lucide-react";
 import { PageHeader } from "@/app/components/shared/PageHeader";
 import { FileTypeIcon } from "@/app/components/shared/FileTypeIcon";
+import { ModelToggle, MODELS } from "@/app/components/assistant/ModelToggle";
+import { ApiKeyMissingPopup } from "@/app/components/popups/ApiKeyMissingPopup";
 import { getProject } from "@/app/lib/mikeApi";
-import { advanceAgentTask, attachAgentTaskDocuments, getAgentTask, pauseAgentTask, resumeAgentTask, retryAgentTask } from "@/app/lib/agentClient";
+import { advanceAgentTask, attachAgentTaskDocuments, getAgentTask, pauseAgentTask, resumeAgentTask, retryAgentTask, updateAgentTaskModel } from "@/app/lib/agentClient";
 import { cn } from "@/app/lib/utils";
+import { useUserProfile } from "@/app/contexts/UserProfileContext";
+import { isModelAvailable, getModelProvider } from "@/app/lib/modelAvailability";
+import type { ModelProvider } from "@/app/lib/modelAvailability";
 import type { AgentArtifactType, AgentStepStatus, AgentTaskSnapshot, AgentTaskStatus } from "@/app/types/agent";
 import type { Project } from "@/app/components/shared/types";
 
@@ -83,11 +88,14 @@ const ARTIFACT_META: Record<AgentArtifactType, { label: string; icon: typeof Fil
 
 export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
     const router = useRouter();
+    const { profile } = useUserProfile();
     const [snapshot, setSnapshot] = useState<AgentTaskSnapshot | null>(null);
     const [loaded, setLoaded] = useState(false);
     const [autoRun, setAutoRun] = useState(false);
     const [matter, setMatter] = useState<Project | null>(null);
     const [executionError, setExecutionError] = useState<string | null>(null);
+    const [missingKeyProvider, setMissingKeyProvider] = useState<ModelProvider | null>(null);
+    const [modelUpdating, setModelUpdating] = useState(false);
 
     useEffect(() => {
         void getAgentTask(taskId)
@@ -167,6 +175,26 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
         setAutoRun(true);
     }
 
+    async function handleModelChange(modelId: string) {
+        if (!snapshot || modelUpdating) return;
+        if (modelId === snapshot.task.execution_model) return;
+        const provider = getModelProvider(modelId);
+        if (provider && !isModelAvailable(modelId, profile?.apiKeys ?? {})) {
+            setMissingKeyProvider(provider);
+            return;
+        }
+        setModelUpdating(true);
+        setExecutionError(null);
+        try {
+            const updated = await updateAgentTaskModel(taskId, modelId);
+            setSnapshot(updated);
+        } catch (error) {
+            setExecutionError(error instanceof Error ? error.message : "Failed to switch task model");
+        } finally {
+            setModelUpdating(false);
+        }
+    }
+
     if (!loaded) {
         return (
             <div className="flex h-full items-center justify-center text-sm text-gray-500">
@@ -195,6 +223,10 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
         artifacts.some((artifact) => artifact.purpose === "Source document" && artifact.artifact_id === document.id),
     );
     const chatArtifact = artifacts.find((artifact) => artifact.artifact_type === "chat");
+    const executionModel = task.execution_model || "gemini-3-flash-preview";
+    const executionModelLabel =
+        MODELS.find((model) => model.id === executionModel)?.label ??
+        executionModel;
 
     function openArtifact(artifact: AgentTaskSnapshot["artifacts"][number]) {
         if (artifact.artifact_type === "chat") {
@@ -271,9 +303,24 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
                                     <span>
                                         {completedSteps} of {task.current_plan.length} steps complete
                                     </span>
+                                    {["queued", "paused", "waiting_input", "failed"].includes(task.status) ? (
+                                        <span className="inline-flex items-center gap-1.5">
+                                            {modelUpdating && <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />}
+                                            <ModelToggle
+                                                value={executionModel}
+                                                onChange={handleModelChange}
+                                                apiKeys={profile?.apiKeys ?? {}}
+                                                disabled={modelUpdating}
+                                            />
+                                        </span>
+                                    ) : (
+                                        <span title={`Execution model: ${executionModel}`}>
+                                            {executionModelLabel}
+                                        </span>
+                                    )}
                                 </div>
                             </div>
-                            <div className="flex shrink-0 gap-2">
+                            <div className="flex shrink-0 flex-wrap items-center gap-2">
                                 {executable && (
                                     <button
                                         type="button"
@@ -312,6 +359,11 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
                     </div>
                 </div>
             </div>
+            <ApiKeyMissingPopup
+                open={missingKeyProvider !== null}
+                onClose={() => setMissingKeyProvider(null)}
+                provider={missingKeyProvider}
+            />
         </div>
     );
 }

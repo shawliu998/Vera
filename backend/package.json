@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
+    "test:deepseek": "tsx scripts/deepseekAdapterSmoke.ts",
+    "test:agent-task-model": "tsx scripts/agentTaskModelSmoke.ts",
     "start": "node dist/index.js"
   },
   "dependencies": {

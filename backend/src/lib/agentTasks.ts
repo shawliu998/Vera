@@ -95,6 +95,7 @@ export async function createAgentTask(
     userId: string;
     matterId: string;
     goal: string;
+    executionModel: string;
     plan?: StepDefinition[];
     initialArtifacts?: AgentArtifactLinkInput[];
   },
@@ -108,6 +109,7 @@ export async function createAgentTask(
       goal: input.goal.trim(),
       mode: "work",
       status: "queued",
+      execution_model: input.executionModel,
       deliverables: DEFAULT_DELIVERABLES,
     })
     .select("*")
@@ -193,7 +195,7 @@ export async function listAgentTasks(
   let query = db
     .from("agent_tasks")
     .select(
-      "id,matter_id,goal,mode,status,deliverables,current_step,latest_checkpoint,created_at,updated_at",
+      "id,matter_id,goal,mode,status,execution_model,deliverables,current_step,latest_checkpoint,created_at,updated_at",
     )
     .eq("user_id", userId)
     .order("updated_at", { ascending: false })
@@ -490,6 +492,36 @@ export async function resumeAgentTask(db: Db, taskId: string, userId: string) {
     .eq("id", taskId)
     .eq("user_id", userId);
   if (error) throw dbError(error, "Failed to resume task");
+  return getAgentTaskSnapshot(db, taskId, userId);
+}
+
+export async function updateAgentTaskExecutionModel(
+  db: Db,
+  taskId: string,
+  userId: string,
+  executionModel: string,
+) {
+  const { data: task, error: taskError } = await db
+    .from("agent_tasks")
+    .select("id,status")
+    .eq("id", taskId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (taskError) throw dbError(taskError, "Failed to load task");
+  if (!task) return null;
+  if (
+    ["running", "verifying", "completed"].includes(task.status)
+  ) {
+    throw new Error(
+      `Only a queued, paused, failed, or input-blocked task can switch models (current: ${task.status})`,
+    );
+  }
+  const { error } = await db
+    .from("agent_tasks")
+    .update({ execution_model: executionModel, updated_at: now() })
+    .eq("id", taskId)
+    .eq("user_id", userId);
+  if (error) throw dbError(error, "Failed to update task model");
   return getAgentTaskSnapshot(db, taskId, userId);
 }
 

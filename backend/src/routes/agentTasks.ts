@@ -12,6 +12,7 @@ import {
   resumeAgentTask,
   retryAgentTask,
   stopAgentTask,
+  updateAgentTaskExecutionModel,
 } from "../lib/agentTasks";
 import {
   executeAgentStep,
@@ -20,6 +21,7 @@ import {
 } from "../lib/agentStepExecutor";
 import { createServerSupabase } from "../lib/supabase";
 import { requireAuth } from "../middleware/auth";
+import { DEFAULT_MAIN_MODEL, isSupportedModel } from "../lib/llm";
 
 export const agentTasksRouter = Router();
 
@@ -36,8 +38,14 @@ function routeError(
 function executionErrorMessage(error: unknown) {
   const message =
     error instanceof Error ? error.message : "Model or tool execution failed";
-  if (/gemini api key|api key is not configured/i.test(message)) {
+  if (/deepseek api key/i.test(message)) {
+    return "DeepSeek is unavailable. Configure a DeepSeek API key in Settings before running this task.";
+  }
+  if (/gemini api key/i.test(message)) {
     return "Gemini is unavailable. Configure a Gemini API key in Settings before running this task.";
+  }
+  if (/api key is not configured/i.test(message)) {
+    return "The selected model is unavailable. Configure its API key in Settings before running this task.";
   }
   if (/503|overloaded|queue|temporarily unavailable/i.test(message)) {
     return "The selected model is temporarily unavailable. Wait a moment and try again.";
@@ -66,6 +74,10 @@ agentTasksRouter.post("/", requireAuth, async (req, res) => {
   const goal = typeof req.body?.goal === "string" ? req.body.goal.trim() : "";
   const matterId =
     typeof req.body?.matter_id === "string" ? req.body.matter_id.trim() : "";
+  const model =
+    typeof req.body?.model === "string"
+      ? req.body.model.trim()
+      : DEFAULT_MAIN_MODEL;
   const rawDocumentIds: unknown[] = Array.isArray(req.body?.document_ids)
     ? (req.body.document_ids as unknown[])
     : [];
@@ -84,6 +96,8 @@ agentTasksRouter.post("/", requireAuth, async (req, res) => {
     return void res.status(400).json({ detail: "goal is too long" });
   if (!matterId)
     return void res.status(400).json({ detail: "matter_id is required" });
+  if (!isSupportedModel(model))
+    return void res.status(400).json({ detail: "Unsupported model" });
 
   try {
     const db = createServerSupabase();
@@ -107,6 +121,7 @@ agentTasksRouter.post("/", requireAuth, async (req, res) => {
       userId,
       matterId,
       goal,
+      executionModel: model,
       initialArtifacts: documentIds.map((documentId) => ({
         artifact_type: "document" as const,
         artifact_id: documentId,
@@ -407,6 +422,28 @@ agentTasksRouter.post("/:taskId/resume", requireAuth, async (req, res) => {
       createServerSupabase(),
       req.params.taskId,
       res.locals.userId as string,
+    );
+    if (!snapshot)
+      return void res.status(404).json({ detail: "Agent task not found" });
+    res.json(snapshot);
+  } catch (error) {
+    routeError(res, error);
+  }
+});
+
+agentTasksRouter.patch("/:taskId/model", requireAuth, async (req, res) => {
+  const userId = res.locals.userId as string;
+  const model =
+    typeof req.body?.model === "string" ? req.body.model.trim() : "";
+  if (!model) return void res.status(400).json({ detail: "model is required" });
+  if (!isSupportedModel(model))
+    return void res.status(400).json({ detail: "Unsupported model" });
+  try {
+    const snapshot = await updateAgentTaskExecutionModel(
+      createServerSupabase(),
+      req.params.taskId,
+      userId,
+      model,
     );
     if (!snapshot)
       return void res.status(404).json({ detail: "Agent task not found" });

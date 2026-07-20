@@ -13,6 +13,7 @@ import {
 } from "./agentTasks";
 import { createServerSupabase } from "./supabase";
 import { getUserModelSettings } from "./userSettings";
+import { DEFAULT_MAIN_MODEL, providerForModel } from "./llm";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -201,12 +202,32 @@ export function isTransientModelError(error: unknown) {
   );
 }
 
-async function runStepWithQueueRetry(args: Parameters<typeof runLLMStream>[0]) {
-  const attempts = [
-    { model: "gemini-3-flash-preview", waitMs: 0 },
-    { model: "gemini-3-flash-preview", waitMs: 1200 },
-    { model: "gemini-3.5-flash", waitMs: 2200 },
+function queueRetryAttempts(selectedModel: string) {
+  if (providerForModel(selectedModel) === "gemini") {
+    return [
+      { model: selectedModel, waitMs: 0 },
+      { model: selectedModel, waitMs: 1200 },
+      {
+        model:
+          selectedModel === "gemini-3-flash-preview"
+            ? "gemini-3.5-flash"
+            : selectedModel,
+        waitMs: 2200,
+      },
+    ];
+  }
+  return [
+    { model: selectedModel, waitMs: 0 },
+    { model: selectedModel, waitMs: 1200 },
+    { model: selectedModel, waitMs: 2200 },
   ];
+}
+
+async function runStepWithQueueRetry(
+  args: Parameters<typeof runLLMStream>[0],
+  selectedModel: string,
+) {
+  const attempts = queueRetryAttempts(selectedModel);
   let lastError: unknown;
   for (const attempt of attempts) {
     if (attempt.waitMs) {
@@ -358,18 +379,26 @@ export async function executeAgentStep(input: {
     getUserModelSettings(userId, db),
     buildWorkflowStore(userId, userEmail, db),
   ]);
-  const { fullText, events, citations } = await runStepWithQueueRetry({
-    apiMessages,
-    docStore,
-    docIndex,
-    userId,
-    db,
-    write: () => {},
-    workflowStore,
-    includeResearchTools: false,
-    apiKeys,
-    projectId: snapshot.task.matter_id,
-  });
+  const executionModel =
+    typeof snapshot.task.execution_model === "string" &&
+    snapshot.task.execution_model
+      ? snapshot.task.execution_model
+      : DEFAULT_MAIN_MODEL;
+  const { fullText, events, citations } = await runStepWithQueueRetry(
+    {
+      apiMessages,
+      docStore,
+      docIndex,
+      userId,
+      db,
+      write: () => {},
+      workflowStore,
+      includeResearchTools: false,
+      apiKeys,
+      projectId: snapshot.task.matter_id,
+    },
+    executionModel,
+  );
   const persistedEvents = stripTransientAssistantEvents(events);
   const { data: assistantMessage, error: assistantError } = await db
     .from("chat_messages")
