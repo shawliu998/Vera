@@ -15,7 +15,7 @@ import {
     Trash2,
     X,
 } from "lucide-react";
-import { MikeIcon } from "@/app/components/chat/mike-icon";
+import { VeraIcon } from "@/app/components/chat/vera-icon";
 import {
     streamTabularChat,
     getTabularChats,
@@ -179,7 +179,7 @@ function TRResponseStatus({ isActive }: { isActive: boolean }) {
 
     return (
         <div className="w-full h-9 flex items-center mb-2">
-            <MikeIcon
+            <VeraIcon
                 spin={isActive}
                 done={showDone && doneVisible}
                 mike={!(showDone && doneVisible)}

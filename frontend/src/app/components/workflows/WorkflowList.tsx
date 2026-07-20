@@ -19,7 +19,7 @@ import { UseWorkflowModal } from "./UseWorkflowModal";
 import { NewWorkflowModal } from "./NewWorkflowModal";
 import { TableToolbar } from "../shared/TableToolbar";
 import { RowActionMenuItems, RowActions } from "../shared/RowActions";
-import { MikeIcon } from "@/app/components/chat/mike-icon";
+import { VeraIcon } from "@/app/components/chat/vera-icon";
 import { PageHeader } from "@/app/components/shared/PageHeader";
 import { PillButton } from "@/app/components/ui/pill-button";
 import { TabPillButton } from "@/app/components/ui/tab-pill-button";
@@ -741,7 +741,7 @@ export function WorkflowList() {
                                 <TableCell className="w-44">
                                     {wf.is_system ? (
                                         <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-600">
-                                            <MikeIcon size={14} />
+                                            <VeraIcon size={14} />
                                             System
                                         </span>
                                     ) : wf.is_owner !== false ? (

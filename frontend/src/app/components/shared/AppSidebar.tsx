@@ -12,7 +12,7 @@ import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import { MikeIcon } from "@/app/components/chat/mike-icon";
+import { VeraIcon } from "@/app/components/chat/vera-icon";
 import { SidebarChatItem } from "@/app/components/shared/SidebarChatItem";
 import {
     ChatSkeuoIcon,
@@ -165,13 +165,13 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                 href="/assistant"
                                 className="flex items-center gap-1.5 hover:opacity-80 transition-opacity"
                             >
-                                <MikeIcon size={22} />
+                                <VeraIcon size={22} />
                                 <span
                                     className={`text-2xl font-light font-serif ${
                                         shouldAnimate ? "sidebar-fade-in" : ""
                                     }`}
                                 >
-                                    Mike
+                                    Vera
                                 </span>
                             </Link>
                         </div>

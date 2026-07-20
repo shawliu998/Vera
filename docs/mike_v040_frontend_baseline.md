@@ -51,6 +51,11 @@ source import.
 The unauthenticated 1280 × 720 login baseline is stored at
 `docs/screenshots/mike-v040-baseline/login-1280x720.png`.
 
+The first Vera brand overlay keeps the Mike layout and interaction code intact
+while replacing the visible product name and product mark. Its matching login
+capture is stored at
+`docs/screenshots/mike-v040-baseline/vera-login-1280x720.png`.
+
 ## Next changes
 
 Changes after this baseline must be layered in this order:

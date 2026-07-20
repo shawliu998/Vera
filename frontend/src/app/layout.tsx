@@ -1,22 +1,25 @@
 import type { Metadata } from "next";
-import { Inter, EB_Garamond } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import { Providers } from "@/app/components/providers";
 
-const inter = Inter({
+const inter = localFont({
+    src: "./assets/fonts/inter-latin.woff2",
     variable: "--font-inter",
-    subsets: ["latin"],
+    display: "swap",
+    weight: "100 900",
 });
 
-const ebGaramond = EB_Garamond({
+const ebGaramond = localFont({
+    src: "./assets/fonts/eb-garamond-latin.woff2",
     variable: "--font-eb-garamond",
-    subsets: ["latin"],
-    weight: ["400", "500", "600", "700"],
+    display: "swap",
+    weight: "400 700",
 });
 
 export const metadata: Metadata = {
-    metadataBase: new URL("https://app.mikeoss.com"),
-    title: "Mike - AI Legal Platform",
+    metadataBase: new URL("https://vera.local"),
+    title: "Vera - Legal Workspace",
     description:
         "AI-powered legal document analysis and contract review platform.",
     icons: {
@@ -28,9 +31,9 @@ export const metadata: Metadata = {
     },
     openGraph: {
         type: "website",
-        url: "https://app.mikeoss.com",
-        siteName: "Mike",
-        title: "Mike - AI Legal Platform",
+        url: "https://vera.local",
+        siteName: "Vera",
+        title: "Vera - Legal Workspace",
         description:
             "AI-powered legal document analysis and contract review platform.",
         images: [
@@ -38,13 +41,13 @@ export const metadata: Metadata = {
                 url: "/link-image.jpg",
                 width: 1200,
                 height: 651,
-                alt: "Mike",
+                alt: "Vera",
             },
         ],
     },
     twitter: {
         card: "summary_large_image",
-        title: "Mike - AI Legal Platform",
+        title: "Vera - Legal Workspace",
         description:
             "AI-powered legal document analysis and contract review platform.",
         images: ["/link-image.jpg"],
