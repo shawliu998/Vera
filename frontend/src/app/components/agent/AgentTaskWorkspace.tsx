@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
     AlertCircle,
     ArrowUpRight,
@@ -19,12 +20,13 @@ import {
 } from "lucide-react";
 import { PageHeader } from "@/app/components/shared/PageHeader";
 import { FileTypeIcon } from "@/app/components/shared/FileTypeIcon";
+import { getProject } from "@/app/lib/mikeApi";
 import {
-    advanceMockAgentTask,
-    getMockAgentTask,
-    pauseMockAgentTask,
-    resumeMockAgentTask,
-} from "@/app/lib/agentMockClient";
+    advanceAgentTask,
+    getAgentTask,
+    pauseAgentTask,
+    resumeAgentTask,
+} from "@/app/lib/agentClient";
 import { cn } from "@/app/lib/utils";
 import type {
     AgentArtifactType,
@@ -32,6 +34,7 @@ import type {
     AgentTaskSnapshot,
     AgentTaskStatus,
 } from "@/app/types/agent";
+import type { Project } from "@/app/components/shared/types";
 
 const STATUS_LABELS: Record<AgentTaskStatus, string> = {
     queued: "Ready",
@@ -108,12 +111,17 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
     const [snapshot, setSnapshot] = useState<AgentTaskSnapshot | null>(null);
     const [loaded, setLoaded] = useState(false);
     const [autoRun, setAutoRun] = useState(false);
+    const [matter, setMatter] = useState<Project | null>(null);
+    const [executionError, setExecutionError] = useState<string | null>(null);
 
     useEffect(() => {
-        void getMockAgentTask(taskId).then((value) => {
-            setSnapshot(value);
-            setLoaded(true);
-        });
+        void getAgentTask(taskId)
+            .then(async (value) => {
+                setSnapshot(value);
+                setMatter(await getProject(value.task.matter_id));
+            })
+            .catch(() => setSnapshot(null))
+            .finally(() => setLoaded(true));
     }, [taskId]);
 
     useEffect(() => {
@@ -123,8 +131,14 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
             return;
         }
         const timer = window.setTimeout(async () => {
-            const next = await advanceMockAgentTask(taskId);
-            setSnapshot({ ...next });
+            try {
+                const next = await advanceAgentTask(taskId);
+                setSnapshot({ ...next });
+            } catch (error) {
+                setAutoRun(false);
+                setExecutionError(error instanceof Error ? error.message : "Task execution failed");
+                setSnapshot(await getAgentTask(taskId));
+            }
         }, snapshot.task.status === "verifying" ? 1250 : 900);
         return () => window.clearTimeout(timer);
     }, [autoRun, snapshot, taskId]);
@@ -139,20 +153,27 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
     async function runTask() {
         if (!snapshot) return;
         if (snapshot.task.status === "paused") {
-            setSnapshot(await resumeMockAgentTask(taskId));
+            setSnapshot(await resumeAgentTask(taskId));
         }
+        setExecutionError(null);
         setAutoRun(true);
     }
 
     async function pauseTask() {
         setAutoRun(false);
-        setSnapshot(await pauseMockAgentTask(taskId));
+        setSnapshot(await pauseAgentTask(taskId));
     }
 
     async function runNextStep() {
         if (!snapshot) return;
-        const next = await advanceMockAgentTask(taskId);
-        setSnapshot({ ...next });
+        setExecutionError(null);
+        try {
+            const next = await advanceAgentTask(taskId);
+            setSnapshot({ ...next });
+        } catch (error) {
+            setExecutionError(error instanceof Error ? error.message : "Task execution failed");
+            setSnapshot(await getAgentTask(taskId));
+        }
     }
 
     if (!loaded) {
@@ -180,7 +201,13 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
     }
 
     const { task, artifacts } = snapshot;
-    const terminal = task.status === "completed" || task.status === "failed";
+    const executable = task.status === "queued" || task.status === "running" || task.status === "verifying";
+    const matterName = matter?.name ?? "Matter";
+    const sourceDocuments = (matter?.documents ?? []).filter((document) =>
+        artifacts.some(
+            (artifact) => artifact.artifact_type === "document" && artifact.artifact_id === document.id,
+        ),
+    );
 
     return (
         <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -188,7 +215,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
                 shrink
                 breadcrumbs={[
                     { label: "Work Tasks", onClick: () => router.push("/assistant") },
-                    { label: "Project Cedar", cursor: "text" },
+                    { label: matterName, cursor: "text", title: matterName },
                 ]}
                 actions={[
                     {
@@ -211,13 +238,13 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
                             </span>
                         ),
                     },
-                    !terminal && task.status !== "paused"
+                    (task.status === "running" || task.status === "verifying")
                         ? {
                               icon: <Pause className="h-3.5 w-3.5" />,
                               label: "Pause",
                               onClick: pauseTask,
                           }
-                        : !terminal
+                        : task.status === "paused"
                           ? {
                                 icon: <Play className="h-3.5 w-3.5" />,
                                 label: "Resume",
@@ -233,22 +260,26 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
                         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                             <div className="min-w-0">
                                 <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-gray-400">
-                                    Matter · Project Cedar
+                                    Matter · {matterName}
                                 </p>
                                 <h1 className="mt-1 max-w-4xl text-pretty font-serif text-[26px] leading-8 text-gray-950 md:text-[30px] md:leading-9">
                                     {task.goal}
                                 </h1>
                                 <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-gray-500">
-                                    <span className="inline-flex items-center gap-1.5">
-                                        <FileTypeIcon fileType="docx" className="h-3.5 w-3.5" />
-                                        synthetic-software-license-review.docx
-                                    </span>
-                                    <span>Current version · v2</span>
+                                    {sourceDocuments.length > 0 ? (
+                                        <span className="inline-flex min-w-0 items-center gap-1.5">
+                                            <FileTypeIcon fileType={sourceDocuments[0].file_type} className="h-3.5 w-3.5" />
+                                            <span className="max-w-[360px] truncate">{sourceDocuments[0].filename}</span>
+                                            {sourceDocuments.length > 1 && <span>+{sourceDocuments.length - 1}</span>}
+                                        </span>
+                                    ) : (
+                                        <span>No source documents attached</span>
+                                    )}
                                     <span>{completedSteps} of {task.current_plan.length} steps complete</span>
                                 </div>
                             </div>
                             <div className="flex shrink-0 gap-2">
-                                {!terminal && (
+                                {executable && (
                                     <button
                                         type="button"
                                         onClick={runNextStep}
@@ -258,7 +289,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
                                         Run next step
                                     </button>
                                 )}
-                                {!terminal && task.status !== "paused" && (
+                                {executable && (
                                     <button
                                         type="button"
                                         onClick={runTask}
@@ -275,7 +306,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
 
                     <div className="grid min-h-0 gap-4 xl:grid-cols-[250px_minmax(0,1fr)_300px]">
                         <PlanPanel snapshot={snapshot} />
-                        <ExecutionPanel snapshot={snapshot} />
+                        <ExecutionPanel snapshot={snapshot} executionError={executionError} />
                         <EvidencePanel snapshot={snapshot} />
                     </div>
                 </div>
@@ -337,7 +368,15 @@ function PlanPanel({ snapshot }: { snapshot: AgentTaskSnapshot }) {
                             <div className="min-w-0 pt-0.5">
                                 <p className={cn("text-xs font-medium leading-5", active ? "text-gray-950" : "text-gray-700")}>{step.title}</p>
                                 <p className="mt-0.5 text-[11px] leading-4 text-gray-400">
-                                    {step.status === "completed" ? "Completed" : step.status === "running" ? `Attempt ${step.attempt}` : "Pending"}
+                                    {step.status === "completed"
+                                        ? "Completed"
+                                        : step.status === "running"
+                                          ? `Attempt ${step.attempt}`
+                                          : step.status === "blocked"
+                                            ? "Blocked"
+                                            : step.status === "skipped"
+                                              ? "Skipped"
+                                              : "Pending"}
                                 </p>
                             </div>
                         </li>
@@ -348,13 +387,55 @@ function PlanPanel({ snapshot }: { snapshot: AgentTaskSnapshot }) {
     );
 }
 
-function ExecutionPanel({ snapshot }: { snapshot: AgentTaskSnapshot }) {
+function ExecutionPanel({
+    snapshot,
+    executionError,
+}: {
+    snapshot: AgentTaskSnapshot;
+    executionError: string | null;
+}) {
     const latest = [...snapshot.task.current_plan].reverse().find((step) => step.status === "completed");
     const current = snapshot.task.current_plan.find((step) => step.status === "running");
     return (
         <Panel title="Execution" eyebrow="Current activity" className="min-w-0">
             <div className="p-4 md:p-5">
-                {current ? (
+                {snapshot.task.status === "failed" ? (
+                    <div className="rounded-2xl border border-red-100 bg-red-50/45 p-4">
+                        <div className="flex items-start gap-3">
+                            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                            <div>
+                                <p className="text-sm font-semibold text-gray-950">Execution unavailable</p>
+                                <p className="mt-1 text-xs leading-5 text-gray-500">
+                                    {executionError || snapshot.task.latest_checkpoint?.summary || "The model or a required tool could not complete this step."}
+                                </p>
+                                <Link
+                                    href="/account/api-keys"
+                                    className="mt-3 inline-flex h-7 items-center rounded-full border border-red-200 bg-white/70 px-3 text-[11px] font-medium text-red-800 transition-colors hover:bg-white"
+                                >
+                                    Open model settings
+                                </Link>
+                            </div>
+                        </div>
+                    </div>
+                ) : snapshot.task.status === "waiting_input" ? (
+                    <div className="rounded-2xl border border-amber-100 bg-amber-50/55 p-4">
+                        <div className="flex items-start gap-3">
+                            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+                            <div>
+                                <p className="text-sm font-semibold text-gray-950">Input required</p>
+                                <p className="mt-1 text-xs leading-5 text-gray-500">
+                                    {snapshot.task.latest_checkpoint?.summary || "Attach the requested Matter documents before continuing."}
+                                </p>
+                                <Link
+                                    href={`/projects/${snapshot.task.matter_id}`}
+                                    className="mt-3 inline-flex h-7 items-center rounded-full border border-amber-200 bg-white/70 px-3 text-[11px] font-medium text-amber-800 transition-colors hover:bg-white"
+                                >
+                                    Open Matter documents
+                                </Link>
+                            </div>
+                        </div>
+                    </div>
+                ) : current ? (
                     <div className="rounded-2xl border border-blue-100 bg-blue-50/45 p-4">
                         <div className="flex items-start gap-3">
                             <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-blue-700 shadow-sm">

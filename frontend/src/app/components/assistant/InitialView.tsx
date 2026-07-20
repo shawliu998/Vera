@@ -25,7 +25,7 @@ import {
 } from "./quickActionsPreferences";
 import type { Message, Workflow } from "../shared/types";
 import type { AgentMode } from "@/app/types/agent";
-import { createMockAgentTask } from "@/app/lib/agentMockClient";
+import { createAgentTask } from "@/app/lib/agentClient";
 
 interface InitialViewProps {
     onSubmit: (message: Message) => void;
@@ -78,12 +78,13 @@ export function InitialView({ onSubmit }: InitialViewProps) {
     const [quickActionsModalOpen, setQuickActionsModalOpen] = useState(false);
     const [mode, setMode] = useState<AgentMode>("ask");
     const [creatingTask, setCreatingTask] = useState(false);
+    const [pendingWork, setPendingWork] = useState<WorkSubmission | null>(null);
     const { visibleActions, setVisibleActions } = useQuickActionsPreference();
     const [iconOffset, setIconOffset] = useState(0);
     const [textOffset, setTextOffset] = useState(0);
     const textRef = useRef<HTMLHeadingElement>(null);
     const chatInputRef = useRef<ChatInputHandle>(null);
-    const { projects } = useDirectoryData(newTROpen, "projects");
+    const { projects } = useDirectoryData(newTROpen || mode === "work", "projects");
 
     const username =
         profile?.displayName?.trim() || user?.email?.split("@")[0] || "there";
@@ -152,11 +153,18 @@ export function InitialView({ onSubmit }: InitialViewProps) {
 
     async function handleWorkSubmit(submission: WorkSubmission) {
         if (creatingTask) return;
+        const matter = projects[0];
+        if (!matter) {
+            setPendingWork(submission);
+            setNewProjectOpen(true);
+            return;
+        }
         setCreatingTask(true);
         try {
-            const snapshot = await createMockAgentTask({
+            const snapshot = await createAgentTask({
                 goal: submission.goal,
-                matterId: projects[0]?.id,
+                matterId: matter.id,
+                documentIds: submission.documentIds,
             });
             router.push(`/agent-tasks/${snapshot.task.id}`);
         } finally {
@@ -275,10 +283,28 @@ export function InitialView({ onSubmit }: InitialViewProps) {
             />
             <NewProjectModal
                 open={newProjectOpen}
-                onClose={() => setNewProjectOpen(false)}
-                onCreated={(project) => {
+                onClose={() => {
                     setNewProjectOpen(false);
-                    router.push(`/projects/${project.id}`);
+                    setPendingWork(null);
+                }}
+                onCreated={async (project) => {
+                    setNewProjectOpen(false);
+                    if (!pendingWork) {
+                        router.push(`/projects/${project.id}`);
+                        return;
+                    }
+                    setCreatingTask(true);
+                    try {
+                        const snapshot = await createAgentTask({
+                            goal: pendingWork.goal,
+                            matterId: project.id,
+                            documentIds: pendingWork.documentIds,
+                        });
+                        setPendingWork(null);
+                        router.push(`/agent-tasks/${snapshot.task.id}`);
+                    } finally {
+                        setCreatingTask(false);
+                    }
                 }}
             />
             <NewTRModal
