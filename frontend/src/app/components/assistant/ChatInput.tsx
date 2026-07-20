@@ -33,6 +33,7 @@ import {
 } from "@/app/lib/modelAvailability";
 import type { Document, Message } from "../shared/types";
 import type { DirectoryTab } from "../shared/useDirectoryData";
+import type { AgentMode } from "@/app/types/agent";
 import { cn } from "@/app/lib/utils";
 import {
     uploadProjectDocument,
@@ -52,6 +53,13 @@ export interface ChatInputHandle {
     ) => void;
 }
 
+export type WorkSubmission = {
+    goal: string;
+    documentIds: string[];
+    workflowId?: string;
+    model: string;
+};
+
 interface Props {
     onSubmit: (message: Message) => void;
     onCancel: () => void;
@@ -62,6 +70,9 @@ interface Props {
     projectCmNumber?: string | null;
     projectId?: string;
     onDocumentsUploaded?: (documents: Document[]) => void;
+    mode?: AgentMode;
+    onModeChange?: (mode: AgentMode) => void;
+    onWorkSubmit?: (submission: WorkSubmission) => void | Promise<void>;
 }
 
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
@@ -75,6 +86,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
         projectCmNumber,
         projectId,
         onDocumentsUploaded,
+        mode = "ask",
+        onModeChange,
+        onWorkSubmit,
     }: Props,
     ref,
 ) {
@@ -253,7 +267,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     const handleSubmit = () => {
         const query = value.trim();
         if (!query || isLoading) return;
-        if (apiKeys && !isModelAvailable(model, apiKeys)) {
+        if (mode === "ask" && apiKeys && !isModelAvailable(model, apiKeys)) {
             setApiKeyModalProvider(getModelProvider(model));
             return;
         }
@@ -269,6 +283,16 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
         setAttachedDocs([]);
         const wf = selectedWorkflow;
         setSelectedWorkflow(null);
+
+        if (mode === "work") {
+            void onWorkSubmit?.({
+                goal: query,
+                documentIds: attachedDocs.map((document) => document.id),
+                workflowId: wf?.id,
+                model,
+            });
+            return;
+        }
 
         onSubmit?.({
             role: "user",
@@ -367,11 +391,46 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                     )}
 
                     {/* Input */}
-                    <div className="px-4 pt-4">
+                    <div className="px-4 pt-3">
+                        {onModeChange && (
+                            <div className="mb-3 flex items-center gap-2">
+                                <div
+                                    className="inline-flex rounded-lg bg-gray-900/[0.045] p-0.5"
+                                    role="group"
+                                    aria-label="Assistant mode"
+                                >
+                                    {(["ask", "work"] as const).map((item) => (
+                                        <button
+                                            key={item}
+                                            type="button"
+                                            aria-pressed={mode === item}
+                                            onClick={() => onModeChange(item)}
+                                            className={cn(
+                                                "h-6 rounded-md px-2.5 text-[11px] font-medium capitalize transition-colors",
+                                                mode === item
+                                                    ? "bg-white text-gray-900 shadow-[0_1px_3px_rgba(15,23,42,0.12)]"
+                                                    : "text-gray-500 hover:text-gray-800",
+                                            )}
+                                        >
+                                            {item}
+                                        </button>
+                                    ))}
+                                </div>
+                                <span className="text-[11px] text-gray-400">
+                                    {mode === "ask"
+                                        ? "Get an answer now"
+                                        : "Create a planned, reviewable task"}
+                                </span>
+                            </div>
+                        )}
                         <textarea
                             ref={textareaRef}
                             rows={1}
-                            placeholder="How can I help?"
+                            placeholder={
+                                mode === "work"
+                                    ? "Describe the outcome and deliverables…"
+                                    : "How can I help?"
+                            }
                             value={value}
                             onChange={handleChange}
                             onKeyDown={handleKeyDown}
@@ -435,6 +494,13 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                             />
                             <button
                                 type="button"
+                                aria-label={
+                                    isLoading
+                                        ? "Stop response"
+                                        : mode === "work"
+                                          ? "Create work task"
+                                          : "Send message"
+                                }
                                 className={cn(
                                     "relative bg-gradient-to-b from-neutral-700 to-black text-white rounded-[10px] h-8 w-8 flex items-center justify-center cursor-pointer disabled:cursor-default disabled:from-neutral-600 disabled:to-black backdrop-blur-xl border border-white/30 active:enabled:scale-95 transition-all duration-150",
                                     "shadow-[0_5px_14px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.24)]",

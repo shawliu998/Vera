@@ -7,7 +7,11 @@ import { MoreHorizontal } from "lucide-react";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { VeraIcon } from "@/app/components/chat/vera-icon";
-import { ChatInput, type ChatInputHandle } from "./ChatInput";
+import {
+    ChatInput,
+    type ChatInputHandle,
+    type WorkSubmission,
+} from "./ChatInput";
 import { SelectAssistantProjectModal } from "./SelectAssistantProjectModal";
 import { QuickActionsModal } from "./QuickActionsModal";
 import { NewProjectModal } from "../projects/NewProjectModal";
@@ -20,6 +24,8 @@ import {
     useQuickActionsPreference,
 } from "./quickActionsPreferences";
 import type { Message, Workflow } from "../shared/types";
+import type { AgentMode } from "@/app/types/agent";
+import { createMockAgentTask } from "@/app/lib/agentMockClient";
 
 interface InitialViewProps {
     onSubmit: (message: Message) => void;
@@ -70,6 +76,8 @@ export function InitialView({ onSubmit }: InitialViewProps) {
     const [newProjectOpen, setNewProjectOpen] = useState(false);
     const [newTROpen, setNewTROpen] = useState(false);
     const [quickActionsModalOpen, setQuickActionsModalOpen] = useState(false);
+    const [mode, setMode] = useState<AgentMode>("ask");
+    const [creatingTask, setCreatingTask] = useState(false);
     const { visibleActions, setVisibleActions } = useQuickActionsPreference();
     const [iconOffset, setIconOffset] = useState(0);
     const [textOffset, setTextOffset] = useState(0);
@@ -142,6 +150,20 @@ export function InitialView({ onSubmit }: InitialViewProps) {
         }
     }
 
+    async function handleWorkSubmit(submission: WorkSubmission) {
+        if (creatingTask) return;
+        setCreatingTask(true);
+        try {
+            const snapshot = await createMockAgentTask({
+                goal: submission.goal,
+                matterId: projects[0]?.id,
+            });
+            router.push(`/agent-tasks/${snapshot.task.id}`);
+        } finally {
+            setCreatingTask(false);
+        }
+    }
+
     return (
         <div className="grid h-full w-full grid-rows-[minmax(0,1fr)_auto_minmax(0,1fr)] px-6">
             <div className="flex min-h-0 items-end justify-center pb-6">
@@ -184,14 +206,19 @@ export function InitialView({ onSubmit }: InitialViewProps) {
                     ref={chatInputRef}
                     onSubmit={onSubmit}
                     onCancel={() => {}}
-                    isLoading={false}
+                    isLoading={creatingTask}
+                    mode={mode}
+                    onModeChange={setMode}
+                    onWorkSubmit={handleWorkSubmit}
                 />
             </div>
 
             <div className="min-h-0 w-full max-w-4xl justify-self-center px-0 pt-1 xl:px-8">
                 <div className="text-center">
                     <p className="text-xs py-2 mb-12 text-gray-500">
-                        AI can make mistakes. Answers are not legal advice.
+                        {mode === "work"
+                            ? "Work tasks pause for input and remain subject to lawyer review."
+                            : "AI can make mistakes. Answers are not legal advice."}
                     </p>
                 </div>
 

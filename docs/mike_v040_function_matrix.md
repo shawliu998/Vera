@@ -49,6 +49,9 @@ This matrix separates source parity, build coverage, and live interaction covera
 | Keyboard navigation and focus | Pending | Login, sidebar, composer, dialogs and tables |
 | Loading/error/empty states | Pending | Network delay/error injection per surface |
 | Model streaming | Blocked | Requires a valid Gemini, Anthropic or OpenAI key; no credential is stored in source |
+| Ask / Work mode switch | UI verified | Work mode creates a local prototype task without weakening Ask mode's provider-key gate |
+| Thin Agent task state flow | UI verified | Queued, running, verifying and completed states exercised through five short mock steps |
+| Agent artifacts and verifier | UI verified | Source, risk matrix and AI draft remain visibly distinct; completion remains `Ready for lawyer review` |
 
 ## Order of execution
 
@@ -63,5 +66,6 @@ This matrix separates source parity, build coverage, and live interaction covera
 
 - `docs/screenshots/mike-v040-baseline/vera-login-1280x720.png` — branded Mike v0.4 login baseline.
 - `docs/screenshots/mike-v040-baseline/project-document-preview-qa.png` — authenticated project workspace with extracted DOCX preview and Version 1 metadata.
+- `docs/screenshots/mike-v040-baseline/agent-work-task-prototype.png` — thin Agent Work Task plan, execution, artifacts and verifier workspace.
 
 The QA document is synthetic and explicitly contains no client, matter, personal, confidential, or privileged information.
