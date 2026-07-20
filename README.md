@@ -1,5 +1,7 @@
 # Vera
 
+> Desktop baseline: Vera 1.1 now uses the connected Electron client described in [`docs/connected_desktop.md`](docs/connected_desktop.md). The older bundled SQLCipher/local-service packaging notes below are historical and do not describe the `1d72e005` Mike/Vera runtime.
+
 Vera is a single-user, local-first macOS legal AI desktop client. Its P0
 product structure, interaction model, and UI are a controlled port of the
 open-source [Mike](https://github.com/Open-Legal-Products/mike) project at the

@@ -1,4 +1,6 @@
-# Vera Desktop App
+# Vera Desktop App (legacy local-first host)
+
+> Superseded for the `1d72e005` Mike/Vera baseline. The active connected-client architecture, build command, and security contract are documented in [`connected_desktop.md`](./connected_desktop.md). The material below is retained as historical documentation for the previous SQLCipher/local-service host and must not be treated as the current packaging contract.
 
 This document starts with the current Mike-derived Vera P0 client. The legacy
 desktop operations reference is retained below for historical compatibility.

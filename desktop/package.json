@@ -1,47 +1,18 @@
 {
-  "name": "aletheia-desktop",
-  "version": "1.0.1",
+  "name": "vera-connected-desktop",
+  "version": "1.1.0",
   "private": true,
-  "description": "Vera local desktop app.",
+  "description": "Vera connected legal workspace for macOS.",
   "author": "Vera contributors",
   "license": "AGPL-3.0-only",
-  "main": "main.js",
+  "main": "connectedMain.js",
   "scripts": {
-    "start": "electron .",
-    "test:sqlcipher-runtime": "electron scripts/sqlcipherUtilityAudit.js",
-    "test:legacy-migration": "node scripts/desktopMigrationAudit.js",
-    "test:packaged-app": "node scripts/packagedAppSmoke.js",
-    "test:packaged-workspace-e2e": "node scripts/packagedWorkspaceE2E.js",
-    "test:packaged-backup": "node scripts/packagedBackupBridgeAudit.js",
-    "test:packaged-restore-fail-closed": "node scripts/packagedRestoreFailClosedAudit.js",
-    "test:native-ocr": "node scripts/nativeOcrAudit.js",
-    "test:packaged-native-ocr": "node scripts/packagedNativeOcrAudit.js",
-    "test:packaged-p1-convergence": "node scripts/packagedNativeOcrAudit.js",
-    "test:packaged-ocr": "node scripts/packagedNativeOcrAudit.js",
-    "test:packaged-notifications": "node scripts/packagedNotificationAudit.js",
-    "test:product-rename": "node scripts/productRenameAudit.js",
-    "test:audit-anchor-config": "node scripts/auditAnchorConfigAudit.js",
-    "test:keychain-provisioning": "node scripts/macOsKeychainProvisioningAudit.js",
-    "test:keychain-credential-store": "node scripts/macOsKeychainCredentialStoreAudit.js",
-    "test:credential-worker": "node scripts/credentialWorkerAudit.js",
-    "test:credential-worker-utility": "electron scripts/credentialWorkerUtilityAudit.js",
-    "test:credential-bridge": "node scripts/credentialBridgeAudit.js",
-    "test:credential-backend-integration": "electron scripts/credentialBackendIntegrationAudit.js",
-    "test:encryption-policy": "node scripts/encryptionPolicyAudit.js",
-    "test:runtime-security": "node scripts/runtimeSecurityAudit.js",
-    "test:workspace-bridge": "node scripts/veraWorkspaceBridgeAudit.js",
-    "test:diagnostic-bundle": "node scripts/diagnosticBundleAudit.js",
-    "test:desktop-logger": "node scripts/desktopLoggerAudit.js",
-    "test:original-document-save": "node scripts/originalDocumentSaveAudit.js",
-    "test:p0-source": "npm run test:product-rename && npm run test:keychain-provisioning && npm run test:keychain-credential-store && npm run test:credential-worker && npm run test:credential-worker-utility && npm run test:credential-bridge && npm run test:credential-backend-integration && npm run test:encryption-policy && npm run test:runtime-security && npm run test:workspace-bridge && npm run test:diagnostic-bundle && npm run test:desktop-logger && npm run test:original-document-save",
-    "signing:preflight": "node scripts/releaseSigningPreflight.js",
-    "signing:readiness": "node scripts/macReleaseReadiness.js",
-    "signing:verify": "node scripts/verifyMacRelease.js",
-    "test:signing-pipeline": "node scripts/releaseSigningAudit.js",
-    "prepare:frontend-runtime": "node scripts/prepareFrontendRuntime.js && node scripts/buildNativeOcr.js",
-    "check:package-hygiene": "node scripts/desktopPackageHygieneAudit.js --runtime .runtime/frontend",
-    "dist:mac": "npm run signing:preflight && electron-builder --mac",
-    "pack:mac": "npm run signing:preflight && electron-builder --mac --dir"
+    "start": "electron connectedMain.js",
+    "test:connected-security": "node scripts/connectedDesktopAudit.js",
+    "test:connected-smoke": "node scripts/connectedDesktopSmoke.js",
+    "test:connected": "npm run test:connected-security && npm run test:connected-smoke",
+    "pack:mac": "electron-builder --mac --dir",
+    "dist:mac": "electron-builder --mac"
   },
   "devDependencies": {
     "@electron/notarize": "2.5.0",
@@ -49,64 +20,18 @@
     "electron-builder": "^26.0.12"
   },
   "build": {
-    "appId": "ai.aletheia.local",
+    "appId": "ai.vera.desktop",
     "productName": "Vera",
     "asar": true,
-    "afterSign": "scripts/afterSign.js",
-    "afterAllArtifactBuild": "scripts/afterAllArtifactBuild.js",
     "files": [
-      "main.js",
-      "preload.js",
-      "auditAnchorConfig.js",
-      "originalDocumentSave.js",
-      "diagnosticBundle.js",
-      "desktopLogger.js",
-      "encryptionPolicy.js",
+      "connectedMain.js",
+      "connectedPreload.js",
+      "connectedConfig.js",
       "package.json",
       "build/icon.icns",
       "build/icon.png"
     ],
-    "extraResources": [
-      {
-        "from": "credentialWorker.js",
-        "to": "aletheia/desktop/credentialWorker.js"
-      },
-      {
-        "from": "macOsKeychain.js",
-        "to": "aletheia/desktop/macOsKeychain.js"
-      },
-      {
-        "from": "../backend/dist",
-        "to": "aletheia/backend/dist"
-      },
-      {
-        "from": "../backend/node_modules",
-        "to": "aletheia/backend/node_modules"
-      },
-      {
-        "from": "../backend/package.json",
-        "to": "aletheia/backend/package.json"
-      },
-      {
-        "from": "../backend/voice_sidecar",
-        "to": "aletheia/backend/voice_sidecar"
-      },
-      {
-        "from": ".runtime/frontend",
-        "to": "aletheia/frontend",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": ".runtime/frontend-node-modules.tgz",
-        "to": "aletheia/frontend-node-modules.tgz"
-      },
-      {
-        "from": ".runtime/native/aletheia-ocr",
-        "to": "aletheia/native/aletheia-ocr"
-      }
-    ],
+    "extraResources": [],
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "build/icon.icns",
@@ -119,11 +44,12 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "gatekeeperAssess": false,
-      "artifactName": "Vera-${version}-${arch}.${ext}"
+      "identity": null,
+      "artifactName": "Vera-Connected-${version}-${arch}.${ext}"
     },
     "dmg": {
-      "artifactName": "Vera-${version}-${arch}.${ext}",
-      "sign": true,
+      "artifactName": "Vera-Connected-${version}-${arch}.${ext}",
+      "sign": false,
       "writeUpdateInfo": false
     }
   }
