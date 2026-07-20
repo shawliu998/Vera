@@ -44,10 +44,77 @@ The script runs:
 2. frontend TypeScript, Agent Task lint, and production build;
 3. connected desktop security audit;
 4. development Electron smoke;
-5. unsigned local `.app`, DMG, and ZIP packaging;
+5. local-only `.app`, DMG, and ZIP packaging, or credentialed Developer ID signing and notarization;
 6. packaged `.app` smoke against an isolated loopback fixture.
 
 Artifacts are written under `desktop/dist/` as `Vera-Connected-<version>-<arch>.*`. Local artifacts are unsigned and unnotarized; distribution requires a separate Developer ID signing and notarization release pipeline.
+
+## macOS distribution modes
+
+### Local testing without an Apple Developer account
+
+The default command remains intentionally local-only:
+
+```bash
+./scripts/package-desktop-mac.sh
+```
+
+It clears any ambient signing/notarization variables before packaging, reports
+`signed=false notarized=false distribution=local-only`, validates the connected
+desktop security boundary, smoke-tests the packaged application, verifies the
+DMG/ZIP structure, and writes SHA-256 checksums. It does not contact Apple's
+notary service and must not be described as a public release.
+
+For a locally built copy, install the DMG in the usual way. On first launch,
+Control-click `Vera.app`, choose **Open**, then confirm **Open**. Do not disable
+Gatekeeper globally. Share this local-only build only with testers who
+understand that macOS cannot verify its publisher.
+
+A free Apple account or Xcode Personal Team does not provide the Developer ID
+Application certificate required for direct distribution. Vera cannot create,
+emulate, borrow, or self-sign an Apple-trusted Developer ID.
+
+### Developer ID release after program enrollment
+
+The release path is already wired but fails closed until a real certificate and
+one complete notarization credential method are available:
+
+```bash
+VERA_RELEASE_SIGNING=true \
+CSC_NAME="Legal Name (TEAMID1234)" \
+APPLE_ID="developer@example.com" \
+APPLE_APP_SPECIFIC_PASSWORD="<app-specific-password>" \
+APPLE_TEAM_ID="TEAMID1234" \
+./scripts/package-desktop-mac.sh
+```
+
+`CSC_NAME` is the exact qualifier shown after `Developer ID Application:` in
+Keychain Access. The script also supports an App Store Connect API key through
+`APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, and
+`APPLE_TEAM_ID`. Never commit certificate files, passwords, or API keys.
+
+The release build performs these hard gates in order:
+
+1. exact Developer ID identity and Team ID preflight;
+2. hardened-runtime signing using the reviewed minimum entitlements;
+3. app notarization, ticket stapling, and validation;
+4. signed DMG notarization, ticket stapling, and validation;
+5. strict nested-code verification, Gatekeeper assessment, ZIP extraction
+   verification, and checksum verification.
+
+Any missing identity, partial credential set, team mismatch, ad-hoc identity,
+notarization failure, or Gatekeeper failure stops the build. Only the final
+success message may report `signed=true notarized=true`.
+
+Current machine readiness can be inspected without signing or contacting Apple:
+
+```bash
+npm run signing:readiness --prefix desktop -- --no-artifacts
+```
+
+Apple's current distribution requirements are documented at
+<https://developer.apple.com/support/developer-id/> and
+<https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution>.
 
 ## Current acceptance
 

@@ -11,8 +11,12 @@
     "test:connected-security": "node scripts/connectedDesktopAudit.js",
     "test:connected-smoke": "node scripts/connectedDesktopSmoke.js",
     "test:connected": "npm run test:connected-security && npm run test:connected-smoke",
-    "pack:mac": "electron-builder --mac --dir",
-    "dist:mac": "electron-builder --mac"
+    "signing:preflight": "node scripts/releaseSigningPreflight.js",
+    "signing:readiness": "node scripts/macReleaseReadiness.js",
+    "signing:verify": "node scripts/verifyMacRelease.js",
+    "test:signing-pipeline": "node scripts/releaseSigningAudit.js",
+    "pack:mac": "npm run signing:preflight && electron-builder --mac --dir",
+    "dist:mac": "npm run signing:preflight && electron-builder --mac"
   },
   "devDependencies": {
     "@electron/notarize": "2.5.0",
@@ -23,6 +27,8 @@
     "appId": "ai.vera.desktop",
     "productName": "Vera",
     "asar": true,
+    "afterSign": "scripts/afterSign.js",
+    "afterAllArtifactBuild": "scripts/afterAllArtifactBuild.js",
     "files": [
       "connectedMain.js",
       "connectedPreload.js",
@@ -44,12 +50,11 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "gatekeeperAssess": false,
-      "identity": null,
       "artifactName": "Vera-Connected-${version}-${arch}.${ext}"
     },
     "dmg": {
       "artifactName": "Vera-Connected-${version}-${arch}.${ext}",
-      "sign": false,
+      "sign": true,
       "writeUpdateInfo": false
     }
   }

@@ -10,7 +10,13 @@ authorised; Mike and this repository are distributed under
 `AGPL-3.0-only`. Vera supplies the local desktop lifecycle, security boundary,
 encrypted persistence, model credentials, backup, and recovery layer.
 
-> **P0 status (2026-07-15):** Phases 0-7 are complete. One fresh invocation of
+> **Connected desktop status (2026-07-20):** the macOS client now has two
+> explicit packaging modes. The default remains local-only and truthfully
+> reports `signed=false notarized=false`; `VERA_RELEASE_SIGNING=true` enables a
+> fail-closed Developer ID and Apple notarization pipeline once real program
+> credentials exist. See [`docs/connected_desktop.md`](docs/connected_desktop.md).
+>
+> **Historical P0 status (2026-07-15):** Phases 0-7 are complete. One fresh invocation of
 > `./scripts/package-desktop-mac.sh` exited successfully after the packaged
 > workspace restart E2E, backup bridge, and restore fail-closed gates passed.
 > This closes the local-client P0; it does not make the unsigned, unnotarized
