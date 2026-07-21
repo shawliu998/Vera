@@ -168,7 +168,11 @@ function ApiKeyField({
             if (isMfaRequiredError(error)) {
                 setPendingMfaAction("save");
             } else {
-                alert(`Failed to save ${label}.`);
+                alert(
+                    error instanceof Error && error.message
+                        ? `Failed to save ${label}: ${error.message}`
+                        : `Failed to save ${label}.`,
+                );
             }
         } finally {
             setIsSaving(false);
@@ -188,7 +192,11 @@ function ApiKeyField({
             if (isMfaRequiredError(error)) {
                 setPendingMfaAction("remove");
             } else {
-                alert(`Failed to remove ${label}.`);
+                alert(
+                    error instanceof Error && error.message
+                        ? `Failed to remove ${label}: ${error.message}`
+                        : `Failed to remove ${label}.`,
+                );
             }
         } finally {
             setIsSaving(false);

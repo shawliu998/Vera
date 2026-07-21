@@ -9,6 +9,7 @@ import {
   linkAgentTaskArtifacts,
   listAgentTasks,
   pauseAgentTask,
+  recordAgentTaskCheckpoint,
   resumeAgentTask,
   retryAgentTask,
   stopAgentTask,
@@ -51,6 +52,20 @@ function executionErrorMessage(error: unknown) {
     return "The selected model is temporarily unavailable. Wait a moment and try again.";
   }
   return message;
+}
+
+function verifierRepairAlreadyAttempted(task: {
+  latest_checkpoint?: unknown;
+}) {
+  const checkpoint = task.latest_checkpoint;
+  if (!checkpoint || typeof checkpoint !== "object") return false;
+  const summary = (checkpoint as { summary?: unknown }).summary;
+  return (
+    typeof summary === "string" &&
+    /^(?:Verifier repair 1\/1 started:|Provider queue during verifier repair 1\/1:)/.test(
+      summary,
+    )
+  );
 }
 
 agentTasksRouter.get("/", requireAuth, async (req, res) => {
@@ -232,6 +247,22 @@ agentTasksRouter.post("/:taskId/advance", requireAuth, async (req, res) => {
         ]
           .filter(Boolean)
           .join("; ");
+        if (verifierRepairAlreadyAttempted(current.task)) {
+          const detail = `Verification blocked after one repair pass: ${reasons}.`;
+          const failed = await stopAgentTask(
+            db,
+            req.params.taskId,
+            userId,
+            { status: "failed", summary: detail },
+          );
+          return void res.status(409).json({ detail, task: failed });
+        }
+        await recordAgentTaskCheckpoint(
+          db,
+          req.params.taskId,
+          userId,
+          `Verifier repair 1/1 started: ${reasons}.`,
+        );
         let repair;
         let recheck;
         try {

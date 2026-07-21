@@ -18,6 +18,20 @@ import { agentTasksRouter } from "./routes/agentTasks";
 const app = express();
 const PORT = process.env.PORT ?? 3001;
 const isProduction = process.env.NODE_ENV === "production";
+const configuredFrontendOrigins = [
+  process.env.FRONTEND_URL ?? "http://localhost:3000",
+  ...(process.env.FRONTEND_URLS ?? "").split(","),
+]
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+function isAllowedFrontendOrigin(origin: string | undefined) {
+  if (!origin || configuredFrontendOrigins.includes(origin)) return true;
+  return (
+    !isProduction &&
+    /^http:\/\/(?:localhost|127\.0\.0\.1):\d+$/.test(origin)
+  );
+}
 
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -115,7 +129,10 @@ app.use(
 
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL ?? "http://localhost:3000",
+    origin(origin, callback) {
+      if (isAllowedFrontendOrigin(origin)) return callback(null, true);
+      callback(new Error("Origin not allowed by CORS"));
+    },
     credentials: true,
   }),
 );

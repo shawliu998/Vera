@@ -1819,7 +1819,33 @@ export async function runToolCalls(
         "docx",
       );
     } else if (tc.function.name === "generate_excel") {
-      const title = args.title as string;
+      const title = typeof args.title === "string" ? args.title.trim() : "";
+      const sheets = Array.isArray(args.sheets) ? args.sheets : [];
+      const validSheets =
+        sheets.length > 0 &&
+        sheets.every((sheet) => {
+          if (!sheet || typeof sheet !== "object") return false;
+          const candidate = sheet as Record<string, unknown>;
+          return (
+            typeof candidate.name === "string" &&
+            candidate.name.trim().length > 0 &&
+            Array.isArray(candidate.columns) &&
+            candidate.columns.length > 0 &&
+            Array.isArray(candidate.rows)
+          );
+        });
+      if (!title || !validSheets) {
+        toolResults.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: JSON.stringify({
+            ok: false,
+            error:
+              "generate_excel requires a non-empty title and at least one sheet with a name, columns, and rows. Correct the arguments and try again.",
+          }),
+        });
+        continue;
+      }
       devLog(`[generate_excel] title="${title}"`);
       const previewFilename = safeGeneratedFilename(title, "xlsx");
       write(
@@ -1827,7 +1853,7 @@ export async function runToolCalls(
       );
       const result = await generateExcel(
         title,
-        args.sheets as unknown[],
+        sheets,
         userId,
         db,
         { projectId: projectId ?? null },

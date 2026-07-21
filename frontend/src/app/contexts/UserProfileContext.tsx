@@ -258,7 +258,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 return true;
             } catch (error) {
                 if (isMfaRequiredError(error)) throw error;
-                return false;
+                throw error;
             }
         },
         [user],

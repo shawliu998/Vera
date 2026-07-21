@@ -399,6 +399,37 @@ export async function deferAgentTaskForProvider(
   return getAgentTaskSnapshot(db, taskId, userId);
 }
 
+export async function recordAgentTaskCheckpoint(
+  db: Db,
+  taskId: string,
+  userId: string,
+  summary: string,
+) {
+  const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
+  if (!snapshot) return null;
+  const current = snapshot.task.current_plan.find(
+    (step: { status: AgentStepStatus }) => step.status === "running",
+  );
+  const updatedAt = now();
+  const { error } = await db
+    .from("agent_tasks")
+    .update({
+      latest_checkpoint: current
+        ? {
+            step_id: current.id,
+            iteration: current.attempt,
+            summary,
+            created_at: updatedAt,
+          }
+        : snapshot.task.latest_checkpoint,
+      updated_at: updatedAt,
+    })
+    .eq("id", taskId)
+    .eq("user_id", userId);
+  if (error) throw dbError(error, "Failed to record task checkpoint");
+  return getAgentTaskSnapshot(db, taskId, userId);
+}
+
 export async function retryAgentTask(db: Db, taskId: string, userId: string) {
   const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
   if (!snapshot) return null;

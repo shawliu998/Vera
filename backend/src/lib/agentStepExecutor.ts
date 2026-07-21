@@ -394,6 +394,7 @@ export async function executeAgentStep(input: {
       write: () => {},
       workflowStore,
       includeResearchTools: false,
+      disableTools: verifierOnly,
       apiKeys,
       projectId: snapshot.task.matter_id,
     },
