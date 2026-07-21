@@ -2,12 +2,12 @@
 <OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0" xmlns:ov="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="TaskPaneApp">
   <Id>6bf488ac-2916-4f3e-bdc0-8d7f66e7ab2e</Id>
   <Version>1.0.0.0</Version>
-  <ProviderName>Hermes</ProviderName>
+  <ProviderName>Vera</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
-  <DisplayName DefaultValue="Hermes Legal Review" />
-  <Description DefaultValue="Review-only legal drafting handoff for Hermes matters." />
-  <IconUrl DefaultValue="https://localhost:3000/icon.png" />
-  <SupportUrl DefaultValue="https://localhost:3000/aletheia" />
+  <DisplayName DefaultValue="Vera Word Review" />
+  <Description DefaultValue="Review selected Word text with a Vera Matter and keep every proposed change subject to lawyer review." />
+  <IconUrl DefaultValue="https://localhost:3000/office/vera-word-32.png" />
+  <SupportUrl DefaultValue="https://localhost:3000/support" />
   <AppDomains>
     <AppDomain>https://localhost:3000</AppDomain>
   </AppDomains>
@@ -22,7 +22,7 @@
   <DefaultSettings>
     <SourceLocation DefaultValue="https://localhost:3000/office/word" />
   </DefaultSettings>
-  <Permissions>ReadDocument</Permissions>
+  <Permissions>ReadWriteDocument</Permissions>
   <VersionOverrides xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="VersionOverridesV1_0">
     <Hosts>
       <Host xsi:type="Document">
@@ -35,18 +35,18 @@
           <FunctionFile resid="Commands.Url" />
           <ExtensionPoint xsi:type="PrimaryCommandSurface">
             <OfficeTab id="TabHome">
-              <Group id="Hermes.Group">
-                <Label resid="Hermes.GroupLabel" />
+              <Group id="Vera.Group">
+                <Label resid="Vera.GroupLabel" />
                 <Icon>
                   <bt:Image size="16" resid="Icon.16" />
                   <bt:Image size="32" resid="Icon.32" />
                   <bt:Image size="80" resid="Icon.80" />
                 </Icon>
-                <Control xsi:type="Button" id="Hermes.OpenTaskpane">
-                  <Label resid="Hermes.OpenTaskpane.Label" />
+                <Control xsi:type="Button" id="Vera.OpenTaskpane">
+                  <Label resid="Vera.OpenTaskpane.Label" />
                   <Supertip>
-                    <Title resid="Hermes.OpenTaskpane.Label" />
-                    <Description resid="Hermes.OpenTaskpane.Description" />
+                    <Title resid="Vera.OpenTaskpane.Label" />
+                    <Description resid="Vera.OpenTaskpane.Description" />
                   </Supertip>
                   <Icon>
                     <bt:Image size="16" resid="Icon.16" />
@@ -54,7 +54,7 @@
                     <bt:Image size="80" resid="Icon.80" />
                   </Icon>
                   <Action xsi:type="ShowTaskpane">
-                    <TaskpaneId>HermesTaskpane</TaskpaneId>
+                    <TaskpaneId>VeraWordTaskpane</TaskpaneId>
                     <SourceLocation resid="Taskpane.Url" />
                   </Action>
                 </Control>
@@ -66,23 +66,23 @@
     </Hosts>
     <Resources>
       <bt:Images>
-        <bt:Image id="Icon.16" DefaultValue="https://localhost:3000/icon.png" />
-        <bt:Image id="Icon.32" DefaultValue="https://localhost:3000/icon.png" />
-        <bt:Image id="Icon.80" DefaultValue="https://localhost:3000/icon.png" />
+        <bt:Image id="Icon.16" DefaultValue="https://localhost:3000/office/vera-word-16.png" />
+        <bt:Image id="Icon.32" DefaultValue="https://localhost:3000/office/vera-word-32.png" />
+        <bt:Image id="Icon.80" DefaultValue="https://localhost:3000/office/vera-word-80.png" />
       </bt:Images>
       <bt:Urls>
         <bt:Url id="Commands.Url" DefaultValue="https://localhost:3000/office/word" />
         <bt:Url id="Taskpane.Url" DefaultValue="https://localhost:3000/office/word" />
-        <bt:Url id="GetStarted.LearnMoreUrl" DefaultValue="https://localhost:3000/aletheia" />
+        <bt:Url id="GetStarted.LearnMoreUrl" DefaultValue="https://localhost:3000/support" />
       </bt:Urls>
       <bt:ShortStrings>
-        <bt:String id="GetStarted.Title" DefaultValue="Hermes Legal Review" />
-        <bt:String id="Hermes.GroupLabel" DefaultValue="Hermes" />
-        <bt:String id="Hermes.OpenTaskpane.Label" DefaultValue="Review selected text" />
+        <bt:String id="GetStarted.Title" DefaultValue="Vera Word Review" />
+        <bt:String id="Vera.GroupLabel" DefaultValue="Vera" />
+        <bt:String id="Vera.OpenTaskpane.Label" DefaultValue="Review selected text" />
       </bt:ShortStrings>
       <bt:LongStrings>
-        <bt:String id="GetStarted.Description" DefaultValue="Capture a Word selection as a review-only Hermes handoff." />
-        <bt:String id="Hermes.OpenTaskpane.Description" DefaultValue="Open Hermes to record a reviewable suggested edit for the current selection." />
+        <bt:String id="GetStarted.Description" DefaultValue="Review a Word selection with a Vera Matter and keep the proposed change pending for lawyer review." />
+        <bt:String id="Vera.OpenTaskpane.Description" DefaultValue="Open Vera to draft a reviewable tracked replacement or comment for the current Word selection." />
       </bt:LongStrings>
     </Resources>
   </VersionOverrides>
