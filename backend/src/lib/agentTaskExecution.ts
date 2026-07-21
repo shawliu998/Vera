@@ -1,11 +1,17 @@
 import {
   advanceAgentTask,
+  applyAgentTaskPlan,
   getAgentTaskSnapshot,
   linkAgentTaskArtifacts,
   recordAgentTaskCheckpoint,
   stopAgentTask,
   verifierRepairAlreadyAttempted,
 } from "./agentTasks";
+import {
+  planAgentTask,
+  readAgentTaskPlanningRequest,
+} from "./agentTaskPlanner";
+import { evaluateTaskDeliverables } from "./agentTaskDeliverables";
 import {
   executeAgentStep,
   isAgentTaskExecutionInterrupted,
@@ -56,6 +62,25 @@ export async function advanceAgentTaskExecution(input: {
   const current = await getAgentTaskSnapshot(db, taskId, userId);
   if (!current) return null;
   if (current.task.status === "queued") {
+    const planningRequest = readAgentTaskPlanningRequest(current.task);
+    if (planningRequest) {
+      const planned = await planAgentTask({
+        db,
+        userId,
+        userEmail,
+        matterId: current.task.matter_id,
+        goal: current.task.goal,
+        model: current.task.execution_model,
+        request: planningRequest,
+      });
+      const updated = await applyAgentTaskPlan(
+        db,
+        taskId,
+        userId,
+        planned.plan,
+      );
+      if (!updated) return null;
+    }
     return advanceAgentTask(db, taskId, userId);
   }
   if (!["running", "verifying"].includes(current.task.status)) {
@@ -94,29 +119,40 @@ export async function advanceAgentTaskExecution(input: {
   if (current.task.status === "verifying") {
     execution.citationCheck = await verifyTaskCitationLinks(db, current);
     const allArtifacts = [...current.artifacts, ...execution.artifacts];
-    const missingDeliverables = () =>
-      [
-        !allArtifacts.some((artifact) => artifact.purpose === "Risk matrix")
-          ? "risk matrix"
-          : null,
-        !allArtifacts.some(
-          (artifact) => artifact.purpose === "Review memo draft",
-        )
-          ? "review memo draft"
-          : null,
-      ].filter((value): value is string => Boolean(value));
+    const deliverableState = async () =>
+      evaluateTaskDeliverables(db, { ...current, artifacts: allArtifacts });
     const summaryHasGap = /\bGAP\b/i.test(execution.summary);
+    const hasSources = current.artifacts.some(
+      (artifact) =>
+        artifact.artifact_type === "document" &&
+        artifact.purpose === "Source document",
+    );
     const citationGap =
-      execution.citationCheck.total > 0 && execution.citationCheck.missing > 0;
-    const initialGaps = missingDeliverables();
+      hasSources &&
+      (execution.citationCheck.total === 0 ||
+        execution.citationCheck.missing > 0);
+    const citationReason =
+      execution.citationCheck.total === 0
+        ? "no source citations were available for relocation checks"
+        : `${execution.citationCheck.missing} citation(s) could not be relocated`;
+    const initialDeliverables = await deliverableState();
+    const incompleteSteps = current.task.current_plan
+      .slice(0, -1)
+      .filter((step: { status: string }) => step.status !== "completed")
+      .map((step: { title: string }) => step.title);
+    const initialGaps = [
+      ...initialDeliverables.missing,
+      ...initialDeliverables.outsideMatter.map(
+        (title) => `${title} is outside the Matter`,
+      ),
+      ...incompleteSteps.map((title: string) => `${title} is incomplete`),
+    ];
 
     if (initialGaps.length || summaryHasGap || citationGap) {
       const reasons = [
-        initialGaps.length ? `missing ${initialGaps.join(" and ")}` : null,
+        initialGaps.length ? initialGaps.join("; ") : null,
         summaryHasGap ? "the verifier reported one or more GAP findings" : null,
-        citationGap
-          ? `${execution.citationCheck.missing} citation(s) could not be relocated`
-          : null,
+        citationGap ? citationReason : null,
       ]
         .filter(Boolean)
         .join("; ");
@@ -164,7 +200,7 @@ export async function advanceAgentTaskExecution(input: {
           userEmail,
           shouldContinue,
           instructionOverride:
-            "Re-run the four verifier checks after the one permitted repair. Do not repair again. Return PASS or GAP for every check.",
+            "Re-run the five verifier checks after the one permitted repair. Do not repair again. Return PASS or GAP for every check.",
         });
         const afterRecheck = await taskCanContinue(db, taskId, userId);
         if (!afterRecheck.active) return afterRecheck.snapshot;
@@ -190,11 +226,19 @@ export async function advanceAgentTaskExecution(input: {
       }
 
       allArtifacts.push(...repair.artifacts);
-      const remaining = missingDeliverables();
+      const remainingState = await deliverableState();
+      const remaining = [
+        ...remainingState.missing,
+        ...remainingState.outsideMatter.map(
+          (title) => `${title} is outside the Matter`,
+        ),
+      ];
       if (
         remaining.length ||
         /\bGAP\b/i.test(recheck.summary) ||
-        recheck.citationCheck.missing > 0
+        (hasSources &&
+          (recheck.citationCheck.total === 0 ||
+            recheck.citationCheck.missing > 0))
       ) {
         const missing = remaining.length
           ? remaining.join(" and ")
@@ -213,7 +257,7 @@ export async function advanceAgentTaskExecution(input: {
           ...recheck.artifacts,
         ],
       };
-    } else if (execution.citationCheck.total === 0) {
+    } else if (hasSources && execution.citationCheck.total === 0) {
       return stopAgentTask(db, taskId, userId, {
         status: "failed",
         summary:

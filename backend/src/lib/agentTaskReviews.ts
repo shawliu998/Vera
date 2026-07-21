@@ -3,6 +3,12 @@ import { verifyTaskCitationLinks } from "./agentStepExecutor";
 import type { AgentArtifactLinkInput } from "./agentTasks";
 import { createServerSupabase } from "./supabase";
 import { downloadFile } from "./storage";
+import {
+  evaluateTaskDeliverables,
+  findDeliverableArtifact,
+  requiredTaskDeliverables,
+  taskDeliverablePurpose,
+} from "./agentTaskDeliverables";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -14,10 +20,15 @@ export type AgentReviewStatus =
 type TaskSnapshot = {
   task: {
     id: string;
+    matter_id: string;
     status: string;
     deliverables: Array<{
       key?: string;
       artifact_id?: string;
+      title?: string;
+      purpose?: string;
+      required?: boolean;
+      artifact_type?: string;
     }>;
     current_plan: Array<{
       id: string;
@@ -53,20 +64,12 @@ export async function getReviewBlockers(db: Db, snapshot: TaskSnapshot) {
     );
   }
 
-  const requiredArtifacts = [
-    { type: "tabular_review", purpose: "Risk matrix", label: "risk matrix" },
-    { type: "draft", purpose: "Review memo draft", label: "review memo" },
-  ];
-  for (const required of requiredArtifacts) {
-    if (
-      !snapshot.artifacts.some(
-        (artifact) =>
-          artifact.artifact_type === required.type &&
-          artifact.purpose === required.purpose,
-      )
-    ) {
-      blockers.push(`The required ${required.label} is missing.`);
-    }
+  const deliverables = await evaluateTaskDeliverables(db, snapshot);
+  for (const title of deliverables.missing) {
+    blockers.push(`The required ${title} is missing.`);
+  }
+  for (const title of deliverables.outsideMatter) {
+    blockers.push(`The required ${title} does not belong to this Matter.`);
   }
 
   const verifier = snapshot.task.current_plan.at(-1);
@@ -76,10 +79,24 @@ export async function getReviewBlockers(db: Db, snapshot: TaskSnapshot) {
     blockers.push("The Verifier reported one or more unresolved gaps.");
   }
 
+  const incomplete = snapshot.task.current_plan
+    .slice(0, -1)
+    .filter((step) => step.status !== "completed");
+  if (incomplete.length) {
+    blockers.push(
+      `${incomplete.length} work step${incomplete.length === 1 ? " is" : "s are"} incomplete.`,
+    );
+  }
+
   const citationCheck = await verifyTaskCitationLinks(db, snapshot as never);
-  if (citationCheck.total === 0) {
+  const hasSources = snapshot.artifacts.some(
+    (artifact) =>
+      artifact.artifact_type === "document" &&
+      artifact.purpose === "Source document",
+  );
+  if (hasSources && citationCheck.total === 0) {
     blockers.push("No source citations are available for relocation checks.");
-  } else if (citationCheck.missing > 0) {
+  } else if (hasSources && citationCheck.missing > 0) {
     blockers.push(
       `${citationCheck.missing} source citation${citationCheck.missing === 1 ? "" : "s"} could not be relocated.`,
     );
@@ -101,33 +118,24 @@ export async function captureApprovedArtifacts(
       artifact.artifact_type === "draft" ||
       artifact.artifact_type === "tabular_review",
   );
-  const links = [
-    {
-      key: "risk-matrix",
-      artifact_type: "tabular_review" as const,
-      purpose: "Risk matrix",
+  const links = requiredTaskDeliverables(snapshot.task).flatMap(
+    (deliverable) => {
+      if (
+        !["draft", "tabular_review"].includes(deliverable.artifact_type ?? "")
+      ) {
+        return [];
+      }
+      const found = findDeliverableArtifact(deliverable, generatedLinks);
+      return found
+        ? [
+            {
+              ...found,
+              purpose: taskDeliverablePurpose(deliverable),
+            },
+          ]
+        : [];
     },
-    {
-      key: "review-memo",
-      artifact_type: "draft" as const,
-      purpose: "Review memo draft",
-    },
-  ].flatMap((required) => {
-    const preferredId = snapshot.task.deliverables.find(
-      (deliverable) => deliverable.key === required.key,
-    )?.artifact_id;
-    const preferred = preferredId
-      ? generatedLinks.find((artifact) => artifact.artifact_id === preferredId)
-      : null;
-    const latest = [...generatedLinks]
-      .reverse()
-      .find(
-        (artifact) =>
-          artifact.artifact_type === required.artifact_type &&
-          artifact.purpose === required.purpose,
-      );
-    return preferred ?? latest ?? [];
-  });
+  );
   const documentIds = Array.from(
     new Set(links.map((artifact) => artifact.artifact_id)),
   );
@@ -165,7 +173,7 @@ export async function captureApprovedArtifacts(
     if (!raw) throw new Error(`Stored bytes are missing for ${link.purpose}.`);
     const bytes = Buffer.from(raw);
     captured.push({
-      artifact_type: link.artifact_type,
+      artifact_type: link.artifact_type as "draft" | "tabular_review",
       artifact_id: link.artifact_id,
       purpose: link.purpose,
       document_id: link.artifact_id,

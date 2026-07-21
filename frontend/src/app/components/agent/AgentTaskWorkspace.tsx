@@ -707,10 +707,17 @@ function DeliverablesPanel({
             ) ??
             [...snapshot.artifacts]
               .reverse()
-              .find((linked) =>
-                deliverable.key === "risk-matrix"
-                  ? linked.purpose === "Risk matrix"
-                  : linked.purpose === "Review memo draft",
+              .find(
+                (linked) =>
+                  linked.purpose ===
+                    (deliverable.purpose ??
+                      (deliverable.key === "risk-matrix"
+                        ? "Risk matrix"
+                        : deliverable.key === "review-memo"
+                          ? "Review memo draft"
+                          : deliverable.title)) &&
+                  (!deliverable.artifact_type ||
+                    linked.artifact_type === deliverable.artifact_type),
               ) ??
             null,
         }));
@@ -741,7 +748,7 @@ function DeliverablesPanel({
                   type="button"
                   onClick={() => void onRevise()}
                   disabled={revisionStarting || submitting !== null}
-                  title="Rebuild the risk matrix and review memo, then rerun verification"
+                  title="Update the required outputs, then rerun verification"
                   className="inline-flex h-8 items-center gap-1.5 rounded-full bg-gray-950 px-3.5 text-xs font-medium text-white shadow-sm outline-none transition-colors hover:bg-black focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 disabled:opacity-45"
                 >
                   {revisionStarting ? (
@@ -1144,22 +1151,27 @@ function WorkRecord({
                 artifact.purpose === evidencePurpose,
             );
           const relatedArtifacts = snapshot.artifacts.filter(
-            (artifact) =>
-              artifact.artifact_id === latestEvidence?.artifact_id ||
-              (/risk matrix/i.test(step.title) &&
-                artifact.purpose === "Risk matrix" &&
-                snapshot.task.deliverables.some(
-                  (deliverable) =>
-                    deliverable.key === "risk-matrix" &&
-                    deliverable.artifact_id === artifact.artifact_id,
-                )) ||
-              (/review memo/i.test(step.title) &&
-                artifact.purpose === "Review memo draft" &&
-                snapshot.task.deliverables.some(
-                  (deliverable) =>
-                    deliverable.key === "review-memo" &&
-                    deliverable.artifact_id === artifact.artifact_id,
-                )),
+            (artifact) => {
+              if (artifact.artifact_id === latestEvidence?.artifact_id) {
+                return true;
+              }
+              const stepText = `${step.title} ${step.expected_output}`.toLowerCase();
+              return snapshot.task.deliverables.some((deliverable) => {
+                const purpose =
+                  deliverable.purpose ??
+                  (deliverable.key === "risk-matrix"
+                    ? "Risk matrix"
+                    : deliverable.key === "review-memo"
+                      ? "Review memo draft"
+                      : deliverable.title);
+                return (
+                  (deliverable.artifact_id === artifact.artifact_id ||
+                    artifact.purpose === purpose) &&
+                  (stepText.includes(deliverable.title.toLowerCase()) ||
+                    stepText.includes(purpose.toLowerCase()))
+                );
+              });
+            },
           );
           return (
             <li

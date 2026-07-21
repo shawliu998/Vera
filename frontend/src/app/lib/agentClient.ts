@@ -39,6 +39,7 @@ export function createAgentTask(input: {
   matterId: string;
   model: string;
   documentIds?: string[];
+  workflowId?: string;
 }) {
   return request<AgentTaskSnapshot>("/agent-tasks", {
     method: "POST",
@@ -47,6 +48,7 @@ export function createAgentTask(input: {
       matter_id: input.matterId,
       model: input.model,
       document_ids: input.documentIds ?? [],
+      ...(input.workflowId ? { workflow_id: input.workflowId } : {}),
     }),
   });
 }

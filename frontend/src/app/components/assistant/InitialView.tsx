@@ -187,6 +187,7 @@ export function InitialView({ onSubmit }: InitialViewProps) {
                 matterId: matter.id,
                 model: submission.model,
                 documentIds: submission.documentIds,
+                workflowId: submission.workflowId,
             });
             router.push(`/agent-tasks/${snapshot.task.id}`);
         } finally {
@@ -347,6 +348,7 @@ export function InitialView({ onSubmit }: InitialViewProps) {
                             matterId: project.id,
                             model: pendingWork.model,
                             documentIds: pendingWork.documentIds,
+                            workflowId: pendingWork.workflowId,
                         });
                         setPendingWork(null);
                         router.push(`/agent-tasks/${snapshot.task.id}`);

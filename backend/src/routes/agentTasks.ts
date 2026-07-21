@@ -19,6 +19,10 @@ import { createServerSupabase } from "../lib/supabase";
 import { requireAuth } from "../middleware/auth";
 import { DEFAULT_MAIN_MODEL, isSupportedModel } from "../lib/llm";
 import {
+  buildGoalAwareFallbackPlan,
+  resolveAgentWorkflowConstraint,
+} from "../lib/agentTaskPlanner";
+import {
   captureApprovedArtifacts,
   getReviewBlockers,
   loadApprovedExport,
@@ -64,6 +68,10 @@ agentTasksRouter.post("/", requireAuth, async (req, res) => {
     typeof req.body?.model === "string"
       ? req.body.model.trim()
       : DEFAULT_MAIN_MODEL;
+  const workflowId =
+    typeof req.body?.workflow_id === "string"
+      ? req.body.workflow_id.trim().slice(0, 200)
+      : "";
   const rawDocumentIds: unknown[] = Array.isArray(req.body?.document_ids)
     ? (req.body.document_ids as unknown[])
     : [];
@@ -103,16 +111,50 @@ agentTasksRouter.post("/", requireAuth, async (req, res) => {
           .json({ detail: "One or more documents are not in this Matter" });
       }
     }
+    const workflow = workflowId
+      ? await resolveAgentWorkflowConstraint({
+          db,
+          workflowId,
+          userId,
+          userEmail,
+        })
+      : null;
+    if (workflowId && !workflow) {
+      return void res.status(404).json({ detail: "Workflow not found" });
+    }
+    const provisionalPlan = buildGoalAwareFallbackPlan({
+      goal,
+      hasSources: documentIds.length > 0,
+      workflowId: workflowId || undefined,
+      workflowType: workflow?.type,
+    });
     const snapshot = await createAgentTask(db, {
       userId,
       matterId,
       goal,
       executionModel: model,
-      initialArtifacts: documentIds.map((documentId) => ({
-        artifact_type: "document" as const,
-        artifact_id: documentId,
-        purpose: "Source document",
-      })),
+      plan: provisionalPlan.steps,
+      deliverables: provisionalPlan.deliverables,
+      planningRequest: {
+        document_ids: documentIds,
+        ...(workflowId ? { workflow_id: workflowId } : {}),
+      },
+      initialArtifacts: [
+        ...documentIds.map((documentId) => ({
+          artifact_type: "document" as const,
+          artifact_id: documentId,
+          purpose: "Source document",
+        })),
+        ...(workflow
+          ? [
+              {
+                artifact_type: "workflow_run" as const,
+                artifact_id: workflow.id,
+                purpose: `Selected workflow: ${workflow.title}`,
+              },
+            ]
+          : []),
+      ],
     });
     if (!snapshot) throw new Error("Created task could not be reloaded");
     wakeAgentTaskRunner({ taskId: snapshot.task.id, userId, userEmail });

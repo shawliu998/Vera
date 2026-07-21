@@ -19,6 +19,7 @@ export type AgentDeliverable = {
   required: boolean;
   artifact_type?: AgentArtifactType;
   artifact_id?: string;
+  purpose?: string;
 };
 
 export type AgentCheckpoint = {

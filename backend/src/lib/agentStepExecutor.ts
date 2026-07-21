@@ -14,6 +14,15 @@ import {
 import { createServerSupabase } from "./supabase";
 import { getUserModelSettings } from "./userSettings";
 import { DEFAULT_MAIN_MODEL, providerForModel } from "./llm";
+import {
+  findDeliverableArtifact,
+  requiredTaskDeliverables,
+  taskDeliverablePurpose,
+} from "./agentTaskDeliverables";
+import {
+  inferGoalProfile,
+  resolveAgentWorkflowConstraint,
+} from "./agentTaskPlanner";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -21,19 +30,36 @@ type TaskSnapshot = Awaited<
   ReturnType<typeof import("./agentTasks").getAgentTaskSnapshot>
 >;
 
-const STEP_INSTRUCTIONS = [
-  "Read every attached source document. Return a concise source manifest and identify any document that could not be read. Do not draft the deliverables yet.",
-  "Read every attached source document. Extract verified facts and contract positions. Separate verified facts, analysis, and open questions. Do not treat an inference as a fact.",
-  "Read every attached source document, then create the required risk matrix. You MUST call generate_excel. Use columns: Issue, Clause or location, Verified fact, Risk, Recommendation, Source. Flag any unresolved conclusion for lawyer review.",
-  "Read every attached source document, then create the required review memo. You MUST call generate_docx. Use separate sections for Verified facts, Analysis, Recommendations, Open questions, and Lawyer review status. Support material factual statements with citations.",
-  "Verify the complete work task. Check exactly: (1) required deliverables exist, (2) important facts have sources, (3) facts, analysis, and recommendations are distinct, and (4) there is no obvious omission or contradiction. Do not create a new deliverable. State PASS or GAP for each check and identify any required repair.",
-] as const;
+export function agentStepCreationKind(step: {
+  title?: string | null;
+  expected_output?: string | null;
+}) {
+  const title = step.title ?? "";
+  const text = `${title} ${step.expected_output ?? ""}`;
+  if (
+    /create|build|generate|produce|生成|创建|制作/i.test(title) &&
+    /table|matrix|excel|workbook|spreadsheet|表格|矩阵|清单/i.test(text)
+  ) {
+    return "tabular_review" as const;
+  }
+  if (
+    /draft|create|generate|produce|revise|proofread|起草|撰写|生成|创建|修订|校对/i.test(
+      title,
+    ) &&
+    /memo|draft|document|word|\.docx|work product|备忘录|文档|草稿/i.test(text)
+  ) {
+    return "draft" as const;
+  }
+  return null;
+}
 
 function taskPrompt(
   snapshot: NonNullable<TaskSnapshot>,
   stepIndex: number,
   artifactManifest: string[],
+  workflowInstruction?: string,
 ) {
+  const currentStep = snapshot.task.current_plan[stepIndex];
   const completed = snapshot.task.current_plan
     .filter((step: { status: string }) => step.status === "completed")
     .map(
@@ -45,9 +71,24 @@ function taskPrompt(
     latestReview?.status === "changes_requested" && latestReview.note.trim()
       ? `REQUESTED CHANGES\n${latestReview.note.trim()}\nRevise the current deliverables to address this review note. Preserve prior work that is not affected, keep source citations attached to material facts, and do not imply approval.`
       : "";
+  const deliverables = requiredTaskDeliverables(snapshot.task).map(
+    (deliverable) =>
+      `- ${deliverable.title ?? taskDeliverablePurpose(deliverable)}: ${deliverable.artifact_type} (${taskDeliverablePurpose(deliverable)})`,
+  );
+  const creationKind = agentStepCreationKind(currentStep ?? {});
+  const creationInstruction =
+    creationKind === "tabular_review"
+      ? "Create exactly the declared Excel deliverable for this step with generate_excel. Do not create a Word document or any undeclared output."
+      : creationKind === "draft"
+        ? "Create exactly the declared Word deliverable for this step with generate_docx. Do not create a spreadsheet or any undeclared output."
+        : "Read or analyze only for this step. Do not call document-generation tools and do not create artifacts; return a concise checkpoint for the next step.";
   return [
     `WORK TASK GOAL\n${snapshot.task.goal}`,
-    `CURRENT STEP\n${STEP_INSTRUCTIONS[stepIndex] ?? snapshot.task.current_plan[stepIndex]?.expected_output}`,
+    `CURRENT STEP\n${currentStep?.title ?? "Complete the current step"}\nExpected output: ${currentStep?.expected_output ?? "Complete the requested work."}`,
+    deliverables.length
+      ? `REQUIRED DELIVERABLES\n${deliverables.join("\n")}`
+      : "REQUIRED DELIVERABLES\nNone declared.",
+    workflowInstruction ? `SELECTED MIKE WORKFLOW\n${workflowInstruction}` : "",
     requestedChanges,
     completed.length
       ? `COMPLETED STEP CHECKPOINTS\n${completed.join("\n")}`
@@ -55,7 +96,9 @@ function taskPrompt(
     artifactManifest.length
       ? `LINKED ARTIFACTS\n${artifactManifest.join("\n")}`
       : "LINKED ARTIFACTS\nNone yet.",
-    "Complete only this step. Keep the output concise enough to serve as the saved checkpoint.",
+    currentStep?.title === "Verify deliverables"
+      ? "Verify: (1) the user goal is covered, (2) every declared deliverable exists in this Matter, (3) important factual statements are source-backed when sources were selected, (4) citations can be relocated, and (5) no prior step is incomplete or failed. Do not create a deliverable. Return PASS or GAP for every check."
+      : `Complete only this step. ${creationInstruction} Keep the saved checkpoint concise.`,
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -294,28 +337,40 @@ export function isAgentTaskExecutionInterrupted(error: unknown) {
 
 function artifactFromCreatedEvent(
   event: Extract<AssistantEvent, { type: "doc_created" }>,
-  stepIndex: number,
+  snapshot: NonNullable<TaskSnapshot>,
+  allowReplacement: boolean,
 ): AgentArtifactLinkInput | null {
   if (!event.document_id) return null;
   const filename = event.filename.toLowerCase();
-  if (filename.endsWith(".xlsx") || filename.endsWith(".xls")) {
+  const artifactType =
+    filename.endsWith(".xlsx") || filename.endsWith(".xls")
+      ? "tabular_review"
+      : filename.endsWith(".docx")
+        ? "draft"
+        : "document";
+  const typedDeliverables = requiredTaskDeliverables(snapshot.task).filter(
+    (candidate) => candidate.artifact_type === artifactType,
+  );
+  const deliverable =
+    typedDeliverables.find(
+      (candidate) => !findDeliverableArtifact(candidate, snapshot.artifacts),
+    ) ?? (allowReplacement ? typedDeliverables[0] : undefined);
+  if (deliverable) {
     return {
-      artifact_type: "tabular_review",
+      artifact_type: artifactType,
       artifact_id: event.document_id,
-      purpose: "Risk matrix",
-    };
-  }
-  if (filename.endsWith(".docx") || stepIndex === 3) {
-    return {
-      artifact_type: "draft",
-      artifact_id: event.document_id,
-      purpose: "Review memo draft",
+      purpose: taskDeliverablePurpose(deliverable),
     };
   }
   return {
-    artifact_type: "document",
+    artifact_type: artifactType,
     artifact_id: event.document_id,
-    purpose: "Generated document",
+    purpose:
+      artifactType === "tabular_review"
+        ? "Generated table"
+        : artifactType === "draft"
+          ? "Generated draft"
+          : "Generated document",
   };
 }
 
@@ -340,7 +395,25 @@ export async function executeAgentStep(input: {
         artifact.purpose === "Source document",
     )
     .map((artifact) => artifact.artifact_id);
-  if (sourceIds.length === 0 && stepIndex < 4) {
+  const currentStep = snapshot.task.current_plan[stepIndex];
+  const selectedWorkflow = snapshot.artifacts.find(
+    (artifact) =>
+      artifact.artifact_type === "workflow_run" &&
+      artifact.purpose.startsWith("Selected workflow:"),
+  );
+  const goalProfile = inferGoalProfile(
+    snapshot.task.goal,
+    selectedWorkflow?.artifact_id,
+  );
+  const sourceDependentGoal =
+    ["contract_review", "compare", "extract", "proofread"].includes(
+      goalProfile,
+    ) || currentStep?.capability === "read_sources";
+  if (
+    sourceIds.length === 0 &&
+    sourceDependentGoal &&
+    currentStep?.title !== "Verify deliverables"
+  ) {
     return {
       summary: "Source documents are required before this step can run.",
       artifacts: [],
@@ -359,6 +432,22 @@ export async function executeAgentStep(input: {
   }));
 
   const chatId = await getOrCreateTaskChat(db, snapshot, userId);
+  const workflowConstraint = selectedWorkflow
+    ? await resolveAgentWorkflowConstraint({
+        db,
+        workflowId: selectedWorkflow.artifact_id,
+        userId,
+        userEmail,
+      })
+    : null;
+  const workflowInstruction = workflowConstraint
+    ? [
+        `${workflowConstraint.title}: ${workflowConstraint.description}`,
+        workflowConstraint.instructions.slice(0, 8_000),
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : undefined;
   const prompt = input.instructionOverride
     ? `${taskPrompt(
         snapshot,
@@ -367,6 +456,7 @@ export async function executeAgentStep(input: {
           (artifact) =>
             `- ${artifact.purpose}: ${artifact.artifact_type}/${artifact.artifact_id}`,
         ),
+        workflowInstruction,
       )}\n\nREPAIR INSTRUCTION\n${input.instructionOverride}`
     : taskPrompt(
         snapshot,
@@ -375,9 +465,10 @@ export async function executeAgentStep(input: {
           (artifact) =>
             `- ${artifact.purpose}: ${artifact.artifact_type}/${artifact.artifact_id}`,
         ),
+        workflowInstruction,
       );
   const verifierOnly =
-    stepIndex === 4 &&
+    snapshot.task.status === "verifying" &&
     !input.instructionOverride?.startsWith(
       "This is the single permitted repair pass",
     );
@@ -386,6 +477,14 @@ export async function executeAgentStep(input: {
     role: "user",
     content: prompt,
     files: activeSourceFiles,
+    ...(workflowConstraint
+      ? {
+          workflow: {
+            id: workflowConstraint.id,
+            title: workflowConstraint.title,
+          },
+        }
+      : {}),
   };
   const { error: userMessageError } = await db.from("chat_messages").insert({
     chat_id: chatId,
@@ -409,7 +508,7 @@ export async function executeAgentStep(input: {
     [userMessage],
     docAvailability,
     verifierOnly
-      ? "You are the final Vera verifier. Use only the saved checkpoints and artifact manifest. Do not call tools or create documents. Return PASS or GAP for exactly four checks and never imply lawyer approval."
+      ? "You are the final Vera verifier. Use only the goal, declared deliverables, saved checkpoints, and artifact manifest. Do not call tools or create documents. Return PASS or GAP for goal coverage, required Matter outputs, source support, citation relocation, and step completion. Never imply lawyer approval."
       : "You are executing one bounded step in a Vera legal Work Task. Preserve source boundaries, never imply lawyer approval, and use the existing Mike tools when the step requires a document artifact.",
     docIndex,
     false,
@@ -467,7 +566,11 @@ export async function executeAgentStep(input: {
   const artifacts: AgentArtifactLinkInput[] = persistedEvents.flatMap(
     (event) => {
       if (event.type !== "doc_created") return [];
-      const artifact = artifactFromCreatedEvent(event, stepIndex);
+      const artifact = artifactFromCreatedEvent(
+        event,
+        snapshot,
+        Boolean(input.instructionOverride),
+      );
       return artifact ? [artifact] : [];
     },
   );

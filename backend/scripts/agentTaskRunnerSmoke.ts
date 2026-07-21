@@ -122,6 +122,62 @@ async function pauseResumeSuite() {
   assert.equal(runs, 2, "resume must continue the same task once");
 }
 
+async function plannerRetrySuite() {
+  const task: FakeTask = {
+    status: "queued",
+    latest_checkpoint: {
+      step_id: "planner",
+      iteration: 0,
+      summary: "Preparing a goal-aligned work plan.",
+      planner_request: {
+        document_ids: ["doc_1", "doc_2"],
+        workflow_id: "builtin-compare-documents",
+      },
+    },
+  };
+  let runs = 0;
+  let preservedPlannerRequest = false;
+  const runner = new AgentTaskRunner({
+    loadTask: async () => snapshot(task),
+    runIteration: async () => {
+      runs += 1;
+      if (runs === 1) {
+        throw Object.assign(new Error("planner 503 overloaded"), {
+          status: 503,
+        });
+      }
+      task.status = "completed";
+      task.latest_checkpoint = null;
+      return snapshot(task);
+    },
+    recordRetry: async (_job, retry) => {
+      const current = task.latest_checkpoint as Record<string, unknown>;
+      task.latest_checkpoint = {
+        ...current,
+        summary: "Model is busy. Retrying automatically.",
+        runner_retry: retry,
+      };
+      preservedPlannerRequest = Boolean(
+        (task.latest_checkpoint as Record<string, unknown>).planner_request,
+      );
+      return snapshot(task);
+    },
+    failTask: async () => {
+      task.status = "failed";
+    },
+    recoverJobs: async () => [],
+    sleep: async () => undefined,
+    now: () => 0,
+    random: () => 0.5,
+  });
+
+  runner.wake({ taskId: "task_planner", userId: "user_1" });
+  await runner.waitForIdle();
+  assert.equal(runs, 2, "planner must retry after a transient 503 and succeed");
+  assert.equal(preservedPlannerRequest, true);
+  assert.equal(task.status, "completed");
+}
+
 async function singleConcurrencySuite() {
   const tasks = new Map<string, FakeTask>([
     ["task_a", { status: "running", latest_checkpoint: null }],
@@ -240,6 +296,7 @@ async function main() {
 
   await retryAndLifecycleSuite();
   await singleConcurrencySuite();
+  await plannerRetrySuite();
   await pauseResumeSuite();
   await recoverySuite();
 

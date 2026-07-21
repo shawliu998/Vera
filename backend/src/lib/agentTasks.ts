@@ -1,4 +1,10 @@
 import { createServerSupabase } from "./supabase";
+import { taskDeliverablePurpose } from "./agentTaskDeliverables";
+import type {
+  AgentTaskDeliverableDefinition,
+  AgentTaskPlanningRequest,
+  GoalAwareTaskPlan,
+} from "./agentTaskPlanner";
 
 export type AgentTaskStatus =
   | "queued"
@@ -89,6 +95,7 @@ export const DEFAULT_DELIVERABLES = [
     description: "Clause findings, severity, source, and review status.",
     required: true,
     artifact_type: "tabular_review",
+    purpose: "Risk matrix",
   },
   {
     key: "review-memo",
@@ -96,6 +103,7 @@ export const DEFAULT_DELIVERABLES = [
     description: "Facts, analysis, recommendations, and open questions.",
     required: true,
     artifact_type: "draft",
+    purpose: "Review memo draft",
   },
 ];
 
@@ -129,6 +137,8 @@ export async function createAgentTask(
     goal: string;
     executionModel: string;
     plan?: StepDefinition[];
+    deliverables?: AgentTaskDeliverableDefinition[];
+    planningRequest?: AgentTaskPlanningRequest;
     initialArtifacts?: AgentArtifactLinkInput[];
   },
 ) {
@@ -142,7 +152,16 @@ export async function createAgentTask(
       mode: "work",
       status: "queued",
       execution_model: input.executionModel,
-      deliverables: DEFAULT_DELIVERABLES,
+      deliverables: input.deliverables ?? DEFAULT_DELIVERABLES,
+      latest_checkpoint: input.planningRequest
+        ? {
+            step_id: "planner",
+            iteration: 0,
+            summary: "Preparing a goal-aligned work plan.",
+            created_at: now(),
+            planner_request: input.planningRequest,
+          }
+        : null,
     })
     .select("*")
     .single();
@@ -170,6 +189,72 @@ export async function createAgentTask(
     }
   }
   return getAgentTaskSnapshot(db, task.id, input.userId);
+}
+
+export async function applyAgentTaskPlan(
+  db: Db,
+  taskId: string,
+  userId: string,
+  plan: GoalAwareTaskPlan,
+) {
+  const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
+  if (!snapshot) return null;
+  if (snapshot.task.status !== "queued") {
+    throw new Error("Only a queued task can receive its initial work plan");
+  }
+  const { data: rows, error: rowsError } = await db
+    .from("agent_steps")
+    .select("id,position")
+    .eq("task_id", taskId)
+    .order("position", { ascending: true });
+  if (rowsError) throw dbError(rowsError, "Failed to load provisional plan");
+
+  for (const [position, step] of plan.steps.entries()) {
+    const existing = rows?.find((row) => row.position === position);
+    if (existing) {
+      const { error } = await db
+        .from("agent_steps")
+        .update({
+          title: step.title,
+          expected_output: step.expected_output,
+          status: "pending",
+          result_summary: null,
+          updated_at: now(),
+        })
+        .eq("id", existing.id)
+        .eq("task_id", taskId);
+      if (error) throw dbError(error, "Failed to update planned step");
+    } else {
+      const { error } = await db.from("agent_steps").insert({
+        task_id: taskId,
+        position,
+        title: step.title,
+        expected_output: step.expected_output,
+        status: "pending",
+      });
+      if (error) throw dbError(error, "Failed to add planned step");
+    }
+  }
+  const { error: deleteError } = await db
+    .from("agent_steps")
+    .delete()
+    .eq("task_id", taskId)
+    .gte("position", plan.steps.length);
+  if (deleteError)
+    throw dbError(deleteError, "Failed to trim provisional plan");
+
+  const { error: taskError } = await db
+    .from("agent_tasks")
+    .update({
+      deliverables: plan.deliverables,
+      latest_checkpoint: null,
+      updated_at: now(),
+    })
+    .eq("id", taskId)
+    .eq("user_id", userId)
+    .eq("status", "queued");
+  if (taskError) throw dbError(taskError, "Failed to save goal-aligned plan");
+  return getAgentTaskSnapshot(db, taskId, userId);
 }
 
 export async function getAgentTaskSnapshot(
@@ -341,12 +426,11 @@ async function syncDeliverables(
   const deliverables = (
     Array.isArray(row.deliverables) ? row.deliverables : []
   ).map((deliverable: Record<string, unknown>) => {
-    const match = links.find((link) =>
-      deliverable.key === "risk-matrix"
-        ? link.purpose === "Risk matrix"
-        : deliverable.key === "review-memo"
-          ? link.purpose === "Review memo draft"
-          : false,
+    const match = links.find(
+      (link) =>
+        link.purpose === taskDeliverablePurpose(deliverable) &&
+        (typeof deliverable.artifact_type !== "string" ||
+          link.artifact_type === deliverable.artifact_type),
     );
     return match
       ? { ...deliverable, artifact_id: match.artifact_id }
@@ -596,15 +680,17 @@ export async function recordAgentTaskRetryCheckpoint(
   const { error } = await db
     .from("agent_tasks")
     .update({
-      latest_checkpoint: current
-        ? {
-            step_id: current.id,
-            iteration: current.attempt,
-            summary: `Model is busy. Retrying automatically at ${retryLabel}.`,
-            created_at: updatedAt,
-            runner_retry: input,
-          }
-        : snapshot.task.latest_checkpoint,
+      latest_checkpoint: {
+        ...(snapshot.task.latest_checkpoint &&
+        typeof snapshot.task.latest_checkpoint === "object"
+          ? snapshot.task.latest_checkpoint
+          : {}),
+        step_id: current?.id ?? "planner",
+        iteration: current?.attempt ?? 0,
+        summary: `Model is busy. Retrying automatically at ${retryLabel}.`,
+        created_at: updatedAt,
+        runner_retry: input,
+      },
       updated_at: updatedAt,
     })
     .eq("id", taskId)
@@ -658,16 +744,25 @@ export async function reviseAgentTask(db: Db, taskId: string, userId: string) {
   }
   const latestDecision = snapshot.review.decisions.at(-1) ?? null;
   if (latestDecision?.status !== "changes_requested") {
-    throw new Error(
-      "Only a task with requested changes can start a revision",
-    );
+    throw new Error("Only a task with requested changes can start a revision");
   }
 
+  const verifierPosition = snapshot.task.current_plan.length - 1;
+  const generatedStep = snapshot.task.current_plan.findIndex(
+    (step: { title: string; expected_output: string }, position: number) =>
+      position > 0 &&
+      position < verifierPosition &&
+      /create|draft|revise|proofread|matrix|table|work product|生成|起草|修订|表格|矩阵/i.test(
+        `${step.title} ${step.expected_output}`,
+      ),
+  );
+  const revisionStart =
+    generatedStep >= 0 ? generatedStep : Math.min(2, verifierPosition);
   const { data: revisionSteps, error: stepsError } = await db
     .from("agent_steps")
     .select("id,attempt,position")
     .eq("task_id", taskId)
-    .gte("position", 2)
+    .gte("position", revisionStart)
     .order("position", { ascending: true });
   if (stepsError) throw dbError(stepsError, "Failed to load revision steps");
   const first = revisionSteps?.[0];
@@ -682,7 +777,7 @@ export async function reviseAgentTask(db: Db, taskId: string, userId: string) {
       updated_at: updatedAt,
     })
     .eq("task_id", taskId)
-    .gte("position", 2);
+    .gte("position", revisionStart);
   if (resetError) throw dbError(resetError, "Failed to reset revision steps");
 
   const { error: startError } = await db
