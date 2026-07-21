@@ -15,13 +15,11 @@ import {
   Clock3,
   Download,
   FileText,
-  Grid2X2,
   Loader2,
   MapPin,
   Pause,
   Play,
   RotateCcw,
-  ShieldCheck,
   XCircle,
 } from "lucide-react";
 import { PageHeader } from "@/app/components/shared/PageHeader";
@@ -50,7 +48,6 @@ import {
 } from "@/app/lib/modelAvailability";
 import type { ModelProvider } from "@/app/lib/modelAvailability";
 import type {
-  AgentArtifactType,
   AgentEvidenceCitation,
   AgentEvidenceSnapshot,
   AgentReviewStatus,
@@ -99,48 +96,6 @@ const STEP_ICONS: Record<AgentStepStatus, typeof Circle> = {
   completed: Check,
   blocked: AlertCircle,
   skipped: Circle,
-};
-
-const ARTIFACT_META: Record<
-  AgentArtifactType,
-  { label: string; icon: typeof FileText; badge: string; badgeClass: string }
-> = {
-  document: {
-    label: "Source document",
-    icon: FileText,
-    badge: "SOURCE",
-    badgeClass: "bg-gray-100 text-gray-600",
-  },
-  tabular_review: {
-    label: "Contract risk matrix",
-    icon: Grid2X2,
-    badge: "FACTS + REVIEW",
-    badgeClass: "bg-blue-50 text-blue-700",
-  },
-  draft: {
-    label: "Review memo draft",
-    icon: FileText,
-    badge: "AI DRAFT",
-    badgeClass: "bg-violet-50 text-violet-700",
-  },
-  chat: {
-    label: "Assistant record",
-    icon: FileText,
-    badge: "WORKING RECORD",
-    badgeClass: "bg-gray-100 text-gray-600",
-  },
-  workflow_run: {
-    label: "Workflow run",
-    icon: Grid2X2,
-    badge: "WORKFLOW",
-    badgeClass: "bg-blue-50 text-blue-700",
-  },
-  citation_snapshot: {
-    label: "Citation snapshot",
-    icon: ShieldCheck,
-    badge: "EVIDENCE",
-    badgeClass: "bg-emerald-50 text-emerald-700",
-  },
 };
 
 const EVIDENCE_STATUS_META = {
@@ -337,13 +292,13 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
 
   async function submitReviewDecision(
     status: "approved" | "changes_requested",
-  ) {
-    if (reviewSubmitting) return;
+  ): Promise<boolean> {
+    if (reviewSubmitting) return false;
     if (status === "changes_requested" && !reviewNote.trim()) {
       setReviewError(
         "Describe the required changes so the decision is auditable.",
       );
-      return;
+      return false;
     }
     setReviewSubmitting(status);
     setReviewError(null);
@@ -354,12 +309,14 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
       });
       setSnapshot(updated);
       setReviewNote("");
+      return true;
     } catch (error) {
       setReviewError(
         error instanceof Error
           ? error.message
           : "The review decision could not be recorded.",
       );
+      return false;
     } finally {
       setReviewSubmitting(null);
     }
@@ -599,22 +556,35 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
 
       <div
         ref={scrollContainerRef}
-        className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 md:px-6 md:pb-6"
+        className="min-h-0 flex-1 overflow-y-auto px-4 pb-8 md:px-6"
       >
-        <div className="mx-auto max-w-[1420px]">
-          <section className="mb-3 px-1 py-3 md:px-2">
-            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+        <main className="mx-auto w-full max-w-[960px]">
+          <header className="border-b border-gray-900/[0.07] py-4 md:py-5">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div className="min-w-0">
-                <p className="text-xs text-gray-500">Matter · {matterName}</p>
+                <p className="truncate text-xs text-gray-500" title={matterName}>
+                  {matterName}
+                </p>
                 <h1
                   title={task.goal}
-                  className="mt-1.5 line-clamp-2 max-w-[82ch] break-words text-pretty text-lg font-semibold leading-6 text-gray-950 [overflow-wrap:anywhere]"
+                  className="mt-1.5 line-clamp-3 max-w-[72ch] break-words text-pretty text-lg font-semibold leading-6 text-gray-950 [overflow-wrap:anywhere]"
                 >
                   {task.goal}
                 </h1>
-                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-gray-500">
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-gray-500">
                   {sourceDocuments.length > 0 ? (
-                    <span className="inline-flex min-w-0 items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const source = artifacts.find(
+                          (artifact) =>
+                            artifact.purpose === "Source document" &&
+                            artifact.artifact_id === sourceDocuments[0].id,
+                        );
+                        if (source) openArtifact(source);
+                      }}
+                      className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded outline-none hover:text-gray-900 focus-visible:ring-2 focus-visible:ring-blue-500/70"
+                    >
                       <FileTypeIcon
                         fileType={sourceDocuments[0].file_type}
                         className="h-3.5 w-3.5"
@@ -625,7 +595,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
                       {sourceDocuments.length > 1 && (
                         <span>+{sourceDocuments.length - 1}</span>
                       )}
-                    </span>
+                    </button>
                   ) : (
                     <span>No source documents attached</span>
                   )}
@@ -663,7 +633,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
                     type="button"
                     onClick={runNextStep}
                     disabled={autoRun || task.status === "paused"}
-                    className="h-9 rounded-full border border-white/80 bg-white/70 px-3.5 text-xs font-medium text-gray-700 shadow-[0_4px_12px_rgba(15,23,42,0.06)] transition-colors hover:bg-white disabled:cursor-default disabled:opacity-40"
+                    className="h-8 rounded-full bg-white px-3.5 text-xs font-medium text-gray-700 shadow-sm outline-none transition-colors hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500/70 disabled:cursor-default disabled:opacity-40"
                   >
                     Run next step
                   </button>
@@ -673,7 +643,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
                     type="button"
                     onClick={runTask}
                     disabled={autoRun}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-full bg-gray-950 px-4 text-xs font-medium text-white shadow-[0_6px_16px_rgba(15,23,42,0.16)] transition-all hover:bg-black active:scale-[0.98] disabled:cursor-default disabled:opacity-45"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-full bg-gray-950 px-4 text-xs font-medium text-white shadow-sm outline-none transition-colors hover:bg-black focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 disabled:cursor-default disabled:opacity-45"
                   >
                     {autoRun ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -685,7 +655,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
                 )}
               </div>
             </div>
-          </section>
+          </header>
 
           {task.status === "completed" && (
             <DeliverablesPanel
@@ -704,29 +674,22 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
             />
           )}
 
-          <div className="grid min-h-0 gap-4 xl:grid-cols-[250px_minmax(0,1fr)_300px]">
-            <PlanPanel snapshot={snapshot} />
-            <ExecutionPanel
-              snapshot={snapshot}
-              executionError={executionError}
-              providerQueued={providerQueued}
-              onRetry={retryTask}
-              onAttachDocuments={attachNewMatterDocuments}
-              onOpenArtifact={openArtifact}
-            />
-            <EvidencePanel
-              snapshot={snapshot}
-              onOpenArtifact={openArtifact}
-              evidenceByArtifact={evidenceByArtifact}
-              evidenceLoading={evidenceLoading}
-              expandedEvidenceId={expandedEvidenceId}
-              onToggleEvidence={(artifactId) =>
-                void showEvidenceArtifact(artifactId)
-              }
-              onOpenCitation={openCitation}
-            />
-          </div>
-        </div>
+          <WorkRecord
+            snapshot={snapshot}
+            executionError={executionError}
+            providerQueued={providerQueued}
+            onRetry={retryTask}
+            onAttachDocuments={attachNewMatterDocuments}
+            onOpenArtifact={openArtifact}
+            evidenceByArtifact={evidenceByArtifact}
+            evidenceLoading={evidenceLoading}
+            expandedEvidenceId={expandedEvidenceId}
+            onToggleEvidence={(artifactId) =>
+              void showEvidenceArtifact(artifactId)
+            }
+            onOpenCitation={openCitation}
+          />
+        </main>
       </div>
       <ApiKeyMissingPopup
         open={missingKeyProvider !== null}
@@ -759,7 +722,7 @@ function DeliverablesPanel({
   revisionStarting: boolean;
   error: string | null;
   downloadingArtifact: string | null;
-  onDecision: (status: "approved" | "changes_requested") => Promise<void>;
+  onDecision: (status: "approved" | "changes_requested") => Promise<boolean>;
   onRevise: () => Promise<void>;
   onDownload: (artifact: ApprovedArtifactSnapshot) => Promise<void>;
   onOpenArtifact: (
@@ -768,6 +731,9 @@ function DeliverablesPanel({
   ) => void;
 }) {
   const reviewStatus = snapshot.review.status ?? "review_required";
+  const [reviewAction, setReviewAction] = useState<
+    "approved" | "changes_requested" | null
+  >(null);
   const latestDecision = snapshot.review.decisions.at(-1) ?? null;
   const approvedArtifacts =
     reviewStatus === "approved" && latestDecision
@@ -817,49 +783,71 @@ function DeliverablesPanel({
         : "Review the outputs once, then release the current versions.";
 
   return (
-    <section className="mb-4 overflow-hidden rounded-xl bg-white/60 shadow-[0_4px_8px_rgba(15,23,42,0.04)] backdrop-blur-2xl">
-      <div className="grid lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
-        <div className="min-w-0 px-4 py-3.5 md:px-5">
+    <section className="border-b border-gray-900/[0.07] py-5">
+      <div>
+        <div className="min-w-0">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="text-sm font-semibold text-gray-950">
-                Outputs ready
+                Work product
               </h2>
-              <p className="mt-0.5 text-[11px] text-gray-500">
-                Vera completed the plan and created {outputRows.length} final
-                files.
+              <p className="mt-0.5 text-xs text-gray-500">
+                {outputRows.length} current file
+                {outputRows.length === 1 ? "" : "s"} · {releaseCopy}
               </p>
             </div>
-            <span
-              className={cn(
-                "inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium",
-                reviewStatus === "approved"
-                  ? "bg-emerald-50 text-emerald-700"
-                  : reviewStatus === "changes_requested"
-                    ? "bg-red-50 text-red-700"
-                    : "bg-amber-50 text-amber-800",
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {reviewStatus === "changes_requested" && (
+                <button
+                  type="button"
+                  onClick={() => void onRevise()}
+                  disabled={revisionStarting || submitting !== null}
+                  title="Rebuild the risk matrix and review memo, then rerun verification"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-full bg-gray-950 px-3.5 text-xs font-medium text-white shadow-sm outline-none transition-colors hover:bg-black focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 disabled:opacity-45"
+                >
+                  {revisionStarting ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RotateCcw className="h-3.5 w-3.5" />
+                  )}
+                  {revisionStarting ? "Starting revision" : "Revise outputs"}
+                </button>
               )}
-            >
-              {reviewStatus === "approved" ? (
-                <ShieldCheck className="h-3 w-3" />
-              ) : reviewStatus === "changes_requested" ? (
-                <XCircle className="h-3 w-3" />
-              ) : (
-                <Clock3 className="h-3 w-3" />
+              {reviewStatus !== "approved" && (
+                <button
+                  type="button"
+                  onClick={() => setReviewAction("approved")}
+                  className={cn(
+                    "inline-flex h-8 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2",
+                    reviewStatus === "changes_requested"
+                      ? "bg-white text-gray-700 shadow-sm hover:bg-gray-50"
+                      : "bg-gray-950 text-white shadow-sm hover:bg-black",
+                  )}
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Approve
+                </button>
               )}
-              {reviewStatus === "approved"
-                ? "Ready to export"
-                : REVIEW_LABELS[reviewStatus]}
-            </span>
+              {reviewStatus !== "changes_requested" && (
+                <button
+                  type="button"
+                  onClick={() => setReviewAction("changes_requested")}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-full bg-white px-3.5 text-xs font-medium text-gray-700 shadow-sm outline-none transition-colors hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2"
+                >
+                  <XCircle className="h-3.5 w-3.5" />
+                  {reviewStatus === "approved" ? "Reopen" : "Request changes"}
+                </button>
+              )}
+            </div>
           </div>
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="mt-3 divide-y divide-gray-900/[0.06] border-y border-gray-900/[0.06]">
             {outputRows.map((output) => {
               const canDownload = output.artifact !== null;
               const canOpen = output.linkedArtifact !== null;
               return (
                 <div
                   key={output.key}
-                  className="flex min-w-[250px] max-w-[390px] flex-1 items-stretch overflow-hidden rounded-lg bg-white/70 ring-1 ring-gray-900/[0.07]"
+                  className="flex min-w-0 items-stretch"
                 >
                   <button
                     type="button"
@@ -876,7 +864,7 @@ function DeliverablesPanel({
                         ? `Open ${output.label} at ${output.artifact ? "the approved version" : "its current version"}`
                         : "Output is not available yet"
                     }
-                    className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left outline-none transition-colors hover:bg-white focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/70 disabled:cursor-default disabled:opacity-60"
+                    className="flex min-h-12 min-w-0 flex-1 items-center gap-3 px-1 py-2 text-left outline-none transition-colors hover:bg-white/60 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/70 disabled:cursor-default disabled:opacity-60"
                   >
                     <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-gray-100 text-gray-600">
                       {canOpen ? (
@@ -889,7 +877,7 @@ function DeliverablesPanel({
                       <span className="block truncate text-xs font-medium text-gray-800">
                         {output.label}
                       </span>
-                      <span className="mt-0.5 block truncate text-[10px] text-gray-500">
+                      <span className="mt-0.5 block truncate text-xs text-gray-500">
                         {output.detail}
                       </span>
                     </span>
@@ -906,7 +894,7 @@ function DeliverablesPanel({
                       disabled={downloadingArtifact !== null}
                       title={`Export locked ${output.detail}`}
                       aria-label={`Export locked ${output.detail}`}
-                      className="flex w-10 shrink-0 items-center justify-center border-l border-gray-900/[0.06] text-gray-500 outline-none transition-colors hover:bg-white hover:text-gray-800 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/70 disabled:opacity-50"
+                      className="flex w-10 shrink-0 items-center justify-center text-gray-500 outline-none transition-colors hover:bg-white/60 hover:text-gray-800 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/70 disabled:opacity-50"
                     >
                       {downloadingArtifact === output.artifact.artifact_id ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -921,83 +909,63 @@ function DeliverablesPanel({
           </div>
         </div>
 
-        <div className="border-t border-gray-900/[0.06] px-4 py-3.5 lg:border-l lg:border-t-0 md:px-5">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs font-medium text-gray-800">Final export</p>
-            <span className="text-[10px] text-gray-400">
-              {reviewStatus === "approved"
-                ? "Locked version only"
-                : "Human review required"}
-            </span>
+        {reviewAction && (
+          <div className="mt-3 rounded-xl bg-white px-3 py-3 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-medium text-gray-800">
+                {reviewAction === "approved"
+                  ? "Approve current files"
+                  : "Describe required changes"}
+              </p>
+              <button
+                type="button"
+                onClick={() => setReviewAction(null)}
+                className="rounded px-1.5 py-1 text-xs text-gray-500 outline-none hover:text-gray-900 focus-visible:ring-2 focus-visible:ring-blue-500/70"
+              >
+                Cancel
+              </button>
+            </div>
+            <textarea
+              id="review-note"
+              aria-label="Review note"
+              value={note}
+              onChange={(event) => onNoteChange(event.target.value)}
+              maxLength={4000}
+              rows={2}
+              placeholder={
+                reviewAction === "changes_requested"
+                  ? "What should change?"
+                  : "Optional approval note"
+              }
+              className="mt-2 w-full resize-none rounded-lg bg-gray-50 px-3 py-2 text-xs leading-5 text-gray-900 outline-none ring-1 ring-gray-900/[0.08] placeholder:text-gray-500 focus:ring-2 focus:ring-blue-500/70"
+            />
+            <button
+              type="button"
+              onClick={async () => {
+                if (await onDecision(reviewAction)) {
+                  setReviewAction(null);
+                }
+              }}
+              disabled={submitting !== null}
+              className={cn(
+                "mt-2 inline-flex h-8 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 disabled:opacity-45",
+                reviewAction === "approved"
+                  ? "bg-gray-950 text-white hover:bg-black"
+                  : "bg-white text-red-700 shadow-sm hover:bg-gray-50",
+              )}
+            >
+              {submitting === reviewAction ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : reviewAction === "approved" ? (
+                <CheckCircle2 className="h-3.5 w-3.5" />
+              ) : (
+                <XCircle className="h-3.5 w-3.5" />
+              )}
+              {reviewAction === "approved" ? "Approve for export" : "Request changes"}
+            </button>
           </div>
-          <p className="mt-1 text-[11px] leading-4 text-gray-500">
-            {releaseCopy}
-          </p>
-          <textarea
-            id="review-note"
-            aria-label="Review note"
-            value={note}
-            onChange={(event) => onNoteChange(event.target.value)}
-            maxLength={4000}
-            rows={1}
-            placeholder="Optional note · required for changes"
-            className="mt-2 w-full resize-none rounded-lg bg-white/75 px-3 py-2 text-xs leading-4 text-gray-900 outline-none ring-1 ring-gray-900/[0.08] placeholder:text-gray-500 focus:ring-2 focus:ring-blue-500/70"
-          />
-          <div className="mt-2.5 flex flex-wrap gap-2">
-            {reviewStatus === "changes_requested" && (
-              <button
-                type="button"
-                onClick={() => void onRevise()}
-                disabled={revisionStarting || submitting !== null}
-                title="Rebuild the risk matrix and review memo, then rerun verification"
-                className="inline-flex h-8 items-center gap-1.5 rounded-full bg-gray-950 px-3.5 text-xs font-medium text-white outline-none transition-colors hover:bg-black focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 disabled:opacity-45"
-              >
-                {revisionStarting ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <RotateCcw className="h-3.5 w-3.5" />
-                )}
-                {revisionStarting ? "Starting revision" : "Revise outputs"}
-              </button>
-            )}
-            {reviewStatus !== "approved" && (
-              <button
-                type="button"
-                onClick={() => void onDecision("approved")}
-                disabled={submitting !== null}
-                className={cn(
-                  "inline-flex h-8 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 disabled:opacity-45",
-                  reviewStatus === "changes_requested"
-                    ? "bg-white/80 text-gray-700 ring-1 ring-gray-900/[0.08] hover:bg-white"
-                    : "bg-gray-950 text-white hover:bg-black",
-                )}
-              >
-                {submitting === "approved" ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                )}
-                Approve for export
-              </button>
-            )}
-            {reviewStatus !== "changes_requested" && (
-              <button
-                type="button"
-                onClick={() => void onDecision("changes_requested")}
-                disabled={submitting !== null}
-                className="inline-flex h-8 items-center gap-1.5 rounded-full bg-white/80 px-3.5 text-xs font-medium text-red-700 outline-none ring-1 ring-red-200 transition-colors hover:bg-white focus-visible:ring-2 focus-visible:ring-red-500/60 focus-visible:ring-offset-2 disabled:opacity-45"
-              >
-                {submitting === "changes_requested" ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <XCircle className="h-3.5 w-3.5" />
-                )}
-                {reviewStatus === "approved"
-                  ? "Reopen review"
-                  : "Request changes"}
-              </button>
-            )}
-          </div>
+        )}
+        <div>
           {error && (
             <p
               role="alert"
@@ -1009,13 +977,13 @@ function DeliverablesPanel({
         </div>
       </div>
 
-      <details className="border-t border-gray-900/[0.055] px-4 py-2.5 md:px-5">
-        <summary className="cursor-pointer list-none rounded text-[11px] text-gray-500 outline-none hover:text-gray-800 focus-visible:ring-2 focus-visible:ring-blue-500/70">
+      <details className="mt-3">
+        <summary className="cursor-pointer list-none rounded text-xs text-gray-500 outline-none hover:text-gray-800 focus-visible:ring-2 focus-visible:ring-blue-500/70">
           Review record · {snapshot.review.decisions.length} decision
           {snapshot.review.decisions.length === 1 ? "" : "s"} · reviewer{" "}
           {reviewerName || "signed-in user"}
         </summary>
-        <div className="mt-3 grid gap-4 border-t border-gray-900/[0.05] pt-3 lg:grid-cols-[minmax(0,1fr)_260px]">
+        <div className="mt-3 grid gap-4 border-t border-gray-900/[0.06] pt-3 md:grid-cols-[minmax(0,1fr)_260px]">
           <ol className="max-h-44 overflow-y-auto pr-1">
             {snapshot.review.decisions.map((decision, index) => {
               const actor =
@@ -1106,96 +1074,18 @@ function DeliverablesPanel({
   );
 }
 
-function Panel({
-  title,
-  eyebrow,
-  children,
-  className,
-}: {
-  title: string;
-  eyebrow?: string;
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <section
-      className={cn(
-        "overflow-hidden rounded-xl bg-white/55 shadow-[0_3px_7px_rgba(15,23,42,0.04)] backdrop-blur-2xl",
-        className,
-      )}
-    >
-      <header className="flex items-center justify-between gap-3 border-b border-gray-900/[0.055] px-4 py-3.5">
-        <h2 className="text-sm font-semibold text-gray-900">{title}</h2>
-        {eyebrow && (
-          <p className="truncate text-[10px] text-gray-400">{eyebrow}</p>
-        )}
-      </header>
-      {children}
-    </section>
-  );
-}
-
-function PlanPanel({ snapshot }: { snapshot: AgentTaskSnapshot }) {
-  return (
-    <Panel title="Plan" eyebrow="Work task" className="self-start">
-      <ol className="px-3 py-3">
-        {snapshot.task.current_plan.map((step, index) => {
-          const Icon = STEP_ICONS[step.status];
-          const active = step.status === "running";
-          return (
-            <li key={step.id} className="relative flex gap-3 pb-4 last:pb-1">
-              {index < snapshot.task.current_plan.length - 1 && (
-                <span className="absolute left-[11px] top-6 h-[calc(100%-12px)] w-px bg-gray-200" />
-              )}
-              <span
-                className={cn(
-                  "relative z-10 mt-0.5 flex h-[23px] w-[23px] shrink-0 items-center justify-center rounded-full border bg-white",
-                  step.status === "completed" &&
-                    "border-emerald-200 bg-emerald-50 text-emerald-700",
-                  active && "border-blue-200 bg-blue-50 text-blue-700",
-                  step.status === "pending" && "border-gray-200 text-gray-300",
-                  step.status === "blocked" &&
-                    "border-red-200 bg-red-50 text-red-700",
-                )}
-              >
-                <Icon className={cn("h-3 w-3", active && "animate-spin")} />
-              </span>
-              <div className="min-w-0 pt-0.5">
-                <p
-                  className={cn(
-                    "text-xs font-medium leading-5",
-                    active ? "text-gray-950" : "text-gray-700",
-                  )}
-                >
-                  {step.title}
-                </p>
-                <p className="mt-0.5 text-[11px] leading-4 text-gray-400">
-                  {step.status === "completed"
-                    ? "Completed"
-                    : step.status === "running"
-                      ? `Attempt ${step.attempt}`
-                      : step.status === "blocked"
-                        ? "Blocked"
-                        : step.status === "skipped"
-                          ? "Skipped"
-                          : "Pending"}
-                </p>
-              </div>
-            </li>
-          );
-        })}
-      </ol>
-    </Panel>
-  );
-}
-
-function ExecutionPanel({
+function WorkRecord({
   snapshot,
   executionError,
   providerQueued,
   onRetry,
   onAttachDocuments,
   onOpenArtifact,
+  evidenceByArtifact,
+  evidenceLoading,
+  expandedEvidenceId,
+  onToggleEvidence,
+  onOpenCitation,
 }: {
   snapshot: AgentTaskSnapshot;
   executionError: string | null;
@@ -1203,221 +1093,297 @@ function ExecutionPanel({
   onRetry: () => Promise<void>;
   onAttachDocuments: () => Promise<void>;
   onOpenArtifact: (artifact: AgentTaskSnapshot["artifacts"][number]) => void;
+  evidenceByArtifact: Record<string, AgentEvidenceSnapshot>;
+  evidenceLoading: string | null;
+  expandedEvidenceId: string | null;
+  onToggleEvidence: (artifactId: string) => void;
+  onOpenCitation: (citation: AgentEvidenceCitation) => void;
 }) {
-  const latest = [...snapshot.task.current_plan]
-    .reverse()
-    .find((step) => step.status === "completed");
-  const current = snapshot.task.current_plan.find(
-    (step) => step.status === "running",
+  const { task } = snapshot;
+  const current = task.current_plan.find((step) => step.status === "running");
+  const completedCount = task.current_plan.filter(
+    (step) => step.status === "completed",
+  ).length;
+  const title =
+    task.status === "completed"
+      ? "Completed in " + completedCount + " steps"
+      : current
+        ? "Working · " + current.title
+        : task.status === "paused"
+          ? "Work paused"
+          : task.status === "waiting_input"
+            ? "Input required"
+            : task.status === "failed"
+              ? "Work stopped"
+              : "Ready to work";
+  const supportingArtifacts = snapshot.artifacts.filter(
+    (artifact) =>
+      artifact.artifact_type === "chat" ||
+      artifact.artifact_type === "workflow_run",
   );
+
   return (
-    <Panel title="Execution" eyebrow="Current activity" className="min-w-0">
-      <div className="p-4 md:p-5" aria-live="polite">
-        {providerQueued ? (
-          <div className="rounded-2xl border border-amber-100 bg-amber-50/55 p-4">
-            <div className="flex items-start gap-3">
-              <Clock3 className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
-              <div>
-                <p className="text-sm font-semibold text-gray-950">
-                  Provider queue
-                </p>
-                <p className="mt-1 text-xs leading-5 text-gray-500">
-                  {snapshot.task.latest_checkpoint?.summary}
-                </p>
-                <p className="mt-2 text-[11px] leading-4 text-amber-800">
-                  Completed steps and linked artifacts are saved. Resume retries
-                  only the current step.
-                </p>
-              </div>
-            </div>
-          </div>
-        ) : snapshot.task.status === "failed" ? (
-          <div className="rounded-2xl border border-red-100 bg-red-50/45 p-4">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
-              <div>
-                <p className="text-sm font-semibold text-gray-950">
-                  Execution unavailable
-                </p>
-                <p className="mt-1 text-xs leading-5 text-gray-500">
-                  {executionError ||
-                    snapshot.task.latest_checkpoint?.summary ||
-                    "The model or a required tool could not complete this step."}
-                </p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void onRetry()}
-                    className="inline-flex h-7 items-center rounded-full border border-red-200 bg-white/70 px-3 text-[11px] font-medium text-red-800 transition-colors hover:bg-white"
-                  >
-                    Retry current step
-                  </button>
-                  <Link
-                    href="/account/api-keys"
-                    className="inline-flex h-7 items-center rounded-full border border-red-200 bg-white/70 px-3 text-[11px] font-medium text-red-800 transition-colors hover:bg-white"
-                  >
-                    Open model settings
-                  </Link>
-                </div>
-              </div>
-            </div>
-          </div>
-        ) : snapshot.task.status === "waiting_input" ? (
-          <div className="rounded-2xl border border-amber-100 bg-amber-50/55 p-4">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
-              <div>
-                <p className="text-sm font-semibold text-gray-950">
-                  Input required
-                </p>
-                <p className="mt-1 text-xs leading-5 text-gray-500">
-                  {snapshot.task.latest_checkpoint?.summary ||
-                    "Attach the requested Matter documents before continuing."}
-                </p>
-                <Link
-                  href={`/projects/${snapshot.task.matter_id}`}
-                  className="mt-3 inline-flex h-7 items-center rounded-full border border-amber-200 bg-white/70 px-3 text-[11px] font-medium text-amber-800 transition-colors hover:bg-white"
-                >
-                  Open Matter documents
-                </Link>
-                <button
-                  type="button"
-                  onClick={() => void onAttachDocuments()}
-                  className="ml-2 mt-3 inline-flex h-7 items-center rounded-full border border-amber-200 bg-white/70 px-3 text-[11px] font-medium text-amber-800 transition-colors hover:bg-white"
-                >
-                  Attach new documents &amp; continue
-                </button>
-                {executionError && (
-                  <p className="mt-2 text-[11px] text-amber-800">
-                    {executionError}
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-        ) : current ? (
-          <div className="rounded-2xl border border-blue-100 bg-blue-50/45 p-4">
-            <div className="flex items-start gap-3">
-              <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-blue-700 shadow-sm">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              </span>
-              <div className="min-w-0">
-                <p className="text-xs font-semibold text-blue-800">
-                  In progress
-                </p>
-                <h3 className="mt-1 text-sm font-semibold text-gray-950">
-                  {current.title}
-                </h3>
-                <p className="mt-1 text-xs leading-5 text-gray-500">
-                  Expected: {current.expected_output}
-                </p>
-              </div>
-            </div>
-          </div>
-        ) : snapshot.task.status === "completed" ? (
-          <div className="border-b border-gray-900/[0.055] pb-4">
-            <div className="flex items-start gap-3">
-              <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-700" />
-              <div>
-                <p className="text-sm font-semibold text-gray-950">
-                  Work task complete
-                </p>
-                <p className="mt-1 text-xs leading-5 text-gray-500">
-                  Required artifacts exist and verification found no unresolved
-                  execution gap.
-                </p>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="rounded-2xl border border-gray-200 bg-white/55 p-4 text-sm text-gray-500">
-            Ready to run. The plan will execute as short, reviewable tool loops.
+    <section className="py-5" aria-live="polite">
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-semibold text-gray-950">{title}</h2>
+          <p className="mt-0.5 text-xs text-gray-500">
+            {completedCount} of {task.current_plan.length} steps complete
+          </p>
+        </div>
+        {task.status === "failed" && (
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void onRetry()}
+              className="inline-flex h-8 items-center rounded-full bg-gray-950 px-3.5 text-xs font-medium text-white shadow-sm outline-none hover:bg-black focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2"
+            >
+              Retry current step
+            </button>
+            <Link
+              href="/account/api-keys"
+              className="inline-flex h-8 items-center rounded-full bg-white px-3.5 text-xs font-medium text-gray-700 shadow-sm outline-none hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500/70"
+            >
+              Model settings
+            </Link>
           </div>
         )}
-
-        <div className="mt-5">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold text-gray-900">Activity</h3>
-            <span className="text-[11px] text-gray-400">Local task record</span>
+        {task.status === "waiting_input" && (
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href={"/projects/" + task.matter_id}
+              className="inline-flex h-8 items-center rounded-full bg-white px-3.5 text-xs font-medium text-gray-700 shadow-sm outline-none hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500/70"
+            >
+              Open documents
+            </Link>
+            <button
+              type="button"
+              onClick={() => void onAttachDocuments()}
+              className="inline-flex h-8 items-center rounded-full bg-gray-950 px-3.5 text-xs font-medium text-white shadow-sm outline-none hover:bg-black focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2"
+            >
+              Attach new documents
+            </button>
           </div>
-          <div className="mt-2 divide-y divide-gray-900/[0.055]">
-            {snapshot.task.current_plan
-              .filter((step) => step.status === "completed")
-              .map((step) => {
-                const stepPosition = snapshot.task.current_plan.findIndex(
-                  (candidate) => candidate.id === step.id,
-                );
-                const relatedArtifacts = snapshot.artifacts.filter(
-                  (artifact) =>
-                    artifact.purpose ===
-                      `Step ${stepPosition + 1} evidence citations` ||
-                    (/risk matrix/i.test(step.title) &&
-                      artifact.purpose === "Risk matrix") ||
-                    (/review memo/i.test(step.title) &&
-                      artifact.purpose === "Review memo draft"),
-                );
-                return (
-                  <div key={step.id} className="flex gap-3 py-3 first:pt-2">
-                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-700">
-                      <Check className="h-3 w-3" />
-                    </span>
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium text-gray-800">
-                        {step.title}
-                      </p>
-                      {step.result_summary && (
-                        <TaskResult>{step.result_summary}</TaskResult>
-                      )}
-                      {relatedArtifacts.length > 0 && (
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {relatedArtifacts.map((artifact) => (
-                            <button
-                              key={`${step.id}:${artifact.artifact_type}:${artifact.artifact_id}`}
-                              type="button"
-                              onClick={() => onOpenArtifact(artifact)}
-                              className="inline-flex max-w-full items-center gap-1 rounded px-1.5 py-1 text-[10px] font-medium text-gray-600 outline-none hover:bg-gray-900/[0.04] hover:text-gray-900 focus-visible:ring-2 focus-visible:ring-blue-500/70"
-                            >
-                              <MapPin className="h-3 w-3 shrink-0" />
-                              <span className="truncate">
-                                {artifact.artifact_type === "citation_snapshot"
-                                  ? "Check sources"
-                                  : artifact.purpose}
-                              </span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            {!latest && (
-              <p className="py-5 text-xs text-gray-400">
-                No steps have completed yet.
-              </p>
-            )}
-          </div>
-        </div>
-
-        {snapshot.task.latest_checkpoint &&
-          snapshot.task.status !== "completed" && (
-            <div className="mt-4 flex items-start gap-2 rounded-xl border border-gray-900/[0.06] bg-white/55 px-3 py-2.5">
-              <Clock3 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-400" />
-              <div className="min-w-0">
-                <p className="text-[11px] font-medium text-gray-700">
-                  Checkpoint saved
-                </p>
-                <TaskResult compact>
-                  {snapshot.task.latest_checkpoint.summary}
-                </TaskResult>
-              </div>
-            </div>
-          )}
+        )}
       </div>
-    </Panel>
+
+      {(providerQueued ||
+        task.status === "failed" ||
+        task.status === "waiting_input" ||
+        executionError) && (
+        <div
+          role={task.status === "failed" || executionError ? "alert" : "status"}
+          className={cn(
+            "mt-3 flex items-start gap-2 rounded-lg px-3 py-2.5 text-xs leading-5",
+            task.status === "failed" || executionError
+              ? "bg-red-50 text-red-800"
+              : "bg-amber-50 text-amber-900",
+          )}
+        >
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span className="break-words [overflow-wrap:anywhere]">
+            {executionError ||
+              task.latest_checkpoint?.summary ||
+              (providerQueued
+                ? "The provider is queued. Resume retries the current step."
+                : "More Matter documents are needed before work can continue.")}
+          </span>
+        </div>
+      )}
+
+      <ol className="mt-3 overflow-hidden rounded-xl bg-white/70 shadow-sm">
+        {task.current_plan.map((step, index) => {
+          const Icon = STEP_ICONS[step.status];
+          const stepPosition = index + 1;
+          const evidencePurpose =
+            "Step " + stepPosition + " evidence citations";
+          const latestEvidence = [...snapshot.artifacts]
+            .reverse()
+            .find(
+              (artifact) =>
+                artifact.artifact_type === "citation_snapshot" &&
+                artifact.purpose === evidencePurpose,
+            );
+          const relatedArtifacts = snapshot.artifacts.filter(
+            (artifact) =>
+              artifact.artifact_id === latestEvidence?.artifact_id ||
+              (/risk matrix/i.test(step.title) &&
+                artifact.purpose === "Risk matrix" &&
+                snapshot.task.deliverables.some(
+                  (deliverable) =>
+                    deliverable.key === "risk-matrix" &&
+                    deliverable.artifact_id === artifact.artifact_id,
+                )) ||
+              (/review memo/i.test(step.title) &&
+                artifact.purpose === "Review memo draft" &&
+                snapshot.task.deliverables.some(
+                  (deliverable) =>
+                    deliverable.key === "review-memo" &&
+                    deliverable.artifact_id === artifact.artifact_id,
+                )),
+          );
+          return (
+            <li
+              key={step.id}
+              className="border-b border-gray-900/[0.06] last:border-b-0"
+            >
+              <details>
+                <summary className="group flex min-h-12 cursor-pointer list-none items-center gap-3 px-3 py-2 outline-none hover:bg-white/70 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/70">
+                  <span
+                    className={cn(
+                      "flex h-6 w-6 shrink-0 items-center justify-center rounded-full",
+                      step.status === "completed"
+                        ? "bg-emerald-50 text-emerald-700"
+                        : step.status === "running"
+                          ? "bg-blue-50 text-blue-700"
+                          : step.status === "blocked"
+                            ? "bg-red-50 text-red-700"
+                            : "bg-gray-100 text-gray-400",
+                    )}
+                  >
+                    <Icon
+                      className={cn(
+                        "h-3.5 w-3.5",
+                        step.status === "running" && "animate-spin",
+                      )}
+                    />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-medium text-gray-800">
+                      {step.title}
+                    </span>
+                    {step.status === "running" && (
+                      <span className="mt-0.5 block truncate text-xs text-gray-500">
+                        {step.expected_output}
+                      </span>
+                    )}
+                  </span>
+                  <span className="shrink-0 text-xs text-gray-400">
+                    {step.status === "completed"
+                      ? "Completed"
+                      : step.status === "running"
+                        ? "Attempt " + step.attempt
+                        : step.status === "blocked"
+                          ? "Blocked"
+                          : step.status === "skipped"
+                            ? "Skipped"
+                            : "Pending"}
+                  </span>
+                  <ChevronRight className="h-3.5 w-3.5 shrink-0 text-gray-300 transition-transform duration-200 group-open:rotate-90 motion-reduce:transition-none" />
+                </summary>
+                <div className="pb-4 pl-12 pr-3">
+                  {step.result_summary ? (
+                    <TaskResult>{step.result_summary}</TaskResult>
+                  ) : (
+                    <p className="text-xs leading-5 text-gray-500">
+                      Expected: {step.expected_output}
+                    </p>
+                  )}
+                  {relatedArtifacts.length > 0 && (
+                    <div className="mt-3 divide-y divide-gray-900/[0.05] border-t border-gray-900/[0.05]">
+                      {relatedArtifacts.map((artifact) => {
+                        const isEvidence =
+                          artifact.artifact_type === "citation_snapshot";
+                        const expanded =
+                          expandedEvidenceId === artifact.artifact_id;
+                        return (
+                          <div
+                            key={
+                              step.id +
+                              ":" +
+                              artifact.artifact_type +
+                              ":" +
+                              artifact.artifact_id
+                            }
+                            id={
+                              isEvidence
+                                ? "evidence-" + artifact.artifact_id
+                                : undefined
+                            }
+                          >
+                            <button
+                              type="button"
+                              onClick={() =>
+                                isEvidence
+                                  ? onToggleEvidence(artifact.artifact_id)
+                                  : onOpenArtifact(artifact)
+                              }
+                              aria-expanded={isEvidence ? expanded : undefined}
+                              className="flex min-h-10 w-full items-center gap-2 py-2 text-left text-xs text-gray-600 outline-none hover:text-gray-950 focus-visible:ring-2 focus-visible:ring-blue-500/70"
+                            >
+                              {evidenceLoading === artifact.artifact_id ? (
+                                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                              ) : isEvidence ? (
+                                <MapPin className="h-3.5 w-3.5 shrink-0" />
+                              ) : (
+                                <FileText className="h-3.5 w-3.5 shrink-0" />
+                              )}
+                              <span className="min-w-0 flex-1 truncate">
+                                {isEvidence ? "Check sources" : artifact.purpose}
+                              </span>
+                              {isEvidence ? (
+                                <ChevronRight
+                                  className={cn(
+                                    "h-3.5 w-3.5 shrink-0 text-gray-300 transition-transform duration-200 motion-reduce:transition-none",
+                                    expanded && "rotate-90",
+                                  )}
+                                />
+                              ) : (
+                                <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-gray-300" />
+                              )}
+                            </button>
+                            {isEvidence && expanded && (
+                              <EvidenceCitationList
+                                evidence={
+                                  evidenceByArtifact[artifact.artifact_id]
+                                }
+                                onOpenCitation={onOpenCitation}
+                              />
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </details>
+            </li>
+          );
+        })}
+      </ol>
+
+      {task.latest_checkpoint && task.status !== "completed" && (
+        <details className="mt-3">
+          <summary className="cursor-pointer list-none rounded text-xs text-gray-500 outline-none hover:text-gray-900 focus-visible:ring-2 focus-visible:ring-blue-500/70">
+            Latest checkpoint
+          </summary>
+          <TaskResult compact>{task.latest_checkpoint.summary}</TaskResult>
+        </details>
+      )}
+
+      {supportingArtifacts.length > 0 && (
+        <details className="mt-3">
+          <summary className="cursor-pointer list-none rounded text-xs text-gray-500 outline-none hover:text-gray-900 focus-visible:ring-2 focus-visible:ring-blue-500/70">
+            Task details
+          </summary>
+          <div className="mt-2 divide-y divide-gray-900/[0.05] border-y border-gray-900/[0.05]">
+            {supportingArtifacts.map((artifact) => (
+              <button
+                key={artifact.artifact_id}
+                type="button"
+                onClick={() => onOpenArtifact(artifact)}
+                className="flex min-h-10 w-full items-center justify-between gap-3 py-2 text-left text-xs text-gray-600 outline-none hover:text-gray-950 focus-visible:ring-2 focus-visible:ring-blue-500/70"
+              >
+                <span className="truncate">{artifact.purpose}</span>
+                <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-gray-300" />
+              </button>
+            ))}
+          </div>
+        </details>
+      )}
+    </section>
   );
 }
-
 function TaskResult({
   children,
   compact = false,
@@ -1439,190 +1405,59 @@ function TaskResult({
   );
 }
 
-function EvidencePanel({
-  snapshot,
-  onOpenArtifact,
-  evidenceByArtifact,
-  evidenceLoading,
-  expandedEvidenceId,
-  onToggleEvidence,
+function EvidenceCitationList({
+  evidence,
   onOpenCitation,
 }: {
-  snapshot: AgentTaskSnapshot;
-  onOpenArtifact: (artifact: AgentTaskSnapshot["artifacts"][number]) => void;
-  evidenceByArtifact: Record<string, AgentEvidenceSnapshot>;
-  evidenceLoading: string | null;
-  expandedEvidenceId: string | null;
-  onToggleEvidence: (artifactId: string) => void;
+  evidence: AgentEvidenceSnapshot | undefined;
   onOpenCitation: (citation: AgentEvidenceCitation) => void;
 }) {
-  const verifyStarted =
-    snapshot.task.status === "verifying" ||
-    snapshot.task.status === "completed";
-  const verified = snapshot.task.status === "completed";
-  const checks = [
-    "Required deliverables exist",
-    "Important facts have sources",
-    "Facts, analysis, and advice are distinct",
-    "No obvious omission or contradiction",
-  ];
+  if (!evidence) {
+    return (
+      <p className="pb-3 pl-5 text-xs text-gray-500">
+        Loading source locations…
+      </p>
+    );
+  }
+  if (evidence.citations.length === 0) {
+    return (
+      <p className="pb-3 pl-5 text-xs leading-5 text-red-700">
+        Citation missing — no source anchor was recorded.
+      </p>
+    );
+  }
   return (
-    <div className="grid gap-4 self-start md:grid-cols-2 xl:grid-cols-1">
-      <Panel title="Artifacts" eyebrow={`${snapshot.artifacts.length} linked`}>
-        <div className="divide-y divide-gray-900/[0.055] px-3 py-1.5">
-          {snapshot.artifacts.map((artifact) => {
-            const meta = ARTIFACT_META[artifact.artifact_type];
-            const Icon = meta.icon;
-            const isEvidence = artifact.artifact_type === "citation_snapshot";
-            const evidence = evidenceByArtifact[artifact.artifact_id];
-            const expanded = expandedEvidenceId === artifact.artifact_id;
-            return (
-              <div
-                key={artifact.artifact_id}
-                id={isEvidence ? `evidence-${artifact.artifact_id}` : undefined}
-                className="min-w-0"
-              >
-                <button
-                  type="button"
-                  onClick={() =>
-                    isEvidence
-                      ? onToggleEvidence(artifact.artifact_id)
-                      : onOpenArtifact(artifact)
-                  }
-                  title={`${isEvidence ? "Check" : "Open"} ${artifact.purpose || meta.label}`}
-                  aria-expanded={isEvidence ? expanded : undefined}
-                  className="group flex w-full items-center gap-3 rounded-lg py-3 text-left outline-none transition-colors hover:bg-white/55 focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2"
-                >
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-gray-900/[0.06] bg-white/75 text-gray-500">
-                    {evidenceLoading === artifact.artifact_id ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Icon className="h-3.5 w-3.5" />
-                    )}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-medium text-gray-800">
-                      {artifact.purpose || meta.label}
-                    </span>
-                    <span
-                      className={cn(
-                        "mt-1 inline-flex rounded px-1.5 py-0.5 text-[9px] font-semibold tracking-[0.08em]",
-                        meta.badgeClass,
-                      )}
-                    >
-                      {meta.badge}
-                    </span>
-                  </span>
-                  {isEvidence ? (
-                    <ChevronRight
-                      className={cn(
-                        "h-3.5 w-3.5 text-gray-300 transition-transform",
-                        expanded && "rotate-90",
-                      )}
-                    />
-                  ) : (
-                    <ArrowUpRight className="h-3.5 w-3.5 text-gray-300 transition-colors group-hover:text-gray-600" />
-                  )}
-                </button>
-                {isEvidence && expanded && (
-                  <div className="mb-2 ml-11 space-y-1.5 pr-1">
-                    {(evidence?.citations ?? []).map((citation) => {
-                      const status = EVIDENCE_STATUS_META[citation.status];
-                      const locator = citation.cell
-                        ? [citation.sheet, citation.cell]
-                            .filter(Boolean)
-                            .join("!")
-                        : citation.page != null
-                          ? `Page ${citation.page}`
-                          : "Source";
-                      return (
-                        <button
-                          key={citation.id}
-                          type="button"
-                          disabled={!citation.openable}
-                          onClick={() => onOpenCitation(citation)}
-                          title={citation.quote || citation.detail}
-                          className="block w-full rounded-md px-2 py-1.5 text-left outline-none hover:bg-gray-900/[0.035] focus-visible:ring-2 focus-visible:ring-blue-500/70 disabled:cursor-default disabled:opacity-65"
-                        >
-                          <span className="flex min-w-0 items-center justify-between gap-2 text-[10px]">
-                            <span className="min-w-0 truncate font-medium text-gray-700">
-                              {citation.filename} · {locator}
-                            </span>
-                            <span
-                              className={cn(
-                                "shrink-0 font-medium",
-                                status.className,
-                              )}
-                            >
-                              {status.label}
-                            </span>
-                          </span>
-                          <span className="mt-0.5 line-clamp-2 break-words text-[10px] leading-4 text-gray-500 [overflow-wrap:anywhere]">
-                            {citation.quote || citation.detail}
-                          </span>
-                        </button>
-                      );
-                    })}
-                    {evidence && evidence.citations.length === 0 && (
-                      <p className="px-2 py-2 text-[10px] leading-4 text-red-700">
-                        Citation missing — no source anchor was recorded.
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-          {snapshot.artifacts.length === 0 && (
-            <p className="py-5 text-xs leading-5 text-gray-400">
-              Artifacts appear here as steps complete.
-            </p>
-          )}
-        </div>
-      </Panel>
-      <Panel
-        title="Verifier"
-        eyebrow={
-          verified ? "Checks passed" : verifyStarted ? "Checking" : "Pending"
-        }
-      >
-        <ul className="px-3 py-2">
-          {checks.map((check) => (
-            <li key={check} className="flex items-start gap-2.5 py-2">
-              {verified ? (
-                <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" />
-              ) : verifyStarted ? (
-                <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-violet-600" />
-              ) : (
-                <Circle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-300" />
-              )}
-              <span className="text-[11px] leading-4 text-gray-600">
-                {check}
+    <div className="space-y-1 pb-3 pl-5">
+      {evidence.citations.map((citation) => {
+        const status = EVIDENCE_STATUS_META[citation.status];
+        const locator = citation.cell
+          ? [citation.sheet, citation.cell].filter(Boolean).join("!")
+          : citation.page != null
+            ? "Page " + citation.page
+            : "Source";
+        return (
+          <button
+            key={citation.id}
+            type="button"
+            disabled={!citation.openable}
+            onClick={() => onOpenCitation(citation)}
+            title={citation.quote || citation.detail}
+            className="block min-h-10 w-full rounded-md px-2 py-1.5 text-left outline-none hover:bg-gray-900/[0.035] focus-visible:ring-2 focus-visible:ring-blue-500/70 disabled:cursor-default disabled:opacity-65"
+          >
+            <span className="flex min-w-0 items-center justify-between gap-2 text-xs">
+              <span className="min-w-0 truncate font-medium text-gray-700">
+                {citation.filename} · {locator}
               </span>
-            </li>
-          ))}
-        </ul>
-        <div className="border-t border-gray-900/[0.055] px-3 py-3">
-          <div className="flex items-center justify-between text-[11px]">
-            <span className="text-gray-500">Lawyer review</span>
-            <span
-              className={cn(
-                "inline-flex min-w-0 items-center gap-1 truncate font-medium",
-                snapshot.review.status === "approved"
-                  ? "text-emerald-700"
-                  : snapshot.review.status === "changes_requested"
-                    ? "text-red-700"
-                    : "text-amber-700",
-              )}
-            >
-              {snapshot.review.status
-                ? REVIEW_LABELS[snapshot.review.status]
-                : "Pending execution"}{" "}
-              <ChevronRight className="h-3 w-3 shrink-0" />
+              <span className={cn("shrink-0 font-medium", status.className)}>
+                {status.label}
+              </span>
             </span>
-          </div>
-        </div>
-      </Panel>
+            <span className="mt-0.5 line-clamp-2 break-words text-xs leading-5 text-gray-500 [overflow-wrap:anywhere]">
+              {citation.quote || citation.detail}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }
