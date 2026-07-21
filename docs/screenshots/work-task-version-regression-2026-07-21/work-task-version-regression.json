@@ -1,0 +1,370 @@
+{
+  "ok": true,
+  "base_commit": "8f131d4908440bbb482c6f87e2b1f4ef392f0e98",
+  "suite": "work-task-version-regression-2026-07-21",
+  "versions": [
+    {
+      "id": "version_1",
+      "document_id": "synthetic_work_product_doc",
+      "version_number": 1,
+      "storage_path": "qa/work-task-version-regression/v1-upload.docx",
+      "filename": "Synthetic Review Memo.docx",
+      "file_type": "docx",
+      "source": "upload",
+      "deleted_at": null,
+      "created_at": "2026-07-21T09:05:00.000Z",
+      "size_bytes": 8562,
+      "current": false,
+      "sha256": "sha256:4fdad11b50968cbd2e5bea8e5d2b67292776f346823cd527096047f86b13ba43",
+      "tracked_change_ids": null
+    },
+    {
+      "id": "version_2",
+      "document_id": "synthetic_work_product_doc",
+      "version_number": 2,
+      "storage_path": "qa/work-task-version-regression/v2-tracked-change.docx",
+      "filename": "Synthetic Review Memo.docx",
+      "file_type": "docx",
+      "source": "assistant_edit",
+      "deleted_at": null,
+      "created_at": "2026-07-21T09:10:00.000Z",
+      "size_bytes": 8677,
+      "current": false,
+      "sha256": "sha256:36800b4225623ea1687d0bdf6afb1a4bab75007eaaa79d50bbec8a2e274ce610",
+      "tracked_change_ids": null
+    },
+    {
+      "id": "version_3",
+      "document_id": "synthetic_work_product_doc",
+      "version_number": 3,
+      "storage_path": "qa/work-task-version-regression/v3-alpha-accepted.docx",
+      "filename": "Synthetic Review Memo.docx",
+      "file_type": "docx",
+      "source": "assistant_edit",
+      "deleted_at": null,
+      "created_at": "2026-07-21T09:30:00.000Z",
+      "size_bytes": 8670,
+      "current": false,
+      "sha256": "sha256:e471abdf3331ca307e6c69c50047cfc73000f4cef67d8cf0646b95254fbb1ff2",
+      "tracked_change_ids": null
+    },
+    {
+      "id": "version_4",
+      "document_id": "synthetic_work_product_doc",
+      "version_number": 4,
+      "storage_path": "qa/work-task-version-regression/v4-beta-rejected.docx",
+      "filename": "Synthetic Review Memo.docx",
+      "file_type": "docx",
+      "source": "assistant_edit",
+      "deleted_at": null,
+      "created_at": "2026-07-21T09:40:00.000Z",
+      "size_bytes": 8592,
+      "current": true,
+      "sha256": "sha256:2cad5230b938c7831323bb6a87a6de68ad50a317510abb39f0d03e3bb19ba5dc",
+      "tracked_change_ids": null
+    }
+  ],
+  "decisions": [
+    {
+      "id": "decision_review_required_initial",
+      "status": "review_required",
+      "note": "Synthetic task completed; lawyer review required before final export.",
+      "artifact_snapshot": [],
+      "created_at": "2026-07-21T09:00:00.000Z"
+    },
+    {
+      "id": "decision_approved_v2",
+      "status": "approved",
+      "note": "Synthetic first approval locks V2.",
+      "created_at": "2026-07-21T09:12:00.000Z",
+      "artifact_snapshot": [
+        {
+          "artifact_type": "draft",
+          "artifact_id": "synthetic_work_product_doc",
+          "document_id": "synthetic_work_product_doc",
+          "purpose": "Review memo draft",
+          "version_id": "version_2",
+          "version_number": 2,
+          "filename": "Synthetic Review Memo.docx",
+          "file_type": "docx",
+          "size_bytes": 8677,
+          "sha256": "sha256:36800b4225623ea1687d0bdf6afb1a4bab75007eaaa79d50bbec8a2e274ce610"
+        }
+      ]
+    },
+    {
+      "id": "decision_approved_v4",
+      "status": "approved",
+      "note": "Synthetic reapproval locks current V4 after manual accept/reject.",
+      "created_at": "2026-07-21T09:45:00.000Z",
+      "artifact_snapshot": [
+        {
+          "artifact_type": "draft",
+          "artifact_id": "synthetic_work_product_doc",
+          "document_id": "synthetic_work_product_doc",
+          "purpose": "Review memo draft",
+          "version_id": "version_4",
+          "version_number": 4,
+          "filename": "Synthetic Review Memo.docx",
+          "file_type": "docx",
+          "size_bytes": 8592,
+          "sha256": "sha256:2cad5230b938c7831323bb6a87a6de68ad50a317510abb39f0d03e3bb19ba5dc"
+        }
+      ]
+    }
+  ],
+  "review": {
+    "before_reapproval": {
+      "status": "review_required",
+      "has_unapproved_changes": true,
+      "current_version_id": "version_4",
+      "approved_version_id": "version_2"
+    },
+    "after_reapproval": {
+      "status": "approved",
+      "has_unapproved_changes": false,
+      "current_version_id": "version_4",
+      "approved_version_id": "version_4"
+    }
+  },
+  "exports": {
+    "v2_before_edits": {
+      "version_id": "version_2",
+      "version_number": 2,
+      "sha256": "sha256:36800b4225623ea1687d0bdf6afb1a4bab75007eaaa79d50bbec8a2e274ce610"
+    },
+    "v2_after_v4_before_reapproval": {
+      "version_id": "version_2",
+      "version_number": 2,
+      "sha256": "sha256:36800b4225623ea1687d0bdf6afb1a4bab75007eaaa79d50bbec8a2e274ce610"
+    },
+    "latest_after_v4_reapproval": {
+      "version_id": "version_4",
+      "version_number": 4,
+      "sha256": "sha256:2cad5230b938c7831323bb6a87a6de68ad50a317510abb39f0d03e3bb19ba5dc"
+    }
+  },
+  "ui": {
+    "assistantTabs": {
+      "initial": [
+        {
+          "kind": "document",
+          "id": "doc-tab",
+          "documentId": "synthetic_work_product_doc",
+          "filename": "Synthetic Review Memo.docx",
+          "versionId": "version_2",
+          "versionNumber": 2,
+          "refetchKey": 3
+        },
+        {
+          "kind": "edit",
+          "id": "alpha-tab",
+          "documentId": "synthetic_work_product_doc",
+          "filename": "Synthetic Review Memo.docx",
+          "versionId": "version_2",
+          "versionNumber": 2,
+          "edit": {
+            "edit_id": "edit_alpha",
+            "status": "pending"
+          }
+        },
+        {
+          "kind": "edit",
+          "id": "beta-tab",
+          "documentId": "synthetic_work_product_doc",
+          "filename": "Synthetic Review Memo.docx",
+          "versionId": "version_2",
+          "versionNumber": 2,
+          "edit": {
+            "edit_id": "edit_beta",
+            "status": "pending"
+          }
+        },
+        {
+          "kind": "case",
+          "id": "case-tab",
+          "caseName": "Synthetic Case"
+        }
+      ],
+      "afterAccept": [
+        {
+          "kind": "document",
+          "id": "doc-tab",
+          "documentId": "synthetic_work_product_doc",
+          "filename": "Synthetic Review Memo.docx",
+          "versionId": "version_3",
+          "versionNumber": 3,
+          "refetchKey": 4
+        },
+        {
+          "kind": "edit",
+          "id": "alpha-tab",
+          "documentId": "synthetic_work_product_doc",
+          "filename": "Synthetic Review Memo.docx",
+          "versionId": "version_3",
+          "versionNumber": 3,
+          "edit": {
+            "edit_id": "edit_alpha",
+            "status": "accepted"
+          }
+        },
+        {
+          "kind": "edit",
+          "id": "beta-tab",
+          "documentId": "synthetic_work_product_doc",
+          "filename": "Synthetic Review Memo.docx",
+          "versionId": "version_3",
+          "versionNumber": 3,
+          "edit": {
+            "edit_id": "edit_beta",
+            "status": "pending"
+          }
+        },
+        {
+          "kind": "case",
+          "id": "case-tab",
+          "caseName": "Synthetic Case"
+        }
+      ],
+      "afterReject": [
+        {
+          "kind": "document",
+          "id": "doc-tab",
+          "documentId": "synthetic_work_product_doc",
+          "filename": "Synthetic Review Memo.docx",
+          "versionId": "version_4",
+          "versionNumber": 4,
+          "refetchKey": 5
+        },
+        {
+          "kind": "edit",
+          "id": "alpha-tab",
+          "documentId": "synthetic_work_product_doc",
+          "filename": "Synthetic Review Memo.docx",
+          "versionId": "version_4",
+          "versionNumber": 4,
+          "edit": {
+            "edit_id": "edit_alpha",
+            "status": "accepted"
+          }
+        },
+        {
+          "kind": "edit",
+          "id": "beta-tab",
+          "documentId": "synthetic_work_product_doc",
+          "filename": "Synthetic Review Memo.docx",
+          "versionId": "version_4",
+          "versionNumber": 4,
+          "edit": {
+            "edit_id": "edit_beta",
+            "status": "rejected"
+          }
+        },
+        {
+          "kind": "case",
+          "id": "case-tab",
+          "caseName": "Synthetic Case"
+        }
+      ]
+    },
+    "documentSidePanelBeforeAcceptReject": "version_2",
+    "documentSidePanelCurrentVersion": "version_4",
+    "documentSidePanelCitationVersion": "version_2",
+    "citation": {
+      "quote": "Fictional Beta clause must be updated",
+      "citedVersionId": "version_2",
+      "currentVersionId": "version_4",
+      "existsInCitedVersion": true,
+      "existsInCurrentVersion": false
+    }
+  },
+  "restart": {
+    "before_reapproval_reload": {
+      "current_version_id": "version_4",
+      "decisions": [
+        {
+          "id": "decision_review_required_initial",
+          "status": "review_required",
+          "note": "Synthetic task completed; lawyer review required before final export.",
+          "artifact_snapshot": [],
+          "created_at": "2026-07-21T09:00:00.000Z"
+        },
+        {
+          "id": "decision_approved_v2",
+          "status": "approved",
+          "note": "Synthetic first approval locks V2.",
+          "created_at": "2026-07-21T09:12:00.000Z",
+          "artifact_snapshot": [
+            {
+              "artifact_type": "draft",
+              "artifact_id": "synthetic_work_product_doc",
+              "document_id": "synthetic_work_product_doc",
+              "purpose": "Review memo draft",
+              "version_id": "version_2",
+              "version_number": 2,
+              "filename": "Synthetic Review Memo.docx",
+              "file_type": "docx",
+              "size_bytes": 8677,
+              "sha256": "sha256:36800b4225623ea1687d0bdf6afb1a4bab75007eaaa79d50bbec8a2e274ce610"
+            }
+          ]
+        }
+      ],
+      "edit_statuses": {
+        "mike-0-1784632427992": "accepted",
+        "mike-1-1784632427992": "rejected"
+      }
+    },
+    "hydrated_annotation_statuses": [
+      {
+        "edit_id": "mike-0-1784632427992",
+        "status": "accepted"
+      },
+      {
+        "edit_id": "mike-1-1784632427992",
+        "status": "rejected"
+      }
+    ],
+    "after_reapproval_reload_status": "approved"
+  },
+  "files": {
+    "docx": [
+      "/Users/a1-6/.codex/worktrees/b378/new agent/docs/screenshots/work-task-version-regression-2026-07-21/files/version_1-Synthetic-Review-Memo.docx",
+      "/Users/a1-6/.codex/worktrees/b378/new agent/docs/screenshots/work-task-version-regression-2026-07-21/files/version_2-Synthetic-Review-Memo.docx",
+      "/Users/a1-6/.codex/worktrees/b378/new agent/docs/screenshots/work-task-version-regression-2026-07-21/files/version_3-Synthetic-Review-Memo.docx",
+      "/Users/a1-6/.codex/worktrees/b378/new agent/docs/screenshots/work-task-version-regression-2026-07-21/files/version_4-Synthetic-Review-Memo.docx"
+    ],
+    "libreoffice": {
+      "soffice": "/Users/a1-6/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override/soffice",
+      "converted": [
+        "/Users/a1-6/.codex/worktrees/b378/new agent/docs/screenshots/work-task-version-regression-2026-07-21/pdf/version_1-Synthetic-Review-Memo.pdf",
+        "/Users/a1-6/.codex/worktrees/b378/new agent/docs/screenshots/work-task-version-regression-2026-07-21/pdf/version_2-Synthetic-Review-Memo.pdf",
+        "/Users/a1-6/.codex/worktrees/b378/new agent/docs/screenshots/work-task-version-regression-2026-07-21/pdf/version_3-Synthetic-Review-Memo.pdf",
+        "/Users/a1-6/.codex/worktrees/b378/new agent/docs/screenshots/work-task-version-regression-2026-07-21/pdf/version_4-Synthetic-Review-Memo.pdf"
+      ]
+    },
+    "word": {
+      "available": true,
+      "ok": true,
+      "detail": "version_1-Synthetic-Review-Memo.docx, version_2-Synthetic-Review-Memo.docx, version_3-Synthetic-Review-Memo.docx, version_4-Synthetic-Review-Memo.docx"
+    },
+    "screenshots": [
+      "/Users/a1-6/.codex/worktrees/b378/new agent/docs/screenshots/work-task-version-regression-2026-07-21/screenshots/01-version-export-1440x900.png",
+      "/Users/a1-6/.codex/worktrees/b378/new agent/docs/screenshots/work-task-version-regression-2026-07-21/screenshots/02-ui-state-1440x900.png"
+    ]
+  },
+  "assertions": [
+    "V1 upload and AI/test tracked-change V2 created with four tracked-change XML ids",
+    "V2 approval captures immutable artifact_snapshot and exports V2 bytes",
+    "Accepting first tracked change creates V3 and derives review_required",
+    "Duplicate accept request is idempotent and does not create another version",
+    "Rejecting second tracked change creates V4, leaves no tracked changes, and keeps document_edits consistent",
+    "Before reapproval, old V2 approved export remains locked and available after V4 appears",
+    "After V4 reapproval, current final export uses only the latest approved V4 snapshot",
+    "Assistant document/edit tabs switch V2 -> V3 -> V4 and preserve resolved edit statuses",
+    "DocumentSidePanel selects new current V4 automatically, while explicit citation links open V2",
+    "Version-bound citation quote is located in cited V2 and not incorrectly taken from current V4",
+    "Restart model preserves current_version_id and hydrates old edit annotations from document_edits statuses",
+    "Generated DOCX files reopen through LibreOffice headless and Microsoft Word automation"
+  ]
+}

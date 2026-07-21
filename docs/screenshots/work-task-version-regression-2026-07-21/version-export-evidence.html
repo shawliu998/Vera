@@ -1,0 +1,25 @@
+<!doctype html><meta charset="utf-8"><title>Work Task version regression</title><style>
+body{margin:0;background:#f4f5f7;color:#111827;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{padding:28px 34px}
+h1{font-size:24px;margin:0 0 8px}
+h2{font-size:16px;margin:26px 0 10px}
+p{font-size:13px;color:#4b5563;margin:4px 0 14px;line-height:1.45}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:18px 0}
+.card{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px;box-shadow:0 1px 3px rgba(15,23,42,.06)}
+.label{font-size:11px;color:#6b7280}.value{font-size:18px;font-weight:650;margin-top:4px}
+table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(15,23,42,.06)}
+th,td{font-size:11px;text-align:left;border-bottom:1px solid #e5e7eb;padding:8px 9px;vertical-align:top}
+th{background:#eef0f3;color:#374151;font-weight:650}td{color:#111827}.ok{color:#047857;font-weight:650}.warn{color:#b45309;font-weight:650}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px}.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+</style><main>
+<h1>Work Task Version Regression Evidence</h1>
+<p>No-sensitive synthetic DOCX flow: upload V1 -> tracked-change V2 -> V2 approval -> V3/V4 manual resolution -> review_required -> V4 reapproval.</p>
+<div class="grid">
+<div class="card"><div class="label">Current version</div><div class="value">V4</div></div>
+<div class="card"><div class="label">Review after V4 reapproval</div><div class="value ok">approved</div></div>
+<div class="card"><div class="label">Old V2 export after edits</div><div class="value ok">available</div></div>
+<div class="card"><div class="label">Latest final export</div><div class="value">version_4</div></div>
+</div>
+<h2>Exact Version Table</h2><table><thead><tr><th>id</th><th>V#</th><th>source</th><th>current</th><th>approval role</th><th>storage path</th><th>sha256</th></tr></thead><tbody><tr><td>version_1</td><td>1</td><td>upload</td><td>no</td><td></td><td>qa/work-task-version-regression/v1-upload.docx</td><td>sha256:4fdad11b50968cbd2e5bea8e5d2b67292776f346823cd527096047f86b13ba43</td></tr><tr><td>version_2</td><td>2</td><td>assistant_edit</td><td>no</td><td>old approved</td><td>qa/work-task-version-regression/v2-tracked-change.docx</td><td>sha256:36800b4225623ea1687d0bdf6afb1a4bab75007eaaa79d50bbec8a2e274ce610</td></tr><tr><td>version_3</td><td>3</td><td>assistant_edit</td><td>no</td><td></td><td>qa/work-task-version-regression/v3-alpha-accepted.docx</td><td>sha256:e471abdf3331ca307e6c69c50047cfc73000f4cef67d8cf0646b95254fbb1ff2</td></tr><tr><td>version_4</td><td>4</td><td>assistant_edit</td><td>yes</td><td>latest approved</td><td>qa/work-task-version-regression/v4-beta-rejected.docx</td><td>sha256:2cad5230b938c7831323bb6a87a6de68ad50a317510abb39f0d03e3bb19ba5dc</td></tr></tbody></table>
+<h2>Review Decisions</h2><table><thead><tr><th>decision</th><th>status</th><th>locked version</th><th>locked V#</th><th>created</th><th>note</th></tr></thead><tbody><tr><td>decision_review_required_initial</td><td>review_required</td><td></td><td></td><td>2026-07-21T09:00:00.000Z</td><td>Synthetic task completed; lawyer review required before final export.</td></tr><tr><td>decision_approved_v2</td><td>approved</td><td>version_2</td><td>2</td><td>2026-07-21T09:12:00.000Z</td><td>Synthetic first approval locks V2.</td></tr><tr><td>decision_approved_v4</td><td>approved</td><td>version_4</td><td>4</td><td>2026-07-21T09:45:00.000Z</td><td>Synthetic reapproval locks current V4 after manual accept/reject.</td></tr></tbody></table>
+</main>

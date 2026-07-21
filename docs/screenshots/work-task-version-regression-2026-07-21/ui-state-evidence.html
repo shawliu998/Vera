@@ -1,0 +1,72 @@
+<!doctype html><meta charset="utf-8"><title>Work Task UI state evidence</title><style>
+body{margin:0;background:#f4f5f7;color:#111827;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{padding:28px 34px}
+h1{font-size:24px;margin:0 0 8px}
+h2{font-size:16px;margin:26px 0 10px}
+p{font-size:13px;color:#4b5563;margin:4px 0 14px;line-height:1.45}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:18px 0}
+.card{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px;box-shadow:0 1px 3px rgba(15,23,42,.06)}
+.label{font-size:11px;color:#6b7280}.value{font-size:18px;font-weight:650;margin-top:4px}
+table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(15,23,42,.06)}
+th,td{font-size:11px;text-align:left;border-bottom:1px solid #e5e7eb;padding:8px 9px;vertical-align:top}
+th{background:#eef0f3;color:#374151;font-weight:650}td{color:#111827}.ok{color:#047857;font-weight:650}.warn{color:#b45309;font-weight:650}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px}.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+</style><main>
+<h1>Version-Aware UI State Evidence</h1>
+<p>State-model checks for Assistant tabs, DocumentSidePanel version selection, version-bound citation location, and restart hydration.</p>
+<div class="two">
+<div class="card"><div class="label">Assistant document tab</div><div class="value">V2 -> V3 -> V4</div><p>Document and edit tabs switch to backend current_version_id; case tab object remains unchanged.</p></div>
+<div class="card"><div class="label">DocumentSidePanel current view</div><div class="value">version_4</div><p>With no explicit version selected, the panel resolves currentVersionId to V4 after reloading state.</p></div>
+</div>
+<h2>UI Assertions</h2><table><thead><tr><th>assertion</th><th>observed</th></tr></thead><tbody><tr><td>V1 upload and AI/test tracked-change V2 created with four tracked-change XML ids</td><td>PASS</td></tr><tr><td>V2 approval captures immutable artifact_snapshot and exports V2 bytes</td><td>PASS</td></tr><tr><td>Accepting first tracked change creates V3 and derives review_required</td><td>PASS</td></tr><tr><td>Duplicate accept request is idempotent and does not create another version</td><td>PASS</td></tr><tr><td>Rejecting second tracked change creates V4, leaves no tracked changes, and keeps document_edits consistent</td><td>PASS</td></tr><tr><td>Before reapproval, old V2 approved export remains locked and available after V4 appears</td><td>PASS</td></tr><tr><td>After V4 reapproval, current final export uses only the latest approved V4 snapshot</td><td>PASS</td></tr><tr><td>Assistant document/edit tabs switch V2 -&gt; V3 -&gt; V4 and preserve resolved edit statuses</td><td>PASS</td></tr><tr><td>DocumentSidePanel selects new current V4 automatically, while explicit citation links open V2</td><td>PASS</td></tr><tr><td>Version-bound citation quote is located in cited V2 and not incorrectly taken from current V4</td><td>PASS</td></tr><tr><td>Restart model preserves current_version_id and hydrates old edit annotations from document_edits statuses</td><td>PASS</td></tr><tr><td>Generated DOCX files reopen through LibreOffice headless and Microsoft Word automation</td><td>PASS</td></tr></tbody></table>
+<h2>Citation Version Binding</h2><table><thead><tr><th>quote</th><th>cited version</th><th>current version</th><th>located in cited?</th><th>located in current?</th></tr></thead><tbody><tr><td>Fictional Beta clause must be updated</td><td>version_2</td><td>version_4</td><td>true</td><td>false</td></tr></tbody></table>
+<h2>Restart Persistence</h2><p class="mono">{
+  &quot;before_reapproval_reload&quot;: {
+    &quot;current_version_id&quot;: &quot;version_4&quot;,
+    &quot;decisions&quot;: [
+      {
+        &quot;id&quot;: &quot;decision_review_required_initial&quot;,
+        &quot;status&quot;: &quot;review_required&quot;,
+        &quot;note&quot;: &quot;Synthetic task completed; lawyer review required before final export.&quot;,
+        &quot;artifact_snapshot&quot;: [],
+        &quot;created_at&quot;: &quot;2026-07-21T09:00:00.000Z&quot;
+      },
+      {
+        &quot;id&quot;: &quot;decision_approved_v2&quot;,
+        &quot;status&quot;: &quot;approved&quot;,
+        &quot;note&quot;: &quot;Synthetic first approval locks V2.&quot;,
+        &quot;created_at&quot;: &quot;2026-07-21T09:12:00.000Z&quot;,
+        &quot;artifact_snapshot&quot;: [
+          {
+            &quot;artifact_type&quot;: &quot;draft&quot;,
+            &quot;artifact_id&quot;: &quot;synthetic_work_product_doc&quot;,
+            &quot;document_id&quot;: &quot;synthetic_work_product_doc&quot;,
+            &quot;purpose&quot;: &quot;Review memo draft&quot;,
+            &quot;version_id&quot;: &quot;version_2&quot;,
+            &quot;version_number&quot;: 2,
+            &quot;filename&quot;: &quot;Synthetic Review Memo.docx&quot;,
+            &quot;file_type&quot;: &quot;docx&quot;,
+            &quot;size_bytes&quot;: 8677,
+            &quot;sha256&quot;: &quot;sha256:36800b4225623ea1687d0bdf6afb1a4bab75007eaaa79d50bbec8a2e274ce610&quot;
+          }
+        ]
+      }
+    ],
+    &quot;edit_statuses&quot;: {
+      &quot;mike-0-1784632427992&quot;: &quot;accepted&quot;,
+      &quot;mike-1-1784632427992&quot;: &quot;rejected&quot;
+    }
+  },
+  &quot;hydrated_annotation_statuses&quot;: [
+    {
+      &quot;edit_id&quot;: &quot;mike-0-1784632427992&quot;,
+      &quot;status&quot;: &quot;accepted&quot;
+    },
+    {
+      &quot;edit_id&quot;: &quot;mike-1-1784632427992&quot;,
+      &quot;status&quot;: &quot;rejected&quot;
+    }
+  ],
+  &quot;after_reapproval_reload_status&quot;: &quot;approved&quot;
+}</p>
+</main>
