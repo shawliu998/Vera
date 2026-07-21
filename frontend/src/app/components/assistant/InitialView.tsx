@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { MoreHorizontal } from "lucide-react";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
@@ -71,12 +71,16 @@ export function InitialView({ onSubmit }: InitialViewProps) {
     const { user } = useAuth();
     const { profile } = useUserProfile();
     const router = useRouter();
+    const searchParams = useSearchParams();
     const [loaded, setLoaded] = useState(false);
     const [projectModalOpen, setProjectModalOpen] = useState(false);
     const [newProjectOpen, setNewProjectOpen] = useState(false);
     const [newTROpen, setNewTROpen] = useState(false);
     const [quickActionsModalOpen, setQuickActionsModalOpen] = useState(false);
-    const [mode, setMode] = useState<AgentMode>("ask");
+    const [mode, setMode] = useState<AgentMode>(() =>
+        searchParams.get("mode") === "work" ? "work" : "ask",
+    );
+    const [selectedMatterId, setSelectedMatterId] = useState("");
     const [creatingTask, setCreatingTask] = useState(false);
     const [pendingWork, setPendingWork] = useState<WorkSubmission | null>(null);
     const { visibleActions, setVisibleActions } = useQuickActionsPreference();
@@ -85,6 +89,21 @@ export function InitialView({ onSubmit }: InitialViewProps) {
     const textRef = useRef<HTMLHeadingElement>(null);
     const chatInputRef = useRef<ChatInputHandle>(null);
     const { projects } = useDirectoryData(newTROpen || mode === "work", "projects");
+
+    useEffect(() => {
+        if (!projects.length) return;
+        const requestedMatterId = searchParams.get("matter_id");
+        const requestedMode = searchParams.get("mode");
+        const requestedMatter = projects.find(
+            (project) => project.id === requestedMatterId,
+        );
+        if (requestedMode === "work" || requestedMatter) setMode("work");
+        setSelectedMatterId((current) => {
+            if (requestedMatter) return requestedMatter.id;
+            if (projects.some((project) => project.id === current)) return current;
+            return projects[0].id;
+        });
+    }, [projects, searchParams]);
 
     const username =
         profile?.displayName?.trim() || user?.email?.split("@")[0] || "there";
@@ -153,7 +172,9 @@ export function InitialView({ onSubmit }: InitialViewProps) {
 
     async function handleWorkSubmit(submission: WorkSubmission) {
         if (creatingTask) return;
-        const matter = projects[0];
+        const matter =
+            projects.find((project) => project.id === selectedMatterId) ??
+            projects[0];
         if (!matter) {
             setPendingWork(submission);
             setNewProjectOpen(true);
@@ -211,6 +232,25 @@ export function InitialView({ onSubmit }: InitialViewProps) {
             </div>
 
             <div className="w-full max-w-4xl justify-self-center px-0 xl:px-8">
+                {mode === "work" && projects.length > 0 && (
+                    <div className="mb-2 flex min-w-0 items-center gap-2 px-1 text-xs text-gray-600">
+                        <label htmlFor="work-task-matter" className="shrink-0 font-medium">
+                            Matter
+                        </label>
+                        <select
+                            id="work-task-matter"
+                            value={selectedMatterId}
+                            onChange={(event) => setSelectedMatterId(event.target.value)}
+                            className="h-7 min-w-0 max-w-sm rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-800 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                        >
+                            {projects.map((project) => (
+                                <option key={project.id} value={project.id}>
+                                    {project.name}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                )}
                 <ChatInput
                     ref={chatInputRef}
                     onSubmit={onSubmit}
@@ -219,6 +259,12 @@ export function InitialView({ onSubmit }: InitialViewProps) {
                     mode={mode}
                     onModeChange={setMode}
                     onWorkSubmit={handleWorkSubmit}
+                    projectId={mode === "work" ? selectedMatterId : undefined}
+                    projectName={
+                        mode === "work"
+                            ? projects.find((project) => project.id === selectedMatterId)?.name
+                            : undefined
+                    }
                 />
             </div>
 

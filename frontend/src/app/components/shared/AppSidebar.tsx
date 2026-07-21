@@ -19,6 +19,7 @@ import {
     FolderSkeuoIcon,
     LibrarySkeuoIcon,
     TabularReviewSkeuoIcon,
+    TaskSkeuoIcon,
     WorkflowSkeuoIcon,
 } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import {
@@ -34,6 +35,7 @@ import {
 
 const NAV_ITEMS = [
     { href: "/assistant", label: "Assistant", icon: ChatSkeuoIcon },
+    { href: "/work-tasks", label: "Work Tasks", icon: TaskSkeuoIcon },
     { href: "/projects", label: "Projects", icon: FolderSkeuoIcon },
     { href: "/library", label: "Library", icon: LibrarySkeuoIcon },
     { href: "/tabular-reviews", label: "Tabular Review", icon: TabularReviewSkeuoIcon },
@@ -194,6 +196,9 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                     const isActive =
                         href === "/assistant"
                             ? pathname === href
+                            : href === "/work-tasks"
+                              ? pathname === href ||
+                                pathname.startsWith("/agent-tasks/")
                             : href === "/projects"
                               ? pathname === href
                               : pathname === href ||

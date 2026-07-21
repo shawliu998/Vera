@@ -93,13 +93,18 @@ function activeSectionFromSegments(
 ): ProjectWorkspaceSection {
     if (segments[0] === "assistant") return "assistant";
     if (segments[0] === "tabular-reviews") return "reviews";
+    if (segments[0] === "work-tasks") return "work-tasks";
     return "documents";
 }
 
 function shouldShowWorkspaceShell(segments: string[]) {
     if (segments.length === 0) return true;
     if (segments.length !== 1) return false;
-    return segments[0] === "assistant" || segments[0] === "tabular-reviews";
+    return (
+        segments[0] === "assistant" ||
+        segments[0] === "tabular-reviews" ||
+        segments[0] === "work-tasks"
+    );
 }
 
 export function ProjectWorkspaceProvider({
@@ -114,7 +119,7 @@ export function ProjectWorkspaceProvider({
     const [projectLoading, setProjectLoading] = useState(true);
     const [searchBySection, setSearchBySection] = useState<
         Record<ProjectWorkspaceSection, string>
-    >({ documents: "", assistant: "", reviews: "" });
+    >({ documents: "", assistant: "", reviews: "", "work-tasks": "" });
     const [projectChats, setProjectChats] = useState<Chat[] | null>(null);
     const [projectReviews, setProjectReviews] = useState<
         TabularReview[] | null
@@ -440,6 +445,11 @@ export function ProjectWorkspaceProvider({
                     onOpenPeople={() => setPeopleModalOpen(true)}
                     onNewChat={() => void createChat()}
                     onNewReview={openNewReview}
+                    onNewTask={() =>
+                        router.push(
+                            `/assistant?mode=work&matter_id=${encodeURIComponent(projectId)}`,
+                        )
+                    }
                     onAddDocuments={addDocumentsHeaderAction.action}
                 />
 
@@ -550,6 +560,7 @@ export function ProjectSectionToolbar({
                 { id: "documents", label: "Documents" },
                 { id: "assistant", label: "Chats" },
                 { id: "reviews", label: "Tabular Reviews" },
+                { id: "work-tasks", label: "Work Tasks" },
             ]}
             active={activeSection}
             onChange={(next) => {
@@ -558,7 +569,9 @@ export function ProjectSectionToolbar({
                         ? `/projects/${projectId}`
                         : next === "assistant"
                           ? `/projects/${projectId}/assistant`
-                          : `/projects/${projectId}/tabular-reviews`;
+                          : next === "reviews"
+                            ? `/projects/${projectId}/tabular-reviews`
+                            : `/projects/${projectId}/work-tasks`;
                 router.push(href);
             }}
             actions={actions}

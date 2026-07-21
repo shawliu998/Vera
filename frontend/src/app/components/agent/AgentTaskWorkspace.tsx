@@ -247,7 +247,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
                 breadcrumbs={[
                     {
                         label: "Work Tasks",
-                        onClick: () => router.push("/assistant"),
+                        onClick: () => router.push("/work-tasks"),
                     },
                     { label: matterName, cursor: "text", title: matterName },
                 ]}

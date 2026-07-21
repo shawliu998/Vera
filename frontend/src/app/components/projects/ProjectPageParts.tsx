@@ -21,7 +21,11 @@ import { RowActions } from "@/app/components/shared/RowActions";
 import { HeaderActionsMenu } from "@/app/components/shared/HeaderActionsMenu";
 import { TABLE_PRIMARY_CELL_WIDTH_CLASS } from "@/app/components/shared/TablePrimitive";
 
-export type ProjectWorkspaceSection = "documents" | "assistant" | "reviews";
+export type ProjectWorkspaceSection =
+    | "documents"
+    | "assistant"
+    | "reviews"
+    | "work-tasks";
 
 export type ProjectContextMenu = {
     x: number;
@@ -364,6 +368,7 @@ export function ProjectPageHeader({
     onOpenPeople,
     onNewChat,
     onNewReview,
+    onNewTask,
     onAddDocuments,
 }: {
     project: Project | null;
@@ -380,6 +385,7 @@ export function ProjectPageHeader({
     onOpenPeople: () => void;
     onNewChat: () => void;
     onNewReview: () => void;
+    onNewTask: () => void;
     onAddDocuments?: (() => void) | null;
 }) {
     const sectionAction: PageHeaderAction =
@@ -403,7 +409,8 @@ export function ProjectPageHeader({
                     label: <span className="hidden sm:inline">Chat</span>,
                     title: "Create chat",
                 }
-              : {
+              : activeSection === "reviews"
+                ? {
                     onClick: onNewReview,
                     disabled: docsCount === 0 || creatingReview,
                     icon: creatingReview ? (
@@ -415,7 +422,13 @@ export function ProjectPageHeader({
                     title: "Create review",
                     tooltip:
                         docsCount === 0 ? "Upload a document first" : null,
-                };
+                  }
+                : {
+                      onClick: onNewTask,
+                      icon: <Plus className="h-4 w-4" />,
+                      label: <span className="hidden sm:inline">Work task</span>,
+                      title: "Create work task in Assistant",
+                  };
 
     return (
         <PageHeader

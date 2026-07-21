@@ -217,7 +217,34 @@ export async function listAgentTasks(
   if (matterId) query = query.eq("matter_id", matterId);
   const { data, error } = await query;
   if (error) throw dbError(error, "Failed to list tasks");
-  return data ?? [];
+  const tasks = data ?? [];
+  if (!tasks.length) return [];
+
+  const { data: steps, error: stepsError } = await db
+    .from("agent_steps")
+    .select(
+      "id,task_id,title,status,expected_output,attempt,result_summary,position",
+    )
+    .in(
+      "task_id",
+      tasks.map((task) => task.id),
+    )
+    .order("position", { ascending: true });
+  if (stepsError) throw dbError(stepsError, "Failed to load task progress");
+
+  const stepsByTask = new Map<string, typeof steps>();
+  for (const step of steps ?? []) {
+    const taskSteps = stepsByTask.get(step.task_id) ?? [];
+    taskSteps.push(step);
+    stepsByTask.set(step.task_id, taskSteps);
+  }
+
+  return tasks.map((task) => ({
+    ...task,
+    current_plan: (stepsByTask.get(task.id) ?? []).map(
+      ({ position: _position, ...step }) => step,
+    ),
+  }));
 }
 
 export async function addAgentArtifactLinks(
