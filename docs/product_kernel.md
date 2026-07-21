@@ -1,3 +1,5 @@
+> **Historical Aletheia research material.** This document is not authoritative for the current Vera product or UI. Use the root [PRODUCT.md](../PRODUCT.md) instead.
+
 # Aletheia Product Kernel
 
 Aletheia is a local-first agent harness for sensitive professional document

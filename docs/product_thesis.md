@@ -1,3 +1,5 @@
+> **Historical Aletheia research material.** This document is not authoritative for the current Vera product or UI. Use the root [PRODUCT.md](../PRODUCT.md) instead.
+
 # Product Thesis
 
 Aletheia 明证 is built for sensitive professional document work where the cost
