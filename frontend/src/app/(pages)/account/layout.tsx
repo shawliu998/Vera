@@ -15,12 +15,6 @@ interface TabDef {
 const TABS: TabDef[] = [
     { id: "general", label: "General", href: "/account" },
     { id: "features", label: "Features", href: "/account/features" },
-    {
-        id: "privacy-data",
-        label: "Privacy & Data",
-        href: "/account/privacy-data",
-    },
-    { id: "security", label: "Security", href: "/account/security" },
     { id: "models", label: "Model Preferences", href: "/account/models" },
     { id: "api-keys", label: "API Keys", href: "/account/api-keys" },
     { id: "connectors", label: "Connectors", href: "/account/connectors" },

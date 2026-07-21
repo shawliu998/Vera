@@ -226,9 +226,6 @@ function NewMcpForm({
                             </button>
                         )}
                     </div>
-                    <p className="mt-1 text-right text-xs text-gray-500">
-                        Tokens are stored encrypted.
-                    </p>
                 </div>
             </div>
             <div className="grid gap-2">
@@ -265,9 +262,6 @@ function NewMcpForm({
                                 spellCheck={false}
                                 disabled={disabled}
                             />
-                            <p className="mt-1 text-right text-xs text-gray-500">
-                                Secrets are stored encrypted.
-                            </p>
                         </div>
                     </label>
                 )}

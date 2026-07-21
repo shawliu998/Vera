@@ -902,7 +902,7 @@ function McpConnectorDetailsModal({
                         showAdvanced={showAdvanced}
                         tokenPlaceholder={
                             connector.hasAuthConfig
-                                ? "Saved token encrypted"
+                                ? "Saved token"
                                 : "Bearer token"
                         }
                         tokenAction={
@@ -985,7 +985,6 @@ function ConnectorForm({
     draft,
     showToken,
     showAdvanced,
-    showTokenNote = false,
     tokenPlaceholder,
     tokenAction,
     disabled = false,
@@ -996,7 +995,6 @@ function ConnectorForm({
     draft: AddDraft;
     showToken: boolean;
     showAdvanced: boolean;
-    showTokenNote?: boolean;
     tokenPlaceholder: string;
     tokenAction?: {
         label: string;
@@ -1113,11 +1111,6 @@ function ConnectorForm({
                             </button>
                         )}
                     </div>
-                    {showTokenNote && (
-                        <p className="mt-1 text-right text-xs text-gray-500">
-                            Tokens are stored encrypted.
-                        </p>
-                    )}
                 </div>
             </div>
             <div className="grid gap-2">
@@ -1154,9 +1147,6 @@ function ConnectorForm({
                                 spellCheck={false}
                                 disabled={disabled}
                             />
-                            <p className="mt-1 text-right text-xs text-gray-500">
-                                Secrets are stored encrypted.
-                            </p>
                         </div>
                     </label>
                 )}

@@ -62,9 +62,7 @@ export default function ApiKeysPage() {
                 API Keys
             </h2>
             <p className="text-sm text-gray-500 mb-4">
-                You must provide your own API keys for the app to work or add
-                your API keys into the .env file if you are running your own
-                instance of Vera. All API keys are encrypted in storage.
+                Add the API keys you use with Vera.
             </p>
             <AccountSection>
                 {MODEL_API_KEY_FIELDS.map((field, index) => (

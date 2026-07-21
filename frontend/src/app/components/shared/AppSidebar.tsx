@@ -19,7 +19,6 @@ import {
     FolderSkeuoIcon,
     LibrarySkeuoIcon,
     TabularReviewSkeuoIcon,
-    TaskSkeuoIcon,
     WorkflowSkeuoIcon,
 } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import {
@@ -35,7 +34,6 @@ import {
 
 const NAV_ITEMS = [
     { href: "/assistant", label: "Assistant", icon: ChatSkeuoIcon },
-    { href: "/work-tasks", label: "Work Tasks", icon: TaskSkeuoIcon },
     { href: "/projects", label: "Projects", icon: FolderSkeuoIcon },
     { href: "/library", label: "Library", icon: LibrarySkeuoIcon },
     { href: "/tabular-reviews", label: "Tabular Review", icon: TabularReviewSkeuoIcon },
@@ -196,9 +194,6 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                     const isActive =
                         href === "/assistant"
                             ? pathname === href
-                            : href === "/work-tasks"
-                              ? pathname === href ||
-                                pathname.startsWith("/agent-tasks/")
                             : href === "/projects"
                               ? pathname === href
                               : pathname === href ||
@@ -428,6 +423,20 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                         )}
                                     </>
                                 )}
+                                <div className="px-2.5 pt-1">
+                                    <button
+                                        type="button"
+                                        onClick={() =>
+                                            router.push("/work-tasks")
+                                        }
+                                        className={cn(
+                                            "flex h-8 w-full items-center justify-start rounded-md px-3 text-left text-xs font-medium text-gray-500 transition-colors hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/70",
+                                            APP_SURFACE_HOVER_CLASS,
+                                        )}
+                                    >
+                                        View all work tasks
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>

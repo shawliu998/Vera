@@ -81,6 +81,10 @@ export default function ModelPreferencesPage() {
                     Model Preferences
                 </h2>
             </div>
+            <p className="mb-4 max-w-[62ch] text-xs leading-5 text-gray-500">
+                When you choose a cloud model, relevant content is sent to that
+                provider for processing.
+            </p>
             <AccountSection>
                 <div className="px-4 py-5">
                     <label className="text-sm font-medium text-gray-700 block mb-2">
