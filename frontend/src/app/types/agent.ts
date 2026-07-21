@@ -32,6 +32,13 @@ export type AgentCheckpoint = {
     retry_at: string;
     classification: "rate_limit" | "provider_unavailable" | "network";
   };
+  user_input?: {
+    step_id: string;
+    attempt: number;
+    submitted_at: string;
+    message?: string;
+    document_ids: string[];
+  };
 };
 
 export type AgentTask = {

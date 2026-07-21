@@ -26,9 +26,9 @@ import { PageHeader } from "@/app/components/shared/PageHeader";
 import { FileTypeIcon } from "@/app/components/shared/FileTypeIcon";
 import { ModelToggle, MODELS } from "@/app/components/assistant/ModelToggle";
 import { ApiKeyMissingPopup } from "@/app/components/popups/ApiKeyMissingPopup";
+import { AddProjectDocsModal } from "@/app/components/modals/AddProjectDocsModal";
 import { getProject } from "@/app/lib/mikeApi";
 import {
-  attachAgentTaskDocuments,
   createAgentReviewDecision,
   downloadApprovedAgentArtifact,
   getAgentTask,
@@ -37,6 +37,7 @@ import {
   resumeAgentTask,
   retryAgentTask,
   reviseAgentTask,
+  submitAgentTaskInput,
   updateAgentTaskModel,
 } from "@/app/lib/agentClient";
 import { cn } from "@/app/lib/utils";
@@ -55,7 +56,7 @@ import type {
   AgentTaskStatus,
   ApprovedArtifactSnapshot,
 } from "@/app/types/agent";
-import type { Project } from "@/app/components/shared/types";
+import type { Document, Project } from "@/app/components/shared/types";
 
 const STATUS_LABELS: Record<AgentTaskStatus, string> = {
   queued: "Ready",
@@ -133,6 +134,11 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
   const [expandedEvidenceId, setExpandedEvidenceId] = useState<string | null>(
     null,
   );
+  const [taskInput, setTaskInput] = useState("");
+  const [taskInputDocuments, setTaskInputDocuments] = useState<Document[]>([]);
+  const [taskInputModalOpen, setTaskInputModalOpen] = useState(false);
+  const [taskInputSubmitting, setTaskInputSubmitting] = useState(false);
+  const [taskInputError, setTaskInputError] = useState<string | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -220,24 +226,56 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
     }
   }
 
-  async function attachNewMatterDocuments() {
+  function chooseTaskInputDocuments(documents: Document[]) {
     if (!snapshot || !matter) return;
     const linked = new Set(
       snapshot.artifacts
         .filter((artifact) => artifact.purpose === "Source document")
         .map((artifact) => artifact.artifact_id),
     );
-    const newDocumentIds = (matter.documents ?? [])
-      .map((document) => document.id)
-      .filter((documentId) => !linked.has(documentId));
-    if (!newDocumentIds.length) {
-      setExecutionError(
-        "No new Matter documents are available. Upload documents to the Matter first.",
-      );
+    const selected = documents.filter(
+      (document) =>
+        document.project_id === matter.id && !linked.has(document.id),
+    );
+    if (!selected.length) {
+      setTaskInputError("Choose at least one new document from this Matter.");
       return;
     }
-    setExecutionError(null);
-    setSnapshot(await attachAgentTaskDocuments(taskId, newDocumentIds));
+    setTaskInputDocuments((current) => {
+      const combined = new Map(
+        [...current, ...selected].map((document) => [document.id, document]),
+      );
+      return [...combined.values()];
+    });
+    setTaskInputError(null);
+  }
+
+  async function continueWithTaskInput() {
+    if (!snapshot || taskInputSubmitting) return;
+    if (!taskInput.trim() && !taskInputDocuments.length) {
+      setTaskInputError("Add a short response or attach a Matter document.");
+      return;
+    }
+    setTaskInputSubmitting(true);
+    setTaskInputError(null);
+    try {
+      setSnapshot(
+        await submitAgentTaskInput(taskId, {
+          message: taskInput,
+          documentIds: taskInputDocuments.map((document) => document.id),
+        }),
+      );
+      setTaskInput("");
+      setTaskInputDocuments([]);
+    } catch (error) {
+      setTaskInputError(
+        error instanceof Error
+          ? error.message
+          : "The task could not continue with this input.",
+      );
+    } finally {
+      setTaskInputSubmitting(false);
+    }
   }
 
   async function handleModelChange(modelId: string) {
@@ -528,7 +566,10 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
           <header className="border-b border-gray-900/[0.07] py-4 md:py-5">
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div className="min-w-0">
-                <p className="truncate text-xs text-gray-500" title={matterName}>
+                <p
+                  className="truncate text-xs text-gray-500"
+                  title={matterName}
+                >
                   {matterName}
                 </p>
                 <h1
@@ -618,7 +659,16 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
             executionError={executionError}
             providerQueued={providerQueued}
             onRetry={retryTask}
-            onAttachDocuments={attachNewMatterDocuments}
+            inputMessage={taskInput}
+            inputDocuments={taskInputDocuments}
+            inputSubmitting={taskInputSubmitting}
+            inputError={taskInputError}
+            onInputMessageChange={(value) => {
+              setTaskInput(value);
+              if (taskInputError) setTaskInputError(null);
+            }}
+            onContinueInput={continueWithTaskInput}
+            onAttachDocuments={() => setTaskInputModalOpen(true)}
             onOpenArtifact={openArtifact}
             evidenceByArtifact={evidenceByArtifact}
             evidenceLoading={evidenceLoading}
@@ -634,6 +684,21 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
         open={missingKeyProvider !== null}
         onClose={() => setMissingKeyProvider(null)}
         provider={missingKeyProvider}
+      />
+      <AddProjectDocsModal
+        open={taskInputModalOpen}
+        onClose={() => setTaskInputModalOpen(false)}
+        onSelect={chooseTaskInputDocuments}
+        breadcrumb={["Work Task", "Attach Documents"]}
+        projectId={snapshot.task.matter_id}
+        excludeDocIds={
+          new Set([
+            ...snapshot.artifacts
+              .filter((artifact) => artifact.purpose === "Source document")
+              .map((artifact) => artifact.artifact_id),
+            ...taskInputDocuments.map((document) => document.id),
+          ])
+        }
       />
     </div>
   );
@@ -791,10 +856,7 @@ function DeliverablesPanel({
               const canDownload = output.artifact !== null;
               const canOpen = output.linkedArtifact !== null;
               return (
-                <div
-                  key={output.key}
-                  className="flex min-w-0 items-stretch"
-                >
+                <div key={output.key} className="flex min-w-0 items-stretch">
                   <button
                     type="button"
                     onClick={() => {
@@ -907,7 +969,9 @@ function DeliverablesPanel({
               ) : (
                 <XCircle className="h-3.5 w-3.5" />
               )}
-              {reviewAction === "approved" ? "Approve for export" : "Request changes"}
+              {reviewAction === "approved"
+                ? "Approve for export"
+                : "Request changes"}
             </button>
           </div>
         )}
@@ -1024,6 +1088,12 @@ function WorkRecord({
   snapshot,
   executionError,
   providerQueued,
+  inputMessage,
+  inputDocuments,
+  inputSubmitting,
+  inputError,
+  onInputMessageChange,
+  onContinueInput,
   onRetry,
   onAttachDocuments,
   onOpenArtifact,
@@ -1036,8 +1106,14 @@ function WorkRecord({
   snapshot: AgentTaskSnapshot;
   executionError: string | null;
   providerQueued: boolean;
+  inputMessage: string;
+  inputDocuments: Document[];
+  inputSubmitting: boolean;
+  inputError: string | null;
+  onInputMessageChange: (value: string) => void;
+  onContinueInput: () => Promise<void>;
   onRetry: () => Promise<void>;
-  onAttachDocuments: () => Promise<void>;
+  onAttachDocuments: () => void;
   onOpenArtifact: (artifact: AgentTaskSnapshot["artifacts"][number]) => void;
   evidenceByArtifact: Record<string, AgentEvidenceSnapshot>;
   evidenceLoading: string | null;
@@ -1094,23 +1170,6 @@ function WorkRecord({
             </Link>
           </div>
         )}
-        {task.status === "waiting_input" && (
-          <div className="flex flex-wrap gap-2">
-            <Link
-              href={"/projects/" + task.matter_id}
-              className="inline-flex h-8 items-center rounded-full bg-white px-3.5 text-xs font-medium text-gray-700 shadow-sm outline-none hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500/70"
-            >
-              Open documents
-            </Link>
-            <button
-              type="button"
-              onClick={() => void onAttachDocuments()}
-              className="inline-flex h-8 items-center rounded-full bg-gray-950 px-3.5 text-xs font-medium text-white shadow-sm outline-none hover:bg-black focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2"
-            >
-              Attach new documents
-            </button>
-          </div>
-        )}
       </div>
 
       {(providerQueued ||
@@ -1137,6 +1196,94 @@ function WorkRecord({
         </div>
       )}
 
+      {task.status === "waiting_input" && (
+        <form
+          className="mt-3 border-y border-gray-900/[0.07] py-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void onContinueInput();
+          }}
+        >
+          <label
+            htmlFor="task-supplemental-input"
+            className="text-xs font-medium text-gray-800"
+          >
+            Your response
+          </label>
+          <textarea
+            id="task-supplemental-input"
+            value={inputMessage}
+            onChange={(event) => onInputMessageChange(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                event.preventDefault();
+                void onContinueInput();
+              }
+            }}
+            maxLength={4000}
+            rows={2}
+            disabled={inputSubmitting}
+            placeholder="Add the missing date, position, governing law, output preference, or confirmation…"
+            className="mt-1.5 w-full resize-y rounded-lg bg-white px-3 py-2 text-sm leading-5 text-gray-950 outline-none ring-1 ring-gray-900/[0.1] placeholder:text-gray-600 focus:ring-2 focus:ring-blue-500/70 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500"
+          />
+          {inputDocuments.length > 0 && (
+            <div className="mt-2 flex min-w-0 flex-wrap gap-1.5">
+              {inputDocuments.map((document) => (
+                <span
+                  key={document.id}
+                  title={document.filename}
+                  className="inline-flex h-6 max-w-full items-center rounded-md bg-gray-100 px-2 text-[11px] text-gray-700"
+                >
+                  <span className="max-w-[320px] truncate">
+                    {document.filename}
+                  </span>
+                </span>
+              ))}
+            </div>
+          )}
+          {inputError && (
+            <p
+              role="alert"
+              className="mt-2 break-words text-xs leading-4 text-red-700 [overflow-wrap:anywhere]"
+            >
+              {inputError}
+            </p>
+          )}
+          <div className="mt-2.5 flex flex-wrap items-center gap-2">
+            <button
+              type="submit"
+              disabled={
+                inputSubmitting ||
+                (!inputMessage.trim() && inputDocuments.length === 0)
+              }
+              className="inline-flex h-8 items-center gap-1.5 rounded-full bg-gray-950 px-3.5 text-xs font-medium text-white shadow-sm outline-none transition-colors hover:bg-black focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              {inputSubmitting && (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              )}
+              Continue
+            </button>
+            <button
+              type="button"
+              onClick={onAttachDocuments}
+              disabled={inputSubmitting}
+              className="inline-flex h-8 items-center rounded-full bg-white px-3.5 text-xs font-medium text-gray-700 shadow-sm outline-none transition-colors hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 disabled:opacity-45"
+            >
+              Attach documents
+            </button>
+            <Link
+              href={"/projects/" + task.matter_id}
+              className="inline-flex h-8 items-center px-1.5 text-xs font-medium text-gray-600 outline-none hover:text-gray-950 focus-visible:ring-2 focus-visible:ring-blue-500/70"
+            >
+              Open Matter
+            </Link>
+            <span className="ml-auto hidden text-[10px] text-gray-500 sm:inline">
+              Cmd/Ctrl+Enter
+            </span>
+          </div>
+        </form>
+      )}
+
       <ol className="mt-3 overflow-hidden rounded-xl bg-white/70 shadow-sm">
         {task.current_plan.map((step, index) => {
           const Icon = STEP_ICONS[step.status];
@@ -1150,29 +1297,28 @@ function WorkRecord({
                 artifact.artifact_type === "citation_snapshot" &&
                 artifact.purpose === evidencePurpose,
             );
-          const relatedArtifacts = snapshot.artifacts.filter(
-            (artifact) => {
-              if (artifact.artifact_id === latestEvidence?.artifact_id) {
-                return true;
-              }
-              const stepText = `${step.title} ${step.expected_output}`.toLowerCase();
-              return snapshot.task.deliverables.some((deliverable) => {
-                const purpose =
-                  deliverable.purpose ??
-                  (deliverable.key === "risk-matrix"
-                    ? "Risk matrix"
-                    : deliverable.key === "review-memo"
-                      ? "Review memo draft"
-                      : deliverable.title);
-                return (
-                  (deliverable.artifact_id === artifact.artifact_id ||
-                    artifact.purpose === purpose) &&
-                  (stepText.includes(deliverable.title.toLowerCase()) ||
-                    stepText.includes(purpose.toLowerCase()))
-                );
-              });
-            },
-          );
+          const relatedArtifacts = snapshot.artifacts.filter((artifact) => {
+            if (artifact.artifact_id === latestEvidence?.artifact_id) {
+              return true;
+            }
+            const stepText =
+              `${step.title} ${step.expected_output}`.toLowerCase();
+            return snapshot.task.deliverables.some((deliverable) => {
+              const purpose =
+                deliverable.purpose ??
+                (deliverable.key === "risk-matrix"
+                  ? "Risk matrix"
+                  : deliverable.key === "review-memo"
+                    ? "Review memo draft"
+                    : deliverable.title);
+              return (
+                (deliverable.artifact_id === artifact.artifact_id ||
+                  artifact.purpose === purpose) &&
+                (stepText.includes(deliverable.title.toLowerCase()) ||
+                  stepText.includes(purpose.toLowerCase()))
+              );
+            });
+          });
           return (
             <li
               key={step.id}
@@ -1270,7 +1416,9 @@ function WorkRecord({
                                 <FileText className="h-3.5 w-3.5 shrink-0" />
                               )}
                               <span className="min-w-0 flex-1 truncate">
-                                {isEvidence ? "Check sources" : artifact.purpose}
+                                {isEvidence
+                                  ? "Check sources"
+                                  : artifact.purpose}
                               </span>
                               {isEvidence ? (
                                 <ChevronRight

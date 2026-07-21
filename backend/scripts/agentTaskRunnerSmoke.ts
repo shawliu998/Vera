@@ -18,10 +18,25 @@ function snapshot(task: FakeTask) {
 
 async function retryAndLifecycleSuite() {
   const tasks = new Map<string, FakeTask>([
-    ["task_1", { status: "running", latest_checkpoint: null }],
+    [
+      "task_1",
+      {
+        status: "running",
+        latest_checkpoint: {
+          user_input: {
+            step_id: "step_1",
+            attempt: 1,
+            submitted_at: "2026-07-21T08:00:00.000Z",
+            message: "适用新加坡法；立场为客户方。",
+            document_ids: [],
+          },
+        },
+      },
+    ],
   ]);
   let iterations = 0;
   let retryWrites = 0;
+  let retryPreservedUserInput = true;
   let active = 0;
   let maxActive = 0;
   const sleeps: number[] = [];
@@ -54,12 +69,16 @@ async function retryAndLifecycleSuite() {
       retryWrites += 1;
       const task = tasks.get(job.taskId)!;
       task.latest_checkpoint = {
+        ...((task.latest_checkpoint as Record<string, unknown> | null) ?? {}),
         step_id: "step_1",
         iteration: 1,
         summary: "Model is busy. Retrying automatically.",
         created_at: new Date(0).toISOString(),
         runner_retry: retry,
       };
+      retryPreservedUserInput &&= Boolean(
+        (task.latest_checkpoint as Record<string, unknown>).user_input,
+      );
       return snapshot(task);
     },
     failTask: async (job) => {
@@ -87,6 +106,11 @@ async function retryAndLifecycleSuite() {
     "two transient failures must retry and then succeed",
   );
   assert.equal(retryWrites, 2);
+  assert.equal(
+    retryPreservedUserInput,
+    true,
+    "503 retry checkpoints must preserve the submitted user input",
+  );
   assert.deepEqual(sleeps, [2_000, 4_000]);
   assert.equal(maxActive, 1, "one task must never execute concurrently twice");
   assert.equal(tasks.get("task_1")?.status, "completed");

@@ -61,6 +61,14 @@ export type AgentTaskRetryCheckpoint = {
   classification: "rate_limit" | "provider_unavailable" | "network";
 };
 
+export type AgentTaskSupplementalInput = {
+  step_id: string;
+  attempt: number;
+  submitted_at: string;
+  message?: string;
+  document_ids: string[];
+};
+
 export const DEFAULT_WORK_PLAN: StepDefinition[] = [
   {
     title: "Read the matter documents",
@@ -127,6 +135,147 @@ export function verifierRepairAlreadyAttempted(task: {
       summary,
     )
   );
+}
+
+export function readAgentTaskSupplementalInput(task: {
+  latest_checkpoint?: unknown;
+}): AgentTaskSupplementalInput | null {
+  const checkpoint = task.latest_checkpoint;
+  if (!checkpoint || typeof checkpoint !== "object") return null;
+  const value = (checkpoint as { user_input?: unknown }).user_input;
+  if (!value || typeof value !== "object") return null;
+  const row = value as Record<string, unknown>;
+  if (
+    typeof row.step_id !== "string" ||
+    typeof row.attempt !== "number" ||
+    typeof row.submitted_at !== "string"
+  ) {
+    return null;
+  }
+  return {
+    step_id: row.step_id,
+    attempt: row.attempt,
+    submitted_at: row.submitted_at,
+    ...(typeof row.message === "string" && row.message.trim()
+      ? { message: row.message.trim() }
+      : {}),
+    document_ids: Array.isArray(row.document_ids)
+      ? row.document_ids.filter(
+          (documentId): documentId is string => typeof documentId === "string",
+        )
+      : [],
+  };
+}
+
+export function prepareAgentTaskInputTransition(
+  snapshot: {
+    task: {
+      status: AgentTaskStatus;
+      latest_checkpoint?: unknown;
+      current_plan: Array<{
+        id: string;
+        status: AgentStepStatus;
+        attempt: number;
+      }>;
+    };
+  },
+  input: { message?: string; documentIds?: string[] },
+  submittedAt = now(),
+) {
+  const message = input.message?.trim() ?? "";
+  const documentIds = Array.from(
+    new Set((input.documentIds ?? []).map((documentId) => documentId.trim())),
+  ).filter(Boolean);
+  if (!message && !documentIds.length) {
+    throw new Error("A message or Matter document is required");
+  }
+  if (message.length > 4000) {
+    throw new Error("The supplemental message is too long");
+  }
+  if (snapshot.task.status !== "waiting_input") {
+    throw new Error("Only a task waiting for input can accept a response");
+  }
+  const current = snapshot.task.current_plan.find(
+    (step) => step.status === "blocked",
+  );
+  if (!current) throw new Error("Input-blocked task has no recoverable step");
+  const activeIndex = snapshot.task.current_plan.findIndex(
+    (step) => step.id === current.id,
+  );
+  const nextAttempt = current.attempt + 1;
+  const checkpoint =
+    snapshot.task.latest_checkpoint &&
+    typeof snapshot.task.latest_checkpoint === "object"
+      ? { ...(snapshot.task.latest_checkpoint as Record<string, unknown>) }
+      : {};
+  delete checkpoint.runner_retry;
+  delete checkpoint.planner_request;
+  delete checkpoint.user_input;
+  const userInput = {
+    step_id: current.id,
+    attempt: nextAttempt,
+    submitted_at: submittedAt,
+    ...(message ? { message } : {}),
+    document_ids: documentIds,
+  } satisfies AgentTaskSupplementalInput;
+  return {
+    current,
+    nextAttempt,
+    documentIds,
+    status: (activeIndex === snapshot.task.current_plan.length - 1
+      ? "verifying"
+      : "running") as AgentTaskStatus,
+    checkpoint: {
+      ...checkpoint,
+      step_id: current.id,
+      iteration: nextAttempt,
+      summary:
+        typeof checkpoint.summary === "string"
+          ? checkpoint.summary
+          : "User input received. Continuing automatically.",
+      created_at: submittedAt,
+      user_input: userInput,
+    },
+  };
+}
+
+export function agentTaskInputDocumentsMatch(
+  requestedDocumentIds: string[],
+  availableDocuments: Array<{ id: string }>,
+) {
+  const requested = new Set(requestedDocumentIds);
+  const available = new Set(availableDocuments.map((document) => document.id));
+  return (
+    requested.size === available.size &&
+    [...requested].every((id) => available.has(id))
+  );
+}
+
+export async function reserveAgentTaskInputStep(
+  db: Db,
+  input: {
+    taskId: string;
+    stepId: string;
+    currentAttempt: number;
+    nextAttempt: number;
+    updatedAt: string;
+  },
+) {
+  const { data, error } = await db
+    .from("agent_steps")
+    .update({
+      status: "running",
+      attempt: input.nextAttempt,
+      updated_at: input.updatedAt,
+    })
+    .eq("id", input.stepId)
+    .eq("task_id", input.taskId)
+    .eq("status", "blocked")
+    .eq("attempt", input.currentAttempt)
+    .select("id")
+    .maybeSingle();
+  if (error) throw dbError(error, "Failed to reserve task step");
+  return Boolean(data);
 }
 
 export async function createAgentTask(
@@ -817,19 +966,80 @@ export async function attachAgentTaskDocuments(
   userId: string,
   documentIds: string[],
 ) {
+  return submitAgentTaskInput(db, taskId, userId, {
+    documentIds,
+  });
+}
+
+export async function submitAgentTaskInput(
+  db: Db,
+  taskId: string,
+  userId: string,
+  input: { message?: string; documentIds?: string[] },
+) {
   const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
   if (!snapshot) return null;
-  await addAgentArtifactLinks(
-    db,
-    taskId,
-    documentIds.map((artifactId) => ({
-      artifact_type: "document" as const,
-      artifact_id: artifactId,
-      purpose: "Source document",
-    })),
+  const updatedAt = now();
+  const transition = prepareAgentTaskInputTransition(
+    snapshot,
+    input,
+    updatedAt,
   );
-  if (snapshot.task.status === "waiting_input") {
-    return retryAgentTask(db, taskId, userId);
+  const { current, nextAttempt, documentIds } = transition;
+  const reserved = await reserveAgentTaskInputStep(db, {
+    taskId,
+    stepId: current.id,
+    currentAttempt: current.attempt,
+    nextAttempt,
+    updatedAt,
+  });
+  if (!reserved) {
+    throw new Error("Only one response can resume the blocked task step");
+  }
+
+  let activated = false;
+  try {
+    await addAgentArtifactLinks(
+      db,
+      taskId,
+      documentIds.map((artifactId) => ({
+        artifact_type: "document" as const,
+        artifact_id: artifactId,
+        purpose: "Source document",
+      })),
+    );
+    const { data: updatedTask, error: taskError } = await db
+      .from("agent_tasks")
+      .update({
+        status: transition.status,
+        current_step: current.id,
+        latest_checkpoint: transition.checkpoint,
+        updated_at: updatedAt,
+      })
+      .eq("id", taskId)
+      .eq("user_id", userId)
+      .eq("status", "waiting_input")
+      .select("id")
+      .maybeSingle();
+    if (taskError) throw dbError(taskError, "Failed to resume task with input");
+    if (!updatedTask) {
+      throw new Error("Only one response can resume the blocked task step");
+    }
+    activated = true;
+  } finally {
+    if (!activated) {
+      await db
+        .from("agent_steps")
+        .update({
+          status: "blocked",
+          attempt: current.attempt,
+          updated_at: now(),
+        })
+        .eq("id", current.id)
+        .eq("task_id", taskId)
+        .eq("status", "running")
+        .eq("attempt", nextAttempt);
+    }
   }
   return getAgentTaskSnapshot(db, taskId, userId);
 }

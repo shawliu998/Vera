@@ -2,6 +2,7 @@ import { Router } from "express";
 import { checkProjectAccess } from "../lib/access";
 import {
   attachAgentTaskDocuments,
+  agentTaskInputDocumentsMatch,
   createAgentTask,
   getAgentTaskSnapshot,
   listAgentTasks,
@@ -9,6 +10,7 @@ import {
   reviseAgentTask,
   resumeAgentTask,
   retryAgentTask,
+  submitAgentTaskInput,
   updateAgentTaskExecutionModel,
 } from "../lib/agentTasks";
 import {
@@ -398,10 +400,10 @@ agentTasksRouter.post("/:taskId/documents", requireAuth, async (req, res) => {
     : [];
   const documentIds: string[] = Array.from(
     new Set(
-      rawDocumentIds.filter(
-        (value: unknown): value is string =>
-          typeof value === "string" && value.trim().length > 0,
-      ),
+      rawDocumentIds
+        .filter((value: unknown): value is string => typeof value === "string")
+        .map((value) => value.trim())
+        .filter(Boolean),
     ),
   ).slice(0, 100);
   if (!documentIds.length)
@@ -418,7 +420,7 @@ agentTasksRouter.post("/:taskId/documents", requireAuth, async (req, res) => {
       .eq("project_id", snapshot.task.matter_id)
       .in("id", documentIds);
     if (error) throw error;
-    if ((documents ?? []).length !== documentIds.length) {
+    if (!agentTaskInputDocumentsMatch(documentIds, documents ?? [])) {
       return void res
         .status(400)
         .json({ detail: "One or more documents are not in this Matter" });
@@ -436,6 +438,69 @@ agentTasksRouter.post("/:taskId/documents", requireAuth, async (req, res) => {
         userEmail: res.locals.userEmail as string | undefined,
       });
     }
+    res.json(updated);
+  } catch (error) {
+    routeError(res, error);
+  }
+});
+
+agentTasksRouter.post("/:taskId/input", requireAuth, async (req, res) => {
+  const message =
+    typeof req.body?.message === "string" ? req.body.message.trim() : "";
+  const rawDocumentIds: unknown[] = Array.isArray(req.body?.document_ids)
+    ? (req.body.document_ids as unknown[])
+    : [];
+  const documentIds = Array.from(
+    new Set(
+      rawDocumentIds
+        .filter((value: unknown): value is string => typeof value === "string")
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ).slice(0, 100);
+  if (!message && !documentIds.length) {
+    return void res
+      .status(400)
+      .json({ detail: "message or document_ids is required" });
+  }
+  if (message.length > 4000) {
+    return void res.status(400).json({ detail: "message is too long" });
+  }
+  try {
+    const db = createServerSupabase();
+    const userId = res.locals.userId as string;
+    const snapshot = await getAgentTaskSnapshot(db, req.params.taskId, userId);
+    if (!snapshot)
+      return void res.status(404).json({ detail: "Agent task not found" });
+    if (snapshot.task.status !== "waiting_input") {
+      return void res
+        .status(409)
+        .json({ detail: "Task is not waiting for input" });
+    }
+    if (documentIds.length) {
+      const { data: documents, error } = await db
+        .from("documents")
+        .select("id")
+        .eq("project_id", snapshot.task.matter_id)
+        .in("id", documentIds);
+      if (error) throw error;
+      if (!agentTaskInputDocumentsMatch(documentIds, documents ?? [])) {
+        return void res
+          .status(400)
+          .json({ detail: "One or more documents are not in this Matter" });
+      }
+    }
+    const updated = await submitAgentTaskInput(db, req.params.taskId, userId, {
+      message,
+      documentIds,
+    });
+    if (!updated)
+      return void res.status(404).json({ detail: "Agent task not found" });
+    wakeAgentTaskRunner({
+      taskId: req.params.taskId,
+      userId,
+      userEmail: res.locals.userEmail as string | undefined,
+    });
     res.json(updated);
   } catch (error) {
     routeError(res, error);

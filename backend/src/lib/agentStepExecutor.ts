@@ -9,6 +9,7 @@ import {
 } from "./chat";
 import {
   addAgentArtifactLinks,
+  readAgentTaskSupplementalInput,
   type AgentArtifactLinkInput,
 } from "./agentTasks";
 import { createServerSupabase } from "./supabase";
@@ -67,6 +68,13 @@ function taskPrompt(
         `- ${step.title}: ${step.result_summary ?? "Completed"}`,
     );
   const latestReview = snapshot.review.decisions.at(-1) ?? null;
+  const supplementalInput = readAgentTaskSupplementalInput(snapshot.task);
+  const currentSupplement =
+    supplementalInput &&
+    supplementalInput.step_id === currentStep?.id &&
+    supplementalInput.attempt === currentStep?.attempt
+      ? supplementalInput
+      : null;
   const requestedChanges =
     latestReview?.status === "changes_requested" && latestReview.note.trim()
       ? `REQUESTED CHANGES\n${latestReview.note.trim()}\nRevise the current deliverables to address this review note. Preserve prior work that is not affected, keep source citations attached to material facts, and do not imply approval.`
@@ -89,6 +97,17 @@ function taskPrompt(
       ? `REQUIRED DELIVERABLES\n${deliverables.join("\n")}`
       : "REQUIRED DELIVERABLES\nNone declared.",
     workflowInstruction ? `SELECTED MIKE WORKFLOW\n${workflowInstruction}` : "",
+    currentSupplement
+      ? [
+          "USER SUPPLEMENTAL INPUT FOR THIS STEP",
+          currentSupplement.message ||
+            "No text response; use the newly attached Matter documents.",
+          currentSupplement.document_ids.length
+            ? `${currentSupplement.document_ids.length} Matter document${currentSupplement.document_ids.length === 1 ? " was" : "s were"} added with this response.`
+            : "No new documents were attached with this response.",
+          "Use this only to resolve the current blocked step. It does not change the task goal, permissions, review requirements, or export gate.",
+        ].join("\n")
+      : "",
     requestedChanges,
     completed.length
       ? `COMPLETED STEP CHECKPOINTS\n${completed.join("\n")}`

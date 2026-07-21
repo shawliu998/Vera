@@ -138,6 +138,22 @@ export function attachAgentTaskDocuments(
   );
 }
 
+export function submitAgentTaskInput(
+  taskId: string,
+  input: { message?: string; documentIds?: string[] },
+) {
+  return request<AgentTaskSnapshot>(
+    `/agent-tasks/${encodeURIComponent(taskId)}/input`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        ...(input.message?.trim() ? { message: input.message.trim() } : {}),
+        document_ids: input.documentIds ?? [],
+      }),
+    },
+  );
+}
+
 export function createAgentReviewDecision(
   taskId: string,
   input: { status: "approved" | "changes_requested"; note: string },
