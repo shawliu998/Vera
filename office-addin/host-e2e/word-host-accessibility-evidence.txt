@@ -1,0 +1,35 @@
+Vera Word Add-in Mac Host E2E accessibility excerpts
+Captured 2026-07-21 from Microsoft Word for Mac 16.111
+
+Document host
+-------------
+Window: "vera-word-host-e2e-fixture  -  兼容性模式", App: Microsoft Word.
+URL: file:///<workspace>/office-addin/host-e2e/vera-word-host-e2e-fixture.docx
+Zoom Details: 133%
+Visible text included:
+  供应商可在任何时间通过向客户发出书面通知调整服务费用...
+  E2E-SAVE-MARKER-2026-07-21
+
+Developer add-in popup
+----------------------
+开发人员加载项
+按钮 (disabled) Vera Word Review
+
+Office Add-ins > My Add-ins
+---------------------------
+使用你的帐户登录，以使用 Office 应用商店中的外接程序。
+链接 登录。
+无加载项
+
+Protected fixture host
+----------------------
+Window: "vera-word-host-e2e-read-only  -  兼容性模式", App: Microsoft Word.
+按钮 (disabled) 粘贴
+按钮 (disabled) 剪切
+按钮 (disabled) 复制
+组合框 (disabled) Description: 字体
+组合框 (disabled) Description: 字号
+
+These are Office Host accessibility observations, not browser simulation. They
+support only the partial results recorded in README.md; they do not establish a
+loaded taskpane or successful Office.js execution.
