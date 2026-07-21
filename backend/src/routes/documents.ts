@@ -21,6 +21,11 @@ import {
   attachLatestVersionNumbers,
   loadActiveVersion,
 } from "../lib/documentVersions";
+import {
+  commitResolvedDocumentEditVersion,
+  docxResolutionFilename,
+  statusForEditResolutionMode,
+} from "../lib/documentEditResolutionVersions";
 import { ensureDocAccess } from "../lib/access";
 import { singleFileUpload } from "../lib/upload";
 import {
@@ -344,6 +349,84 @@ function downloadFilenameForVersion(
   const stem = dot > 0 ? resolved.slice(0, dot) : resolved;
   const ext = dot > 0 ? resolved.slice(dot) : "";
   return `${stem} [Edited V${versionNumber}]${ext}`;
+}
+
+async function countPendingDocumentEdits(
+  db: ReturnType<typeof createServerSupabase>,
+  documentId: string,
+) {
+  const { count } = await db
+    .from("document_edits")
+    .select("id", { count: "exact", head: true })
+    .eq("document_id", documentId)
+    .eq("status", "pending");
+  return count ?? 0;
+}
+
+async function markPendingEditResolved(
+  db: ReturnType<typeof createServerSupabase>,
+  editId: string,
+  status: "accepted" | "rejected",
+  resolvedAt: string,
+) {
+  const { data, error } = await db
+    .from("document_edits")
+    .update({ status, resolved_at: resolvedAt })
+    .eq("id", editId)
+    .eq("status", "pending")
+    .select("id")
+    .maybeSingle();
+  if (error) throw error;
+  return Boolean(data);
+}
+
+async function nextDocumentVersionNumber(
+  db: ReturnType<typeof createServerSupabase>,
+  documentId: string,
+) {
+  const { data: maxRow, error } = await db
+    .from("document_versions")
+    .select("version_number")
+    .eq("document_id", documentId)
+    .not("version_number", "is", null)
+    .order("version_number", { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return ((maxRow?.version_number as number | null) ?? 1) + 1;
+}
+
+async function buildEditResolutionCurrentPayload(
+  db: ReturnType<typeof createServerSupabase>,
+  documentId: string,
+  currentVersionId: string | null,
+  options: {
+    alreadyResolved?: boolean;
+    status?: "accepted" | "rejected";
+    remainingPending?: number;
+  } = {},
+) {
+  const active = await loadActiveVersion(documentId, db);
+  const remainingPending =
+    options.remainingPending ??
+    (await countPendingDocumentEdits(db, documentId));
+  return {
+    ok: true,
+    ...(options.alreadyResolved ? { already_resolved: true } : {}),
+    ...(options.status ? { status: options.status } : {}),
+    version_id: active?.id ?? currentVersionId,
+    download_url: active
+      ? buildDownloadUrl(
+          active.storage_path,
+          downloadFilenameForVersion(
+            active.filename,
+            active.version_number,
+            active.source === "assistant_edit",
+          ),
+        )
+      : null,
+    remaining_pending: remainingPending,
+  };
 }
 
 // GET /single-documents/:documentId/versions
@@ -1129,24 +1212,15 @@ async function handleEditResolution(
       devLog(`[edit-resolution] doc access denied for resolved edit`);
       return void res.status(404).json({ detail: "Document not found" });
     }
-    const activeForResolved = await loadActiveVersion(documentId, db);
-    const payload = {
-      ok: true,
-      already_resolved: true,
-      status: edit.status,
-      version_id: doc.current_version_id ?? null,
-      download_url: activeForResolved
-        ? buildDownloadUrl(
-            activeForResolved.storage_path,
-            downloadFilenameForVersion(
-              activeForResolved.filename,
-              activeForResolved.version_number,
-              activeForResolved.source === "assistant_edit",
-            ),
-          )
-        : null,
-      remaining_pending: 0,
-    };
+    const payload = await buildEditResolutionCurrentPayload(
+      db,
+      documentId,
+      (doc.current_version_id as string | null) ?? null,
+      {
+        alreadyResolved: true,
+        status: edit.status as "accepted" | "rejected",
+      },
+    );
     devLog(`[edit-resolution] returning already-resolved payload`, payload);
     return void res.status(200).json(payload);
   }
@@ -1200,79 +1274,180 @@ async function handleEditResolution(
     );
     // Still update DB status so the UI reflects the decision — the change
     // may have been auto-consumed by a previous accept/reject pass.
-    const { error: updErr } = await db
-      .from("document_edits")
-      .update({ status: mode === "accept" ? "accepted" : "rejected", resolved_at: new Date().toISOString() })
-      .eq("id", editId);
-    devLog(`[edit-resolution] status-only update`, { updErr });
-    const payload = {
-      ok: true,
-      version_id: doc.current_version_id,
-      download_url: buildDownloadUrl(
-        latestPath,
-        downloadFilenameForVersion(
-          active?.filename,
-          active?.version_number ?? null,
-          active?.source === "assistant_edit",
-        ),
-      ),
-      remaining_pending: 0,
-    };
+    const status = statusForEditResolutionMode(mode);
+    const resolvedAt = new Date().toISOString();
+    try {
+      const claimed = await markPendingEditResolved(
+        db,
+        editId,
+        status,
+        resolvedAt,
+      );
+      if (!claimed) {
+        const payload = await buildEditResolutionCurrentPayload(
+          db,
+          documentId,
+          (doc.current_version_id as string | null) ?? null,
+          {
+            alreadyResolved: true,
+            status,
+          },
+        );
+        devLog(
+          `[edit-resolution] returning raced status-only payload`,
+          payload,
+        );
+        return void res.status(200).json(payload);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to resolve edit";
+      return void res.status(500).json({ detail: message });
+    }
+    const remainingPending = await countPendingDocumentEdits(db, documentId);
+    const payload = await buildEditResolutionCurrentPayload(
+      db,
+      documentId,
+      (doc.current_version_id as string | null) ?? null,
+      { status, remainingPending },
+    );
     devLog(`[edit-resolution] returning not-found payload`, payload);
     return void res.status(200).json(payload);
   }
 
-  // Overwrite bytes in place at the current version's storage path —
-  // accept/reject mutates the existing version rather than spawning a
-  // new row. This keeps document_versions lean (one row per assistant
-  // edit, not one per accept/reject click) and avoids the N-versions-
-  // per-doc churn as users resolve pending changes.
-  const ab = resolvedBytes.buffer.slice(
-    resolvedBytes.byteOffset,
-    resolvedBytes.byteOffset + resolvedBytes.byteLength,
-  ) as ArrayBuffer;
-  devLog(`[edit-resolution] overwriting bytes in place`, {
-    latestPath,
-    byteLength: ab.byteLength,
-  });
-  await uploadFile(
-    latestPath,
-    ab,
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  const status = statusForEditResolutionMode(mode);
+  const versionSlug = crypto.randomUUID().replace(/-/g, "");
+  const versionFilename = docxResolutionFilename(active?.filename);
+  const resolvedStoragePath = versionStorageKey(
+    userId,
+    documentId,
+    versionSlug,
+    versionFilename,
   );
-
-  const { error: statusErr } = await db
-    .from("document_edits")
-    .update({
-      status: mode === "accept" ? "accepted" : "rejected",
-      resolved_at: new Date().toISOString(),
-    })
-    .eq("id", editId);
-  devLog(`[edit-resolution] updated document_edits status`, {
-    editId,
-    newStatus: mode === "accept" ? "accepted" : "rejected",
-    statusErr,
+  devLog(`[edit-resolution] creating resolved edit version`, {
+    fromPath: latestPath,
+    resolvedStoragePath,
+    byteLength: resolvedBytes.byteLength,
   });
 
-  const { count: remainingPending } = await db
-    .from("document_edits")
-    .select("id", { count: "exact", head: true })
-    .eq("document_id", documentId)
-    .eq("status", "pending");
-  devLog(`[edit-resolution] remaining pending count`, { remainingPending });
+  let committed: Awaited<ReturnType<typeof commitResolvedDocumentEditVersion>>;
+  try {
+    committed = await commitResolvedDocumentEditVersion(
+      {
+        documentId,
+        editId,
+        status,
+        resolvedAt: new Date().toISOString(),
+        filename: active?.filename,
+        storagePath: resolvedStoragePath,
+        bytes: resolvedBytes,
+      },
+      {
+        claimPendingEditResolution: (input) =>
+          markPendingEditResolved(
+            db,
+            input.editId,
+            input.status,
+            input.resolvedAt,
+          ),
+        getNextVersionNumber: (id) => nextDocumentVersionNumber(db, id),
+        uploadVersionBytes: async (input) => {
+          const ab = input.bytes.buffer.slice(
+            input.bytes.byteOffset,
+            input.bytes.byteOffset + input.bytes.byteLength,
+          ) as ArrayBuffer;
+          await uploadFile(input.storagePath, ab, input.contentType);
+        },
+        insertDocumentVersion: async (input) => {
+          const { data: versionRow, error: verErr } = await db
+            .from("document_versions")
+            .insert(input)
+            .select("id, version_number, storage_path, filename, source")
+            .single();
+          if (verErr || !versionRow) {
+            throw new Error(
+              `Failed to record resolved edit version: ${
+                verErr?.message ?? "unknown"
+              }`,
+            );
+          }
+          return {
+            id: versionRow.id as string,
+            version_number:
+              (versionRow.version_number as number | null) ?? null,
+            storage_path: versionRow.storage_path as string,
+            filename: (versionRow.filename as string | null) ?? null,
+            source: (versionRow.source as string | null) ?? null,
+          };
+        },
+        updateDocumentCurrentVersion: async (input) => {
+          const { error: updateErr } = await db
+            .from("documents")
+            .update({ current_version_id: input.versionId })
+            .eq("id", input.documentId);
+          if (updateErr) throw updateErr;
+        },
+        countRemainingPendingEdits: (id) => countPendingDocumentEdits(db, id),
+        cleanupVersion: async (input) => {
+          if (input.versionId) {
+            await db
+              .from("document_versions")
+              .delete()
+              .eq("id", input.versionId)
+              .eq("document_id", documentId);
+          }
+          await deleteFile(input.storagePath).catch(() => {});
+        },
+        rollbackEditResolution: async (input) => {
+          await db
+            .from("document_edits")
+            .update({ status: "pending", resolved_at: null })
+            .eq("id", input.editId)
+            .eq("status", input.status);
+        },
+      },
+    );
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to resolve edit";
+    return void res.status(500).json({ detail: message });
+  }
+
+  if (!committed.committed) {
+    const payload = await buildEditResolutionCurrentPayload(
+      db,
+      documentId,
+      (doc.current_version_id as string | null) ?? null,
+      {
+        alreadyResolved: true,
+        status,
+      },
+    );
+    devLog(`[edit-resolution] returning raced resolved payload`, payload);
+    return void res.status(200).json(payload);
+  }
+
+  devLog(`[edit-resolution] committed resolved edit version`, {
+    editId,
+    newStatus: status,
+    versionId: committed.version.id,
+    versionNumber: committed.version.version_number,
+    remainingPending: committed.remainingPending,
+  });
 
   const payload = {
     ok: true,
-    version_id: doc.current_version_id,
+    status,
+    version_id: committed.version.id,
     download_url: buildDownloadUrl(
-      latestPath,
+      committed.version.storage_path,
       downloadFilenameForVersion(
-        active?.filename,
-        active?.version_number ?? null,
-        active?.source === "assistant_edit",
+        committed.version.filename,
+        committed.version.version_number,
+        committed.version.source === "assistant_edit",
       ),
     ),
-    remaining_pending: remainingPending ?? 0,
+    remaining_pending: committed.remainingPending,
   };
   devLog(`[edit-resolution] returning success payload`, payload);
   res.json(payload);
