@@ -89,6 +89,20 @@ function dbError(error: { message: string } | null, fallback: string) {
   return new Error(error?.message ?? fallback);
 }
 
+export function verifierRepairAlreadyAttempted(task: {
+  latest_checkpoint?: unknown;
+}) {
+  const checkpoint = task.latest_checkpoint;
+  if (!checkpoint || typeof checkpoint !== "object") return false;
+  const summary = (checkpoint as { summary?: unknown }).summary;
+  return (
+    typeof summary === "string" &&
+    /^(?:Verifier repair 1\/1 started:|Provider queue during verifier repair 1\/1:)/.test(
+      summary,
+    )
+  );
+}
+
 export async function createAgentTask(
   db: Db,
   input: {

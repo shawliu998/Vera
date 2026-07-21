@@ -143,6 +143,18 @@ function throwIfAborted(signal?: AbortSignal) {
   throw err;
 }
 
+export function selectActiveTools(input: {
+  disableTools: boolean;
+  baseTools: unknown[];
+  mcpTools: unknown[];
+  extraTools?: unknown[];
+}) {
+  if (input.disableTools) return [];
+  return input.extraTools?.length
+    ? [...input.baseTools, ...input.mcpTools, ...input.extraTools]
+    : [...input.baseTools, ...input.mcpTools];
+}
+
 export async function runLLMStream(params: {
   apiMessages: unknown[];
   docStore: DocStore;
@@ -191,11 +203,12 @@ export async function runLLMStream(params: {
   const researchTools = includeResearchTools ? COURTLISTENER_TOOLS : [];
   const mcpTools = disableTools ? [] : await buildUserMcpTools(userId, db);
   const baseTools = [...TOOLS, ...researchTools, ...WORKFLOW_TOOLS];
-  const activeTools = disableTools
-    ? []
-    : extraTools?.length
-      ? [...baseTools, ...mcpTools, ...extraTools]
-      : [...baseTools, ...mcpTools];
+  const activeTools = selectActiveTools({
+    disableTools,
+    baseTools,
+    mcpTools,
+    extraTools,
+  });
 
   // Extract system prompt; pass remaining turns to the adapter as
   // plain user/assistant messages.

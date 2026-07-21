@@ -14,6 +14,7 @@ import {
   retryAgentTask,
   stopAgentTask,
   updateAgentTaskExecutionModel,
+  verifierRepairAlreadyAttempted,
 } from "../lib/agentTasks";
 import {
   executeAgentStep,
@@ -52,20 +53,6 @@ function executionErrorMessage(error: unknown) {
     return "The selected model is temporarily unavailable. Wait a moment and try again.";
   }
   return message;
-}
-
-function verifierRepairAlreadyAttempted(task: {
-  latest_checkpoint?: unknown;
-}) {
-  const checkpoint = task.latest_checkpoint;
-  if (!checkpoint || typeof checkpoint !== "object") return false;
-  const summary = (checkpoint as { summary?: unknown }).summary;
-  return (
-    typeof summary === "string" &&
-    /^(?:Verifier repair 1\/1 started:|Provider queue during verifier repair 1\/1:)/.test(
-      summary,
-    )
-  );
 }
 
 agentTasksRouter.get("/", requireAuth, async (req, res) => {
