@@ -1,95 +1,70 @@
-# Product Status
+# Vera Status
 
-This document is the authoritative short status for Vera. Keep broader
-design notes in the existing architecture and deployment documents.
+[`PRODUCT.md`](../PRODUCT.md) is Vera's sole authoritative product context.
+This file provides a short execution orientation and preserves older
+implementation evidence; it does not set product or UI direction.
 
-## Current P0 stage — Mike-derived desktop client
+## Current product direction
 
-Current stage on 2026-07-15: **P0 Phases 0-7 complete; fresh packaged
-verification passed**.
+Vera helps legal professionals finish legal work with checkable Word, Excel,
+and conclusion outputs. Mike is the baseline for information architecture,
+navigation, visual design, components, density, interaction rhythm, and
+workflow. Vera adds only the smallest legal-Agent capability that Mike does not
+already provide, preferably inside an existing Mike surface.
 
-The primary product is now a Vera-branded, single-user, local-first macOS legal
-AI client whose UI, information architecture, and workflow semantics are a
-controlled port of Open Legal Products' Mike at
-`e32daad5a4c64a5561e04c53ee12411e3c5e7238`. Mike UI use is authorised and the
-port retains `AGPL-3.0-only` attribution. Vera supplies the Electron lifecycle,
-loopback authentication, SQLCipher/encrypted-file persistence, isolated
-Keychain credential worker, bounded local job runtime, backup, restore,
-diagnostics, and packaging boundary.
+The normal path is Matter and objective → Word/Excel/conclusion output →
+one-action source verification → approval or requested changes only when a
+final, external, or otherwise controlled output calls for it. Ask is the
+existing conversational entry for the user's question; Work is the thin
+execution layer that shows the objective, three to six steps, outputs, and
+blockers requiring action. Neither surface should expose reasoning traces,
+tool-call streams, or developer controls.
 
-The four core Mike-derived workspaces are Assistant, Projects, Workflows, and
-Tabular Review; Settings is the fifth first-level local control surface. The
-desktop opens `/assistant`. `Project` is the generic container for documents,
-Assistant conversations, workflow runs, and Tabular Reviews. The active local
-`/api/v1` surface covers those resources, model profiles, durable jobs,
-citations, exports, and settings. Workspace migrations are additive through
-v14.
+Source verification is a brief, in-place action with precise deep links or
+location states, not a separate evidence workspace. Routine drafts and internal
+viewing remain frictionless. The product does not claim to be fully offline:
+when a user selects a cloud model such as DeepSeek or Kimi, relevant content is
+sent off-device for model processing; state that fact at configuration or
+egress.
 
-**Implemented in source:** real local Project/document CRUD and parsing;
-packaged Apple Vision OCR with reviewable provenance and exact-page source
-reopening; v13 fail-closed legal-source retention/use/export lifecycle; v14
-Document Studio AI suggestions with explicit user acceptance and immutable
-version history, while real legal connectors remain activation-gated and
-disabled;
-OpenAI, DeepSeek, Anthropic, Gemini, and hardened OpenAI-compatible profiles;
-Keychain-only provider secrets and connection-gated activation; durable
-Assistant streaming/stop/retry/regenerate/recovery and citations; Mike-derived
-workflow templates/editor with bounded persisted execution; multi-document,
-multi-column Tabular generation, cell retry/cancel, citations, CSV/XLSX export;
-encrypted backup/restore; redacted rotating desktop and model-call diagnostics;
-sandboxed renderer, explicit child-process environment allowlists, and
-loopback-only services.
+Existing Mike routes, objects, and components are the default. Do not create a
+parallel Vera system or a new table, state, page, panel, or framework unless
+the existing task, artifact, document, citation, review, or Matter objects
+cannot carry the need. Technical, security, storage, permission, audit, and
+integrity details belong only to exceptions, controlled export/egress, or
+explicit expansion.
 
-**Packaged P0 acceptance completed:** one full
-`./scripts/package-desktop-mac.sh` invocation exited `0` after package hygiene,
-SQLCipher, legacy migration, packaged startup/port release, workspace restart
-E2E, backup bridge, and restore fail-closed passed.
+## Next execution checklist
 
-The final packaged smoke also used the real executable to reject application
-encryption `disabled` and database encryption `metadata_plaintext`; each launch
-exited `1` before local services bound their ports. In the restore fail-closed
-cases, the working desktop log contained `startup_failed` and no
-`renderer_window_creating` event, while both services remained offline.
+- Start with [`PRODUCT.md`](../PRODUCT.md), then reuse the corresponding Mike
+  route, data contract, and component.
+- Keep the primary flow recognizably Mike: objective first, then Word/Excel or
+  conclusion output, then a one-action source check.
+- Make the Agent increment thin and legible; show only steps, outputs, and
+  blockers that require user action.
+- Add approval only for a consequential final, external, or controlled output;
+  retain the factual cloud-model data notice at configuration or egress.
+- Treat all content below as historical implementation evidence. It may support
+  compatibility or regression work, but it must not be read as the current
+  product plan, navigation, or UI acceptance criteria.
 
-```text
-relative app:      desktop/dist/mac-arm64/Vera.app
-relative DMG:      desktop/dist/Vera-1.0.1-arm64.dmg (198122845 bytes)
-relative ZIP:      desktop/dist/Vera-1.0.1-arm64.zip (200992113 bytes)
-relative manifest: desktop/dist/Vera-1.0.1-SHA256SUMS.txt
-```
+## Historical implementation records — not current product direction
 
-The verified `desktop/dist/Vera-1.0.1-SHA256SUMS.txt` entries are:
+The remainder of this document records earlier P0 desktop, civil-litigation,
+Research Agent, safety, governance, and validation work. Terms such as
+“Current stage”, “Next”, “Available now”, “current boundaries”, and “ready”
+below are historical at the time they were written. They neither supersede
+[`PRODUCT.md`](../PRODUCT.md) nor authorize a research workspace, governance
+surface, security center, audit console, or local-first product claim.
 
-```text
-fd246214916b3485e25bb16c8e00bcf6e8be471ed95679190e7685a5c1c49ef8  Vera-1.0.1-arm64.dmg
-7be4a9504151ddd8518141901e3d2753a1cda2fbe13ac27fa7842a9f3d347f1b  Vera-1.0.1-arm64.zip
-```
-
-This closes P0 local-client acceptance, not public release readiness. The
-accepted package remains unsigned, unnotarized, and local-only.
-See [the P0 migration record](p0_mike_desktop_migration.md),
-[Mike port manifest](mike_port_manifest.md), and
-[desktop guide](desktop_app.md). The completed OCR, legal-source retention, and
-Document Studio scope is recorded in
-[the P1 implementation record](p1_ocr_legal_document_studio.md).
-
-Legacy `/aletheia/*` litigation, governance, audit, research, and opinion paths
-remain in the repository for compatibility and regression coverage, but they
-are not the P0 primary navigation.
-
-## Legacy historical status — Research Agent convergence
-
-The remainder of this document records the earlier civil-litigation and
-Research Agent programme. Statements such as “Current stage”, “Next”, or
-“Available now” below apply to that historical track and are superseded for the
-primary product by the P0 status above.
+### Historical Research Agent convergence
 
 Current stage: **Vera Research Agent convergence.** The product is being
 reduced to one local-first Chinese civil-commercial litigation workflow:
 verified legal research followed by a lawyer-approved legal opinion. It remains
 a bounded private-pilot build, not production/SaaS.
 
-## Research Agent Focus
+### Historical Research Agent focus
 
 The authoritative scope is [Vera Research Agent](vera_research_agent.md):
 local Matter intelligence, lawyer-visible redacted query approval, one controlled
@@ -267,7 +242,7 @@ occlusion checks, core interaction states, and the corresponding lint/build
 results. Other models may integrate and regression-test the work, but may not
 substitute their own visual approval.
 
-## Product Convergence
+### Historical product convergence
 
 Vera entered product convergence on 2026-07-12. Horizontal feature expansion
 is frozen unless a gap directly blocks the daily Chinese civil-litigation
@@ -707,7 +682,7 @@ Reviewer-facing orientation starts in `README.md`, then continues through
 `docs/reviewer_walkthrough.md`, `docs/demo_script.md`,
 `docs/deepseek_pitch.md`, and `docs/feature_map.md`.
 
-## Validation Entry Points
+### Historical validation entry points
 
 The fast operator health entrypoint is:
 
@@ -835,7 +810,7 @@ Main branch pushes and pull requests are also covered by
 `.github/workflows/aletheia-local-ci.yml`, which runs the backend local-first
 checks, package preflight, frontend lint/build, and Playwright UI smoke.
 
-## Completed Capabilities
+### Historical completed capabilities
 
 The product can demonstrate the first Private Contract / Due Diligence Review
 pack in local mode:
@@ -1208,7 +1183,7 @@ contained SQLCipher database still requires its independent database key;
 cross-Mac recovery therefore requires separately escrowed application and
 database keys.
 
-## Current Boundaries
+### Historical boundaries
 
 - Automated Playwright UI smoke covers desktop and mobile local workspace
   flows with screenshot baseline assertions for the initial workspace render.
@@ -1229,7 +1204,7 @@ database keys.
   transaction; derived artifact-staleness refresh and matter timestamps run
   after that commit.
 
-## Verification Commands
+### Historical verification commands
 
 Run before demos or packaging:
 
@@ -1280,7 +1255,7 @@ cd desktop && npm run test:packaged-ocr
 cd desktop && npm run test:packaged-notifications
 ```
 
-Current known result:
+Historical known result:
 
 - backend TypeScript build passes.
 - litigation deadline-task persistence, isolation, idempotency, audit, and
