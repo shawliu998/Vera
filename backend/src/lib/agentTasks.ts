@@ -21,7 +21,11 @@ export type AgentTaskStatus =
   | "failed";
 
 export type AgentStepStatus =
-  "pending" | "running" | "completed" | "blocked" | "skipped";
+  | "pending"
+  | "running"
+  | "completed"
+  | "blocked"
+  | "skipped";
 
 export type AgentArtifactType =
   | "chat"
@@ -866,6 +870,21 @@ export function readAgentTaskRetryCheckpoint(task: {
   };
 }
 
+export function clearAgentTaskRunnerRetryCheckpoint(checkpoint: unknown) {
+  if (
+    !checkpoint ||
+    typeof checkpoint !== "object" ||
+    Array.isArray(checkpoint)
+  ) {
+    return checkpoint ?? null;
+  }
+  const { runner_retry: _runnerRetry, ...retained } = checkpoint as Record<
+    string,
+    unknown
+  >;
+  return retained;
+}
+
 export async function recordAgentTaskRetryCheckpoint(
   db: Db,
   taskId: string,
@@ -938,7 +957,14 @@ export async function retryAgentTask(db: Db, taskId: string, userId: string) {
       : "running";
   const { error } = await db
     .from("agent_tasks")
-    .update({ status, current_step: current.id, updated_at: updatedAt })
+    .update({
+      status,
+      current_step: current.id,
+      latest_checkpoint: clearAgentTaskRunnerRetryCheckpoint(
+        snapshot.task.latest_checkpoint,
+      ),
+      updated_at: updatedAt,
+    })
     .eq("id", taskId)
     .eq("user_id", userId);
   if (error) throw dbError(error, "Failed to retry task");

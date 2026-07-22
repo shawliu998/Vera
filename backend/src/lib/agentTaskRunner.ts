@@ -13,6 +13,8 @@ import { isTransientModelError } from "./agentStepExecutor";
 import { createServerSupabase } from "./supabase";
 
 const ACTIVE_STATUSES = ["queued", "running", "verifying"] as const;
+const MAX_TRANSIENT_RETRY_ATTEMPTS = 3;
+const MAX_TRANSIENT_RETRY_WAIT_MS = 60_000;
 
 export type AgentTaskRunnerJob = {
   taskId: string;
@@ -119,11 +121,11 @@ export function calculateAgentTaskBackoffMs(
     random?: () => number;
   } = {},
 ) {
+  const maxMs = options.maxMs ?? MAX_TRANSIENT_RETRY_WAIT_MS;
   if (options.retryAfterMs != null) {
-    return Math.max(0, Math.round(options.retryAfterMs));
+    return Math.max(0, Math.min(maxMs, Math.round(options.retryAfterMs)));
   }
   const baseMs = options.baseMs ?? 2_000;
-  const maxMs = options.maxMs ?? 60_000;
   const jitterRatio = options.jitterRatio ?? 0.2;
   const random = options.random ?? Math.random;
   const exponential = Math.min(maxMs, baseMs * 2 ** Math.max(0, attempt - 1));
@@ -223,7 +225,13 @@ export class AgentTaskRunner {
     ) {
       const persistedRetry = readAgentTaskRetryCheckpoint(snapshot.task);
       if (persistedRetry) {
-        const waitMs = Date.parse(persistedRetry.retry_at) - now();
+        const retryAtMs = Date.parse(persistedRetry.retry_at);
+        const waitMs = Number.isNaN(retryAtMs)
+          ? 0
+          : Math.max(
+              0,
+              Math.min(MAX_TRANSIENT_RETRY_WAIT_MS, retryAtMs - now()),
+            );
         if (waitMs > 0) await sleep(waitMs);
         if (this.cancelled.has(job.taskId)) return;
         snapshot = await this.dependencies.loadTask(job);
@@ -244,6 +252,13 @@ export class AgentTaskRunner {
           await this.dependencies.failTask(
             job,
             agentTaskExecutionErrorMessage(error),
+          );
+          return;
+        }
+        if (retryAttempt >= MAX_TRANSIENT_RETRY_ATTEMPTS) {
+          await this.dependencies.failTask(
+            job,
+            `The selected model remained unavailable after ${MAX_TRANSIENT_RETRY_ATTEMPTS} automatic retries. Retry the current step when the provider is available.`,
           );
           return;
         }

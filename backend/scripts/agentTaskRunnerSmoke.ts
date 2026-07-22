@@ -6,6 +6,7 @@ import {
   parseRetryAfterMs,
   type AgentTaskRunnerJob,
 } from "../src/lib/agentTaskRunner";
+import { clearAgentTaskRunnerRetryCheckpoint } from "../src/lib/agentTasks";
 
 type FakeTask = {
   status: string;
@@ -202,6 +203,61 @@ async function plannerRetrySuite() {
   assert.equal(task.status, "completed");
 }
 
+async function retryExhaustionSuite() {
+  const task: FakeTask = { status: "running", latest_checkpoint: null };
+  let iterations = 0;
+  let retryWrites = 0;
+  let failureSummary = "";
+  const sleeps: number[] = [];
+  const runner = new AgentTaskRunner({
+    loadTask: async () => snapshot(task),
+    runIteration: async () => {
+      iterations += 1;
+      throw Object.assign(new Error("503 provider overloaded"), {
+        status: 503,
+      });
+    },
+    recordRetry: async (_job, retry) => {
+      retryWrites += 1;
+      task.latest_checkpoint = {
+        step_id: "step_retry",
+        iteration: 1,
+        summary: "Model is busy. Retrying automatically.",
+        created_at: new Date(0).toISOString(),
+        runner_retry: retry,
+      };
+      return snapshot(task);
+    },
+    failTask: async (_job, summary) => {
+      failureSummary = summary;
+      task.status = "failed";
+    },
+    recoverJobs: async () => [],
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
+    now: () => 0,
+    random: () => 0.5,
+  });
+
+  runner.wake({ taskId: "task_exhausted", userId: "user_1" });
+  await runner.waitForIdle();
+
+  assert.equal(
+    iterations,
+    4,
+    "the runner must stop after three scheduled transient retries",
+  );
+  assert.equal(retryWrites, 3, "only three retry checkpoints may be written");
+  assert.deepEqual(sleeps, [2_000, 4_000, 8_000]);
+  assert.equal(task.status, "failed");
+  assert.match(
+    failureSummary,
+    /after 3 automatic retries.*Retry the current step/i,
+    "retry exhaustion must provide a recoverable next action",
+  );
+}
+
 async function singleConcurrencySuite() {
   const tasks = new Map<string, FakeTask>([
     ["task_a", { status: "running", latest_checkpoint: null }],
@@ -263,6 +319,51 @@ async function recoverySuite() {
   assert.equal(task.status, "completed");
 }
 
+async function recoveryRetryWaitBoundSuite() {
+  const task: FakeTask = {
+    status: "running",
+    latest_checkpoint: {
+      step_id: "step_retry",
+      iteration: 1,
+      runner_retry: {
+        attempt: 1,
+        retry_at: new Date(91_000).toISOString(),
+        classification: "provider_unavailable",
+      },
+    },
+  };
+  const sleeps: number[] = [];
+  let runs = 0;
+  const runner = new AgentTaskRunner({
+    loadTask: async () => snapshot(task),
+    runIteration: async () => {
+      runs += 1;
+      task.status = "completed";
+      task.latest_checkpoint = null;
+      return snapshot(task);
+    },
+    recordRetry: async () => snapshot(task),
+    failTask: async () => {
+      task.status = "failed";
+    },
+    recoverJobs: async () => [],
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
+    now: () => 0,
+  });
+
+  runner.wake({ taskId: "task_recovery_retry", userId: "user_1" });
+  await runner.waitForIdle();
+  assert.deepEqual(
+    sleeps,
+    [60_000],
+    "a recovered retry checkpoint must retain the same bounded wait cap",
+  );
+  assert.equal(runs, 1);
+  assert.equal(task.status, "completed");
+}
+
 async function main() {
   const now = Date.parse("2026-07-21T00:00:00.000Z");
   assert.equal(parseRetryAfterMs("12", now), 12_000);
@@ -295,6 +396,24 @@ async function main() {
     classification: "network",
     retryAfterMs: null,
   });
+  assert.deepEqual(
+    clearAgentTaskRunnerRetryCheckpoint({
+      step_id: "step_1",
+      iteration: 3,
+      summary: "Model is busy. Retrying automatically.",
+      runner_retry: {
+        attempt: 3,
+        retry_at: "2026-07-21T00:00:08.000Z",
+        classification: "provider_unavailable",
+      },
+    }),
+    {
+      step_id: "step_1",
+      iteration: 3,
+      summary: "Model is busy. Retrying automatically.",
+    },
+    "manual retry must reset the persisted automatic retry budget",
+  );
 
   assert.equal(calculateAgentTaskBackoffMs(1, { random: () => 0.5 }), 2_000);
   assert.equal(
@@ -314,15 +433,17 @@ async function main() {
   );
   assert.equal(
     calculateAgentTaskBackoffMs(9, { retryAfterMs: 91_000 }),
-    91_000,
-    "Retry-After must take precedence over the local cap",
+    60_000,
+    "Retry-After must remain within the bounded wait cap",
   );
 
   await retryAndLifecycleSuite();
   await singleConcurrencySuite();
   await plannerRetrySuite();
+  await retryExhaustionSuite();
   await pauseResumeSuite();
   await recoverySuite();
+  await recoveryRetryWaitBoundSuite();
 
   console.log(
     JSON.stringify({ ok: true, suite: "agent-task-runner-smoke-v1" }, null, 2),
