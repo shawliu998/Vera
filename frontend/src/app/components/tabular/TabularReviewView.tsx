@@ -16,6 +16,7 @@ import {
     Pencil,
     Trash2,
     WandSparkles,
+    FileText,
 } from "lucide-react";
 
 import {
@@ -71,6 +72,10 @@ import { PageHeader } from "../shared/PageHeader";
 import { TableToolbar } from "../shared/TableToolbar";
 import { TabPillButton } from "@/app/components/ui/tab-pill-button";
 import { resolveCellCitationFromExcerpt } from "./citation-utils";
+import {
+    buildTabularReviewWordMemo,
+    isTabularReviewWordMemoWithinUploadLimit,
+} from "./exportToWordMemo";
 
 interface Props {
     reviewId: string;
@@ -120,6 +125,9 @@ export function TRView({ reviewId, projectId }: Props) {
         string[]
     >([]);
     const [saveExcelToMatterStatus, setSaveExcelToMatterStatus] = useState<
+        "idle" | "saving" | "saved" | "too_large" | "error"
+    >("idle");
+    const [saveMemoToMatterStatus, setSaveMemoToMatterStatus] = useState<
         "idle" | "saving" | "saved" | "too_large" | "error"
     >("idle");
     const searchParams = useSearchParams();
@@ -753,10 +761,14 @@ export function TRView({ reviewId, projectId }: Props) {
             documents.length > 0 &&
             documents.every((document) => document.project_id === projectId),
     );
+    const hasCompletedFindings = cells.some(
+        (cell) => cell.status === "done" && Boolean(cell.content?.summary),
+    );
 
     async function handleSaveExcelToMatter() {
         if (!projectId || !matterSourcesVerified) return;
 
+        setSaveMemoToMatterStatus("idle");
         setSaveExcelToMatterStatus("saving");
         try {
             const excelExport = await buildTabularReviewExcel({
@@ -782,6 +794,36 @@ export function TRView({ reviewId, projectId }: Props) {
         }
     }
 
+    async function handleCreateWordMemo() {
+        if (!projectId || !matterSourcesVerified || !hasCompletedFindings) return;
+
+        setSaveExcelToMatterStatus("idle");
+        setSaveMemoToMatterStatus("saving");
+        try {
+            const memoExport = await buildTabularReviewWordMemo({
+                reviewTitle: review?.title || "Tabular Review",
+                matterName: project?.name,
+                columns,
+                documents,
+                cells,
+            });
+            if (!isTabularReviewWordMemoWithinUploadLimit(memoExport.blob)) {
+                setSaveMemoToMatterStatus("too_large");
+                return;
+            }
+            await uploadProjectDocument(
+                projectId,
+                new File([memoExport.blob], memoExport.filename, {
+                    type: memoExport.blob.type,
+                }),
+            );
+            setSaveMemoToMatterStatus("saved");
+        } catch (error) {
+            console.error("Failed to create Word memo in Matter", error);
+            setSaveMemoToMatterStatus("error");
+        }
+    }
+
     const saveExcelToMatterMessage =
         saveExcelToMatterStatus === "saving"
             ? "Saving…"
@@ -791,6 +833,17 @@ export function TRView({ reviewId, projectId }: Props) {
                 ? "Export exceeds 100 MB"
                 : saveExcelToMatterStatus === "error"
                   ? "Couldn’t save — retry"
+                  : null;
+
+    const saveMemoToMatterMessage =
+        saveMemoToMatterStatus === "saving"
+            ? "Creating memo…"
+            : saveMemoToMatterStatus === "saved"
+              ? "Word memo saved to Matter"
+              : saveMemoToMatterStatus === "too_large"
+                ? "Memo exceeds 100 MB"
+                : saveMemoToMatterStatus === "error"
+                  ? "Couldn’t create memo — retry"
                   : null;
 
     const q = search.toLowerCase();
@@ -868,21 +921,27 @@ export function TRView({ reviewId, projectId }: Props) {
                                 type: "custom",
                                 render: (
                                     <div className="flex items-center gap-1.5">
-                                        {saveExcelToMatterMessage && (
+                                        {(saveMemoToMatterMessage ||
+                                            saveExcelToMatterMessage) && (
                                             <span
                                                 role="status"
                                                 aria-live="polite"
                                                 className={
+                                                    saveMemoToMatterStatus ===
+                                                        "error" ||
                                                     saveExcelToMatterStatus ===
-                                                    "error"
+                                                        "error"
                                                         ? "max-w-40 truncate text-xs text-red-600"
-                                                        : saveExcelToMatterStatus ===
-                                                            "too_large"
+                                                        : saveMemoToMatterStatus ===
+                                                                "too_large" ||
+                                                            saveExcelToMatterStatus ===
+                                                                "too_large"
                                                           ? "max-w-40 truncate text-xs text-amber-700"
                                                           : "max-w-40 truncate text-xs text-gray-500"
                                                 }
                                             >
-                                                {saveExcelToMatterMessage}
+                                                {saveMemoToMatterMessage ||
+                                                    saveExcelToMatterMessage}
                                             </span>
                                         )}
                                         <HeaderActionsMenu
@@ -918,6 +977,26 @@ export function TRView({ reviewId, projectId }: Props) {
                                                 },
                                                 ...(projectId
                                                     ? [
+                                                          {
+                                                              label: matterSourcesVerified
+                                                                  ? !hasCompletedFindings
+                                                                      ? "Memo unavailable — complete review"
+                                                                      : saveMemoToMatterStatus ===
+                                                                          "saving"
+                                                                        ? "Creating Word memo…"
+                                                                        : "Create Word memo"
+                                                                  : "Memo unavailable — verify Matter sources",
+                                                              icon: FileText,
+                                                              onSelect:
+                                                                  handleCreateWordMemo,
+                                                              disabled:
+                                                                  !matterSourcesVerified ||
+                                                                  saveMemoToMatterStatus ===
+                                                                      "saving" ||
+                                                                  columns.length === 0 ||
+                                                                  documents.length === 0 ||
+                                                                  !hasCompletedFindings,
+                                                          },
                                                           {
                                                               label: matterSourcesVerified
                                                                   ? saveExcelToMatterStatus ===
