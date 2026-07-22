@@ -28,6 +28,28 @@ Tracked-change, comment, locate-source, save/reopen, long-document, keyboard, an
 125%/150% checks remain covered by their existing Host acceptance entries; this
 run specifically closes the Word-to-Matter version round-trip.
 
+## Pending tracked change → Matter V3 Host acceptance — 2026-07-22
+
+This follow-up used the same disposable synthetic Memo at
+`/tmp/vera-tabular-word-roundtrip-20260722.docx`; no client, personal, or
+confidential document was opened, changed, or uploaded. It proves that a pending
+native Word revision, rather than an accepted edit or a Vera-only suggestion,
+survives the Word-to-Matter version path.
+
+| Check | Result |
+|---|---|
+| Precise selected-text request | **Pass** — Word supplied only `DRAFT — LAWYER REVIEW REQUIRED`; DeepSeek V4 Flash returned one replacement, `DRAFT — LAWYER REVIEW REQUIRED — ROUNDTRIP QA`, with no additional suggestion. |
+| Locate before write | **Pass** — **Locate in document** selected the exact source label in Word before any document mutation. |
+| Native pending revision | **Pass** — **Apply as tracked change** inserted one Word deletion and one insertion. Vera reported `Inserted as a tracked change. Review it in Word; Vera did not accept it.` |
+| Explicit V2 → V3 target | **Pass** — Actions showed the exact synthetic Matter and Word target at `Current Matter version: V2`; the Host saved the file and reported `Saved … as V3`. |
+| Preserve version history and uploaded bytes | **Pass** — the Matter document retained active V3 plus intact V2 and V1 rows. The re-downloaded V3 was a valid 16,805-byte DOCX; its `word/document.xml` contained exactly one `<w:del>` and one `<w:ins>` and retained both the original and replacement text. |
+| Local save and reopen | **Pass** — after saving, closing only the disposable `/tmp` document, and reopening that exact path in Word 16.111, the pending red deletion/insertion markup remained visible. It was not automatically accepted. |
+
+Real Host evidence:
+`screenshots/word-host-matter-v3-saved-20260722.jpeg` records the taskpane
+after V3 became current; `screenshots/word-host-matter-v3-pending-reopen-20260722.jpeg`
+records the same disposable document after Word close/reopen.
+
 ## 2026-07-22 status update
 
 The user completed the distinct Office Add-ins gallery sign-in on 2026-07-22.
