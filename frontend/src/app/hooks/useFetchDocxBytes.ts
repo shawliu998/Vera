@@ -28,6 +28,56 @@ function cacheKey(
 }
 
 /**
+ * Read raw DOCX bytes through the existing authenticated document endpoint.
+ * This is shared by the viewer and narrow source-verification flows so both
+ * operate on the same, version-pinned document bytes.
+ */
+export function fetchDocxBytes(
+    documentId: string,
+    versionId?: string | null,
+    refetchKey?: number,
+): Promise<ArrayBuffer> {
+    const key = cacheKey(documentId, versionId, refetchKey);
+    const cached = bytesCache.get(key);
+    if (cached) return Promise.resolve(cached);
+
+    const existing = inFlight.get(key);
+    if (existing) return existing;
+
+    const apiBase =
+        process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
+    const qs = versionId
+        ? `?version_id=${encodeURIComponent(versionId)}`
+        : "";
+    const url = `${apiBase}/single-documents/${documentId}/docx${qs}`;
+    const pending = (async () => {
+        const {
+            data: { session },
+        } = await supabase.auth.getSession();
+        const token = session?.access_token;
+        // Stream bytes through the backend (avoids CORS on R2 signed URLs).
+        const bin = await fetch(url, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!bin.ok) throw new Error(`HTTP ${bin.status}`);
+        const buf = await bin.arrayBuffer();
+        bytesCache.set(key, buf);
+        return buf;
+    })();
+
+    inFlight.set(key, pending);
+    void pending.then(
+        () => {
+            if (inFlight.get(key) === pending) inFlight.delete(key);
+        },
+        () => {
+            if (inFlight.get(key) === pending) inFlight.delete(key);
+        },
+    );
+    return pending;
+}
+
+/**
  * Fetch the raw .docx bytes for a document, optionally targeting a specific
  * tracked-changes version. Results are cached so the DocxView can re-render
  * cheaply when switching between versions, and tab switches don't refetch.
@@ -49,9 +99,15 @@ export function useFetchDocxBytes(
 
     useEffect(() => {
         if (!documentId) {
-            setBytes(null);
-            setDownloadUrl(null);
-            return;
+            let cancelled = false;
+            void Promise.resolve().then(() => {
+                if (cancelled) return;
+                setBytes(null);
+                setDownloadUrl(null);
+            });
+            return () => {
+                cancelled = true;
+            };
         }
 
         const key = cacheKey(documentId, versionId, refetchKey);
@@ -65,35 +121,27 @@ export function useFetchDocxBytes(
         // Cache hit: reuse bytes synchronously, no network, no spinner.
         const cached = bytesCache.get(key);
         if (cached) {
-            setBytes(cached);
-            setDownloadUrl(url);
-            setLoading(false);
-            setError(null);
-            return;
+            let cancelled = false;
+            void Promise.resolve().then(() => {
+                if (cancelled) return;
+                setBytes(cached);
+                setDownloadUrl(url);
+                setLoading(false);
+                setError(null);
+            });
+            return () => {
+                cancelled = true;
+            };
         }
 
         let cancelled = false;
-        setLoading(true);
-        setError(null);
+        void Promise.resolve().then(() => {
+            if (cancelled) return;
+            setLoading(true);
+            setError(null);
+        });
 
-        const pending =
-            inFlight.get(key) ??
-            (async () => {
-                const {
-                    data: { session },
-                } = await supabase.auth.getSession();
-                const token = session?.access_token;
-                // Stream bytes through the backend (avoids CORS on R2
-                // signed URLs).
-                const bin = await fetch(url, {
-                    headers: token ? { Authorization: `Bearer ${token}` } : {},
-                });
-                if (!bin.ok) throw new Error(`HTTP ${bin.status}`);
-                const buf = await bin.arrayBuffer();
-                bytesCache.set(key, buf);
-                return buf;
-            })();
-        if (!inFlight.has(key)) inFlight.set(key, pending);
+        const pending = fetchDocxBytes(documentId, versionId, refetchKey);
 
         pending
             .then((buf) => {
@@ -106,7 +154,6 @@ export function useFetchDocxBytes(
                 setError(e instanceof Error ? e.message : String(e));
             })
             .finally(() => {
-                inFlight.delete(key);
                 if (!cancelled) setLoading(false);
             });
 

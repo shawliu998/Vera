@@ -1,6 +1,10 @@
 import type { ChatDetailOut, Citation } from "@/app/components/shared/types";
 import {
     cleanSuggestionText,
+    findReviewStandardCitation,
+    highestCitationRef,
+    offsetCitationRefs,
+    offsetReviewStandardCitationRefs,
     parseWordDocumentSuggestions,
     splitWordDocumentParagraphs,
     type WordReviewMode,
@@ -25,6 +29,8 @@ export type WordReviewSessionPointer = {
     documentId?: string;
     baseVersionId?: string;
     baseVersionNumber?: number | null;
+    reviewStandardDocumentId?: string;
+    reviewStandardFilename?: string;
     updatedAt: string;
 };
 
@@ -90,6 +96,20 @@ function isPointer(value: unknown, now: number): value is WordReviewSessionPoint
                 (Number.isInteger(value.baseVersionNumber) &&
                     Number(value.baseVersionNumber) > 0)
             ))
+    ) {
+        return false;
+    }
+
+    const hasReviewStandardBinding =
+        value.reviewStandardDocumentId !== undefined ||
+        value.reviewStandardFilename !== undefined;
+    if (
+        hasReviewStandardBinding &&
+        (value.scope !== "document" ||
+            typeof value.reviewStandardDocumentId !== "string" ||
+            !value.reviewStandardDocumentId ||
+            typeof value.reviewStandardFilename !== "string" ||
+            !value.reviewStandardFilename)
     ) {
         return false;
     }
@@ -294,6 +314,10 @@ export function restoreWordReviewFromChat(args: {
         args.pointer.scope === "document"
             ? documentReviewTurns(args.detail)
             : [lastReviewTurn(args.detail, args.pointer.scope)];
+    const reviewStandardDocumentId = args.pointer.reviewStandardDocumentId;
+    let skippedMissingReviewStandardCitation = false;
+    let skippedDocumentSectionBeforeLaterCompletion = false;
+    const unresolvedDocumentSegmentKeys = new Set<string>();
     const validDocumentTurns:
         | Array<{
               turn: (typeof turns)[number];
@@ -308,26 +332,68 @@ export function restoreWordReviewFromChat(args: {
                       items: WordSuggestionItem[];
                       segmentIndex: number | null;
                   }>
-              >((valid, turn) => {
+              >((valid, turn, turnIndex) => {
+                  const segmentIndex = extractSegmentIndex(turn.user.content);
+                  // Current document prompts carry a stable segment index. Do
+                  // not guess whether an older unstructured turn is a retry:
+                  // if it later interleaves with a completed turn, its saved
+                  // decision order cannot be recovered safely.
+                  const segmentKey =
+                      segmentIndex === null
+                          ? `unstructured:${turnIndex}`
+                          : `segment:${segmentIndex}`;
+                  const markUnresolvedSegment = () => {
+                      unresolvedDocumentSegmentKeys.add(segmentKey);
+                  };
                   if (
                       turn.assistant.events?.some(
                           (event) => event.type === "error",
                       )
                   ) {
+                      markUnresolvedSegment();
                       return valid;
                   }
                   const paragraphStart = extractSegmentParagraphStart(
                       turn.user.content,
                   );
-                  const segmentIndex = extractSegmentIndex(turn.user.content);
                   try {
                       const items = parseWordDocumentSuggestions(
                           finalAssistantContent(turn.assistant),
                           extractTaggedText(turn.user.content, "document"),
                           paragraphStart === null
-                              ? { idOffset: 0 }
-                              : { paragraphStart, idOffset: 0 },
+                              ? {
+                                    idOffset: 0,
+                                    requiresReviewStandard: Boolean(
+                                        reviewStandardDocumentId,
+                                    ),
+                                }
+                              : {
+                                    paragraphStart,
+                                    idOffset: 0,
+                                    requiresReviewStandard: Boolean(
+                                        reviewStandardDocumentId,
+                                    ),
+                              },
                       );
+                      if (
+                          reviewStandardDocumentId &&
+                          items.some(
+                              (item) =>
+                                  !findReviewStandardCitation(
+                                      turn.assistant.citations ?? [],
+                                      reviewStandardDocumentId,
+                                      item.standardCitationRef,
+                                  ),
+                          )
+                      ) {
+                          skippedMissingReviewStandardCitation = true;
+                          markUnresolvedSegment();
+                          return valid;
+                      }
+                      unresolvedDocumentSegmentKeys.delete(segmentKey);
+                      if (unresolvedDocumentSegmentKeys.size > 0) {
+                          skippedDocumentSectionBeforeLaterCompletion = true;
+                      }
                       const duplicateIndex =
                           segmentIndex === null
                               ? -1
@@ -344,22 +410,74 @@ export function restoreWordReviewFromChat(args: {
                   } catch {
                       // A canceled stream or provider failure can leave a
                       // partial assistant message. Preserve earlier completed
-                      // segments instead of invalidating the whole review.
+                      // tail segments, but never shift saved decisions across
+                      // a later completed document section.
+                      markUnresolvedSegment();
                   }
                   return valid;
               }, [])
             : null;
+    // A prior generation that lacks a citation for any playbook-backed
+    // suggestion cannot be resumed safely. Returning only later sections
+    // would renumber their suggestion ids and could transfer a saved decision
+    // from an omitted section onto a different clause.
+    if (reviewStandardDocumentId && skippedMissingReviewStandardCitation) {
+        throw new Error(
+            "The saved Word review does not contain a verifiable citation for the selected Matter standard.",
+        );
+    }
+    const hasMissingStructuredDocumentSection =
+        validDocumentTurns?.every(({ segmentIndex }) => segmentIndex !== null) &&
+        validDocumentTurns.some(
+            ({ segmentIndex }, index) => segmentIndex !== index,
+        );
+    if (
+        skippedDocumentSectionBeforeLaterCompletion ||
+        hasMissingStructuredDocumentSection
+    ) {
+        throw new Error(
+            "The saved Word review has a missing document section and cannot be restored safely.",
+        );
+    }
     if (validDocumentTurns && validDocumentTurns.length === 0) {
         throw new Error("The saved Word review is incomplete.");
     }
+    const restoredDocumentTurns = validDocumentTurns
+        ? validDocumentTurns.reduce<{
+              items: WordSuggestionItem[];
+              citations: Citation[];
+          }>((restored, { turn, items }) => {
+              const turnCitations = turn.assistant.citations ?? [];
+              if (!reviewStandardDocumentId) {
+                  return {
+                      items: [...restored.items, ...items],
+                      citations: [...restored.citations, ...turnCitations],
+                  };
+              }
+
+              const citationRefOffset = highestCitationRef(restored.citations);
+              return {
+                  items: [
+                      ...restored.items,
+                      ...offsetReviewStandardCitationRefs(
+                          items,
+                          citationRefOffset,
+                      ),
+                  ],
+                  citations: [
+                      ...restored.citations,
+                      ...offsetCitationRefs(turnCitations, citationRefOffset),
+                  ],
+              };
+          }, { items: [], citations: [] })
+        : null;
     const effectiveTurns = validDocumentTurns
         ? validDocumentTurns.map(({ turn }) => turn)
         : turns;
     const instruction = extractInstruction(effectiveTurns[0].user.content);
     const baseItems =
-        validDocumentTurns
-            ? validDocumentTurns
-                  .flatMap(({ items }) => items)
+        restoredDocumentTurns
+            ? restoredDocumentTurns.items
                   .map((item, index) => ({
                       ...item,
                       id: `word-suggestion-${index + 1}`,
@@ -385,9 +503,9 @@ export function restoreWordReviewFromChat(args: {
     return {
         items,
         instruction,
-        citations: effectiveTurns.flatMap(
-            (turn) => turn.assistant.citations ?? [],
-        ),
+        citations: restoredDocumentTurns
+            ? restoredDocumentTurns.citations
+            : effectiveTurns.flatMap((turn) => turn.assistant.citations ?? []),
         chatId: args.pointer.chatId,
         scope: args.pointer.scope,
         mode: args.pointer.mode,

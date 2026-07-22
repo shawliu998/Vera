@@ -4,6 +4,7 @@ import type { ChatDetailOut } from "@/app/components/shared/types";
 import {
     buildWordDocumentReviewPrompt,
     buildWordSuggestionPrompt,
+    findReviewStandardCitation,
 } from "./wordSuggestion";
 import {
     WORD_REVIEW_SESSION_KEY,
@@ -51,6 +52,7 @@ function pointer(
 function detail(args: {
     user: string;
     assistant: string;
+    citations?: ChatDetailOut["messages"][number]["citations"];
     assistantEvents?: ChatDetailOut["messages"][number]["events"];
     trailingMessages?: ChatDetailOut["messages"];
 }): ChatDetailOut {
@@ -68,7 +70,7 @@ function detail(args: {
                 id: "message-2",
                 role: "assistant",
                 content: args.assistant,
-                citations: [],
+                citations: args.citations ?? [],
                 events: args.assistantEvents,
             },
             ...(args.trailingMessages ?? []),
@@ -155,6 +157,57 @@ test("persists an optional Matter document version binding without invalidating 
     );
     storage.setItem(WORD_REVIEW_SESSION_KEY, JSON.stringify(pointer()));
     assert.deepEqual(loadWordReviewSessionPointer(storage, NOW), pointer());
+});
+
+test("persists a document-only review-standard binding and rejects partial bindings", () => {
+    const storage = new MemoryStorage();
+    persistWordReviewSessionPointer(
+        storage,
+        {
+            projectId: "matter-1",
+            chatId: "chat-1",
+            scope: "document",
+            mode: "review",
+            activeIndex: 0,
+            statuses: { "word-suggestion-1": "pending" },
+            reviewStandardDocumentId: "playbook-1",
+            reviewStandardFilename: "Customer Contract Playbook.docx",
+        },
+        NOW,
+    );
+    assert.deepEqual(loadWordReviewSessionPointer(storage, NOW), {
+        version: 1,
+        projectId: "matter-1",
+        chatId: "chat-1",
+        scope: "document",
+        mode: "review",
+        activeIndex: 0,
+        statuses: { "word-suggestion-1": "pending" },
+        reviewStandardDocumentId: "playbook-1",
+        reviewStandardFilename: "Customer Contract Playbook.docx",
+        updatedAt: new Date(NOW).toISOString(),
+    });
+
+    storage.setItem(
+        WORD_REVIEW_SESSION_KEY,
+        JSON.stringify(pointer({ reviewStandardDocumentId: "playbook-1" })),
+    );
+    assert.equal(loadWordReviewSessionPointer(storage, NOW), null);
+
+    storage.setItem(
+        WORD_REVIEW_SESSION_KEY,
+        JSON.stringify(
+            pointer({
+                reviewStandardDocumentId: "playbook-1",
+                reviewStandardFilename: "Customer Contract Playbook.docx",
+            }),
+        ),
+    );
+    assert.equal(
+        loadWordReviewSessionPointer(storage, NOW),
+        null,
+        "selection review pointers cannot carry a Matter standard",
+    );
 });
 
 test("ignores expired or malformed review pointers", () => {
@@ -309,6 +362,268 @@ test("restores a document suggestion queue and validates the current document", 
             documentText.replace("within 10 days", "within 20 days"),
         ),
         false,
+    );
+});
+
+test("restores a Matter-standard document review with its per-suggestion citation ref", () => {
+    const documentText = "The Supplier may change the Fees at any time.";
+    const user = buildWordDocumentReviewPrompt({
+        mode: "review",
+        instruction: "Use the customer-side playbook.",
+        documentText,
+        reviewStandard: { filename: "Customer Contract Playbook.docx" },
+    });
+    const assistant = JSON.stringify({
+        suggestions: [
+            {
+                original: documentText,
+                replacement:
+                    "The Supplier may change the Fees on 30 days' prior written notice.",
+                reason: "Adds the playbook's notice period.",
+                standard: "The playbook requires 30 days' prior written notice.",
+                deviation: "The current clause permits changes at any time.",
+                standard_citation_ref: 1,
+            },
+        ],
+    });
+    const restored = restoreWordReviewFromChat({
+        pointer: pointer({
+            scope: "document",
+            reviewStandardDocumentId: "playbook-1",
+            reviewStandardFilename: "Customer Contract Playbook.docx",
+        }),
+        detail: detail({
+            user,
+            assistant,
+            citations: [
+                {
+                    type: "citation_data",
+                    ref: 1,
+                    doc_id: "doc-0",
+                    document_id: "playbook-1",
+                    version_id: "playbook-v1",
+                    version_number: 1,
+                    filename: "Customer Contract Playbook.docx",
+                    page: 2,
+                    quote: "Supplier must provide 30 days' prior written notice.",
+                },
+            ],
+        }),
+    });
+
+    assert.equal(restored.items[0].standardCitationRef, 1);
+    assert.equal(
+        restored.items[0].standard,
+        "The playbook requires 30 days' prior written notice.",
+    );
+    assert.equal(restored.items[0].deviation, "The current clause permits changes at any time.");
+    assert.notEqual(restored.citations[0].kind, "case");
+    if (restored.citations[0].kind !== "case") {
+        assert.equal(restored.citations[0].document_id, "playbook-1");
+    }
+});
+
+test("rebases Matter-standard citation refs across restored document sections", () => {
+    const standard = { filename: "Customer Contract Playbook.docx" };
+    const firstDocumentText = "The Supplier may change the Fees at any time.";
+    const secondDocumentText =
+        "The Customer must pay every invoice within 10 days.";
+    const firstUser = buildWordDocumentReviewPrompt({
+        mode: "review",
+        instruction: "Use the customer-side playbook.",
+        documentText: firstDocumentText,
+        paragraphStart: 0,
+        segmentIndex: 0,
+        segmentCount: 2,
+        reviewStandard: standard,
+    });
+    const secondUser = buildWordDocumentReviewPrompt({
+        mode: "review",
+        instruction: "Use the customer-side playbook.",
+        documentText: secondDocumentText,
+        paragraphStart: 1,
+        segmentIndex: 1,
+        segmentCount: 2,
+        reviewStandard: standard,
+    });
+    const firstAssistant = JSON.stringify({
+        suggestions: [
+            {
+                original: firstDocumentText,
+                replacement:
+                    "The Supplier may change the Fees on 30 days' prior written notice.",
+                reason: "Adds the required notice period.",
+                standard: "The playbook requires 30 days' prior notice.",
+                deviation: "The draft allows fee changes at any time.",
+                standard_citation_ref: 1,
+            },
+        ],
+    });
+    const secondAssistant = JSON.stringify({
+        suggestions: [
+            {
+                original: secondDocumentText,
+                replacement:
+                    "The Customer must pay each undisputed invoice within 30 days.",
+                reason: "Adds the playbook payment position.",
+                standard:
+                    "The playbook excludes disputed amounts and permits 30 days to pay.",
+                deviation: "The draft requires payment of every invoice within 10 days.",
+                standard_citation_ref: 1,
+            },
+        ],
+    });
+    const firstCitation = {
+        type: "citation_data" as const,
+        ref: 1,
+        doc_id: "doc-0",
+        document_id: "playbook-1",
+        version_id: "playbook-v1",
+        version_number: 1,
+        filename: standard.filename,
+        page: 2,
+        quote: "Supplier must provide 30 days' prior written notice.",
+    };
+    const secondCitation = {
+        type: "citation_data" as const,
+        ref: 1,
+        doc_id: "doc-0",
+        document_id: "playbook-1",
+        version_id: "playbook-v1",
+        version_number: 1,
+        filename: standard.filename,
+        page: 3,
+        quote:
+            "Payment terms exclude disputed amounts and allow 30 days after receipt.",
+    };
+
+    const restored = restoreWordReviewFromChat({
+        pointer: pointer({
+            scope: "document",
+            reviewStandardDocumentId: "playbook-1",
+            reviewStandardFilename: standard.filename,
+            activeIndex: 1,
+            statuses: {
+                "word-suggestion-1": "pending",
+                "word-suggestion-2": "commented",
+            },
+        }),
+        detail: detail({
+            user: firstUser,
+            assistant: firstAssistant,
+            citations: [firstCitation],
+            trailingMessages: [
+                { id: "message-3", role: "user", content: secondUser },
+                {
+                    id: "message-4",
+                    role: "assistant",
+                    content: secondAssistant,
+                    citations: [secondCitation],
+                },
+            ],
+        }),
+    });
+
+    assert.deepEqual(
+        restored.items.map((item) => item.standardCitationRef),
+        [1, 2],
+    );
+    assert.deepEqual(restored.citations.map((citation) => citation.ref), [1, 2]);
+    assert.equal(restored.items[1].status, "commented");
+    assert.ok(
+        findReviewStandardCitation(
+            restored.citations,
+            "playbook-1",
+            restored.items[0].standardCitationRef,
+        ),
+    );
+    assert.ok(
+        findReviewStandardCitation(
+            restored.citations,
+            "playbook-1",
+            restored.items[1].standardCitationRef,
+        ),
+    );
+
+    assert.throws(
+        () =>
+            restoreWordReviewFromChat({
+                pointer: pointer({
+                    scope: "document",
+                    reviewStandardDocumentId: "playbook-1",
+                    reviewStandardFilename: standard.filename,
+                    statuses: {
+                        "word-suggestion-1": "applied",
+                        "word-suggestion-2": "pending",
+                    },
+                }),
+                detail: detail({
+                    user: firstUser,
+                    assistant: firstAssistant,
+                    citations: [],
+                    trailingMessages: [
+                        { id: "message-3", role: "user", content: secondUser },
+                        {
+                            id: "message-4",
+                            role: "assistant",
+                            content: secondAssistant,
+                            citations: [secondCitation],
+                        },
+                    ],
+                }),
+            }),
+        /verifiable citation for the selected Matter standard/i,
+        "a skipped first segment must not transfer its saved decision to a later clause",
+    );
+});
+
+test("fails closed when a restored Matter-standard suggestion lacks its exact citation", () => {
+    const documentText = "The Supplier may change the Fees at any time.";
+    const user = buildWordDocumentReviewPrompt({
+        mode: "review",
+        instruction: "Use the customer-side playbook.",
+        documentText,
+        reviewStandard: { filename: "Customer Contract Playbook.docx" },
+    });
+    const assistant = JSON.stringify({
+        suggestions: [
+            {
+                original: documentText,
+                replacement:
+                    "The Supplier may change the Fees on 30 days' prior written notice.",
+                reason: "Adds the playbook's notice period.",
+                standard: "The playbook requires 30 days' prior written notice.",
+                deviation: "The current clause permits changes at any time.",
+                standard_citation_ref: 1,
+            },
+        ],
+    });
+
+    assert.throws(
+        () =>
+            restoreWordReviewFromChat({
+                pointer: pointer({
+                    scope: "document",
+                    reviewStandardDocumentId: "playbook-1",
+                    reviewStandardFilename: "Customer Contract Playbook.docx",
+                }),
+                detail: detail({
+                    user,
+                    assistant,
+                    citations: [
+                        {
+                            type: "citation_data",
+                            ref: 1,
+                            doc_id: "doc-0",
+                            document_id: "other-document",
+                            filename: "Other standard.docx",
+                            page: 2,
+                            quote: "Supplier must give 30 days' notice.",
+                        },
+                    ],
+                }),
+            }),
+        /verifiable citation for the selected Matter standard/i,
     );
 });
 
@@ -476,7 +791,7 @@ test("restores queued suggestions from multiple document segments in one Matter 
     );
 });
 
-test("restores completed document segments around a canceled partial response", () => {
+test("rejects a missing middle document section before a later completed section", () => {
     const first = "The Supplier may change the Fees at any time.";
     const third = "The Customer must pay every invoice within 10 days.";
     const prompts = [
@@ -505,8 +820,150 @@ test("restores completed document segments around a canceled partial response", 
             segmentCount: 3,
         }),
     ];
+    assert.throws(
+        () =>
+            restoreWordReviewFromChat({
+                pointer: pointer({
+                    scope: "document",
+                    statuses: {
+                        "word-suggestion-1": "applied",
+                        "word-suggestion-2": "commented",
+                    },
+                }),
+                detail: {
+                    chat: {
+                        id: "chat-1",
+                        project_id: "matter-1",
+                        user_id: "user-1",
+                        title: "Word review",
+                        created_at: new Date(NOW).toISOString(),
+                    },
+                    messages: [
+                        { id: "user-1", role: "user", content: prompts[0] },
+                        {
+                            id: "assistant-1",
+                            role: "assistant",
+                            content: JSON.stringify({
+                                suggestions: [
+                                    {
+                                        original: first,
+                                        replacement:
+                                            "The Supplier may change the Fees on 30 days' written notice.",
+                                        reason: "Adds notice.",
+                                    },
+                                ],
+                            }),
+                            citations: [],
+                        },
+                        { id: "user-2", role: "user", content: prompts[1] },
+                        {
+                            id: "assistant-2",
+                            role: "assistant",
+                            content: '{"suggestions":[',
+                            citations: [],
+                        },
+                        { id: "user-3", role: "user", content: prompts[2] },
+                        {
+                            id: "assistant-3",
+                            role: "assistant",
+                            content: JSON.stringify({
+                                suggestions: [
+                                    {
+                                        original: third,
+                                        replacement:
+                                            "The Customer must pay each undisputed invoice within 30 days.",
+                                        reason: "Adds a dispute carve-out.",
+                                    },
+                                ],
+                            }),
+                            citations: [],
+                        },
+                    ],
+                },
+            }),
+        /missing document section/i,
+    );
+});
+
+test("rejects an unrecorded middle document section before a later completed section", () => {
+    const first = "The Supplier may change the Fees at any time.";
+    const middle = "The Customer must pay every invoice within 10 days.";
+    const third = "The Agreement terminates immediately on any breach.";
+    const prompts = [first, middle, third].map((documentText, segmentIndex) =>
+        buildWordDocumentReviewPrompt({
+            mode: "review",
+            instruction: "Balance the agreement.",
+            documentText,
+            paragraphStart: segmentIndex,
+            segmentIndex,
+            segmentCount: 3,
+        }),
+    );
+
+    assert.throws(
+        () =>
+            restoreWordReviewFromChat({
+                pointer: pointer({ scope: "document" }),
+                detail: detail({
+                    user: prompts[0],
+                    assistant: JSON.stringify({
+                        suggestions: [
+                            {
+                                original: first,
+                                replacement:
+                                    "The Supplier may change the Fees on 30 days' written notice.",
+                                reason: "Adds notice.",
+                            },
+                        ],
+                    }),
+                    trailingMessages: [
+                        { id: "message-3", role: "user", content: prompts[1] },
+                        { id: "message-4", role: "user", content: prompts[2] },
+                        {
+                            id: "message-5",
+                            role: "assistant",
+                            content: JSON.stringify({
+                                suggestions: [
+                                    {
+                                        original: third,
+                                        replacement:
+                                            "The Agreement may terminate only after a material breach remains uncured for 30 days.",
+                                        reason: "Adds a cure period.",
+                                    },
+                                ],
+                            }),
+                            citations: [],
+                        },
+                    ],
+                }),
+            }),
+        /missing document section/i,
+    );
+});
+
+test("restores completed document segments before a canceled tail response", () => {
+    const first = "The Supplier may change the Fees at any time.";
+    const second = "The Customer must pay every invoice within 10 days.";
+    const third = "The Agreement terminates immediately on any breach.";
+    const prompts = [first, second, third].map((documentText, segmentIndex) =>
+        buildWordDocumentReviewPrompt({
+            mode: "review",
+            instruction: "Balance the agreement.",
+            documentText,
+            paragraphStart: segmentIndex,
+            segmentIndex,
+            segmentCount: 3,
+        }),
+    );
     const restored = restoreWordReviewFromChat({
-        pointer: pointer({ scope: "document" }),
+        pointer: pointer({
+            scope: "document",
+            activeIndex: 1,
+            statuses: {
+                "word-suggestion-1": "commented",
+                "word-suggestion-2": "skipped",
+            },
+        }),
         detail: {
             chat: {
                 id: "chat-1",
@@ -524,7 +981,8 @@ test("restores completed document segments around a canceled partial response", 
                         suggestions: [
                             {
                                 original: first,
-                                replacement: "The Supplier may change the Fees on 30 days' written notice.",
+                                replacement:
+                                    "The Supplier may change the Fees on 30 days' written notice.",
                                 reason: "Adds notice.",
                             },
                         ],
@@ -535,22 +993,23 @@ test("restores completed document segments around a canceled partial response", 
                 {
                     id: "assistant-2",
                     role: "assistant",
-                    content: '{"suggestions":[',
+                    content: JSON.stringify({
+                        suggestions: [
+                            {
+                                original: second,
+                                replacement:
+                                    "The Customer must pay each undisputed invoice within 30 days.",
+                                reason: "Adds a dispute carve-out.",
+                            },
+                        ],
+                    }),
                     citations: [],
                 },
                 { id: "user-3", role: "user", content: prompts[2] },
                 {
                     id: "assistant-3",
                     role: "assistant",
-                    content: JSON.stringify({
-                        suggestions: [
-                            {
-                                original: third,
-                                replacement: "The Customer must pay each undisputed invoice within 30 days.",
-                                reason: "Adds a dispute carve-out.",
-                            },
-                        ],
-                    }),
+                    content: '{"suggestions":[',
                     citations: [],
                 },
             ],
@@ -558,13 +1017,14 @@ test("restores completed document segments around a canceled partial response", 
     });
 
     assert.deepEqual(
-        restored.items.map((item) => item.id),
-        ["word-suggestion-1", "word-suggestion-2"],
+        restored.items.map((item) => item.locator?.paragraph_index),
+        [0, 1],
     );
     assert.deepEqual(
-        restored.items.map((item) => item.locator?.paragraph_index),
-        [0, 2],
+        restored.items.map((item) => item.status),
+        ["commented", "skipped"],
     );
+    assert.equal(restored.activeIndex, 1);
 });
 
 test("restores only the successful retry when a complete segment response ends in an error", () => {

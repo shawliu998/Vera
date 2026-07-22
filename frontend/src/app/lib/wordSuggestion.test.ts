@@ -1,10 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { Citation } from "@/app/components/shared/types";
 import {
     buildWordDocumentReviewPrompt,
+    findLocatedReviewStandardCitation,
+    findReviewStandardCitation,
+    highestCitationRef,
+    isDeterministicReviewStandardSourceError,
     MAX_WORD_SUGGESTION_ANCHOR_CHARS,
+    MIN_REVIEW_STANDARD_QUOTE_CHARS,
     parseWordDocumentSuggestions,
+    offsetCitationRefs,
+    offsetReviewStandardCitationRefs,
     readWordSuggestionStream,
+    ReviewStandardSourceValidationError,
     segmentWordDocumentText,
     WordSuggestionStreamError,
     WORD_DOCUMENT_CHUNK_MAX_CHARS,
@@ -15,6 +24,46 @@ const DOCUMENT = [
     "The Supplier may change the Fees at any time.",
     "The Customer must pay every invoice within 10 days.",
 ].join("\n");
+
+test("classifies only deterministic review-standard source failures as permanent", () => {
+    assert.equal(
+        isDeterministicReviewStandardSourceError(
+            new ReviewStandardSourceValidationError(
+                "The Matter standard has no readable text.",
+            ),
+        ),
+        true,
+    );
+    assert.equal(
+        isDeterministicReviewStandardSourceError(new Error("HTTP 404")),
+        true,
+    );
+    assert.equal(
+        isDeterministicReviewStandardSourceError({ status: 422 }),
+        true,
+    );
+});
+
+test("keeps transient review-standard source failures retryable", () => {
+    assert.equal(
+        isDeterministicReviewStandardSourceError(new Error("HTTP 429")),
+        false,
+    );
+    assert.equal(
+        isDeterministicReviewStandardSourceError(new Error("HTTP 503")),
+        false,
+    );
+    assert.equal(
+        isDeterministicReviewStandardSourceError(
+            new TypeError("Failed to fetch"),
+        ),
+        false,
+    );
+    assert.equal(
+        isDeterministicReviewStandardSourceError({ status: 401 }),
+        false,
+    );
+});
 
 test("buildWordDocumentReviewPrompt requests bounded exact-quote JSON", () => {
     const prompt = buildWordDocumentReviewPrompt({
@@ -33,6 +82,27 @@ test("buildWordDocumentReviewPrompt requests bounded exact-quote JSON", () => {
     assert.match(prompt, /at most one suggestion for each paragraph/);
     assert.match(prompt, /Only the first part of the document is available/);
     assert.match(prompt, /The Supplier may change the Fees/);
+});
+
+test("buildWordDocumentReviewPrompt requires a Matter standard for every suggestion", () => {
+    const prompt = buildWordDocumentReviewPrompt({
+        mode: "review",
+        documentText: DOCUMENT,
+        instruction: "Review against the firm's customer-side standard.",
+        reviewStandard: { filename: "Customer Contract Playbook.docx" },
+    });
+
+    assert.match(prompt, /Customer Contract Playbook\.docx/);
+    assert.match(prompt, /Read that document before suggesting a change/);
+    assert.match(prompt, /"standard"/);
+    assert.match(prompt, /"deviation"/);
+    assert.match(prompt, /"standard_citation_ref"/);
+    assert.match(prompt, /hidden <CITATIONS> block/);
+    assert.match(prompt, /uniquely occurring quotation/);
+    assert.match(
+        prompt,
+        new RegExp(`${MIN_REVIEW_STANDARD_QUOTE_CHARS} characters excluding whitespace`),
+    );
 });
 
 test("segments a 60k Chinese Word document without splitting paragraphs or losing a post-20k clause", () => {
@@ -103,6 +173,211 @@ test("parseWordDocumentSuggestions accepts fenced JSON and creates stable ids", 
     assert.equal(result.length, 2);
     assert.equal(result[0].id, "word-suggestion-1");
     assert.equal(result[1].original, "The Customer must pay every invoice within 10 days.");
+});
+
+test("parseWordDocumentSuggestions preserves a required Matter-standard mapping", () => {
+    const result = parseWordDocumentSuggestions(
+        JSON.stringify({
+            suggestions: [
+                {
+                    original: "The Supplier may change the Fees at any time.",
+                    replacement:
+                        "The Supplier may change the Fees on 30 days' written notice.",
+                    reason: "Adds a defined notice period.",
+                    standard: "The playbook requires 30 days' prior notice.",
+                    deviation: "The current clause allows changes at any time.",
+                    standard_citation_ref: 2,
+                },
+            ],
+        }),
+        DOCUMENT,
+        { requiresReviewStandard: true },
+    );
+
+    assert.equal(result[0].standard, "The playbook requires 30 days' prior notice.");
+    assert.equal(result[0].deviation, "The current clause allows changes at any time.");
+    assert.equal(result[0].standardCitationRef, 2);
+});
+
+test("parseWordDocumentSuggestions rejects an incomplete Matter-standard mapping", () => {
+    assert.throws(
+        () =>
+            parseWordDocumentSuggestions(
+                JSON.stringify({
+                    suggestions: [
+                        {
+                            original: "The Supplier may change the Fees at any time.",
+                            replacement:
+                                "The Supplier may change the Fees on 30 days' written notice.",
+                            reason: "Adds a defined notice period.",
+                            standard: "The playbook requires 30 days' prior notice.",
+                            deviation: "The current clause allows changes at any time.",
+                        },
+                    ],
+                }),
+                DOCUMENT,
+                { requiresReviewStandard: true },
+            ),
+        /missing its review-standard explanation or citation/,
+    );
+});
+
+test("findReviewStandardCitation matches only the mapped Matter source", () => {
+    const citations: Citation[] = [
+        {
+            type: "citation_data",
+            ref: 1,
+            doc_id: "doc-0",
+            document_id: "standard-1",
+            version_id: "standard-v1",
+            version_number: 1,
+            filename: "Customer Contract Playbook.docx",
+            page: 2,
+            quote: "Supplier must give 30 days' notice.",
+            quotes: [
+                { page: 2, quote: "Supplier must give 30 days' notice." },
+            ],
+        },
+        {
+            type: "citation_data",
+            ref: 2,
+            doc_id: "doc-1",
+            document_id: "other-document",
+            filename: "Other source.docx",
+            page: 1,
+            quote: "Other source language.",
+        },
+        {
+            type: "citation_data",
+            ref: 3,
+            doc_id: "doc-0",
+            document_id: "standard-1",
+            filename: "Customer Contract Playbook.docx",
+            page: 2,
+            quote: "",
+        },
+    ];
+
+    assert.equal(
+        findReviewStandardCitation(citations, "standard-1", 1)?.ref,
+        1,
+    );
+    assert.equal(findReviewStandardCitation(citations, "standard-1", 2), null);
+    assert.equal(findReviewStandardCitation(citations, "standard-1", 3), null);
+    assert.equal(
+        findReviewStandardCitation(
+            [
+                ...citations,
+                {
+                    type: "citation_data",
+                    ref: 1,
+                    doc_id: "doc-2",
+                    document_id: "other-document",
+                    filename: "Other source.docx",
+                    page: 1,
+                    quote: "A conflicting local ref.",
+                },
+            ],
+            "standard-1",
+            1,
+        ),
+        null,
+        "a citation ref must identify exactly one source in a chat turn",
+    );
+});
+
+test("requires a pinned, uniquely re-locatable Matter-standard quote before a Word write", () => {
+    const citation: Citation = {
+        type: "citation_data",
+        ref: 1,
+        doc_id: "doc-0",
+        document_id: "standard-1",
+        version_id: "standard-v1",
+        version_number: 1,
+        filename: "Customer Contract Playbook.docx",
+        page: 2,
+        quote:
+            "Supplier must give at least 30 days' prior written notice before a fee change.",
+    };
+    const standardText = [
+        "Customer Contract Playbook",
+        "Supplier must give at least 30 days' prior written notice before a fee change.",
+    ].join("\n\n");
+
+    assert.equal(
+        findLocatedReviewStandardCitation(
+            [citation],
+            "standard-1",
+            1,
+            standardText,
+        )?.ref,
+        1,
+    );
+    assert.equal(
+        findLocatedReviewStandardCitation(
+            [
+                {
+                    ...citation,
+                    quote:
+                        "The playbook requires an unavailable pricing protection.",
+                },
+            ],
+            "standard-1",
+            1,
+            standardText,
+        ),
+        null,
+        "a nonempty hallucinated quote must not allow a Word comment or tracked change",
+    );
+    assert.equal(
+        findLocatedReviewStandardCitation(
+            [citation],
+            "standard-1",
+            1,
+            `${standardText}\n\n${citation.quote}`,
+        ),
+        null,
+        "a repeated quotation is not a deterministic source anchor",
+    );
+    assert.equal(
+        findReviewStandardCitation(
+            [{ ...citation, version_id: null }],
+            "standard-1",
+            1,
+        ),
+        null,
+        "the cited version must remain available to re-locate the source",
+    );
+});
+
+test("offsets review-standard refs across independent document sections", () => {
+    const citations: Citation[] = [
+        {
+            type: "citation_data",
+            ref: 1,
+            doc_id: "doc-0",
+            document_id: "standard-1",
+            filename: "Customer Contract Playbook.docx",
+            page: 2,
+            quote: "Supplier must give notice.",
+        },
+    ];
+    const items = [
+        {
+            id: "word-suggestion-2",
+            original: "Clause B.",
+            replacement: "Clause B, revised.",
+            reason: "Reason.",
+            standardCitationRef: 1,
+        },
+    ];
+
+    assert.equal(highestCitationRef(citations), 1);
+    assert.equal(offsetCitationRefs(citations, 1)[0].ref, 2);
+    assert.equal(
+        offsetReviewStandardCitationRefs(items, 1)[0].standardCitationRef,
+        2,
+    );
 });
 
 test("parseWordDocumentSuggestions rejects a quote missing from the document", () => {

@@ -9,6 +9,13 @@ export interface WordSuggestionItem {
     replacement: string;
     reason: string;
     /**
+     * Present only for a review against a Matter standard. The source itself
+     * remains the existing Matter Chat citation payload.
+     */
+    standard?: string;
+    deviation?: string;
+    standardCitationRef?: number;
+    /**
      * A compact position hint lets a document-wide Word search disambiguate a
      * repeated standard clause without exposing document internals in the UI.
      */
@@ -16,6 +23,7 @@ export interface WordSuggestionItem {
 }
 
 export const MAX_WORD_SUGGESTION_ANCHOR_CHARS = 255;
+export const MIN_REVIEW_STANDARD_QUOTE_CHARS = 16;
 export const TARGET_WORD_DOCUMENT_SEGMENT_CHARS = 14_000;
 export const WORD_DOCUMENT_CHUNK_MIN_CHARS = 12_000;
 export const WORD_DOCUMENT_CHUNK_MAX_CHARS = 16_000;
@@ -63,6 +71,42 @@ export class WordSuggestionStreamError extends Error {
     }
 }
 
+/**
+ * A deterministic failure in the cited review-standard version or its
+ * accepted document content. Transport and provider failures deliberately do
+ * not use this class so a saved Word review can keep its pointer and retry.
+ */
+export class ReviewStandardSourceValidationError extends Error {
+    constructor(message: string, options?: { cause?: unknown }) {
+        super(message, options);
+        this.name = "ReviewStandardSourceValidationError";
+    }
+}
+
+/**
+ * Only failures that prove the saved source/version cannot validate are
+ * permanent. Unknown failures are retryable; this includes browser network
+ * errors whose implementations do not expose an HTTP status.
+ */
+export function isDeterministicReviewStandardSourceError(
+    error: unknown,
+): boolean {
+    if (error instanceof ReviewStandardSourceValidationError) return true;
+
+    const explicitStatus =
+        typeof error === "object" &&
+        error !== null &&
+        "status" in error &&
+        typeof error.status === "number"
+            ? error.status
+            : null;
+    const message = error instanceof Error ? error.message : String(error);
+    const messageStatus = message.match(/\bHTTP\s+(\d{3})\b/i)?.[1];
+    const status = explicitStatus ?? (messageStatus ? Number(messageStatus) : null);
+
+    return status === 400 || status === 404 || status === 410 || status === 422;
+}
+
 export function buildWordSuggestionPrompt(args: {
     mode: WordReviewMode;
     selection: string;
@@ -95,6 +139,7 @@ export function buildWordDocumentReviewPrompt(args: {
     paragraphStart?: number;
     segmentIndex?: number;
     segmentCount?: number;
+    reviewStandard?: { filename: string } | null;
 }): string {
     const task =
         args.mode === "review"
@@ -107,6 +152,12 @@ export function buildWordDocumentReviewPrompt(args: {
         typeof args.paragraphStart === "number"
             ? `This is segment ${(args.segmentIndex ?? 0) + 1} of ${args.segmentCount ?? 1}, beginning at document paragraph ${args.paragraphStart + 1}. Only review this supplied segment.\n<vera_word_segment index="${args.segmentIndex ?? 0}" count="${args.segmentCount ?? 1}" paragraph_start="${args.paragraphStart}" source_chars="${args.documentText.length}" />`
             : `<vera_word_source tag="document" chars="${args.documentText.length}" />`;
+    const standardInstructions = args.reviewStandard
+        ? `\nReview standard:\nThe Matter document "${args.reviewStandard.filename}" is attached as the review standard. Read that document before suggesting a change. Only suggest a change where that standard supports a material drafting difference. For every suggestion, state the applicable standard, the difference in the Word document, and its matching citation reference. After the JSON object, append the normal hidden <CITATIONS> block. Every suggestion must cite one exact, uniquely occurring quotation from "${args.reviewStandard.filename}" that is at least ${MIN_REVIEW_STANDARD_QUOTE_CHARS} characters excluding whitespace. Do not put [N] citation markers inside the JSON object.\n`
+        : "";
+    const structuredFields = args.reviewStandard
+        ? `\n- "standard": one concise statement of the applicable requirement from the attached Matter standard\n- "deviation": one concise statement of how the quoted Word passage differs from that requirement\n- "standard_citation_ref": the positive integer ref for that suggestion's exact quotation in the following hidden <CITATIONS> block`
+        : "";
 
     return `${task}
 
@@ -120,15 +171,16 @@ ${args.documentText}
 
 ${truncationNote}
 ${segmentNote}
+${standardInstructions}
 
-Return one JSON object with a \"suggestions\" array containing 0 to 5 items. Each item must contain exactly these string fields:
+Return one JSON object with a \"suggestions\" array containing 0 to 5 items. Each item must contain these fields:
 - \"original\": copy an exact, verbatim, uniquely occurring short passage from one paragraph of the supplied document text. It must be directly searchable in Word, contain no line break or tab, and be at most ${MAX_WORD_SUGGESTION_ANCHOR_CHARS} characters. Never shorten, paraphrase, or combine a passage to fit this limit; choose a different exact passage instead.
 - \"replacement\": the complete text that should replace exactly the quoted \"original\" passage; preserve any context needed inside that passage, do not repeat text outside it, and include no line break
-- \"reason\": one concise sentence explaining the legal or drafting issue
+- \"reason\": one concise sentence explaining the legal or drafting issue${structuredFields}
 
 Suggestions must not repeat or overlap the same document text. Return at most one suggestion for each paragraph; combine related changes within that paragraph into one exact replacement.
 
-Do not edit or create any project document. Do not include Markdown, citation markers, headings, or text outside the JSON object.`;
+Do not edit or create any project document. Do not include Markdown, headings, or text outside the JSON object${args.reviewStandard ? " followed by the required hidden <CITATIONS> block" : ""}.`;
 }
 
 /**
@@ -257,7 +309,11 @@ function extractJsonObject(value: string): string {
 export function parseWordDocumentSuggestions(
     value: string,
     documentText: string,
-    options?: { paragraphStart?: number; idOffset?: number },
+    options?: {
+        paragraphStart?: number;
+        idOffset?: number;
+        requiresReviewStandard?: boolean;
+    },
 ): WordSuggestionItem[] {
     let parsed: unknown;
     try {
@@ -294,8 +350,24 @@ export function parseWordDocumentSuggestions(
         const replacement =
             typeof item.replacement === "string" ? item.replacement.trim() : "";
         const reason = typeof item.reason === "string" ? item.reason.trim() : "";
+        const standard = typeof item.standard === "string" ? item.standard.trim() : "";
+        const deviation = typeof item.deviation === "string" ? item.deviation.trim() : "";
+        const standardCitationRef =
+            typeof item.standard_citation_ref === "number" &&
+            Number.isSafeInteger(item.standard_citation_ref) &&
+            item.standard_citation_ref > 0
+                ? item.standard_citation_ref
+                : null;
         if (!original || !replacement || !reason) {
             throw new Error(`Suggestion ${index + 1} is incomplete. Generate the review again.`);
+        }
+        if (
+            options?.requiresReviewStandard &&
+            (!standard || !deviation || standardCitationRef === null)
+        ) {
+            throw new Error(
+                `Suggestion ${index + 1} is missing its review-standard explanation or citation. Generate the review again.`,
+            );
         }
         if (original === replacement) {
             throw new Error(`Suggestion ${index + 1} does not change the quoted text.`);
@@ -368,6 +440,9 @@ export function parseWordDocumentSuggestions(
             original,
             replacement,
             reason,
+            ...(standard ? { standard } : {}),
+            ...(deviation ? { deviation } : {}),
+            ...(standardCitationRef !== null ? { standardCitationRef } : {}),
             ...(typeof options?.paragraphStart === "number"
                 ? {
                       locator: {
@@ -388,6 +463,113 @@ export function parseWordDocumentSuggestions(
     }
 
     return accepted;
+}
+
+function normalizeReviewStandardQuote(value: string): string {
+    return value
+        .normalize("NFKC")
+        .trim()
+        .replace(/\s+/gu, " ")
+        .toLocaleLowerCase();
+}
+
+function hasUniqueReviewStandardQuote(
+    sourceText: string,
+    quote: string,
+): boolean {
+    const normalizedQuote = normalizeReviewStandardQuote(quote);
+    if (
+        normalizedQuote.replace(/\s/gu, "").length <
+        MIN_REVIEW_STANDARD_QUOTE_CHARS
+    ) {
+        return false;
+    }
+    const normalizedSource = normalizeReviewStandardQuote(sourceText);
+    const firstMatch = normalizedSource.indexOf(normalizedQuote);
+    return (
+        firstMatch >= 0 &&
+        normalizedSource.indexOf(normalizedQuote, firstMatch + 1) === -1
+    );
+}
+
+export function findReviewStandardCitation(
+    citations: Citation[],
+    documentId: string,
+    citationRef: number | undefined,
+): Citation | null {
+    const ref = citationRef;
+    if (typeof ref !== "number" || !Number.isSafeInteger(ref) || ref < 1) {
+        return null;
+    }
+    const matches = citations.filter((citation) => citation.ref === ref);
+    if (matches.length !== 1) return null;
+    const [citation] = matches;
+    return citation.kind !== "case" &&
+        citation.document_id === documentId &&
+        typeof citation.version_id === "string" &&
+        citation.version_id.length > 0 &&
+        citation.quote.trim().length > 0
+        ? citation
+        : null;
+}
+
+/**
+ * Return a review-standard citation only when its canonical quote can be
+ * uniquely re-located in the exact cited document-version text. This is the
+ * source gate used before Word writes; presentation-only quote highlighting
+ * remains intentionally more permissive elsewhere in the product.
+ */
+export function findLocatedReviewStandardCitation(
+    citations: Citation[],
+    documentId: string,
+    citationRef: number | undefined,
+    sourceText: string,
+): Citation | null {
+    const citation = findReviewStandardCitation(
+        citations,
+        documentId,
+        citationRef,
+    );
+    if (!citation || citation.kind === "case") return null;
+    return hasUniqueReviewStandardQuote(sourceText, citation.quote)
+        ? citation
+        : null;
+}
+
+export function highestCitationRef(citations: Citation[]): number {
+    return citations.reduce(
+        (highest, citation) =>
+            Number.isSafeInteger(citation.ref) && citation.ref > highest
+                ? citation.ref
+                : highest,
+        0,
+    );
+}
+
+export function offsetCitationRefs(
+    citations: Citation[],
+    offset: number,
+): Citation[] {
+    if (!offset) return citations;
+    return citations.map((citation) => ({
+        ...citation,
+        ref: citation.ref + offset,
+    })) as Citation[];
+}
+
+export function offsetReviewStandardCitationRefs(
+    items: WordSuggestionItem[],
+    offset: number,
+): WordSuggestionItem[] {
+    if (!offset) return items;
+    return items.map((item) =>
+        item.standardCitationRef === undefined
+            ? item
+            : {
+                  ...item,
+                  standardCitationRef: item.standardCitationRef + offset,
+            },
+    );
 }
 
 export async function readWordSuggestionStream(

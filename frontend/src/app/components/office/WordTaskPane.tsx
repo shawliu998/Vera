@@ -28,6 +28,10 @@ import {
 import { SiteLogo } from "@/app/components/site-logo";
 import { MODELS } from "@/app/components/assistant/ModelToggle";
 import { PillButton } from "@/app/components/ui/pill-button";
+import {
+    fetchDocxBytes,
+    invalidateDocxBytes,
+} from "@/app/hooks/useFetchDocxBytes";
 import type {
     Citation,
     Document as MatterDocument,
@@ -61,8 +65,15 @@ import {
 import {
     buildWordDocumentReviewPrompt,
     buildWordSuggestionPrompt,
+    findLocatedReviewStandardCitation,
+    findReviewStandardCitation,
+    highestCitationRef,
+    isDeterministicReviewStandardSourceError,
+    offsetCitationRefs,
+    offsetReviewStandardCitationRefs,
     parseWordDocumentSuggestions,
     readWordSuggestionStream,
+    ReviewStandardSourceValidationError,
     segmentWordDocumentText,
     WordSuggestionStreamError,
     type WordReviewMode,
@@ -137,6 +148,21 @@ const PREVIEW_PROJECTS: Project[] = [
                 created_at: "2026-07-21T00:00:00.000Z",
                 active_version_number: 2,
             },
+            {
+                id: "preview-review-standard",
+                user_id: "preview-user",
+                project_id: "preview-matter",
+                filename: "Customer Contract Playbook.docx",
+                file_type: "docx",
+                storage_path: "preview/customer-contract-playbook.docx",
+                pdf_storage_path: null,
+                size_bytes: 18_000,
+                page_count: 4,
+                structure_tree: null,
+                status: "ready",
+                created_at: "2026-07-21T00:00:00.000Z",
+                active_version_number: 1,
+            },
         ],
     },
     {
@@ -190,12 +216,24 @@ type ReviewSuggestion = WordSuggestionItem & {
     status: SuggestionStatus;
 };
 
+type ReviewStandard = {
+    documentId: string;
+    filename: string;
+};
+
+type ReviewStandardVerification =
+    | "not-required"
+    | "checking"
+    | "verified"
+    | "blocked";
+
 type SuggestionState = {
     items: ReviewSuggestion[];
     instruction: string;
     citations: Citation[];
     chatId: string | null;
     scope: WordReviewScope;
+    reviewStandard: ReviewStandard | null;
 };
 
 type AppliedState =
@@ -210,6 +248,25 @@ type RestoreIssue =
     | { kind: "unavailable"; message: string };
 
 type TaskPaneTab = "assistant" | "review" | "actions";
+
+function isReviewStandardDocument(document: MatterDocument): boolean {
+    return (
+        document.file_type?.toLowerCase() === "docx" ||
+        /\.docx$/i.test(document.filename)
+    );
+}
+
+function reviewStandardCitationError(
+    filename: string,
+): ReviewStandardSourceValidationError {
+    return new ReviewStandardSourceValidationError(
+        `Playbook source missing: Vera could not uniquely locate every cited quote in ${filename}. Generate the review again before writing to Word.`,
+    );
+}
+
+function isReviewStandardSourceVerificationError(error: unknown): boolean {
+    return readableError(error).startsWith("Playbook source missing:");
+}
 
 const TASK_PANE_TABS: ReadonlyArray<readonly [TaskPaneTab, string]> = [
     ["assistant", "Assistant"],
@@ -267,6 +324,21 @@ function citationLabel(citation: Citation): string {
           ? `page ${citation.page}`
           : null;
     return [citation.filename, location].filter(Boolean).join(" · ");
+}
+
+function citationDocumentHref(
+    projectId: string,
+    citation: Citation,
+): string | null {
+    if (citation.kind === "case") return null;
+    const query = new URLSearchParams({ open_document: citation.document_id });
+    if (citation.version_id) query.set("version_id", citation.version_id);
+    if (citation.page !== undefined && citation.page !== null) {
+        query.set("page", String(citation.page));
+    }
+    const quote = citation.quotes?.[0]?.quote ?? citation.quote;
+    if (quote.trim()) query.set("quote", quote);
+    return `/projects/${projectId}?${query.toString()}`;
 }
 
 function readableError(error: unknown): string {
@@ -333,6 +405,21 @@ function decisionMessageClass(kind: NonNullable<AppliedState>["kind"]): string {
 export function WordTaskPane() {
     const searchParams = useSearchParams();
     const previewMode = searchParams.get("preview");
+    const previewScenario = searchParams.get("scenario");
+    const isPlaybookPreview =
+        previewMode === "playbook" ||
+        previewMode === "playbook-missing" ||
+        previewMode === "playbook-unlocated" ||
+        (previewMode === "ready" &&
+            (previewScenario === "playbook" ||
+                previewScenario === "playbook-missing" ||
+                previewScenario === "playbook-unlocated"));
+    const isPlaybookMissingPreview =
+        previewMode === "playbook-missing" ||
+        (previewMode === "ready" && previewScenario === "playbook-missing");
+    const isPlaybookUnlocatedPreview =
+        previewMode === "playbook-unlocated" ||
+        (previewMode === "ready" && previewScenario === "playbook-unlocated");
     const isPreview = [
         "ready",
         "empty",
@@ -340,6 +427,9 @@ export function WordTaskPane() {
         "retrying",
         "restore-retry",
         "restore-unavailable",
+        "playbook",
+        "playbook-missing",
+        "playbook-unlocated",
     ].includes(previewMode ?? "");
     const previewContent = searchParams.get("lang") === "zh"
         ? CHINESE_PREVIEW
@@ -360,6 +450,8 @@ export function WordTaskPane() {
     const [matterDocumentsLoading, setMatterDocumentsLoading] = useState(false);
     const [matterDocumentError, setMatterDocumentError] = useState<string | null>(null);
     const [selectedMatterDocumentId, setSelectedMatterDocumentId] = useState("");
+    const [selectedReviewStandardDocumentId, setSelectedReviewStandardDocumentId] =
+        useState("");
     const [matterDocumentVersionBase, setMatterDocumentVersionBase] =
         useState<MatterDocumentVersionBase | null>(null);
     const [matterVersionLoading, setMatterVersionLoading] = useState(false);
@@ -379,6 +471,10 @@ export function WordTaskPane() {
     const [instruction, setInstruction] = useState("");
     const [activeTab, setActiveTab] = useState<TaskPaneTab>("assistant");
     const [suggestion, setSuggestion] = useState<SuggestionState | null>(null);
+    // This is deliberately ephemeral: it gates the consequential Word write
+    // while the existing Matter citation is re-located in its cited version.
+    const [reviewStandardVerification, setReviewStandardVerification] =
+        useState<ReviewStandardVerification>("not-required");
     const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
     const [streamingText, setStreamingText] = useState("");
     const [reviewProgress, setReviewProgress] = useState<{
@@ -401,6 +497,9 @@ export function WordTaskPane() {
     const abortRef = useRef<AbortController | null>(null);
     const instructionRef = useRef<HTMLTextAreaElement>(null);
     const restoreStartedRef = useRef(false);
+    const reviewStandardTextCacheRef = useRef(
+        new Map<string, Promise<string>>(),
+    );
 
     const selectedProject = useMemo(
         () => projects.find((project) => project.id === selectedProjectId) ?? null,
@@ -413,6 +512,22 @@ export function WordTaskPane() {
             ) ?? null,
         [matterDocuments, selectedMatterDocumentId],
     );
+    const reviewStandardDocuments = useMemo(
+        () =>
+            matterDocuments.filter(
+                (document) =>
+                    document.status === "ready" &&
+                    isReviewStandardDocument(document),
+            ),
+        [matterDocuments],
+    );
+    const selectedReviewStandardDocument = useMemo(
+        () =>
+            reviewStandardDocuments.find(
+                (document) => document.id === selectedReviewStandardDocumentId,
+            ) ?? null,
+        [reviewStandardDocuments, selectedReviewStandardDocumentId],
+    );
 
     const activeSuggestion = suggestion?.items[activeSuggestionIndex] ?? null;
     const sourceText = scope === "selection" ? selection : documentText;
@@ -420,6 +535,135 @@ export function WordTaskPane() {
         scope === "document" && sourceText.length > 1_200
             ? `${sourceText.slice(0, 1_200)}…`
             : sourceText;
+
+    const loadReviewStandardText = useCallback(
+        async (
+            documentId: string,
+            versionId: string,
+            force = false,
+        ): Promise<string> => {
+            const key = `${documentId}:${versionId}`;
+            const cached = reviewStandardTextCacheRef.current.get(key);
+            if (cached && !force) return cached;
+            if (force) {
+                reviewStandardTextCacheRef.current.delete(key);
+                invalidateDocxBytes(documentId, versionId);
+            }
+
+            const pending = (async () => {
+                // Keep transport/module-loading failures distinguishable from
+                // deterministic DOCX content failures. Restore can retry the
+                // former without discarding its saved Matter-chat pointer.
+                const bytes = await fetchDocxBytes(documentId, versionId);
+                const { extractAcceptedDocxText } = await import(
+                    "@/app/lib/docxAcceptedView"
+                );
+                let text: string;
+                try {
+                    text = await extractAcceptedDocxText(bytes);
+                } catch (error) {
+                    throw new ReviewStandardSourceValidationError(
+                        "The Matter standard content could not be read.",
+                        { cause: error },
+                    );
+                }
+                // Match the existing Matter reader's exceptional fallback for
+                // legacy or malformed DOCX packages with no readable body.
+                if (!text.trim()) {
+                    const { default: mammoth } = await import("mammoth");
+                    try {
+                        const extracted = await mammoth.extractRawText({
+                            arrayBuffer: bytes,
+                        });
+                        text = extracted.value;
+                    } catch (error) {
+                        throw new ReviewStandardSourceValidationError(
+                            "The Matter standard content could not be read.",
+                            { cause: error },
+                        );
+                    }
+                }
+                if (!text.trim()) {
+                    throw new ReviewStandardSourceValidationError(
+                        "The Matter standard has no readable text.",
+                    );
+                }
+                return text;
+            })();
+            reviewStandardTextCacheRef.current.set(key, pending);
+            void pending.catch(() => {
+                if (reviewStandardTextCacheRef.current.get(key) === pending) {
+                    reviewStandardTextCacheRef.current.delete(key);
+                }
+            });
+            return pending;
+        },
+        [],
+    );
+
+    const verifyReviewStandardSources = useCallback(
+        async (input: {
+            reviewStandard: ReviewStandard;
+            items: WordSuggestionItem[];
+            citations: Citation[];
+            force?: boolean;
+        }) => {
+            if (!input.items.length) return;
+            const mappedCitations = input.items.map((item) =>
+                findReviewStandardCitation(
+                    input.citations,
+                    input.reviewStandard.documentId,
+                    item.standardCitationRef,
+                ),
+            );
+            if (mappedCitations.some((citation) => !citation)) {
+                throw reviewStandardCitationError(input.reviewStandard.filename);
+            }
+
+            const versionIds = new Set(
+                mappedCitations.map((citation) =>
+                    citation?.kind === "case" ? null : citation?.version_id ?? null,
+                ),
+            );
+            if (versionIds.size !== 1) {
+                throw reviewStandardCitationError(input.reviewStandard.filename);
+            }
+            const [versionId] = versionIds;
+            if (!versionId) {
+                throw reviewStandardCitationError(input.reviewStandard.filename);
+            }
+
+            let sourceText: string;
+            try {
+                sourceText = await loadReviewStandardText(
+                    input.reviewStandard.documentId,
+                    versionId,
+                    input.force,
+                );
+            } catch (error) {
+                if (isDeterministicReviewStandardSourceError(error)) {
+                    throw reviewStandardCitationError(
+                        input.reviewStandard.filename,
+                    );
+                }
+                throw error;
+            }
+            if (
+                input.items.some(
+                    (item) =>
+                        !findLocatedReviewStandardCitation(
+                            input.citations,
+                            input.reviewStandard.documentId,
+                            item.standardCitationRef,
+                            sourceText,
+                        ),
+                )
+            ) {
+                throw reviewStandardCitationError(input.reviewStandard.filename);
+            }
+        },
+        [loadReviewStandardText],
+    );
 
     const loadSelection = useCallback(async () => {
         if (host.kind !== "word" || !host.canReadSelection) return;
@@ -433,6 +677,7 @@ export function WordTaskPane() {
             const value = await readCurrentWordSelection();
             setSelection(value.trim());
             setSuggestion(null);
+            setReviewStandardVerification("not-required");
             setActiveSuggestionIndex(0);
             setApplied(null);
             if (!value.trim()) {
@@ -462,6 +707,7 @@ export function WordTaskPane() {
             setDocumentText(context.documentText);
             setDocumentTextTruncated(context.documentTextTruncated);
             setSuggestion(null);
+            setReviewStandardVerification("not-required");
             setActiveSuggestionIndex(0);
             setApplied(null);
             if (!context.documentText.trim()) {
@@ -515,12 +761,40 @@ export function WordTaskPane() {
         );
         setDocumentTextTruncated(false);
         setInstruction(previewContent.instruction);
-        if (previewMode === "ready") {
+        const previewReviewStandard = isPlaybookPreview
+            ? {
+                  documentId: "preview-review-standard",
+                  filename: "Customer Contract Playbook.docx",
+              }
+            : null;
+        const previewScope: WordReviewScope = isPlaybookPreview
+            ? "document"
+            : scope;
+        if (isPlaybookPreview) {
+            setScope("document");
+            setSelectedReviewStandardDocumentId(
+                "preview-review-standard",
+            );
+        } else {
+            setSelectedReviewStandardDocumentId("");
+        }
+        if (previewMode === "ready" || isPlaybookPreview) {
             setSuggestion({
                 items:
-                    scope === "document" && searchParams.get("lang") !== "zh"
-                        ? PREVIEW_DOCUMENT_SUGGESTIONS.map((item) => ({
+                    previewScope === "document" && searchParams.get("lang") !== "zh"
+                        ? PREVIEW_DOCUMENT_SUGGESTIONS.map((item, index) => ({
                               ...item,
+                              ...(previewReviewStandard
+                                  ? {
+                                        standard:
+                                            "The customer playbook requires 30 days' prior written notice and an exit right before revised fees apply.",
+                                        deviation:
+                                            index === 0
+                                                ? "The draft permits fee changes at any time."
+                                                : "The draft requires payment within 10 days even for disputed amounts.",
+                                        standardCitationRef: index + 1,
+                                    }
+                                  : {}),
                               status: "pending" as const,
                           }))
                         : [
@@ -529,25 +803,77 @@ export function WordTaskPane() {
                                   original: previewContent.selection,
                                   replacement: previewContent.suggestion,
                                   reason: "Addresses the requested legal and drafting issue with a precise replacement.",
+                                  ...(previewReviewStandard
+                                      ? {
+                                            standard:
+                                                "客户合同指引要求至少提前三十日书面通知，并允许客户在新费用生效前解除。",
+                                            deviation:
+                                                "当前条款允许供应商立即调整费用，且未提供无责解除权。",
+                                            standardCitationRef: 1,
+                                        }
+                                      : {}),
                                   status: "pending" as const,
                               },
                           ],
                 instruction: previewContent.instruction,
                 chatId: "preview-chat",
-                citations: [
-                    {
-                        type: "citation_data",
-                        kind: "document",
-                        ref: 1,
-                        doc_id: "contract-docx",
-                        document_id: "preview-document",
-                        filename: "Master Services Agreement.docx",
-                        page: 4,
-                        quote: previewContent.selection,
-                    },
-                ],
-                scope,
+                citations: previewReviewStandard
+                    ? isPlaybookMissingPreview
+                        ? []
+                        : [
+                              {
+                                  type: "citation_data",
+                                  kind: "document",
+                                  ref: 1,
+                                  doc_id: "doc-0",
+                                  document_id: "preview-review-standard",
+                                  version_id: "preview-standard-v1",
+                                  version_number: 1,
+                                  filename:
+                                      "Customer Contract Playbook.docx",
+                                  page: 2,
+                                  quote:
+                                      isPlaybookUnlocatedPreview
+                                          ? "The playbook requires an unavailable pricing protection."
+                                          : "Supplier must give at least 30 days' prior written notice before a fee change.",
+                              },
+                              {
+                                  type: "citation_data",
+                                  kind: "document",
+                                  ref: 2,
+                                  doc_id: "doc-0",
+                                  document_id: "preview-review-standard",
+                                  version_id: "preview-standard-v1",
+                                  version_number: 1,
+                                  filename:
+                                      "Customer Contract Playbook.docx",
+                                  page: 3,
+                                  quote:
+                                      "Payment terms must exclude disputed amounts and provide a commercially workable payment period.",
+                              },
+                          ]
+                    : [
+                          {
+                              type: "citation_data",
+                              kind: "document",
+                              ref: 1,
+                              doc_id: "contract-docx",
+                              document_id: "preview-document",
+                              filename: "Master Services Agreement.docx",
+                              page: 4,
+                              quote: previewContent.selection,
+                          },
+                      ],
+                scope: previewScope,
+                reviewStandard: previewReviewStandard,
             });
+            setReviewStandardVerification(
+                previewReviewStandard
+                    ? isPlaybookMissingPreview || isPlaybookUnlocatedPreview
+                        ? "blocked"
+                        : "verified"
+                    : "not-required",
+            );
             setActiveSuggestionIndex(0);
             setActiveTab("review");
         } else if (previewMode === "progress" || previewMode === "retrying") {
@@ -575,7 +901,17 @@ export function WordTaskPane() {
             setActiveTab("assistant");
         }
         setProjectsLoading(false);
-    }, [isPreview, previewContent, previewMode, scope, searchParams]);
+    }, [
+        isPlaybookMissingPreview,
+        isPlaybookPreview,
+        isPlaybookUnlocatedPreview,
+        isPreview,
+        previewContent,
+        previewMode,
+        previewScenario,
+        scope,
+        searchParams,
+    ]);
 
     useEffect(() => {
         if (isPreview) return;
@@ -626,6 +962,7 @@ export function WordTaskPane() {
     useEffect(() => {
         setMatterDocuments([]);
         setSelectedMatterDocumentId("");
+        setSelectedReviewStandardDocumentId("");
         setMatterDocumentVersionBase(null);
         setMatterDocumentError(null);
         setMatterVersionMessage(null);
@@ -653,6 +990,32 @@ export function WordTaskPane() {
                     versionNumber: resumePointer.baseVersionNumber,
                 });
             }
+            if (
+                resumePointer?.projectId === project.id &&
+                resumePointer.reviewStandardDocumentId &&
+                documents.some(
+                    (document) =>
+                        document.id === resumePointer.reviewStandardDocumentId &&
+                        document.status === "ready" &&
+                        isReviewStandardDocument(document),
+                )
+            ) {
+                setSelectedReviewStandardDocumentId(
+                    resumePointer.reviewStandardDocumentId,
+                );
+            } else if (
+                isPlaybookPreview &&
+                documents.some(
+                    (document) =>
+                        document.id === "preview-review-standard" &&
+                        document.status === "ready" &&
+                        isReviewStandardDocument(document),
+                )
+            ) {
+                setSelectedReviewStandardDocumentId(
+                    "preview-review-standard",
+                );
+            }
         };
 
         if (isPreview) {
@@ -679,7 +1042,13 @@ export function WordTaskPane() {
         return () => {
             cancelled = true;
         };
-    }, [isPreview, projects, resumePointer, selectedProjectId]);
+    }, [
+        isPlaybookPreview,
+        isPreview,
+        projects,
+        resumePointer,
+        selectedProjectId,
+    ]);
 
     useEffect(() => {
         if (
@@ -698,6 +1067,11 @@ export function WordTaskPane() {
 
         restoreStartedRef.current = true;
         setRestoringReview(true);
+        setReviewStandardVerification(
+            resumePointer.reviewStandardDocumentId
+                ? "checking"
+                : "not-required",
+        );
         let cancelled = false;
         void getChat(resumePointer.chatId)
             .then(async (detail) => {
@@ -709,6 +1083,31 @@ export function WordTaskPane() {
                     });
                 } catch (error) {
                     throw new SavedReviewRestoreError(error);
+                }
+                const restoredReviewStandard =
+                    resumePointer.reviewStandardDocumentId &&
+                    resumePointer.reviewStandardFilename
+                        ? {
+                              documentId:
+                                  resumePointer.reviewStandardDocumentId,
+                              filename: resumePointer.reviewStandardFilename,
+                          }
+                        : null;
+                if (restoredReviewStandard) {
+                    try {
+                        await verifyReviewStandardSources({
+                            reviewStandard: restoredReviewStandard,
+                            items: restored.items,
+                            citations: restored.citations,
+                        });
+                    } catch (error) {
+                        if (
+                            isDeterministicReviewStandardSourceError(error)
+                        ) {
+                            throw new SavedReviewRestoreError(error);
+                        }
+                        throw error;
+                    }
                 }
                 let sourceMatches = restoredWordReviewMatchesSource(
                     restored,
@@ -735,6 +1134,9 @@ export function WordTaskPane() {
                 }
                 if (cancelled) return;
 
+                setReviewStandardVerification(
+                    restoredReviewStandard ? "verified" : "not-required",
+                );
                 setMode(restored.mode);
                 setInstruction(restored.instruction);
                 setSuggestion({
@@ -743,6 +1145,15 @@ export function WordTaskPane() {
                     citations: restored.citations,
                     chatId: restored.chatId,
                     scope: restored.scope,
+                    reviewStandard:
+                        resumePointer.reviewStandardDocumentId &&
+                        resumePointer.reviewStandardFilename
+                            ? {
+                                  documentId:
+                                      resumePointer.reviewStandardDocumentId,
+                                  filename: resumePointer.reviewStandardFilename,
+                              }
+                            : null,
                 });
                 setActiveSuggestionIndex(restored.activeIndex);
                 setApplied(null);
@@ -761,6 +1172,7 @@ export function WordTaskPane() {
             .catch((error) => {
                 if (cancelled) return;
                 if (error instanceof SavedReviewRestoreError) {
+                    setReviewStandardVerification("blocked");
                     if (typeof window !== "undefined") {
                         clearWordReviewSessionPointer(window.localStorage);
                     }
@@ -773,6 +1185,11 @@ export function WordTaskPane() {
                 }
                 if (isTransientRestoreError(error)) {
                     restoreStartedRef.current = false;
+                    setReviewStandardVerification(
+                        resumePointer.reviewStandardDocumentId
+                            ? "blocked"
+                            : "not-required",
+                    );
                     setResumeIssue({
                         kind: "retry",
                         message: `Vera could not restore the saved review. ${readableError(error)}`,
@@ -782,6 +1199,7 @@ export function WordTaskPane() {
                 if (typeof window !== "undefined") {
                     clearWordReviewSessionPointer(window.localStorage);
                 }
+                setReviewStandardVerification("blocked");
                 setResumeActive(false);
                 setResumeIssue({
                     kind: "unavailable",
@@ -806,6 +1224,7 @@ export function WordTaskPane() {
         selectedProjectId,
         sourceReady,
         sourceText,
+        verifyReviewStandardSources,
     ]);
 
     useEffect(() => {
@@ -832,6 +1251,13 @@ export function WordTaskPane() {
                       baseVersionId: matterDocumentVersionBase.versionId,
                       baseVersionNumber:
                           matterDocumentVersionBase.versionNumber,
+                  }
+                : {}),
+            ...(suggestion.reviewStandard
+                ? {
+                      reviewStandardDocumentId:
+                          suggestion.reviewStandard.documentId,
+                      reviewStandardFilename: suggestion.reviewStandard.filename,
                   }
                 : {}),
         });
@@ -918,6 +1344,11 @@ export function WordTaskPane() {
 
     async function generateSuggestion() {
         if (!selectedProjectId || !sourceText.trim() || !instruction.trim()) return;
+        const reviewStandard =
+            scope === "document" ? selectedReviewStandardDocument : null;
+        setReviewStandardVerification(
+            reviewStandard ? "checking" : "not-required",
+        );
         setGenerating(true);
         setGenerateError(null);
         setActionError(null);
@@ -938,9 +1369,18 @@ export function WordTaskPane() {
             await new Promise((resolve) => window.setTimeout(resolve, 300));
             setSuggestion({
                 items:
-                    scope === "document"
-                        ? PREVIEW_DOCUMENT_SUGGESTIONS.map((item) => ({
+                    scope === "document" && searchParams.get("lang") !== "zh"
+                        ? PREVIEW_DOCUMENT_SUGGESTIONS.map((item, index) => ({
                               ...item,
+                              ...(reviewStandard
+                                  ? {
+                                        standard:
+                                            "The customer playbook requires 30 days' prior written notice and an exit right before revised fees apply.",
+                                        deviation:
+                                            "The draft does not include the applicable customer-side protection.",
+                                        standardCitationRef: index + 1,
+                                    }
+                                  : {}),
                               status: "pending" as const,
                           }))
                         : [
@@ -949,15 +1389,69 @@ export function WordTaskPane() {
                                   original: selection,
                                   replacement: previewContent.suggestion,
                                   reason: "Addresses the requested legal and drafting issue with a precise replacement.",
+                                  ...(reviewStandard
+                                      ? {
+                                            standard:
+                                                "客户合同指引要求至少提前三十日书面通知，并允许客户在新费用生效前解除。",
+                                            deviation:
+                                                "当前条款允许供应商立即调整费用，且未提供无责解除权。",
+                                            standardCitationRef: 1,
+                                        }
+                                      : {}),
                                   status: "pending" as const,
                               },
                           ],
                 instruction: instruction.trim(),
                 chatId: "preview-chat",
-                citations: [],
+                citations: reviewStandard
+                    ? [
+                          {
+                              type: "citation_data",
+                              kind: "document",
+                              ref: 1,
+                              doc_id: "doc-0",
+                              document_id: reviewStandard.id,
+                              version_id: "preview-standard-v1",
+                              version_number: 1,
+                              filename: reviewStandard.filename,
+                              page: 2,
+                              quote:
+                                  isPlaybookUnlocatedPreview
+                                      ? "The playbook requires an unavailable pricing protection."
+                                      : "Supplier must give at least 30 days' prior written notice before a fee change.",
+                          },
+                          {
+                              type: "citation_data",
+                              kind: "document",
+                              ref: 2,
+                              doc_id: "doc-0",
+                              document_id: reviewStandard.id,
+                              version_id: "preview-standard-v1",
+                              version_number: 1,
+                              filename: reviewStandard.filename,
+                              page: 3,
+                              quote:
+                                  "Payment terms must exclude disputed amounts and provide a commercially workable payment period.",
+                          },
+                      ]
+                    : [],
                 scope,
+                reviewStandard: reviewStandard
+                    ? {
+                          documentId: reviewStandard.id,
+                          filename: reviewStandard.filename,
+                      }
+                    : null,
             });
+            setReviewStandardVerification(
+                reviewStandard
+                    ? isPlaybookMissingPreview || isPlaybookUnlocatedPreview
+                        ? "blocked"
+                        : "verified"
+                    : "not-required",
+            );
             setActiveTab("review");
+            focusTaskPaneTab("review");
             setGenerating(false);
             return;
         }
@@ -978,10 +1472,13 @@ export function WordTaskPane() {
                           paragraphStart: segment.paragraphStart,
                           segmentIndex: segment.index,
                           segmentCount: segments.length,
+                          reviewStandard: reviewStandard
+                              ? { filename: reviewStandard.filename }
+                              : null,
                       }),
                   )
                 : [
-                      buildWordSuggestionPrompt({
+                  buildWordSuggestionPrompt({
                           mode,
                           selection,
                           instruction,
@@ -1011,22 +1508,31 @@ export function WordTaskPane() {
                     try {
                         const response = await streamProjectChat({
                             projectId: selectedProjectId,
-                            messages: [{ role: "user", content: prompt }],
+                            messages: [
+                                {
+                                    role: "user",
+                                    content: prompt,
+                                    ...(reviewStandard
+                                        ? {
+                                              files: [
+                                                  {
+                                                      filename:
+                                                          reviewStandard.filename,
+                                                      document_id:
+                                                          reviewStandard.id,
+                                                  },
+                                              ],
+                                          }
+                                        : {}),
+                                },
+                            ],
                             ...(chatId ? { chat_id: chatId } : {}),
-                            ...(selectedMatterDocument
+                            ...(reviewStandard
                                 ? {
-                                      displayed_doc: {
-                                          filename:
-                                              selectedMatterDocument.filename,
-                                          document_id:
-                                              selectedMatterDocument.id,
-                                      },
                                       attached_documents: [
                                           {
-                                              filename:
-                                                  selectedMatterDocument.filename,
-                                              document_id:
-                                                  selectedMatterDocument.id,
+                                              filename: reviewStandard.filename,
+                                              document_id: reviewStandard.id,
                                           },
                                       ],
                                   }
@@ -1064,10 +1570,17 @@ export function WordTaskPane() {
                     }
                 }
                 chatId = result.chatId ?? chatId;
-                const nextItems = segments
+                const citationRefOffset = reviewStandard
+                    ? highestCitationRef(citations)
+                    : 0;
+                const responseCitations = reviewStandard
+                    ? offsetCitationRefs(result.citations, citationRefOffset)
+                    : result.citations;
+                let nextItems = segments
                     ? parseWordDocumentSuggestions(result.text, segments[index].text, {
                           paragraphStart: segments[index].paragraphStart,
                           idOffset: items.length,
+                          requiresReviewStandard: Boolean(reviewStandard),
                       })
                     : [
                           {
@@ -1077,6 +1590,38 @@ export function WordTaskPane() {
                               reason: "Addresses the instruction for the selected Word text.",
                           },
                       ];
+                if (reviewStandard) {
+                    nextItems = offsetReviewStandardCitationRefs(
+                        nextItems,
+                        citationRefOffset,
+                    );
+                }
+                if (
+                    reviewStandard &&
+                    nextItems.some(
+                        (item) =>
+                            !findReviewStandardCitation(
+                                responseCitations,
+                                reviewStandard.id,
+                                item.standardCitationRef,
+                            ),
+                    )
+                ) {
+                    throw new Error(
+                        `Playbook source missing: ${reviewStandard.filename} was not cited for every suggestion. Generate the review again before writing to Word.`,
+                    );
+                }
+                if (reviewStandard) {
+                    await verifyReviewStandardSources({
+                        reviewStandard: {
+                            documentId: reviewStandard.id,
+                            filename: reviewStandard.filename,
+                        },
+                        items: [...items, ...nextItems],
+                        citations: [...citations, ...responseCitations],
+                    });
+                    setReviewStandardVerification("verified");
+                }
                 if (scope === "document" && host.kind === "word") {
                     await Promise.all(
                         nextItems.map((item) =>
@@ -1094,7 +1639,7 @@ export function WordTaskPane() {
                 }
                 items = [...items, ...nextItems];
                 completedItemCount = items.length;
-                citations = [...citations, ...result.citations];
+                citations = [...citations, ...responseCitations];
                 if (items.length) {
                     // Completed sections remain usable if a later model request
                     // is cancelled. The existing session pointer restores them.
@@ -1104,6 +1649,12 @@ export function WordTaskPane() {
                         citations,
                         chatId,
                         scope,
+                        reviewStandard: reviewStandard
+                            ? {
+                                  documentId: reviewStandard.id,
+                                  filename: reviewStandard.filename,
+                              }
+                            : null,
                     });
                 }
             }
@@ -1111,7 +1662,19 @@ export function WordTaskPane() {
                 throw new Error("Vera did not identify any changes in this document.");
             }
             setActiveTab("review");
+            focusTaskPaneTab("review");
         } catch (error) {
+            // A completed segment has already passed exact source relocation.
+            // Keep it usable when a later segment is cancelled or the provider
+            // fails. Only a source-verification failure, or no completed
+            // suggestions at all, may block the consequential Word write.
+            if (
+                reviewStandard &&
+                (!completedItemCount ||
+                    isReviewStandardSourceVerificationError(error))
+            ) {
+                setReviewStandardVerification("blocked");
+            }
             if (error instanceof Error && error.name === "AbortError") {
                 setGenerateError(
                     scope === "document" && completedItemCount
@@ -1171,6 +1734,9 @@ export function WordTaskPane() {
     function changeScope(nextScope: WordReviewScope) {
         if (generating || nextScope === scope) return;
         setScope(nextScope);
+        if (nextScope === "selection") {
+            setSelectedReviewStandardDocumentId("");
+        }
         setSuggestion(null);
         setActiveSuggestionIndex(0);
         setApplied(null);
@@ -1200,6 +1766,13 @@ export function WordTaskPane() {
         const nextTab = TASK_PANE_TABS[nextIndex][0];
         setActiveTab(nextTab);
         window.setTimeout(() => document.getElementById(`word-tab-${nextTab}`)?.focus(), 0);
+    }
+
+    function focusTaskPaneTab(tab: TaskPaneTab) {
+        window.setTimeout(
+            () => document.getElementById(`word-tab-${tab}`)?.focus(),
+            0,
+        );
     }
 
     function cancelGeneration() {
@@ -1232,6 +1805,33 @@ export function WordTaskPane() {
         setRestoreAttempt((attempt) => attempt + 1);
     }
 
+    async function confirmReviewStandardBeforeWrite() {
+        if (!suggestion?.reviewStandard) return;
+        // This action is only reachable once the existing suggestion has
+        // already passed an exact source relocation. Keep that verified state
+        // on a transport failure so the user can try the same consequential
+        // action again; the action itself still fails closed on this attempt.
+        const priorVerification = reviewStandardVerification;
+        setReviewStandardVerification("checking");
+        try {
+            await verifyReviewStandardSources({
+                reviewStandard: suggestion.reviewStandard,
+                items: suggestion.items,
+                citations: suggestion.citations,
+                force: true,
+            });
+            setReviewStandardVerification("verified");
+        } catch (error) {
+            setReviewStandardVerification(
+                isDeterministicReviewStandardSourceError(error) ||
+                    priorVerification !== "verified"
+                    ? "blocked"
+                    : "verified",
+            );
+            throw error;
+        }
+    }
+
     function startNewReview() {
         if (!isPreview && typeof window !== "undefined") {
             clearWordReviewSessionPointer(window.localStorage);
@@ -1242,6 +1842,7 @@ export function WordTaskPane() {
         setResumeMessage(null);
         setRestoredSourceMismatch(false);
         setSuggestion(null);
+        setReviewStandardVerification("not-required");
         setActiveSuggestionIndex(0);
         setApplied(null);
         setActionError(null);
@@ -1275,9 +1876,18 @@ export function WordTaskPane() {
 
     async function applySuggestionAsTrackedChange() {
         if (!suggestion || !activeSuggestion || applying) return;
+        if (reviewStandardSourceBlocked) {
+            setActionError(
+                matterDocumentsLoading || reviewStandardVerification === "checking"
+                    ? "Vera is confirming the Matter standard before writing to Word."
+                    : "Playbook source missing. Vera cannot write this suggestion to Word until the standard has a verifiable Matter citation.",
+            );
+            return;
+        }
         setApplying("tracked");
         setActionError(null);
         try {
+            await confirmReviewStandardBeforeWrite();
             const result =
                 suggestion.scope === "document"
                     ? await applyTrackedReplacementAtAnchor({
@@ -1312,9 +1922,18 @@ export function WordTaskPane() {
 
     async function addSuggestionComment() {
         if (!suggestion || !activeSuggestion || applying) return;
+        if (reviewStandardSourceBlocked) {
+            setActionError(
+                matterDocumentsLoading || reviewStandardVerification === "checking"
+                    ? "Vera is confirming the Matter standard before writing to Word."
+                    : "Playbook source missing. Vera cannot write this suggestion to Word until the standard has a verifiable Matter citation.",
+            );
+            return;
+        }
         setApplying("comment");
         setActionError(null);
         try {
+            await confirmReviewStandardBeforeWrite();
             const comment = `Vera suggestion:\n${activeSuggestion.replacement}\n\nReason: ${activeSuggestion.reason}\n\nInstruction: ${suggestion.instruction}`;
             if (suggestion.scope === "document") {
                 await insertSuggestionCommentAtAnchor({
@@ -1400,12 +2019,46 @@ export function WordTaskPane() {
     const staleOrAmbiguousSelection =
         !!actionError && isStaleOrAmbiguousSelectionError(actionError);
     const readOnlyDocument = !!actionError && isReadOnlyDocumentError(actionError);
+    const reviewStandardSourceCitation =
+        suggestion?.reviewStandard && activeSuggestion
+            ? findReviewStandardCitation(
+                  suggestion.citations,
+                  suggestion.reviewStandard.documentId,
+                  activeSuggestion.standardCitationRef,
+              )
+            : null;
+    const reviewStandardUnavailable =
+        !!suggestion?.reviewStandard &&
+        (matterDocumentsLoading ||
+            !reviewStandardDocuments.some(
+                (document) =>
+                    document.id === suggestion.reviewStandard?.documentId &&
+                    document.status === "ready",
+            ));
+    const reviewStandardSourceBlocked =
+        !!suggestion?.reviewStandard &&
+        (!reviewStandardSourceCitation ||
+            reviewStandardUnavailable ||
+            reviewStandardVerification !== "verified");
+    const reviewStandardSourceHref =
+        selectedProject &&
+        reviewStandardSourceCitation &&
+        !reviewStandardUnavailable &&
+        reviewStandardVerification === "verified"
+            ? citationDocumentHref(selectedProject.id, reviewStandardSourceCitation)
+            : null;
     const canWriteToWord =
         host.kind === "word" &&
         host.canReviewInDocument &&
         activeSuggestion?.status === "pending" &&
+        !reviewStandardSourceBlocked &&
+        !generating &&
         !staleOrAmbiguousSelection &&
         !readOnlyDocument;
+    const hasWriteRestrictionMessage =
+        activeSuggestion?.status === "pending" &&
+        !canWriteToWord &&
+        !applied;
     const canLocateInWord =
         host.kind === "word" &&
         host.canReadSelection &&
@@ -1419,6 +2072,8 @@ export function WordTaskPane() {
         isStaleOrAmbiguousSelectionError(generateError);
     const generateErrorTitle = providerQueued
         ? "Model is queued"
+        : generateError && /playbook source missing/i.test(generateError)
+          ? "Playbook source missing"
         : documentLocationError
           ? "Document changed"
           : generateError && /model|provider|api|network|fetch|unavailable|quota|credential/i.test(generateError)
@@ -1428,6 +2083,10 @@ export function WordTaskPane() {
         ? `The ${scope === "selection" ? "selection" : "document"} changed. Refresh it before applying this suggestion.`
         : readOnlyDocument
           ? "This Word document is read-only. You can still copy the suggestion."
+          : reviewStandardSourceBlocked
+            ? matterDocumentsLoading || reviewStandardVerification === "checking"
+              ? "Vera is confirming the Matter standard before enabling Word actions. You can still copy the suggestion."
+              : "Copy stays available. Select a Matter standard with a verifiable source before writing to Word."
           : host.kind === "word"
             ? "This Word version can read text but cannot insert a comment or tracked replacement. You can still copy the suggestion."
             : "Open this task pane in a compatible Word host to insert a comment or tracked replacement. You can still copy the suggestion.";
@@ -1522,6 +2181,7 @@ export function WordTaskPane() {
                                                     setSelectedProjectId(event.target.value);
                                                     setMatterDocuments([]);
                                                     setSelectedMatterDocumentId("");
+                                                    setSelectedReviewStandardDocumentId("");
                                                     setMatterDocumentVersionBase(null);
                                                     setMatterDocumentError(null);
                                                     setMatterVersionMessage(null);
@@ -1605,6 +2265,65 @@ export function WordTaskPane() {
                                         </p>
                                     )}
                                 </section>
+
+                                {scope === "document" && selectedProject && (
+                                    <section
+                                        aria-labelledby="review-standard-heading"
+                                        className="mt-4 border-t border-gray-200/80 pt-4"
+                                    >
+                                        <h2
+                                            id="review-standard-heading"
+                                            className="text-sm font-semibold text-gray-900"
+                                        >
+                                            Review against
+                                        </h2>
+                                        <p
+                                            id="review-standard-help"
+                                            className="mt-1 text-sm leading-5 text-gray-600"
+                                        >
+                                            Optionally use a Matter DOCX as the drafting standard.
+                                        </p>
+                                        {matterDocumentsLoading ? (
+                                            <div className="mt-2 h-10 animate-pulse rounded-lg bg-gray-100 motion-reduce:animate-none" />
+                                        ) : reviewStandardDocuments.length ? (
+                                            <select
+                                                id="word-review-standard"
+                                                aria-label="Review against Matter standard"
+                                                aria-describedby="review-standard-help"
+                                                value={selectedReviewStandardDocumentId}
+                                                disabled={generating || restoringReview}
+                                                onChange={(event) => {
+                                                    setSelectedReviewStandardDocumentId(
+                                                        event.target.value,
+                                                    );
+                                                    setSuggestion(null);
+                                                    setReviewStandardVerification(
+                                                        "not-required",
+                                                    );
+                                                    setActiveSuggestionIndex(0);
+                                                    setApplied(null);
+                                                    setActionError(null);
+                                                    setGenerateError(null);
+                                                }}
+                                                className="mt-2 min-h-10 w-full truncate rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 outline-none transition-colors hover:border-gray-400 focus-visible:border-blue-600 focus-visible:ring-2 focus-visible:ring-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                <option value="">No Matter DOCX standard</option>
+                                                {reviewStandardDocuments.map((document) => (
+                                                    <option
+                                                        key={document.id}
+                                                        value={document.id}
+                                                    >
+                                                        {document.filename}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        ) : (
+                                            <p className="mt-2 text-sm leading-5 text-gray-700">
+                                                Add a Matter DOCX before using a standard.
+                                            </p>
+                                        )}
+                                    </section>
+                                )}
 
                                 <section aria-labelledby="instruction-heading" className="mt-6 border-t border-gray-200/80 pt-6">
                                     <h2 id="instruction-heading" className="text-sm font-semibold text-gray-900">
@@ -1703,7 +2422,9 @@ export function WordTaskPane() {
                                         </p>
                                     )}
                                     <p className="mt-2 text-sm leading-5 text-gray-600">
-                                        {scope === "selection" ? "Selected text" : "Loaded main document text"} is sent to your configured model when you generate suggestions.
+                                        {selectedReviewStandardDocument
+                                            ? <>Loaded main document text and the Matter standard <span className="break-words font-medium text-gray-800">{selectedReviewStandardDocument.filename}</span> are sent to your configured model when you generate suggestions.</>
+                                            : <>{scope === "selection" ? "Selected text" : "Loaded main document text"} is sent to your configured model when you generate suggestions.</>}
                                     </p>
                                     {restoringReview && (
                                         <p
@@ -1846,6 +2567,60 @@ export function WordTaskPane() {
                                                 {activeSuggestion.reason}
                                             </p>
                                         )}
+                                        {suggestion?.reviewStandard && (
+                                            <section
+                                                aria-label="Review standard"
+                                                className="mt-3 border-y border-gray-200 py-3"
+                                            >
+                                                <p className="text-xs font-medium text-gray-700">
+                                                    Review standard
+                                                </p>
+                                                <p
+                                                    title={suggestion.reviewStandard.filename}
+                                                    className="mt-1 break-words text-sm font-medium leading-5 text-gray-900"
+                                                >
+                                                    {suggestion.reviewStandard.filename}
+                                                </p>
+                                                {activeSuggestion?.standard && (
+                                                    <p className="mt-2 text-sm leading-5 text-gray-700">
+                                                        <span className="font-medium text-gray-900">
+                                                            Standard:
+                                                        </span>{" "}
+                                                        {activeSuggestion.standard}
+                                                    </p>
+                                                )}
+                                                {activeSuggestion?.deviation && (
+                                                    <p className="mt-2 text-sm leading-5 text-gray-700">
+                                                        <span className="font-medium text-gray-900">
+                                                            Difference:
+                                                        </span>{" "}
+                                                        {activeSuggestion.deviation}
+                                                    </p>
+                                                )}
+                                                {reviewStandardSourceHref &&
+                                                reviewStandardSourceCitation ? (
+                                                    <Link
+                                                        href={reviewStandardSourceHref}
+                                                        target="_blank"
+                                                        rel="noreferrer"
+                                                        className="mt-2 inline-flex min-h-10 break-words items-center gap-1.5 rounded-lg px-1 text-sm font-medium text-blue-700 outline-none hover:text-blue-900 focus-visible:ring-2 focus-visible:ring-blue-600"
+                                                    >
+                                                        Open Matter standard source · {citationLabel(reviewStandardSourceCitation)}
+                                                        <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                                                    </Link>
+                                                ) : (
+                                                    <p
+                                                        role="alert"
+                                                        className="mt-2 text-sm leading-5 text-amber-900"
+                                                    >
+                                                        {matterDocumentsLoading ||
+                                                        reviewStandardVerification === "checking"
+                                                            ? "Vera is confirming the Matter standard before enabling Word actions."
+                                                            : "Playbook source missing. Vera cannot write this suggestion to Word until the standard has a verifiable Matter citation."}
+                                                    </p>
+                                                )}
+                                            </section>
+                                        )}
                                     </>
                                 )}
                                 {suggestion?.citations.length ? (
@@ -1856,7 +2631,9 @@ export function WordTaskPane() {
                                         </ul>
                                     </div>
                                 ) : null}
-                                {suggestion && suggestion.citations.length === 0 && (
+                                {suggestion &&
+                                    suggestion.citations.length === 0 &&
+                                    !suggestion.reviewStandard && (
                                     <div role="status" className="mt-3 rounded-lg bg-amber-50 px-3 py-2.5 text-sm leading-5 text-amber-950">
                                         <p className="font-medium">No Matter source linked</p>
                                         <p className="mt-1">Verify this drafting suggestion against the Word text or the saved Matter chat before applying it.</p>
@@ -1864,12 +2641,12 @@ export function WordTaskPane() {
                                 )}
                                 {activeSuggestion && (
                                     <div className="mt-4 space-y-2">
-                                        <PillButton tone="black" size="normal" className="min-h-11 w-full" disabled={!canWriteToWord || !!applying} onClick={() => void applySuggestionAsTrackedChange()}>
+                                        <PillButton aria-describedby={hasWriteRestrictionMessage ? "word-write-restriction" : undefined} tone="black" size="normal" className="min-h-11 w-full" disabled={!canWriteToWord || !!applying} onClick={() => void applySuggestionAsTrackedChange()}>
                                             {applying === "tracked" ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <FilePenLine className="h-4 w-4" />}
                                             Apply as tracked change
                                         </PillButton>
                                         <div className="grid grid-cols-1 gap-2 min-[300px]:grid-cols-2">
-                                            <PillButton tone="white" size="normal" className="min-h-11 w-full" disabled={!canWriteToWord || !!applying} onClick={() => void addSuggestionComment()}>
+                                            <PillButton aria-describedby={hasWriteRestrictionMessage ? "word-write-restriction" : undefined} tone="white" size="normal" className="min-h-11 w-full" disabled={!canWriteToWord || !!applying} onClick={() => void addSuggestionComment()}>
                                                 {applying === "comment" ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <MessageSquarePlus className="h-4 w-4" />}
                                                 Insert comment
                                             </PillButton>
@@ -1898,8 +2675,8 @@ export function WordTaskPane() {
                                         )}
                                     </div>
                                 )}
-                                {activeSuggestion?.status === "pending" && !canWriteToWord && !applied && (
-                                    <p className="mt-3 text-sm leading-5 text-amber-900">
+                                {hasWriteRestrictionMessage && (
+                                    <p id="word-write-restriction" className="mt-3 text-sm leading-5 text-amber-900">
                                         {writeRestrictionMessage}
                                     </p>
                                 )}
