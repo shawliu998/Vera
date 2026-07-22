@@ -18,7 +18,7 @@ import type { ApiKeyState } from "@/app/lib/mikeApi";
 export interface ModelOption {
     id: string;
     label: string;
-    group: "Anthropic" | "Google" | "OpenAI" | "DeepSeek";
+    group: "Anthropic" | "Google" | "OpenAI" | "DeepSeek" | "Kimi";
 }
 
 export const MODELS: ModelOption[] = [
@@ -41,6 +41,7 @@ export const MODELS: ModelOption[] = [
         label: "DeepSeek V4 Pro",
         group: "DeepSeek",
     },
+    { id: "kimi-k3", label: "Kimi K3", group: "Kimi" },
 ];
 
 export const SETTINGS_MODELS: ModelOption[] = [
@@ -63,6 +64,7 @@ const GROUP_ORDER: ModelOption["group"][] = [
     "Google",
     "OpenAI",
     "DeepSeek",
+    "Kimi",
 ];
 const itemClassName =
     "rounded-xl px-2.5 py-1.5 text-gray-700 focus:bg-app-surface-hover focus:text-gray-900 data-[highlighted]:bg-app-surface-hover data-[highlighted]:text-gray-900";

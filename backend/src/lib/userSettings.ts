@@ -3,6 +3,7 @@ import {
     resolveModel,
     DEFAULT_TITLE_MODEL,
     DEFAULT_TABULAR_MODEL,
+    KIMI_LOW_MODELS,
     OPENAI_LOW_MODELS,
     type UserApiKeys,
 } from "./llm";
@@ -22,6 +23,7 @@ export type UserModelSettings = {
 function resolveTitleModel(apiKeys: UserApiKeys): string {
     if (apiKeys.gemini?.trim()) return DEFAULT_TITLE_MODEL;
     if (apiKeys.deepseek?.trim()) return "deepseek-v4-flash";
+    if (apiKeys.kimi?.trim()) return KIMI_LOW_MODELS[0];
     if (apiKeys.openai?.trim()) return OPENAI_LOW_MODELS[0];
     if (apiKeys.claude?.trim()) return "claude-haiku-4-5";
     return DEFAULT_TITLE_MODEL;

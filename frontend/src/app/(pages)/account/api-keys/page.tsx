@@ -37,6 +37,11 @@ const MODEL_API_KEY_FIELDS = [
         placeholder: "sk-...",
     },
     {
+        provider: "kimi",
+        label: "Kimi API Key",
+        placeholder: "sk-...",
+    },
+    {
         provider: "openrouter",
         label: "OpenRouter API Key",
         placeholder: "sk-or-...",

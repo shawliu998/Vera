@@ -8,6 +8,7 @@ export type ApiKeyProvider =
     | "gemini"
     | "openai"
     | "deepseek"
+    | "kimi"
     | "openrouter"
     | "courtlistener";
 export type ApiKeySource = "user" | "env" | null;
@@ -27,6 +28,7 @@ const PROVIDERS: ApiKeyProvider[] = [
     "gemini",
     "openai",
     "deepseek",
+    "kimi",
     "openrouter",
     "courtlistener",
 ];
@@ -45,6 +47,8 @@ function envApiKey(provider: ApiKeyProvider): string | null {
             return process.env.OPENAI_API_KEY?.trim() || null;
         case "deepseek":
             return process.env.DEEPSEEK_API_KEY?.trim() || null;
+        case "kimi":
+            return process.env.MOONSHOT_API_KEY?.trim() || null;
         case "openrouter":
             return process.env.OPENROUTER_API_KEY?.trim() || null;
         case "courtlistener":
@@ -119,6 +123,7 @@ export async function getUserApiKeyStatus(
         gemini: false,
         openai: false,
         deepseek: false,
+        kimi: false,
         openrouter: false,
         courtlistener: false,
         sources: {
@@ -126,6 +131,7 @@ export async function getUserApiKeyStatus(
             gemini: null,
             openai: null,
             deepseek: null,
+            kimi: null,
             openrouter: null,
             courtlistener: null,
         },
@@ -164,6 +170,7 @@ export async function getUserApiKeys(
         gemini: envApiKey("gemini"),
         openai: envApiKey("openai"),
         deepseek: envApiKey("deepseek"),
+        kimi: envApiKey("kimi"),
         openrouter: envApiKey("openrouter"),
         courtlistener: envApiKey("courtlistener"),
     };

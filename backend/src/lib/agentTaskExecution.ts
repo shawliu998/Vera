@@ -28,6 +28,9 @@ export function agentTaskExecutionErrorMessage(error: unknown) {
   if (/deepseek api key/i.test(message)) {
     return "DeepSeek is unavailable. Configure a DeepSeek API key in Settings before running this task.";
   }
+  if (/kimi api key/i.test(message)) {
+    return "Kimi is unavailable. Configure a Kimi API key in Settings before running this task.";
+  }
   if (/gemini api key/i.test(message)) {
     return "Gemini is unavailable. Configure a Gemini API key in Settings before running this task.";
   }
