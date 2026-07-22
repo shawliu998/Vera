@@ -4,6 +4,30 @@ This directory records a real Microsoft Word for Mac sideload attempt. Browser
 evidence and Office Host evidence are kept separate; no browser result is counted
 as an Office Host pass.
 
+## Matter version round-trip Host acceptance — 2026-07-22
+
+This acceptance uses the existing deterministic Tabular Review Word-memo export,
+not a user document. Vera downloaded the generated V1 and copied it to the new
+disposable file `/tmp/vera-tabular-word-roundtrip-20260722.docx`. Word 16.111
+opened that file and showed its draft notice, Matter, finding, and source-note
+table. The taskpane was served from this workspace and connected to the existing
+Vera session and API. No user document was opened, modified, saved, or closed.
+
+| Check | Result |
+|---|---|
+| Generate and download a synthetic review memo | **Pass** — the existing Tabular Review export produced the Matter V1 used for this run. |
+| Open memo in real Word Host | **Pass** — Word opened the disposable `/tmp` copy and rendered the expected memo content at 150% zoom. |
+| Current taskpane and session | **Pass** — Word loaded `https://localhost:3000/office/word` from this workspace and restored the existing Vera session. |
+| Explicit Matter and document target | **Pass** — the taskpane selected `Vera Synthetic License Review — Work Task QA` and `Software License Key Terms Memo - Review Memo.docx`; it showed `Current Matter version: V1` before upload. |
+| Save current Word file as a new version | **Pass** — the real Host compressed-file export uploaded through the existing document-version endpoint and returned `Saved ... as V2`; the taskpane then showed V2 as current and offered V3. |
+| Preserve existing version | **Pass** — after refresh, Vera displayed both Version 2 and Version 1 for the same Matter document. |
+| Re-download and validate V2 | **Pass** — the downloaded V2 was 15,777 bytes, `unzip -t` reported no compressed-data errors, and its document XML retained the memo title plus both citation references. |
+
+Real Host evidence: `screenshots/word-host-matter-v2-saved-20260722.jpeg`.
+Tracked-change, comment, locate-source, save/reopen, long-document, keyboard, and
+125%/150% checks remain covered by their existing Host acceptance entries; this
+run specifically closes the Word-to-Matter version round-trip.
+
 ## 2026-07-22 status update
 
 The user completed the distinct Office Add-ins gallery sign-in on 2026-07-22.

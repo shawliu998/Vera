@@ -3,6 +3,7 @@ import {
     AmbiguousWordAnchorError,
     detectWordHost,
     OfficeJsWordHost,
+    readCurrentWordDocumentFile,
     ReadOnlyWordDocumentError,
     StaleWordAnchorError,
     UnsupportedWordRegionError,
@@ -133,6 +134,104 @@ async function expectRejectsWith<T extends Error>(
 }
 
 async function run(): Promise<void> {
+    const documentBytes = [
+        Uint8Array.from([80, 75, 3]),
+        Uint8Array.from([4, 20, 26]),
+    ];
+    const requestedSlices: number[] = [];
+    let closeCount = 0;
+    const fileRuntime = officeRuntime();
+    fileRuntime.FileType = { Compressed: "compressed-docx" };
+    fileRuntime.context!.document!.getFileAsync = (
+        fileType,
+        options,
+        callback,
+    ) => {
+        assert.equal(fileType, "compressed-docx");
+        assert.equal(options.sliceSize, 4 * 1024 * 1024);
+        callback({
+            status: "succeeded",
+            value: {
+                sliceCount: documentBytes.length,
+                getSliceAsync: (
+                    index: number,
+                    sliceCallback: (result: {
+                        status: unknown;
+                        value?: unknown;
+                    }) => void,
+                ) => {
+                    requestedSlices.push(index);
+                    sliceCallback({
+                        status: "succeeded",
+                        value: { data: documentBytes[index] },
+                    });
+                },
+                closeAsync: (
+                    closeCallback: (result: { status: unknown }) => void,
+                ) => {
+                    closeCount += 1;
+                    closeCallback({ status: "succeeded" });
+                },
+            },
+        });
+    };
+    const exportedDocument = await readCurrentWordDocumentFile({
+        filename: "Matter draft.docx",
+        runtime: fileRuntime,
+    });
+    assert.equal(exportedDocument.name, "Matter draft.docx");
+    assert.equal(
+        exportedDocument.type,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    );
+    assert.deepEqual(
+        Array.from(new Uint8Array(await exportedDocument.arrayBuffer())),
+        [80, 75, 3, 4, 20, 26],
+    );
+    assert.deepEqual(requestedSlices, [0, 1]);
+    assert.equal(closeCount, 1);
+
+    let failedFileClosed = false;
+    const failedSliceRuntime = officeRuntime();
+    failedSliceRuntime.context!.document!.getFileAsync = (
+        _fileType,
+        _options,
+        callback,
+    ) => {
+        callback({
+            status: "succeeded",
+            value: {
+                sliceCount: 1,
+                getSliceAsync: (
+                    _index: number,
+                    sliceCallback: (result: {
+                        status: unknown;
+                        error?: { message?: string };
+                    }) => void,
+                ) =>
+                    sliceCallback({
+                        status: "failed",
+                        error: { message: "Host could not read this slice." },
+                    }),
+                closeAsync: (
+                    closeCallback: (result: { status: unknown }) => void,
+                ) => {
+                    failedFileClosed = true;
+                    closeCallback({ status: "succeeded" });
+                },
+            },
+        });
+    };
+    await assert.rejects(
+        () =>
+            readCurrentWordDocumentFile({
+                filename: "Matter draft.docx",
+                runtime: failedSliceRuntime,
+            }),
+        /Host could not read this slice/,
+    );
+    assert.equal(failedFileClosed, true);
+
     const boundRuntime = officeRuntime();
     boundRuntime.onReady = async function () {
         assert.equal(this, boundRuntime);

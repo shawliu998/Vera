@@ -113,6 +113,50 @@ test("persists only the review pointer and restores valid progress", () => {
     });
 });
 
+test("persists an optional Matter document version binding without invalidating legacy pointers", () => {
+    const storage = new MemoryStorage();
+    persistWordReviewSessionPointer(
+        storage,
+        {
+            projectId: "matter-1",
+            chatId: "chat-1",
+            scope: "document",
+            mode: "review",
+            activeIndex: 0,
+            statuses: { "word-suggestion-1": "pending" },
+            documentId: "document-1",
+            baseVersionId: "version-2",
+            baseVersionNumber: 2,
+        },
+        NOW,
+    );
+    assert.deepEqual(loadWordReviewSessionPointer(storage, NOW), {
+        version: 1,
+        projectId: "matter-1",
+        chatId: "chat-1",
+        scope: "document",
+        mode: "review",
+        activeIndex: 0,
+        statuses: { "word-suggestion-1": "pending" },
+        documentId: "document-1",
+        baseVersionId: "version-2",
+        baseVersionNumber: 2,
+        updatedAt: new Date(NOW).toISOString(),
+    });
+
+    storage.setItem(
+        WORD_REVIEW_SESSION_KEY,
+        JSON.stringify(pointer({ documentId: "document-1" })),
+    );
+    assert.equal(
+        loadWordReviewSessionPointer(storage, NOW),
+        null,
+        "partial bindings must fail closed",
+    );
+    storage.setItem(WORD_REVIEW_SESSION_KEY, JSON.stringify(pointer()));
+    assert.deepEqual(loadWordReviewSessionPointer(storage, NOW), pointer());
+});
+
 test("ignores expired or malformed review pointers", () => {
     const storage = new MemoryStorage();
     storage.setItem(WORD_REVIEW_SESSION_KEY, "not-json");

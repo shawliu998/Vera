@@ -15,6 +15,7 @@ import {
     LocateFixed,
     MessageSquarePlus,
     RefreshCw,
+    Save,
 } from "lucide-react";
 import {
     useCallback,
@@ -27,9 +28,14 @@ import {
 import { SiteLogo } from "@/app/components/site-logo";
 import { MODELS } from "@/app/components/assistant/ModelToggle";
 import { PillButton } from "@/app/components/ui/pill-button";
-import type { Citation, Project } from "@/app/components/shared/types";
+import type {
+    Citation,
+    Document as MatterDocument,
+    Project,
+} from "@/app/components/shared/types";
 import {
     getChat,
+    getProject,
     listProjects,
     MikeApiError,
     streamProjectChat,
@@ -46,6 +52,12 @@ import {
     readCurrentWordSelection,
     type WordHostState,
 } from "@/app/lib/wordOfficeBridge";
+import {
+    listMatterWordDocuments,
+    loadMatterDocumentVersionBase,
+    saveCurrentWordDocumentAsMatterVersion,
+    type MatterDocumentVersionBase,
+} from "@/app/lib/wordMatterVersion";
 import {
     buildWordDocumentReviewPrompt,
     buildWordSuggestionPrompt,
@@ -109,6 +121,23 @@ const PREVIEW_PROJECTS: Project[] = [
         shared_with: [],
         created_at: "2026-07-21T00:00:00.000Z",
         updated_at: "2026-07-21T00:00:00.000Z",
+        documents: [
+            {
+                id: "preview-document",
+                user_id: "preview-user",
+                project_id: "preview-matter",
+                filename: "Master Services Agreement.docx",
+                file_type: "docx",
+                storage_path: "preview/master-services-agreement.docx",
+                pdf_storage_path: null,
+                size_bytes: 48_000,
+                page_count: 7,
+                structure_tree: null,
+                status: "ready",
+                created_at: "2026-07-21T00:00:00.000Z",
+                active_version_number: 2,
+            },
+        ],
     },
     {
         id: "preview-matter-two",
@@ -327,6 +356,15 @@ export function WordTaskPane() {
     const [projectsLoading, setProjectsLoading] = useState(true);
     const [projectError, setProjectError] = useState<string | null>(null);
     const [selectedProjectId, setSelectedProjectId] = useState("");
+    const [matterDocuments, setMatterDocuments] = useState<MatterDocument[]>([]);
+    const [matterDocumentsLoading, setMatterDocumentsLoading] = useState(false);
+    const [matterDocumentError, setMatterDocumentError] = useState<string | null>(null);
+    const [selectedMatterDocumentId, setSelectedMatterDocumentId] = useState("");
+    const [matterDocumentVersionBase, setMatterDocumentVersionBase] =
+        useState<MatterDocumentVersionBase | null>(null);
+    const [matterVersionLoading, setMatterVersionLoading] = useState(false);
+    const [matterVersionSaving, setMatterVersionSaving] = useState(false);
+    const [matterVersionMessage, setMatterVersionMessage] = useState<string | null>(null);
     const [scope, setScope] = useState<WordReviewScope>(() =>
         resumePointer?.scope ??
         (searchParams.get("scope") === "document" ? "document" : "selection"),
@@ -367,6 +405,13 @@ export function WordTaskPane() {
     const selectedProject = useMemo(
         () => projects.find((project) => project.id === selectedProjectId) ?? null,
         [projects, selectedProjectId],
+    );
+    const selectedMatterDocument = useMemo(
+        () =>
+            matterDocuments.find(
+                (document) => document.id === selectedMatterDocumentId,
+            ) ?? null,
+        [matterDocuments, selectedMatterDocumentId],
     );
 
     const activeSuggestion = suggestion?.items[activeSuggestionIndex] ?? null;
@@ -579,6 +624,64 @@ export function WordTaskPane() {
     }, [isPreview, resumePointer]);
 
     useEffect(() => {
+        setMatterDocuments([]);
+        setSelectedMatterDocumentId("");
+        setMatterDocumentVersionBase(null);
+        setMatterDocumentError(null);
+        setMatterVersionMessage(null);
+        if (!selectedProjectId) {
+            setMatterDocumentsLoading(false);
+            return;
+        }
+
+        const applyProjectDocuments = (project: Project) => {
+            const documents = listMatterWordDocuments(project);
+            setMatterDocuments(documents);
+            if (
+                resumePointer?.projectId === project.id &&
+                resumePointer.documentId &&
+                resumePointer.baseVersionId &&
+                resumePointer.baseVersionNumber !== undefined &&
+                documents.some(
+                    (document) => document.id === resumePointer.documentId,
+                )
+            ) {
+                setSelectedMatterDocumentId(resumePointer.documentId);
+                setMatterDocumentVersionBase({
+                    documentId: resumePointer.documentId,
+                    versionId: resumePointer.baseVersionId,
+                    versionNumber: resumePointer.baseVersionNumber,
+                });
+            }
+        };
+
+        if (isPreview) {
+            const project = projects.find(
+                (candidate) => candidate.id === selectedProjectId,
+            );
+            if (project) applyProjectDocuments(project);
+            setMatterDocumentsLoading(false);
+            return;
+        }
+
+        let cancelled = false;
+        setMatterDocumentsLoading(true);
+        void getProject(selectedProjectId)
+            .then((project) => {
+                if (!cancelled) applyProjectDocuments(project);
+            })
+            .catch((error) => {
+                if (!cancelled) setMatterDocumentError(readableError(error));
+            })
+            .finally(() => {
+                if (!cancelled) setMatterDocumentsLoading(false);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [isPreview, projects, resumePointer, selectedProjectId]);
+
+    useEffect(() => {
         if (
             isPreview ||
             !resumePointer ||
@@ -723,12 +826,22 @@ export function WordTaskPane() {
             statuses: Object.fromEntries(
                 suggestion.items.map((item) => [item.id, item.status]),
             ),
+            ...(selectedMatterDocument && matterDocumentVersionBase
+                ? {
+                      documentId: selectedMatterDocument.id,
+                      baseVersionId: matterDocumentVersionBase.versionId,
+                      baseVersionNumber:
+                          matterDocumentVersionBase.versionNumber,
+                  }
+                : {}),
         });
     }, [
         activeSuggestionIndex,
         isPreview,
+        matterDocumentVersionBase,
         mode,
         selectedProjectId,
+        selectedMatterDocument,
         suggestion,
     ]);
 
@@ -738,6 +851,70 @@ export function WordTaskPane() {
         },
         [],
     );
+
+    async function selectMatterDocumentTarget(documentId: string) {
+        setSelectedMatterDocumentId(documentId);
+        setMatterDocumentVersionBase(null);
+        setMatterDocumentError(null);
+        setMatterVersionMessage(null);
+        if (!documentId) return;
+
+        if (isPreview) {
+            const document = matterDocuments.find(
+                (candidate) => candidate.id === documentId,
+            );
+            setMatterDocumentVersionBase({
+                documentId,
+                versionId: "preview-version-2",
+                versionNumber: document?.active_version_number ?? 2,
+            });
+            return;
+        }
+
+        setMatterVersionLoading(true);
+        try {
+            setMatterDocumentVersionBase(
+                await loadMatterDocumentVersionBase(documentId),
+            );
+        } catch (error) {
+            setMatterDocumentError(readableError(error));
+        } finally {
+            setMatterVersionLoading(false);
+        }
+    }
+
+    async function saveWordDocumentVersion() {
+        if (
+            !selectedMatterDocument ||
+            !matterDocumentVersionBase ||
+            host.kind !== "word"
+        ) {
+            return;
+        }
+        setMatterVersionSaving(true);
+        setMatterDocumentError(null);
+        setMatterVersionMessage(null);
+        try {
+            const version = await saveCurrentWordDocumentAsMatterVersion({
+                document: selectedMatterDocument,
+                base: matterDocumentVersionBase,
+            });
+            setMatterDocumentVersionBase({
+                documentId: selectedMatterDocument.id,
+                versionId: version.id,
+                versionNumber: version.version_number,
+            });
+            setMatterVersionMessage(
+                version.version_number
+                    ? `Saved ${selectedMatterDocument.filename} as V${version.version_number}.`
+                    : `Saved ${selectedMatterDocument.filename} as a new version.`,
+            );
+        } catch (error) {
+            setMatterDocumentError(readableError(error));
+        } finally {
+            setMatterVersionSaving(false);
+        }
+    }
 
     async function generateSuggestion() {
         if (!selectedProjectId || !sourceText.trim() || !instruction.trim()) return;
@@ -836,6 +1013,24 @@ export function WordTaskPane() {
                             projectId: selectedProjectId,
                             messages: [{ role: "user", content: prompt }],
                             ...(chatId ? { chat_id: chatId } : {}),
+                            ...(selectedMatterDocument
+                                ? {
+                                      displayed_doc: {
+                                          filename:
+                                              selectedMatterDocument.filename,
+                                          document_id:
+                                              selectedMatterDocument.id,
+                                      },
+                                      attached_documents: [
+                                          {
+                                              filename:
+                                                  selectedMatterDocument.filename,
+                                              document_id:
+                                                  selectedMatterDocument.id,
+                                          },
+                                      ],
+                                  }
+                                : {}),
                             model,
                             signal: controller.signal,
                         });
@@ -1325,6 +1520,11 @@ export function WordTaskPane() {
                                                 disabled={generating || restoringReview}
                                                 onChange={(event) => {
                                                     setSelectedProjectId(event.target.value);
+                                                    setMatterDocuments([]);
+                                                    setSelectedMatterDocumentId("");
+                                                    setMatterDocumentVersionBase(null);
+                                                    setMatterDocumentError(null);
+                                                    setMatterVersionMessage(null);
                                                     setSuggestion(null);
                                                     setApplied(null);
                                                     setActionError(null);
@@ -1753,6 +1953,138 @@ export function WordTaskPane() {
                                 ) : (
                                     <div className="mt-4 rounded-xl bg-gray-100 px-3 py-4 text-sm leading-6 text-gray-700">{scope === "selection" ? "Select text in Word before choosing an action." : "Load the Word document before choosing an action."}</div>
                                 )}
+                                <div className="mt-6 border-t border-gray-200/80 pt-6">
+                                    <h3 className="text-sm font-semibold text-gray-900">
+                                        Save to Matter
+                                    </h3>
+                                    <p className="mt-1 text-sm leading-5 text-gray-600">
+                                        Save the current Word file as a new version. Existing versions remain available.
+                                    </p>
+                                    {selectedProject ? (
+                                        <div className="mt-3">
+                                            <p className="truncate text-xs font-medium text-gray-600">
+                                                {selectedProject.name}
+                                            </p>
+                                            <label
+                                                htmlFor="word-matter-document"
+                                                className="mt-3 block text-sm font-medium text-gray-900"
+                                            >
+                                                Target document
+                                            </label>
+                                            {matterDocumentsLoading ? (
+                                                <div className="mt-2 h-10 animate-pulse rounded-lg bg-gray-100 motion-reduce:animate-none" />
+                                            ) : matterDocuments.length > 0 ? (
+                                                <select
+                                                    id="word-matter-document"
+                                                    value={selectedMatterDocumentId}
+                                                    disabled={
+                                                        generating ||
+                                                        restoringReview ||
+                                                        matterVersionLoading ||
+                                                        matterVersionSaving
+                                                    }
+                                                    onChange={(event) =>
+                                                        void selectMatterDocumentTarget(
+                                                            event.target.value,
+                                                        )
+                                                    }
+                                                    className="mt-2 min-h-10 w-full truncate rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 outline-none transition-colors hover:border-gray-400 focus-visible:border-blue-600 focus-visible:ring-2 focus-visible:ring-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+                                                >
+                                                    <option value="">
+                                                        Choose a Word document…
+                                                    </option>
+                                                    {matterDocuments.map(
+                                                        (document) => (
+                                                            <option
+                                                                key={document.id}
+                                                                value={document.id}
+                                                            >
+                                                                {document.filename}
+                                                            </option>
+                                                        ),
+                                                    )}
+                                                </select>
+                                            ) : (
+                                                <p className="mt-2 text-sm leading-5 text-gray-700">
+                                                    This Matter has no Word document to version. Add the source document in Vera first.
+                                                </p>
+                                            )}
+                                            {matterVersionLoading && (
+                                                <p role="status" className="mt-2 text-xs leading-5 text-gray-600">
+                                                    Checking the current Matter version…
+                                                </p>
+                                            )}
+                                            {selectedMatterDocument &&
+                                                matterDocumentVersionBase &&
+                                                !matterVersionLoading && (
+                                                    <>
+                                                    <p className="mt-2 text-xs leading-5 text-gray-600">
+                                                        Current Matter version: {matterDocumentVersionBase.versionNumber ? `V${matterDocumentVersionBase.versionNumber}` : "version available"}
+                                                    </p>
+                                                    <PillButton
+                                                        tone="black"
+                                                        size="normal"
+                                                        className="mt-3 min-h-11 w-full whitespace-normal px-3 py-2 leading-5"
+                                                        title={`Save ${selectedMatterDocument.filename} as ${matterDocumentVersionBase.versionNumber !== null ? `V${matterDocumentVersionBase.versionNumber + 1}` : "a new version"}`}
+                                                        disabled={
+                                                            host.kind !== "word" ||
+                                                            matterVersionSaving ||
+                                                            generating ||
+                                                            restoringReview
+                                                        }
+                                                        onClick={() =>
+                                                            void saveWordDocumentVersion()
+                                                        }
+                                                    >
+                                                        {matterVersionSaving ? (
+                                                            <Loader2 className="h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none" />
+                                                        ) : (
+                                                            <Save className="h-4 w-4 shrink-0" />
+                                                        )}
+                                                        <span className="min-w-0 break-words text-center">
+                                                            {matterVersionSaving
+                                                                ? `Saving ${selectedMatterDocument.filename}…`
+                                                                : `Save ${selectedMatterDocument.filename} as ${matterDocumentVersionBase.versionNumber !== null ? `V${matterDocumentVersionBase.versionNumber + 1}` : "a new version"}`}
+                                                        </span>
+                                                    </PillButton>
+                                                    {host.kind !== "word" && (
+                                                        <p className="mt-2 text-xs leading-5 text-gray-600">
+                                                            Open this task pane in Word to save the current document.
+                                                        </p>
+                                                    )}
+                                                    </>
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <p className="mt-3 text-sm leading-5 text-gray-700">
+                                            Choose a Matter in Assistant first.
+                                        </p>
+                                    )}
+                                    {matterDocumentError && (
+                                        <div role="alert" className="mt-3 text-sm leading-5 text-red-700">
+                                            <p>{matterDocumentError}</p>
+                                            {selectedMatterDocumentId && (
+                                                <button
+                                                    type="button"
+                                                    disabled={matterVersionLoading || matterVersionSaving}
+                                                    onClick={() =>
+                                                        void selectMatterDocumentTarget(
+                                                            selectedMatterDocumentId,
+                                                        )
+                                                    }
+                                                    className="mt-1 min-h-10 rounded-lg px-1 font-medium underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+                                                >
+                                                    Refresh target version
+                                                </button>
+                                            )}
+                                        </div>
+                                    )}
+                                    {matterVersionMessage && (
+                                        <p role="status" className="mt-3 text-sm leading-5 text-emerald-800">
+                                            {matterVersionMessage}
+                                        </p>
+                                    )}
+                                </div>
                             </section>
                         )}
 

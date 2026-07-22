@@ -173,9 +173,27 @@ interface OfficeAsyncResult {
     error?: { message?: string };
 }
 
+interface OfficeFileSliceRuntime {
+    data?: unknown;
+}
+
+interface OfficeFileRuntime {
+    sliceCount: number;
+    getSliceAsync: (
+        index: number,
+        callback: (result: OfficeAsyncResult) => void,
+    ) => void;
+    closeAsync: (callback: (result: OfficeAsyncResult) => void) => void;
+}
+
 interface OfficeDocumentRuntime {
     getSelectedDataAsync: (
         coercionType: unknown,
+        callback: (result: OfficeAsyncResult) => void,
+    ) => void;
+    getFileAsync?: (
+        fileType: unknown,
+        options: { sliceSize: number },
         callback: (result: OfficeAsyncResult) => void,
     ) => void;
 }
@@ -189,6 +207,7 @@ export interface OfficeJsRuntime {
         };
     };
     CoercionType?: { Text?: unknown };
+    FileType?: { Compressed?: unknown };
     AsyncResultStatus?: { Succeeded?: unknown };
 }
 
@@ -274,6 +293,9 @@ type OfficeWindow = Window & {
 
 const HOST_TIMEOUT_MS = 2500;
 const MAX_WORD_SEARCH_CHARS = 255;
+// Office's documented maximum keeps 60–100 MB legal documents to a bounded
+// number of host round trips while remaining supported by Word for Mac.
+const WORD_FILE_SLICE_SIZE = 4 * 1024 * 1024;
 const SUPPORTED_WRITE_REGIONS = new Set<WordRegion>([
     "main-document",
     "section",
@@ -282,6 +304,113 @@ const SUPPORTED_WRITE_REGIONS = new Set<WordRegion>([
 
 function officeWindow(): OfficeWindow | null {
     return typeof window === "undefined" ? null : (window as OfficeWindow);
+}
+
+function officeResultSucceeded(
+    result: OfficeAsyncResult,
+    runtime: OfficeJsRuntime | undefined,
+): boolean {
+    return (
+        result.status === runtime?.AsyncResultStatus?.Succeeded ||
+        String(result.status).toLowerCase() === "succeeded"
+    );
+}
+
+function officeResultError(
+    result: OfficeAsyncResult,
+    fallback: string,
+): Error {
+    return new Error(result.error?.message || fallback);
+}
+
+function officeFileSliceBytes(value: unknown): Uint8Array {
+    const data = (value as OfficeFileSliceRuntime | undefined)?.data;
+    if (data instanceof Uint8Array) return data;
+    if (data instanceof ArrayBuffer) return new Uint8Array(data);
+    if (
+        Array.isArray(data) &&
+        data.every(
+            (item) =>
+                Number.isInteger(item) && Number(item) >= 0 && Number(item) <= 255,
+        )
+    ) {
+        return Uint8Array.from(data as number[]);
+    }
+    throw new Error("Word returned an invalid document file slice.");
+}
+
+function getOfficeFile(
+    runtime: OfficeJsRuntime,
+    documentRuntime: OfficeDocumentRuntime,
+): Promise<OfficeFileRuntime> {
+    return new Promise((resolve, reject) => {
+        documentRuntime.getFileAsync!(
+            runtime.FileType?.Compressed ?? "compressed",
+            { sliceSize: WORD_FILE_SLICE_SIZE },
+            (result) => {
+                if (!officeResultSucceeded(result, runtime)) {
+                    reject(
+                        officeResultError(
+                            result,
+                            "Vera could not read the current Word document.",
+                        ),
+                    );
+                    return;
+                }
+                const file = result.value as OfficeFileRuntime | undefined;
+                if (
+                    !file ||
+                    !Number.isInteger(file.sliceCount) ||
+                    file.sliceCount < 0 ||
+                    typeof file.getSliceAsync !== "function" ||
+                    typeof file.closeAsync !== "function"
+                ) {
+                    reject(new Error("Word returned an invalid document file."));
+                    return;
+                }
+                resolve(file);
+            },
+        );
+    });
+}
+
+function getOfficeFileSlice(
+    runtime: OfficeJsRuntime,
+    file: OfficeFileRuntime,
+    index: number,
+): Promise<Uint8Array> {
+    return new Promise((resolve, reject) => {
+        file.getSliceAsync(index, (result) => {
+            if (!officeResultSucceeded(result, runtime)) {
+                reject(
+                    officeResultError(
+                        result,
+                        `Vera could not read Word document slice ${index + 1}.`,
+                    ),
+                );
+                return;
+            }
+            try {
+                resolve(officeFileSliceBytes(result.value));
+            } catch (error) {
+                reject(error);
+            }
+        });
+    });
+}
+
+function closeOfficeFile(
+    runtime: OfficeJsRuntime,
+    file: OfficeFileRuntime,
+): Promise<void> {
+    return new Promise((resolve) => {
+        file.closeAsync((result) => {
+            // Closing is best-effort after all bytes have been copied. A host
+            // close error must not discard a complete document buffer.
+            void officeResultSucceeded(result, runtime);
+            resolve();
+        });
+    });
 }
 
 function stringProperty(value: unknown, property: string): string | null {
@@ -818,6 +947,39 @@ export async function readCurrentWordSelection(
             },
         );
     });
+}
+
+export async function readCurrentWordDocumentFile(args: {
+    filename: string;
+    runtime?: OfficeJsRuntime;
+}): Promise<File> {
+    const runtime = args.runtime ?? officeWindow()?.Office;
+    const documentRuntime = runtime?.context?.document;
+    if (!runtime || !documentRuntime?.getFileAsync) {
+        throw new Error(
+            "This Word version cannot save the current document back to a Matter.",
+        );
+    }
+
+    const file = await getOfficeFile(runtime, documentRuntime);
+    try {
+        const slices: Uint8Array[] = [];
+        // Read sequentially: Office file handles have a small host-side
+        // request budget, while legal documents can span many slices.
+        for (let index = 0; index < file.sliceCount; index += 1) {
+            slices.push(await getOfficeFileSlice(runtime, file, index));
+        }
+        const fileParts = slices.map((slice) => {
+            const buffer = new ArrayBuffer(slice.byteLength);
+            new Uint8Array(buffer).set(slice);
+            return buffer;
+        });
+        return new File(fileParts, args.filename, {
+            type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        });
+    } finally {
+        await closeOfficeFile(runtime, file);
+    }
 }
 
 export async function readCurrentWordDocumentContext(args?: {

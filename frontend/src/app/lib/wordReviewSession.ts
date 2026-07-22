@@ -22,6 +22,9 @@ export type WordReviewSessionPointer = {
     mode: WordReviewMode;
     activeIndex: number;
     statuses: Record<string, WordSuggestionStatus>;
+    documentId?: string;
+    baseVersionId?: string;
+    baseVersionNumber?: number | null;
     updatedAt: string;
 };
 
@@ -69,6 +72,25 @@ function isPointer(value: unknown, now: number): value is WordReviewSessionPoint
 
     const updatedAt = Date.parse(value.updatedAt);
     if (!Number.isFinite(updatedAt) || now - updatedAt > MAX_SESSION_AGE_MS) {
+        return false;
+    }
+
+    const hasDocumentVersionBinding =
+        value.documentId !== undefined ||
+        value.baseVersionId !== undefined ||
+        value.baseVersionNumber !== undefined;
+    if (
+        hasDocumentVersionBinding &&
+        (typeof value.documentId !== "string" ||
+            !value.documentId ||
+            typeof value.baseVersionId !== "string" ||
+            !value.baseVersionId ||
+            !(
+                value.baseVersionNumber === null ||
+                (Number.isInteger(value.baseVersionNumber) &&
+                    Number(value.baseVersionNumber) > 0)
+            ))
+    ) {
         return false;
     }
 
