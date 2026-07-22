@@ -12,6 +12,7 @@ import {
     ExternalLink,
     FilePenLine,
     Loader2,
+    LocateFixed,
     MessageSquarePlus,
     RefreshCw,
 } from "lucide-react";
@@ -171,6 +172,7 @@ type SuggestionState = {
 type AppliedState =
     | { kind: "tracked"; message: string }
     | { kind: "comment"; message: string }
+    | { kind: "located"; message: string }
     | { kind: "skipped"; message: string }
     | null;
 
@@ -348,7 +350,7 @@ export function WordTaskPane() {
     } | null>(null);
     const [generating, setGenerating] = useState(false);
     const [generateError, setGenerateError] = useState<string | null>(null);
-    const [applying, setApplying] = useState<"tracked" | "comment" | null>(null);
+    const [applying, setApplying] = useState<"tracked" | "comment" | "locate" | null>(null);
     const [applied, setApplied] = useState<AppliedState>(null);
     const [actionError, setActionError] = useState<string | null>(null);
     const [resumeMessage, setResumeMessage] = useState<string | null>(null);
@@ -1150,6 +1152,37 @@ export function WordTaskPane() {
         }
     }
 
+    async function locateSuggestionInDocument() {
+        if (!suggestion || !activeSuggestion || applying) return;
+        setApplying("locate");
+        setActionError(null);
+        try {
+            await locateWordAnchor({
+                anchor: {
+                    exact_quote: activeSuggestion.original,
+                    locator:
+                        suggestion.scope === "document"
+                            ? { scope: "document", ...activeSuggestion.locator }
+                            : { scope: "selection" },
+                },
+                select: true,
+            });
+            setApplied({
+                kind: "located",
+                message: "Located the original text in Word. Vera did not change the document.",
+            });
+        } catch (error) {
+            const message = readableError(error);
+            setActionError(
+                suggestion.scope === "document" && isStaleOrAmbiguousSelectionError(message)
+                    ? "The document changed or this passage is not unique. Refresh the document and generate the review again."
+                    : message,
+            );
+        } finally {
+            setApplying(null);
+        }
+    }
+
     async function copySuggestion() {
         if (!activeSuggestion) return;
         try {
@@ -1178,6 +1211,10 @@ export function WordTaskPane() {
         activeSuggestion?.status === "pending" &&
         !staleOrAmbiguousSelection &&
         !readOnlyDocument;
+    const canLocateInWord =
+        host.kind === "word" &&
+        host.canReadSelection &&
+        !staleOrAmbiguousSelection;
     const providerQueued =
         !!generateError &&
         (isProviderQueuedError(generateError) || /waiting for the model/i.test(generateError));
@@ -1645,6 +1682,10 @@ export function WordTaskPane() {
                                                 {copied ? "Copied" : "Copy"}
                                             </button>
                                         </div>
+                                        <PillButton tone="white" size="normal" className="min-h-11 w-full" disabled={!canLocateInWord || !!applying} onClick={() => void locateSuggestionInDocument()}>
+                                            {applying === "locate" ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <LocateFixed className="h-4 w-4" />}
+                                            Locate in document
+                                        </PillButton>
                                         {activeSuggestion.status === "pending" && (
                                             <button
                                                 type="button"

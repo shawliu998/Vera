@@ -76,7 +76,10 @@ export interface WordHost {
     readonly capabilities: WordHostCapabilities;
     getSelection(): Promise<WordSelection>;
     getDocumentContext(): Promise<WordDocumentContext>;
-    locate(anchor: WordCitationAnchor): Promise<LocatedWordAnchor>;
+    locate(
+        anchor: WordCitationAnchor,
+        options?: { select?: boolean },
+    ): Promise<LocatedWordAnchor>;
     previewChange(
         anchor: WordCitationAnchor,
         replacement: string,
@@ -199,6 +202,7 @@ interface WordRangeRuntime {
     ) => WordRangeCollectionRuntime;
     insertText?: (text: string, location: unknown) => unknown;
     insertComment?: (text: string) => unknown;
+    select?: () => unknown;
 }
 
 interface WordParagraphRuntime {
@@ -489,10 +493,23 @@ export class OfficeJsWordHost implements WordHost {
         });
     }
 
-    async locate(anchor: WordCitationAnchor): Promise<LocatedWordAnchor> {
+    async locate(
+        anchor: WordCitationAnchor,
+        options?: { select?: boolean },
+    ): Promise<LocatedWordAnchor> {
         this.requireCapability("locate");
         return this.word!.run(async (context) => {
             const located = await this.locateRange(context, anchor);
+            if (options?.select) {
+                if (typeof located.range.select !== "function") {
+                    throw new WordHostCapabilityError("locate");
+                }
+                // Keep selection as an explicit, user-triggered operation. The
+                // same paragraph-plus-exact-quote lookup continues to reject
+                // stale or ambiguous anchors before Word changes its selection.
+                located.range.select();
+                await context.sync();
+            }
             return {
                 anchor,
                 text: located.text,
@@ -816,6 +833,7 @@ export async function readCurrentWordDocumentContext(args?: {
 
 export async function locateWordAnchor(args: {
     anchor: WordCitationAnchor;
+    select?: boolean;
     officeRuntime?: OfficeJsRuntime;
     wordRuntime?: OfficeJsWordRuntime;
 }): Promise<LocatedWordAnchor> {
@@ -823,7 +841,7 @@ export async function locateWordAnchor(args: {
         args.officeRuntime ?? officeWindow()?.Office,
         args.wordRuntime ?? officeWindow()?.Word,
     );
-    return host.locate(args.anchor);
+    return host.locate(args.anchor, { select: args.select });
 }
 
 export async function applyTrackedReplacementAtAnchor(args: {

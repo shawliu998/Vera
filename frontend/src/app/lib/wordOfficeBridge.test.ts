@@ -18,6 +18,7 @@ type FakeRange = {
     search?: (text: string) => { items: FakeRange[]; load: () => void };
     insertText: (text: string, location: unknown) => void;
     insertComment: (text: string) => void;
+    select?: () => void;
 };
 
 function officeRuntime(maxWordApi = 1.6): OfficeJsRuntime {
@@ -42,6 +43,7 @@ function fakeRange(args: {
     region?: string;
     onInsertText?: (text: string) => void;
     onInsertComment?: (text: string) => void;
+    onSelect?: () => void;
 }): FakeRange {
     return {
         text: args.text,
@@ -52,6 +54,7 @@ function fakeRange(args: {
         load: () => undefined,
         insertText: (text) => args.onInsertText?.(text),
         insertComment: (text) => args.onInsertComment?.(text),
+        ...(args.onSelect ? { select: args.onSelect } : {}),
     };
 }
 
@@ -148,21 +151,92 @@ async function run(): Promise<void> {
         "ANCHOR_STALE",
     );
 
+    let staleSelectCount = 0;
+    const staleSelectionHost = new OfficeJsWordHost(
+        officeRuntime(),
+        wordRuntime({
+            selection: fakeRange({
+                text: "The selection moved.",
+                onSelect: () => {
+                    staleSelectCount += 1;
+                },
+            }),
+        }),
+    );
+    await expectRejectsWith(
+        () =>
+            staleSelectionHost.locate(
+                {
+                    exact_quote: DOCUMENT_ANCHOR.exact_quote,
+                    locator: { scope: "selection" },
+                },
+                { select: true },
+            ),
+        StaleWordAnchorError,
+        "ANCHOR_STALE",
+    );
+    assert.equal(
+        staleSelectCount,
+        0,
+        "a stale selection must fail closed before Word changes its selection",
+    );
+
+    let selectedRangeCount = 0;
+    const selectableHost = new OfficeJsWordHost(
+        officeRuntime(),
+        wordRuntime({
+            matches: [
+                fakeRange({
+                    text: DOCUMENT_ANCHOR.exact_quote,
+                    onSelect: () => {
+                        selectedRangeCount += 1;
+                    },
+                }),
+            ],
+        }),
+    );
+    assert.deepEqual(
+        await selectableHost.locate(DOCUMENT_ANCHOR, { select: true }),
+        {
+            anchor: DOCUMENT_ANCHOR,
+            text: DOCUMENT_ANCHOR.exact_quote,
+            region: "main-document",
+        },
+        "a successful user-requested locate selects the exact Word range",
+    );
+    assert.equal(selectedRangeCount, 1);
+
+    let ambiguousSelectCount = 0;
     const ambiguousHost = new OfficeJsWordHost(
         officeRuntime(),
         wordRuntime({
             matches: [
-                fakeRange({ text: DOCUMENT_ANCHOR.exact_quote }),
-                fakeRange({ text: DOCUMENT_ANCHOR.exact_quote }),
+                fakeRange({
+                    text: DOCUMENT_ANCHOR.exact_quote,
+                    onSelect: () => {
+                        ambiguousSelectCount += 1;
+                    },
+                }),
+                fakeRange({
+                    text: DOCUMENT_ANCHOR.exact_quote,
+                    onSelect: () => {
+                        ambiguousSelectCount += 1;
+                    },
+                }),
             ],
         }),
     );
     const initialAmbiguous = await expectRejectsWith(
-        () => ambiguousHost.locate(DOCUMENT_ANCHOR),
+        () => ambiguousHost.locate(DOCUMENT_ANCHOR, { select: true }),
         AmbiguousWordAnchorError,
         "ANCHOR_AMBIGUOUS",
     );
     assert.equal(initialAmbiguous.matchCount, 2);
+    assert.equal(
+        ambiguousSelectCount,
+        0,
+        "an ambiguous anchor must fail closed before Word changes its selection",
+    );
 
     const repeated = "Repeated standard clause.";
     const paragraphLocatedHost = new OfficeJsWordHost(
