@@ -66,6 +66,18 @@ export type AgentTaskRetryCheckpoint = {
   classification: "rate_limit" | "provider_unavailable" | "network";
 };
 
+export type AgentTaskExecutionPauseClassification =
+  | "provider_capacity"
+  | "provider_network";
+
+type AgentTaskExecutionPauseCheckpointV1 = {
+  kind: "agent_task_execution_pause_v1";
+  classification: AgentTaskExecutionPauseClassification;
+  step_id: string;
+  attempt: number;
+  created_at: string;
+};
+
 export type AgentTaskSupplementalInput = {
   step_id: string;
   attempt: number;
@@ -785,30 +797,64 @@ export async function deferAgentTaskForProvider(
   taskId: string,
   userId: string,
   summary: string,
+  options: { classification?: AgentTaskExecutionPauseClassification } = {},
 ) {
   const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
   if (!snapshot) return null;
+  const task = snapshot.task as {
+    status: AgentTaskStatus;
+    current_step?: string | null;
+    latest_checkpoint?: unknown;
+  };
+  if (!["queued", "running", "verifying"].includes(task.status)) {
+    return snapshot;
+  }
   const current = snapshot.task.current_plan.find(
     (step: { status: AgentStepStatus }) => step.status === "running",
   );
   const updatedAt = now();
-  const { error } = await db
+  const retainedCheckpoint =
+    task.latest_checkpoint &&
+    typeof task.latest_checkpoint === "object" &&
+    !Array.isArray(task.latest_checkpoint)
+      ? (task.latest_checkpoint as Record<string, unknown>)
+      : {};
+  const checkpoint = current
+    ? {
+        ...retainedCheckpoint,
+        step_id: current.id,
+        iteration: current.attempt,
+        summary,
+        created_at: updatedAt,
+        ...(options.classification
+          ? {
+              execution_pause: {
+                kind: "agent_task_execution_pause_v1",
+                classification: options.classification,
+                step_id: current.id,
+                attempt: current.attempt,
+                created_at: updatedAt,
+              } satisfies AgentTaskExecutionPauseCheckpointV1,
+            }
+          : {}),
+      }
+    : task.latest_checkpoint;
+  let update = db
     .from("agent_tasks")
     .update({
       status: "paused",
-      latest_checkpoint: current
-        ? {
-            step_id: current.id,
-            iteration: current.attempt,
-            summary,
-            created_at: updatedAt,
-          }
-        : snapshot.task.latest_checkpoint,
+      latest_checkpoint: checkpoint,
       updated_at: updatedAt,
     })
     .eq("id", taskId)
-    .eq("user_id", userId);
+    .eq("user_id", userId)
+    .eq("status", task.status);
+  update = task.current_step
+    ? update.eq("current_step", task.current_step)
+    : update.is("current_step", null);
+  const { data: deferred, error } = await update.select("id").maybeSingle();
   if (error) throw dbError(error, "Failed to defer provider-queued task");
+  if (!deferred) return getAgentTaskSnapshot(db, taskId, userId);
   return getAgentTaskSnapshot(db, taskId, userId);
 }
 

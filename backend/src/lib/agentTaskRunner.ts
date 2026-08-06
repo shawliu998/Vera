@@ -1,20 +1,35 @@
 import {
+  deferAgentTaskForProvider,
   getAgentTaskSnapshot,
   readAgentTaskRetryCheckpoint,
   recordAgentTaskRetryCheckpoint,
   stopAgentTask,
+  type AgentTaskExecutionPauseClassification,
   type AgentTaskRetryCheckpoint,
 } from "./agentTasks";
 import {
   advanceAgentTaskExecution,
   agentTaskExecutionErrorMessage,
 } from "./agentTaskExecution";
-import { isTransientModelError } from "./agentStepExecutor";
+import {
+  MAX_AGENT_TASK_TRANSIENT_RETRIES,
+  MAX_AGENT_TASK_TRANSIENT_WAIT_MS,
+  agentTaskRetryBaseMs,
+  calculateAgentTaskBackoffMs,
+  classifyAgentTaskError,
+  parseRetryAfterMs,
+  type TransientAgentTaskError,
+} from "./agentTaskRetryPolicy";
 import { createServerSupabase } from "./supabase";
 
 const ACTIVE_STATUSES = ["queued", "running", "verifying"] as const;
-const MAX_TRANSIENT_RETRY_ATTEMPTS = 3;
-const MAX_TRANSIENT_RETRY_WAIT_MS = 60_000;
+
+export {
+  calculateAgentTaskBackoffMs,
+  classifyAgentTaskError,
+  parseRetryAfterMs,
+  type TransientAgentTaskError,
+} from "./agentTaskRetryPolicy";
 
 export type AgentTaskRunnerJob = {
   taskId: string;
@@ -29,110 +44,6 @@ type RunnerTaskSnapshot = {
   };
 };
 
-export type TransientAgentTaskError = {
-  classification: AgentTaskRetryCheckpoint["classification"];
-  retryAfterMs: number | null;
-};
-
-function numericStatus(error: unknown) {
-  if (!error || typeof error !== "object") return null;
-  const row = error as {
-    status?: unknown;
-    statusCode?: unknown;
-    response?: { status?: unknown };
-  };
-  for (const value of [row.status, row.statusCode, row.response?.status]) {
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-  }
-  return null;
-}
-
-function retryAfterHeader(error: unknown) {
-  if (!error || typeof error !== "object") return null;
-  const row = error as {
-    retryAfter?: unknown;
-    headers?: unknown;
-    response?: { headers?: unknown };
-  };
-  if (
-    typeof row.retryAfter === "string" ||
-    typeof row.retryAfter === "number"
-  ) {
-    return String(row.retryAfter);
-  }
-  for (const headers of [row.headers, row.response?.headers]) {
-    if (!headers || typeof headers !== "object") continue;
-    const getter = (headers as { get?: unknown }).get;
-    if (typeof getter === "function") {
-      const value = getter.call(headers, "retry-after");
-      if (typeof value === "string" && value.trim()) return value.trim();
-    }
-    const record = headers as Record<string, unknown>;
-    const value = record["retry-after"] ?? record["Retry-After"];
-    if (typeof value === "string" || typeof value === "number") {
-      return String(value);
-    }
-  }
-  const message = error instanceof Error ? error.message : String(error);
-  return message.match(/retry-after\s*[:=]\s*([^\s,;]+)/i)?.[1] ?? null;
-}
-
-export function parseRetryAfterMs(value: string | null, nowMs: number) {
-  if (!value) return null;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) {
-    return Math.round(seconds * 1000);
-  }
-  const dateMs = Date.parse(value);
-  if (Number.isNaN(dateMs)) return null;
-  return Math.max(0, dateMs - nowMs);
-}
-
-export function classifyAgentTaskError(
-  error: unknown,
-  nowMs = Date.now(),
-): TransientAgentTaskError | null {
-  const status = numericStatus(error);
-  if (status && [400, 401, 403, 404, 405, 409, 422].includes(status)) {
-    return null;
-  }
-  const message = error instanceof Error ? error.message : String(error);
-  const transient =
-    status === 429 || status === 503 || isTransientModelError(error);
-  if (!transient) return null;
-  const retryAfterMs = parseRetryAfterMs(retryAfterHeader(error), nowMs);
-  const classification: TransientAgentTaskError["classification"] =
-    status === 429 || /\b429\b|rate.?limit|throttl/i.test(message)
-      ? "rate_limit"
-      : status === 503 ||
-          /\b503\b|overloaded|queue|resource exhausted/i.test(message)
-        ? "provider_unavailable"
-        : "network";
-  return { classification, retryAfterMs };
-}
-
-export function calculateAgentTaskBackoffMs(
-  attempt: number,
-  options: {
-    retryAfterMs?: number | null;
-    baseMs?: number;
-    maxMs?: number;
-    jitterRatio?: number;
-    random?: () => number;
-  } = {},
-) {
-  const maxMs = options.maxMs ?? MAX_TRANSIENT_RETRY_WAIT_MS;
-  if (options.retryAfterMs != null) {
-    return Math.max(0, Math.min(maxMs, Math.round(options.retryAfterMs)));
-  }
-  const baseMs = options.baseMs ?? 2_000;
-  const jitterRatio = options.jitterRatio ?? 0.2;
-  const random = options.random ?? Math.random;
-  const exponential = Math.min(maxMs, baseMs * 2 ** Math.max(0, attempt - 1));
-  const factor = 1 - jitterRatio + random() * jitterRatio * 2;
-  return Math.max(0, Math.min(maxMs, Math.round(exponential * factor)));
-}
-
 type AgentTaskRunnerDependencies = {
   loadTask: (job: AgentTaskRunnerJob) => Promise<RunnerTaskSnapshot | null>;
   runIteration: (job: AgentTaskRunnerJob) => Promise<RunnerTaskSnapshot | null>;
@@ -141,6 +52,12 @@ type AgentTaskRunnerDependencies = {
     retry: AgentTaskRetryCheckpoint,
   ) => Promise<RunnerTaskSnapshot | null>;
   failTask: (job: AgentTaskRunnerJob, summary: string) => Promise<void>;
+  /** Optional only for legacy test seams; the production runner always binds it. */
+  deferTask?: (
+    job: AgentTaskRunnerJob,
+    summary: string,
+    classification: AgentTaskExecutionPauseClassification,
+  ) => Promise<void>;
   recoverJobs: () => Promise<AgentTaskRunnerJob[]>;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
@@ -230,7 +147,7 @@ export class AgentTaskRunner {
           ? 0
           : Math.max(
               0,
-              Math.min(MAX_TRANSIENT_RETRY_WAIT_MS, retryAtMs - now()),
+              Math.min(MAX_AGENT_TASK_TRANSIENT_WAIT_MS, retryAtMs - now()),
             );
         if (waitMs > 0) await sleep(waitMs);
         if (this.cancelled.has(job.taskId)) return;
@@ -255,16 +172,23 @@ export class AgentTaskRunner {
           );
           return;
         }
-        if (retryAttempt >= MAX_TRANSIENT_RETRY_ATTEMPTS) {
-          await this.dependencies.failTask(
-            job,
-            `The selected model remained unavailable after ${MAX_TRANSIENT_RETRY_ATTEMPTS} automatic retries. Retry the current step when the provider is available.`,
-          );
+        if (retryAttempt >= MAX_AGENT_TASK_TRANSIENT_RETRIES) {
+          const summary = `The selected model remained unavailable after ${MAX_AGENT_TASK_TRANSIENT_RETRIES} automatic retries. This step is paused without discarding existing work; resume it when the provider is available.`;
+          const classification: AgentTaskExecutionPauseClassification =
+            transient.classification === "network"
+              ? "provider_network"
+              : "provider_capacity";
+          if (this.dependencies.deferTask) {
+            await this.dependencies.deferTask(job, summary, classification);
+          } else {
+            await this.dependencies.failTask(job, summary);
+          }
           return;
         }
         retryAttempt += 1;
         const delayMs = calculateAgentTaskBackoffMs(retryAttempt, {
           retryAfterMs: transient.retryAfterMs,
+          baseMs: agentTaskRetryBaseMs(transient.classification),
           random: this.dependencies.random,
         });
         const retry: AgentTaskRetryCheckpoint = {
@@ -316,6 +240,14 @@ export const agentTaskRunner = new AgentTaskRunner({
       summary,
     });
   },
+  deferTask: (job, summary, classification) =>
+    deferAgentTaskForProvider(
+      createServerSupabase(),
+      job.taskId,
+      job.userId,
+      summary,
+      { classification },
+    ).then(() => {}),
   recoverJobs: recoverAgentTaskJobs,
 });
 

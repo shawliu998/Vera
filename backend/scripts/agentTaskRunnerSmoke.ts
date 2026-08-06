@@ -112,7 +112,7 @@ async function retryAndLifecycleSuite() {
     true,
     "503 retry checkpoints must preserve the submitted user input",
   );
-  assert.deepEqual(sleeps, [2_000, 4_000]);
+  assert.deepEqual(sleeps, [30_000, 60_000]);
   assert.equal(maxActive, 1, "one task must never execute concurrently twice");
   assert.equal(tasks.get("task_1")?.status, "completed");
 }
@@ -207,7 +207,8 @@ async function retryExhaustionSuite() {
   const task: FakeTask = { status: "running", latest_checkpoint: null };
   let iterations = 0;
   let retryWrites = 0;
-  let failureSummary = "";
+  let deferrals = 0;
+  let deferralClassification = "";
   const sleeps: number[] = [];
   const runner = new AgentTaskRunner({
     loadTask: async () => snapshot(task),
@@ -228,9 +229,13 @@ async function retryExhaustionSuite() {
       };
       return snapshot(task);
     },
-    failTask: async (_job, summary) => {
-      failureSummary = summary;
+    failTask: async () => {
       task.status = "failed";
+    },
+    deferTask: async (_job, _summary, classification) => {
+      deferrals += 1;
+      deferralClassification = classification;
+      task.status = "paused";
     },
     recoverJobs: async () => [],
     sleep: async (ms) => {
@@ -249,13 +254,137 @@ async function retryExhaustionSuite() {
     "the runner must stop after three scheduled transient retries",
   );
   assert.equal(retryWrites, 3, "only three retry checkpoints may be written");
-  assert.deepEqual(sleeps, [2_000, 4_000, 8_000]);
-  assert.equal(task.status, "failed");
-  assert.match(
-    failureSummary,
-    /after 3 automatic retries.*Retry the current step/i,
-    "retry exhaustion must provide a recoverable next action",
-  );
+  assert.deepEqual(sleeps, [30_000, 60_000, 60_000]);
+  assert.equal(task.status, "paused");
+  assert.equal(deferrals, 1);
+  assert.equal(deferralClassification, "provider_capacity");
+}
+
+async function sseProviderPauseAndResumeSuite() {
+  for (const providerError of [
+    { message: "SSE data.error code 1302", expected: "provider_capacity" },
+    { message: "SSE data.error code 1305", expected: "provider_capacity" },
+  ] as const) {
+    const step = { id: "step_fixed", attempt: 1 };
+    const durableEffects = new Set([
+      "runner-seam:existing-artifact-link",
+      "runner-seam:existing-citation",
+    ]);
+    const initialEffectsFingerprint = [...durableEffects].sort().join("|");
+    const durableEffectsFingerprint = () =>
+      [...durableEffects].sort().join("|");
+    const completedEffectId = "runner-seam:step_fixed-completed";
+    const task: FakeTask = {
+      status: "running",
+      latest_checkpoint: {
+        user_input: {
+          step_id: step.id,
+          attempt: step.attempt,
+          submitted_at: "2026-08-07T00:00:00.000Z",
+          document_ids: ["doc_fixed"],
+        },
+        existing_checkpoint: "retain-me",
+      },
+    };
+    const job = {
+      taskId: `task_${providerError.message.slice(-4)}`,
+      userId: "user_1",
+    };
+    let iterations = 0;
+    let retries = 0;
+    let failures = 0;
+    let pausedTaskId = "";
+    let successfulExecution = 0;
+    const runner = new AgentTaskRunner({
+      loadTask: async () => snapshot(task),
+      runIteration: async () => {
+        iterations += 1;
+        if (iterations <= 4) {
+          assert.equal(step.attempt, 1);
+          assert.equal(durableEffectsFingerprint(), initialEffectsFingerprint);
+          throw Object.assign(new Error(providerError.message), { status: "200" });
+        }
+        assert.equal(step.attempt, 1);
+        assert.equal(durableEffects.has(completedEffectId), false);
+        durableEffects.add(completedEffectId);
+        successfulExecution += 1;
+        task.status = "completed";
+        return snapshot(task);
+      },
+      recordRetry: async (_job, retry) => {
+        retries += 1;
+        assert.equal(step.attempt, 1);
+        assert.equal(durableEffectsFingerprint(), initialEffectsFingerprint);
+        task.latest_checkpoint = {
+          ...(task.latest_checkpoint as Record<string, unknown>),
+          runner_retry: retry,
+        };
+        return snapshot(task);
+      },
+      failTask: async () => {
+        failures += 1;
+        task.status = "failed";
+      },
+      deferTask: async (deferredJob, _summary, classification) => {
+        pausedTaskId = deferredJob.taskId;
+        assert.equal(classification, providerError.expected);
+        assert.equal(step.attempt, 1);
+        assert.equal(durableEffectsFingerprint(), initialEffectsFingerprint);
+        task.latest_checkpoint = {
+          ...(task.latest_checkpoint as Record<string, unknown>),
+          step_id: step.id,
+          iteration: step.attempt,
+          execution_pause: {
+            kind: "agent_task_execution_pause_v1",
+            classification,
+            step_id: step.id,
+            attempt: step.attempt,
+          },
+        };
+        task.status = "paused";
+      },
+      recoverJobs: async () => [],
+      sleep: async () => undefined,
+      now: () => 0,
+      random: () => 0.5,
+    });
+
+    runner.wake(job);
+    await runner.waitForIdle();
+    assert.equal(retries, 3, "each SSE capacity error has exactly three retries");
+    assert.equal(failures, 0, "provider capacity exhaustion must not fail work");
+    assert.equal(task.status, "paused");
+    assert.equal(pausedTaskId, job.taskId);
+    assert.equal(step.attempt, 1, "pausing must not advance the Step attempt");
+    assert.equal(durableEffectsFingerprint(), initialEffectsFingerprint);
+    assert.deepEqual(
+      (task.latest_checkpoint as Record<string, unknown>).user_input,
+      {
+        step_id: step.id,
+        attempt: 1,
+        submitted_at: "2026-08-07T00:00:00.000Z",
+        document_ids: ["doc_fixed"],
+      },
+      "provider pause must merge, rather than replace, the existing checkpoint",
+    );
+    assert.equal(
+      (task.latest_checkpoint as Record<string, unknown>).existing_checkpoint,
+      "retain-me",
+    );
+
+    task.status = "running"; // Existing explicit resume preserves the Task and Step IDs.
+    runner.wake(job);
+    await runner.waitForIdle();
+    assert.equal(task.status, "completed");
+    assert.equal(iterations, 5, "the resumed task continues after the provider recovers");
+    assert.equal(successfulExecution, 1);
+    assert.deepEqual([...durableEffects].sort(), [
+      "runner-seam:existing-artifact-link",
+      "runner-seam:existing-citation",
+      completedEffectId,
+    ]);
+    assert.equal(durableEffects.size, 3, "the success effect must be idempotent");
+  }
 }
 
 async function singleConcurrencySuite() {
@@ -441,6 +570,7 @@ async function main() {
   await singleConcurrencySuite();
   await plannerRetrySuite();
   await retryExhaustionSuite();
+  await sseProviderPauseAndResumeSuite();
   await pauseResumeSuite();
   await recoverySuite();
   await recoveryRetryWaitBoundSuite();
