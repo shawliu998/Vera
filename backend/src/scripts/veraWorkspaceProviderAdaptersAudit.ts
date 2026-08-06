@@ -759,6 +759,75 @@ async function auditHttpErrorsAndRedaction() {
     events[0]?.type === "error" ? events[0].code : null,
     "network_error",
   );
+
+  for (const [payload, code, message, retryable] of [
+    [
+      { error: { code: 1302, message: "rate-limit response" } },
+      "rate_limited",
+      "Model provider rate limit was reached.",
+      true,
+    ],
+    [
+      { error: { code: 1305, message: "Service is too busy" } },
+      "provider_unavailable",
+      "Model provider is temporarily unavailable.",
+      true,
+    ],
+  ] as const) {
+    const adapter = createModelProvider(config("deepseek"), {
+      credentialResolver: resolver([]),
+      fetchImpl: async () => sse([payload]),
+    });
+    assert.deepEqual(
+      await collect(
+        adapter.generate(request("deepseek"), new AbortController().signal),
+      ),
+      [{ type: "error", code, message, retryable }],
+    );
+  }
+
+  const streamError = createModelProvider(config("deepseek"), {
+    credentialResolver: resolver([]),
+    fetchImpl: async () =>
+      sse([{ error: { code: 9999, message: `unknown ${SECRET}` } }]),
+  });
+  const streamErrorEvents = await collect(
+    streamError.generate(request("deepseek"), new AbortController().signal),
+  );
+  assert.deepEqual(streamErrorEvents, [
+    {
+      type: "error",
+      code: "provider_stream_error",
+      message: "Model provider reported a generation error.",
+      retryable: false,
+    },
+  ]);
+  assert.equal(JSON.stringify(streamErrorEvents).includes(SECRET), false);
+
+  for (const error of [null, `primitive ${SECRET}`]) {
+    const primitiveStreamError = createModelProvider(config("deepseek"), {
+      credentialResolver: resolver([]),
+      fetchImpl: async () => sse([{ error }]),
+    });
+    const primitiveStreamErrorEvents = await collect(
+      primitiveStreamError.generate(
+        request("deepseek"),
+        new AbortController().signal,
+      ),
+    );
+    assert.deepEqual(primitiveStreamErrorEvents, [
+      {
+        type: "error",
+        code: "provider_stream_error",
+        message: "Model provider reported a generation error.",
+        retryable: false,
+      },
+    ]);
+    assert.equal(
+      JSON.stringify(primitiveStreamErrorEvents).includes(SECRET),
+      false,
+    );
+  }
 }
 
 async function auditMalformedAndBoundedStreams() {

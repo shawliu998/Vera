@@ -16,6 +16,57 @@ import {
 
 type ToolState = { id: string; name: string; started: boolean };
 
+function classifyProviderStreamError(
+  error: unknown,
+): ModelEvent {
+  const errorRecord =
+    error !== null && typeof error === "object"
+      ? (error as Record<string, unknown>)
+      : undefined;
+  const rawCode = errorRecord?.code;
+  const code =
+    typeof rawCode === "number" || typeof rawCode === "string"
+      ? Number(rawCode)
+      : undefined;
+  const rawMessage = errorRecord?.message;
+  const message =
+    typeof rawMessage === "string" ? rawMessage.toLowerCase() : "";
+  if (
+    code === 1302 ||
+    code === 429 ||
+    /rate[- ]limit(?:ed)?|速率限制/i.test(message)
+  ) {
+    return {
+      type: "error",
+      code: "rate_limited",
+      message: "Model provider rate limit was reached.",
+      retryable: true,
+    };
+  }
+  if (
+    code === 1305 ||
+    code === 500 ||
+    code === 502 ||
+    code === 503 ||
+    message.includes("访问量过大") ||
+    message.includes("service is too busy") ||
+    message.includes("temporarily unavailable")
+  ) {
+    return {
+      type: "error",
+      code: "provider_unavailable",
+      message: "Model provider is temporarily unavailable.",
+      retryable: true,
+    };
+  }
+  return {
+    type: "error",
+    code: "provider_stream_error",
+    message: "Model provider reported a generation error.",
+    retryable: false,
+  };
+}
+
 export class ChatCompletionsProvider extends BoundModelProvider {
   constructor(
     config: ModelProviderConfig,
@@ -131,13 +182,8 @@ export class ChatCompletionsProvider extends BoundModelProvider {
           return;
         }
         const data = record.data!;
-        if (object(data.error)) {
-          yield {
-            type: "error",
-            code: "provider_stream_error",
-            message: "Model provider reported a generation error.",
-            retryable: false,
-          };
+        if ("error" in data) {
+          yield classifyProviderStreamError(data.error);
           return;
         }
         const usage = object(data.usage);
