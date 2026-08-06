@@ -710,14 +710,16 @@ async function run() {
       );
     });
 
-    const failed = acceptedGeneration(setup.service, profileId);
-    const failedClaim = claim(setup.jobs, "failure-worker");
-    assert.equal(failedClaim.id, failed.generation.jobId);
+    const interrupted = acceptedGeneration(setup.service, profileId);
+    const interruptedClaim = claim(setup.jobs, "failure-worker");
+    assert.equal(interruptedClaim.id, interrupted.generation.jobId);
     const originalAppend = setup.chats.appendGenerationEvent.bind(setup.chats);
-    let injectFailure = true;
+    let contentDeltas = 0;
     setup.chats.appendGenerationEvent = ((input) => {
-      if (injectFailure && input.event.type === "content_delta") {
-        injectFailure = false;
+      if (input.event.type === "content_delta") {
+        contentDeltas += 1;
+      }
+      if (contentDeltas === 2 && input.event.type === "content_delta") {
         throw {
           code: "assistant_timeout",
           retryable: true,
@@ -726,39 +728,74 @@ async function run() {
       }
       return originalAppend(input);
     }) as typeof setup.chats.appendGenerationEvent;
+    const retryableTimeoutModel: AssistantModelPort = {
+      async registeredCapabilities() {
+        return {
+          adapterId: "retryable-timeout-model",
+          streaming: true,
+          toolCalling: true,
+        };
+      },
+      async runTurn({ onTextDelta }) {
+        await onTextDelta("safe partial ");
+        await onTextDelta("provider timeout");
+        return { content: "unreachable", toolCalls: [], sources: [] };
+      },
+    };
     await assert.rejects(
       new AssistantRuntimeService(
         setup.chats,
         setup.jobs,
-        successfulModel("event write must fail"),
+        retryableTimeoutModel,
         { tools: tools(), clock: () => new Date(CLAIM_AT) },
       ).execute({
-        jobId: failed.generation.jobId,
+        jobId: interrupted.generation.jobId,
         leaseOwner: "failure-worker",
-        attempt: failedClaim.attempt,
+        attempt: interruptedClaim.attempt,
         signal: new AbortController().signal,
       }),
       (error) =>
         error instanceof WorkspaceApiError && error.code === "JOB_FAILED",
     );
     setup.chats.appendGenerationEvent = originalAppend;
-    const failedStatus = setup.service.generationStatus(
-      failed.generation.jobId,
+    const interruptedStatus = setup.service.generationStatus(
+      interrupted.generation.jobId,
     );
-    assert.equal(failedStatus.status, "failed");
-    assert.equal(failedStatus.retryable, true);
-    const failedReplay = setup.service.generationEvents(
-      failed.generation.jobId,
+    assert.equal(interruptedStatus.status, "interrupted");
+    assert.equal(interruptedStatus.terminal, true);
+    assert.equal(interruptedStatus.retryable, true);
+    assert.equal(
+      setup.chats.message(
+        interrupted.chat.id,
+        interrupted.generation.outputMessageId,
+      ).content,
+      "safe partial ",
+      "retryable provider interruption retains the safe partial output",
     );
-    assert.equal(failedReplay.events.at(-1)?.event.type, "error");
+    const interruptedReplay = setup.service.generationEvents(
+      interrupted.generation.jobId,
+    );
+    assert.deepEqual(
+      interruptedReplay.events
+        .filter((record) => record.event.type === "content_delta")
+        .map((record) =>
+          record.event.type === "content_delta" ? record.event.text : "",
+        ),
+      ["safe partial "],
+    );
+    assert.deepEqual(interruptedReplay.events.at(-1)?.event, {
+      type: "error",
+      code: "assistant_timeout",
+      message: "Assistant generation failed.",
+    });
     assert.doesNotMatch(
-      JSON.stringify(failedReplay),
+      JSON.stringify(interruptedReplay),
       /Users\/private|plaintext-secret|api_key/i,
     );
-    const retried = setup.service.retryGeneration(failed.generation.jobId);
+    const retried = setup.service.retryGeneration(interrupted.generation.jobId);
     assert.equal(retried.status, "queued");
     const retryQueuedReplay = setup.service.generationEvents(
-      failed.generation.jobId,
+      interrupted.generation.jobId,
     );
     assert.equal(retryQueuedReplay.attempt, 2);
     assert.deepEqual(
@@ -774,7 +811,7 @@ async function run() {
       ["retrying", "queued"],
     );
     const retryClaim = claim(setup.jobs, "retry-worker");
-    assert.equal(retryClaim.id, failed.generation.jobId);
+    assert.equal(retryClaim.id, interrupted.generation.jobId);
     assert.equal(retryClaim.attempt, 2);
     await new AssistantRuntimeService(
       setup.chats,
@@ -782,14 +819,56 @@ async function run() {
       successfulModel("retry complete"),
       { tools: tools(), clock: () => new Date(CLAIM_AT) },
     ).execute({
-      jobId: failed.generation.jobId,
+      jobId: interrupted.generation.jobId,
       leaseOwner: "retry-worker",
       attempt: retryClaim.attempt,
       signal: new AbortController().signal,
     });
     assert.equal(
-      setup.service.generationStatus(failed.generation.jobId).status,
+      setup.service.generationStatus(interrupted.generation.jobId).status,
       "complete",
+    );
+
+    const nonRetryable = acceptedGeneration(setup.service, profileId);
+    const nonRetryableClaim = claim(setup.jobs, "non-retryable-worker");
+    assert.equal(nonRetryableClaim.id, nonRetryable.generation.jobId);
+    await assert.rejects(
+      new AssistantRuntimeService(
+        setup.chats,
+        setup.jobs,
+        {
+          async registeredCapabilities() {
+            return {
+              adapterId: "non-retryable-model",
+              streaming: true,
+              toolCalling: true,
+            };
+          },
+          async runTurn() {
+            throw {
+              code: "assistant_model_failed",
+              retryable: false,
+            };
+          },
+        },
+        { tools: tools(), clock: () => new Date(CLAIM_AT) },
+      ).execute({
+        jobId: nonRetryable.generation.jobId,
+        leaseOwner: "non-retryable-worker",
+        attempt: nonRetryableClaim.attempt,
+        signal: new AbortController().signal,
+      }),
+      (error) =>
+        error instanceof WorkspaceApiError && error.code === "JOB_FAILED",
+    );
+    const nonRetryableStatus = setup.service.generationStatus(
+      nonRetryable.generation.jobId,
+    );
+    assert.equal(nonRetryableStatus.status, "failed");
+    assert.equal(nonRetryableStatus.retryable, false);
+    assert.throws(
+      () => setup.service.retryGeneration(nonRetryable.generation.jobId),
+      (error) => error instanceof WorkspaceApiError && error.code === "CONFLICT",
     );
 
     const running = acceptedGeneration(setup.service, profileId);

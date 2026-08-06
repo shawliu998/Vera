@@ -2231,6 +2231,7 @@ export class AssistantRuntimeService {
         snapshot,
         claim: { ...initialClaim, at: this.now() },
         claims: this.claims,
+        terminalStatus: failure.retryable ? "interrupted" : "failed",
         error: failure,
         content: partialContent,
         now: this.now(),

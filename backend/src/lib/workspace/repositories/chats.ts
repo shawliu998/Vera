@@ -2694,6 +2694,7 @@ export class ChatsRepository {
     snapshot: AssistantGenerationSnapshot;
     claim: AssistantClaimIdentity;
     claims: AssistantClaimTransactionPort;
+    terminalStatus?: "failed" | "interrupted";
     error: {
       code: string;
       message: string;
@@ -2704,6 +2705,10 @@ export class ChatsRepository {
     now: string;
   }) {
     return this.transaction(() => {
+      const terminalStatus = input.terminalStatus ?? "failed";
+      if (terminalStatus === "interrupted" && !input.error.retryable) {
+        corrupt("Non-retryable Assistant errors cannot be interrupted.");
+      }
       const claimInput = {
         id: input.claim.jobId,
         type: "assistant_generate" as const,
@@ -2715,14 +2720,19 @@ export class ChatsRepository {
         payload: input.snapshot.payload,
       };
       input.claims.assertClaimInCurrentTransaction(claimInput);
+      const persisted = this.generationSnapshot(input.claim.jobId);
+      if (!isDeepStrictEqual(persisted, input.snapshot)) {
+        corrupt("Assistant generation snapshot changed before terminal error.");
+      }
       this.database
         .prepare(
           `UPDATE chat_messages
-              SET content=?,status='failed',error_code=?,updated_at=?,completed_at=?
-            WHERE id=? AND job_id=? AND status='pending'`,
+              SET content=?,status=?,error_code=?,updated_at=?,completed_at=?
+            WHERE id=? AND job_id=? AND status IN ('pending','streaming')`,
         )
         .run(
           input.content ?? "",
+          terminalStatus,
           input.error.code,
           input.now,
           input.now,
@@ -2739,9 +2749,12 @@ export class ChatsRepository {
         resourceType: claimInput.resourceType,
         resourceId: claimInput.resourceId,
         leaseOwner: claimInput.leaseOwner,
-        attempt: claimInput.attempt,
-        payload: claimInput.payload,
-        event: { type: "fail", at: input.now, error: input.error },
+          attempt: claimInput.attempt,
+          payload: claimInput.payload,
+        event:
+          terminalStatus === "interrupted"
+            ? { type: "interrupt", at: input.now, error: input.error }
+            : { type: "fail", at: input.now, error: input.error },
       });
       this.insertGenerationEventInCurrentTransaction({
         jobId: input.claim.jobId,
