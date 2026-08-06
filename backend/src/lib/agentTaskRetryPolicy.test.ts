@@ -4,6 +4,7 @@ import {
   MAX_AGENT_TASK_TRANSIENT_WAIT_MS,
   calculateAgentTaskBackoffMs,
   classifyAgentTaskError,
+  classifyAgentTaskProviderProtocolError,
   parseRetryAfterMs,
 } from "./agentTaskRetryPolicy";
 
@@ -122,4 +123,47 @@ test("bounds Retry-After and exponential backoff", () => {
     calculateAgentTaskBackoffMs(1, { retryAfterMs: -1 }),
     0,
   );
+});
+
+test("classifies only an exact required-tool provider protocol diagnostic", () => {
+  for (const provider of [
+    "DeepSeek",
+    "Kimi",
+    "Gemini",
+    "Zhipu",
+    "Claude",
+    "OpenAI",
+  ]) {
+    assert.deepEqual(
+      classifyAgentTaskProviderProtocolError(
+        new Error(
+          `${provider} did not return the required read_document tool call for this iteration.`,
+        ),
+      ),
+      { classification: "provider_protocol" },
+    );
+  }
+  for (const toolName of ["edit_document", "source-verify"]) {
+    assert.deepEqual(
+      classifyAgentTaskProviderProtocolError(
+        new Error(
+          `OpenAI did not return the required ${toolName} tool call for this iteration.`,
+        ),
+      ),
+      { classification: "provider_protocol" },
+    );
+  }
+});
+
+test("fails closed for non-exact provider protocol and policy diagnostics", () => {
+  for (const message of [
+    "UnknownAI did not return the required read_document tool call for this iteration.",
+    "OpenAI did not return the required read_document tool call for this iteration. Retry now.",
+    "OpenAI provider policy rejected an unregistered tool.",
+    "OpenAI rejected an unauthorized tool invocation.",
+    "OpenAI rejected a mutation target outside the fixed document version.",
+    "OpenAI did not return required tool call for this iteration.",
+  ]) {
+    assert.equal(classifyAgentTaskProviderProtocolError(new Error(message)), null);
+  }
 });

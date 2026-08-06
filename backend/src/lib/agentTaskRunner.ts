@@ -17,6 +17,7 @@ import {
   agentTaskRetryBaseMs,
   calculateAgentTaskBackoffMs,
   classifyAgentTaskError,
+  classifyAgentTaskProviderProtocolError,
   parseRetryAfterMs,
   type TransientAgentTaskError,
 } from "./agentTaskRetryPolicy";
@@ -166,6 +167,21 @@ export class AgentTaskRunner {
       } catch (error) {
         const transient = classifyAgentTaskError(error, now());
         if (!transient) {
+          const protocol = classifyAgentTaskProviderProtocolError(error);
+          if (protocol) {
+            const summary =
+              "The selected model did not complete the required provider tool protocol. This step is paused without discarding existing work; resume it or choose a compatible model.";
+            if (this.dependencies.deferTask) {
+              await this.dependencies.deferTask(
+                job,
+                summary,
+                protocol.classification,
+              );
+            } else {
+              await this.dependencies.failTask(job, summary);
+            }
+            return;
+          }
           await this.dependencies.failTask(
             job,
             agentTaskExecutionErrorMessage(error),

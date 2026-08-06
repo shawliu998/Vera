@@ -387,6 +387,149 @@ async function sseProviderPauseAndResumeSuite() {
   }
 }
 
+async function providerProtocolPauseAndResumeSuite() {
+  for (const provider of [
+    "DeepSeek",
+    "Kimi",
+    "Gemini",
+    "Zhipu",
+    "Claude",
+    "OpenAI",
+  ]) {
+    const step = { id: "step_protocol", attempt: 1 };
+    const durableEffects = new Set(["runner-seam:existing-artifact-link"]);
+    const initialEffectsFingerprint = [...durableEffects].join("|");
+    const completedEffectId = `runner-seam:${provider}-protocol-completed`;
+    const task: FakeTask = {
+      status: "running",
+      latest_checkpoint: {
+        step_id: step.id,
+        iteration: step.attempt,
+        existing_checkpoint: "retain-me",
+      },
+    };
+    const job = { taskId: `task_protocol_${provider}`, userId: "user_1" };
+    let iterations = 0;
+    let retryWrites = 0;
+    let failures = 0;
+    let deferrals = 0;
+    let successfulExecution = 0;
+    let deferredTaskId = "";
+    const sleeps: number[] = [];
+    const runner = new AgentTaskRunner({
+      loadTask: async () => snapshot(task),
+      runIteration: async () => {
+        iterations += 1;
+        if (iterations === 1) {
+          assert.equal(step.attempt, 1);
+          assert.equal([...durableEffects].join("|"), initialEffectsFingerprint);
+          throw new Error(
+            `${provider} did not return the required read_document tool call for this iteration.`,
+          );
+        }
+        assert.equal(step.attempt, 1);
+        assert.equal(durableEffects.has(completedEffectId), false);
+        durableEffects.add(completedEffectId);
+        successfulExecution += 1;
+        task.status = "completed";
+        return snapshot(task);
+      },
+      recordRetry: async () => {
+        retryWrites += 1;
+        assert.fail("a protocol pause must not write a retry checkpoint");
+      },
+      failTask: async () => {
+        failures += 1;
+        task.status = "failed";
+      },
+      deferTask: async (deferredJob, _summary, classification) => {
+        deferrals += 1;
+        deferredTaskId = deferredJob.taskId;
+        assert.equal(classification, "provider_protocol");
+        assert.equal(step.id, "step_protocol");
+        assert.equal(step.attempt, 1);
+        assert.equal([...durableEffects].join("|"), initialEffectsFingerprint);
+        assert.deepEqual(task.latest_checkpoint, {
+          step_id: step.id,
+          iteration: step.attempt,
+          existing_checkpoint: "retain-me",
+        });
+        task.status = "paused";
+      },
+      recoverJobs: async () => [],
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+
+    runner.wake(job);
+    await runner.waitForIdle();
+    assert.equal(iterations, 1, `${provider} must pause after one attempt`);
+    assert.equal(deferrals, 1);
+    assert.equal(retryWrites, 0);
+    assert.equal(sleeps.length, 0);
+    assert.equal(failures, 0);
+    assert.equal(task.status, "paused");
+    assert.equal(deferredTaskId, job.taskId);
+    assert.equal(step.attempt, 1);
+    assert.equal([...durableEffects].join("|"), initialEffectsFingerprint);
+
+    task.status = "running"; // Existing explicit resume retains the Task and Step IDs.
+    runner.wake(job);
+    await runner.waitForIdle();
+    assert.equal(task.status, "completed");
+    assert.equal(successfulExecution, 1);
+    assert.deepEqual([...durableEffects], [
+      "runner-seam:existing-artifact-link",
+      completedEffectId,
+    ]);
+    assert.equal(durableEffects.size, 2);
+  }
+}
+
+async function unknownProviderProtocolFailureSuite() {
+  const task: FakeTask = { status: "running", latest_checkpoint: null };
+  let iterations = 0;
+  let retryWrites = 0;
+  let sleeps = 0;
+  let failures = 0;
+  let deferrals = 0;
+  const runner = new AgentTaskRunner({
+    loadTask: async () => snapshot(task),
+    runIteration: async () => {
+      iterations += 1;
+      throw new Error(
+        "UnknownAI did not return the required read_document tool call for this iteration.",
+      );
+    },
+    recordRetry: async () => {
+      retryWrites += 1;
+      return snapshot(task);
+    },
+    failTask: async () => {
+      failures += 1;
+      task.status = "failed";
+    },
+    deferTask: async () => {
+      deferrals += 1;
+      task.status = "paused";
+    },
+    recoverJobs: async () => [],
+    sleep: async () => {
+      sleeps += 1;
+    },
+  });
+
+  runner.wake({ taskId: "task_protocol_unknown", userId: "user_1" });
+  await runner.waitForIdle();
+  assert.equal(iterations, 1);
+  assert.equal(retryWrites, 0);
+  assert.equal(sleeps, 0);
+  assert.equal(deferrals, 0);
+  assert.equal(failures, 1);
+  assert.equal(task.status, "failed");
+}
+
 async function singleConcurrencySuite() {
   const tasks = new Map<string, FakeTask>([
     ["task_a", { status: "running", latest_checkpoint: null }],
@@ -571,6 +714,8 @@ async function main() {
   await plannerRetrySuite();
   await retryExhaustionSuite();
   await sseProviderPauseAndResumeSuite();
+  await providerProtocolPauseAndResumeSuite();
+  await unknownProviderProtocolFailureSuite();
   await pauseResumeSuite();
   await recoverySuite();
   await recoveryRetryWaitBoundSuite();

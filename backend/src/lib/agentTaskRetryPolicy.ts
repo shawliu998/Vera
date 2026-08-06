@@ -3,12 +3,18 @@ export type TransientAgentTaskError = {
   retryAfterMs: number | null;
 };
 
+export type AgentTaskProviderProtocolError = {
+  classification: "provider_protocol";
+};
+
 export const MAX_AGENT_TASK_TRANSIENT_RETRIES = 3;
 export const MAX_AGENT_TASK_TRANSIENT_WAIT_MS = 60_000;
 
 const RATE_LIMIT_HTTP_STATUSES = new Set([429]);
 const PROVIDER_UNAVAILABLE_HTTP_STATUSES = new Set([500, 502, 503]);
 const NETWORK_HTTP_STATUSES = new Set([408, 504]);
+const REQUIRED_TOOL_CALL_PROTOCOL_ERROR =
+  /^(DeepSeek|Kimi|Gemini|Zhipu|Claude|OpenAI) did not return the required ([A-Za-z][A-Za-z0-9_-]*) tool call for this iteration\.$/;
 
 function numericStatus(error: unknown) {
   if (!error || typeof error !== "object") return null;
@@ -144,6 +150,19 @@ export function classifyAgentTaskError(
     };
   }
   return null;
+}
+
+/**
+ * Accepts only the provider-neutral, server-owned required-tool diagnostic.
+ * All policy, registration, authorization, argument, and target errors remain
+ * fail-closed because they do not match this complete diagnostic exactly.
+ */
+export function classifyAgentTaskProviderProtocolError(
+  error: unknown,
+): AgentTaskProviderProtocolError | null {
+  return REQUIRED_TOOL_CALL_PROTOCOL_ERROR.test(errorMessage(error))
+    ? { classification: "provider_protocol" }
+    : null;
 }
 
 export function agentTaskRetryBaseMs(

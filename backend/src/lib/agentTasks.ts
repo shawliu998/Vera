@@ -68,7 +68,8 @@ export type AgentTaskRetryCheckpoint = {
 
 export type AgentTaskExecutionPauseClassification =
   | "provider_capacity"
-  | "provider_network";
+  | "provider_network"
+  | "provider_protocol";
 
 type AgentTaskExecutionPauseCheckpointV1 = {
   kind: "agent_task_execution_pause_v1";
