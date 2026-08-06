@@ -46,6 +46,11 @@ import {
   type AssistantModelPort,
   type AssistantToolPort,
 } from "../lib/workspace/services/assistantRuntime";
+import { WorkspaceAssistantDocumentTools } from "../lib/workspace/services/assistantDocumentTools";
+import {
+  WorkspaceAssistantDocumentToolModule,
+  WorkspaceAssistantToolRegistry,
+} from "../lib/workspace/services/assistantToolRegistry";
 import { ChatsService } from "../lib/workspace/services/chats";
 import { WorkspaceJobsService } from "../lib/workspace/services/jobs";
 import { WORKSPACE_LOCAL_PRINCIPAL_ID } from "../lib/workspace/principal";
@@ -1337,7 +1342,169 @@ async function run() {
       })[0]?.documentId,
       standaloneDocument.documentId,
     );
-    jobs.requestCancellation(globalGeneration.jobId, CLAIM_AT, "audit cleanup");
+    const globalClaim = jobs.claimNextQueued(
+      CLAIM_AT,
+      "single-document-source-worker",
+      LEASE_EXPIRES,
+    );
+    assert.equal(globalClaim?.id, globalGeneration.jobId);
+    assert.equal(globalClaim?.attempt, 1);
+    const standaloneEvidence = retrieval.retrieve({
+      chatId: globalChat.id,
+      query: "governing law",
+      allowedDocumentIds: [standaloneDocument.documentId],
+      currentVersionOnly: true,
+      limit: 1,
+    })[0];
+    assert.ok(standaloneEvidence);
+    const standaloneQuote = "standalone governing law is England";
+    const standaloneQuoteRelativeStart = standaloneEvidence.text.indexOf(
+      standaloneQuote,
+    );
+    assert.notEqual(standaloneQuoteRelativeStart, -1);
+    const standaloneQuoteStart =
+      standaloneEvidence.startOffset + standaloneQuoteRelativeStart;
+    const standaloneQuoteEnd = standaloneQuoteStart + standaloneQuote.length;
+    const discardedFirstRoundText = "Ungrounded first-round text must not persist.";
+    let globalModelTurns = 0;
+    let deterministicDocumentReads = 0;
+    const globalDocumentRegistry = new WorkspaceAssistantToolRegistry([
+      new WorkspaceAssistantDocumentToolModule(
+        new WorkspaceAssistantDocumentTools(database, chats, retrieval),
+      ),
+    ]);
+    const globalTools: AssistantToolPort = {
+      async registeredTools(context) {
+        assert.equal(context.jobId, globalGeneration.jobId);
+        assert.deepEqual(context.documents, [
+          {
+            documentId: standaloneDocument.documentId,
+            versionId: standaloneDocument.versionId,
+            attached: true,
+          },
+        ]);
+        return globalDocumentRegistry.registeredTools(context);
+      },
+      assertModelUse(context) {
+        return globalDocumentRegistry.assertModelUse(context);
+      },
+      async execute(input) {
+        deterministicDocumentReads += 1;
+        assert.deepEqual(input.call, {
+          id: "server-read-document-1",
+          name: "read_document",
+          input: { doc_id: "doc-0" },
+        });
+        return globalDocumentRegistry.execute(input);
+      },
+      settleLifecycle(input) {
+        return globalDocumentRegistry.settleLifecycle(input);
+      },
+    };
+    const globalRuntime = new AssistantRuntimeService(
+      chats,
+      jobs,
+      {
+        async registeredCapabilities() {
+          return {
+            adapterId: "single-document-source-model",
+            streaming: true,
+            toolCalling: true,
+          };
+        },
+        async runTurn({ messages, tools, onTextDelta }) {
+          globalModelTurns += 1;
+          assert.equal(
+            tools.some((tool) => tool.name === "read_document"),
+            true,
+          );
+          if (globalModelTurns === 1) {
+            await onTextDelta(discardedFirstRoundText);
+            return {
+              content: discardedFirstRoundText,
+              toolCalls: [],
+              sources: [],
+            };
+          }
+          assert.equal(globalModelTurns, 2);
+          const readCallMessage = messages.at(-2);
+          assert.equal(readCallMessage?.role, "assistant");
+          assert.deepEqual(
+            readCallMessage?.role === "assistant"
+              ? readCallMessage.toolCalls
+              : [],
+            [
+              {
+                id: "server-read-document-1",
+                name: "read_document",
+                input: { doc_id: "doc-0" },
+              },
+            ],
+          );
+          assert.equal(messages.at(-1)?.role, "tool");
+          assert.match(
+            messages.at(-1)?.content ?? "",
+            new RegExp(standaloneDocument.versionId),
+          );
+          assert.match(messages.at(-1)?.content ?? "", /England/);
+          await onTextDelta("England governs [1].");
+          return {
+            content: "England governs [1].",
+            toolCalls: [],
+            sources: [
+              {
+                documentId: standaloneEvidence.documentId,
+                versionId: standaloneEvidence.versionId,
+                chunkId: standaloneEvidence.chunkId,
+                quote: standaloneQuote,
+                startOffset: standaloneQuoteStart,
+                endOffset: standaloneQuoteEnd,
+                locator: { pageStart: 1, pageEnd: 1 },
+                rank: 0,
+                score: 1,
+                citationOrdinal: 0,
+                citationMetadata: { citationNumber: 1 },
+              },
+            ],
+          };
+        },
+      },
+      {
+        clock: () => new Date("2026-07-14T08:01:30.000Z"),
+        tools: globalTools,
+      },
+    );
+    await globalRuntime.execute({
+      jobId: globalGeneration.jobId,
+      leaseOwner: "single-document-source-worker",
+      attempt: globalClaim!.attempt,
+      signal: new AbortController().signal,
+    });
+    assert.equal(globalModelTurns, 2);
+    assert.equal(deterministicDocumentReads, 1);
+    assert.equal(jobs.getJob(globalGeneration.jobId)?.status, "complete");
+    assert.equal(
+      database
+        .prepare("SELECT content FROM chat_messages WHERE id=?")
+        .get(globalGeneration.outputMessageId)?.content,
+      "England governs [1].",
+    );
+    assert.equal(
+      database
+        .prepare(
+          `SELECT group_concat(json_extract(event_json,'$.text'),'') AS content
+             FROM assistant_generation_events
+            WHERE job_id=? AND event_type='content_delta'`,
+        )
+        .get(globalGeneration.jobId)?.content,
+      "England governs [1].",
+      "ungrounded first-round text is never persisted as content_delta",
+    );
+    assert.equal(
+      chats.sources(globalGeneration.outputMessageId)[0]?.versionId,
+      standaloneDocument.versionId,
+      "the final citation is bound to the fixed document Version read by the tool",
+    );
     database
       .prepare(
         "UPDATE document_versions SET filename='mutated-live-name.txt',mime_type='application/octet-stream' WHERE id=?",
@@ -3544,6 +3711,19 @@ async function run() {
       boundedMessage?.content_length,
       200_000,
       "safe partial model output is retained atomically on terminal failure",
+    );
+    assert.deepEqual(
+      database
+        .prepare(
+          `SELECT json_extract(event_json,'$.text') AS text
+             FROM assistant_generation_events
+            WHERE job_id=? AND event_type='content_delta'
+            ORDER BY sequence`,
+        )
+        .all(boundedGeneration.jobId)
+        .map((row) => String(row.text)),
+      ["x".repeat(100_000), "y".repeat(100_000)],
+      "only bounded, safe deltas are retained once on terminal failure",
     );
 
     const missingToolsGeneration = service.requestGeneration({

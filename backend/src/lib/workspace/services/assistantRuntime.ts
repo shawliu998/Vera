@@ -1177,6 +1177,7 @@ export class AssistantRuntimeService {
       let totalReasoningChars = 0;
       let totalToolResultChars = 0;
       let usedEvidenceTool = false;
+      let deterministicDocumentReadAttempted = false;
       const usedToolCallIds = new Set<string>();
       const toolCallsByName = new Map<AssistantToolName, number>();
       const identicalToolResults = new Map<
@@ -1459,13 +1460,38 @@ export class AssistantRuntimeService {
         throwIfAborted(input.signal);
         this.assertClaim(snapshot, input);
         let roundDeltaChars = 0;
-        const roundDeltas: string[] = [];
+        const safeRoundDeltas: string[] = [];
+        let persistedSafeRoundDeltas = 0;
         const bufferRoundContent = [...expectedDeliverables].some(
           (kind) => !completedDeliverables.has(kind),
         );
+        const recoveryBufferContent =
+          !bufferRoundContent &&
+          snapshot.documents.length === 1 &&
+          !usedEvidenceTool &&
+          !deterministicDocumentReadAttempted &&
+          toolsByName.has("read_document");
+        const flushRecoveryDeltas = () => {
+          while (persistedSafeRoundDeltas < safeRoundDeltas.length) {
+            const delta = safeRoundDeltas[persistedSafeRoundDeltas]!;
+            const nextPartial = partialContent + delta;
+            assertMikeSafePayload(nextPartial);
+            persistEvent(
+              MikeAssistantStreamEventSchema.parse({
+                type: "content_delta",
+                text: delta,
+              }),
+            );
+            partialContent = nextPartial;
+            persistedSafeRoundDeltas += 1;
+          }
+        };
         let roundReasoningOpen = false;
-        const turn = ModelTurnSchema.parse(
-          await this.model.runTurn({
+        let recoveredDeterministicDocumentRead = false;
+        let turn: ReturnType<typeof ModelTurnSchema.parse>;
+        try {
+          turn = ModelTurnSchema.parse(
+            await this.model.runTurn({
             modelProfileId: snapshot.modelProfileId,
             projectId: snapshot.payload.projectId,
             operation: "assistant",
@@ -1487,26 +1513,19 @@ export class AssistantRuntimeService {
                   "Assistant model emitted an invalid text delta.",
                 );
               }
-              roundDeltaChars += delta.length;
-              roundDeltas.push(delta);
-              totalOutputChars += delta.length;
-              if (totalOutputChars > MAX_ASSISTANT_CONTENT_CHARS) {
+              const nextTotalOutputChars = totalOutputChars + delta.length;
+              if (nextTotalOutputChars > MAX_ASSISTANT_CONTENT_CHARS) {
                 throw new WorkspaceApiError(
                   502,
                   "JOB_FAILED",
                   "Assistant model text deltas exceeded the limit.",
                 );
               }
-              if (!bufferRoundContent) {
-                const nextPartial = partialContent + delta;
-                assertMikeSafePayload(nextPartial);
-                persistEvent(
-                  MikeAssistantStreamEventSchema.parse({
-                    type: "content_delta",
-                    text: delta,
-                  }),
-                );
-                partialContent = nextPartial;
+              totalOutputChars = nextTotalOutputChars;
+              roundDeltaChars += delta.length;
+              safeRoundDeltas.push(delta);
+              if (!bufferRoundContent && !recoveryBufferContent) {
+                flushRecoveryDeltas();
               }
             },
             onReasoningDelta: async (delta) => {
@@ -1545,34 +1564,65 @@ export class AssistantRuntimeService {
                 }),
               );
             },
-          }),
-        );
-        throwIfAborted(input.signal);
-        this.assertClaim(snapshot, input);
-        if (roundReasoningOpen) {
-          persistEvent(
-            MikeAssistantStreamEventSchema.parse({
-              type: "reasoning_block_end",
             }),
           );
-        }
-        assertMikeSafePayload(turn.content);
-        if (roundDeltas.length > 0 && roundDeltas.join("") !== turn.content) {
-          throw new WorkspaceApiError(
-            502,
-            "JOB_FAILED",
-            "Assistant model stream drifted from its final turn content.",
-          );
-        }
-        if (roundDeltaChars === 0 && turn.content.length > 0) {
-          totalOutputChars += turn.content.length;
-          if (totalOutputChars > MAX_ASSISTANT_CONTENT_CHARS) {
+          throwIfAborted(input.signal);
+          this.assertClaim(snapshot, input);
+          if (roundReasoningOpen) {
+            persistEvent(
+              MikeAssistantStreamEventSchema.parse({
+                type: "reasoning_block_end",
+              }),
+            );
+          }
+          assertMikeSafePayload(turn.content);
+          if (
+            safeRoundDeltas.length > 0 &&
+            safeRoundDeltas.join("") !== turn.content
+          ) {
             throw new WorkspaceApiError(
               502,
               "JOB_FAILED",
-              "Assistant model content exceeded the limit.",
+              "Assistant model stream drifted from its final turn content.",
             );
           }
+          if (roundDeltaChars === 0 && turn.content.length > 0) {
+            totalOutputChars += turn.content.length;
+            if (totalOutputChars > MAX_ASSISTANT_CONTENT_CHARS) {
+              throw new WorkspaceApiError(
+                502,
+                "JOB_FAILED",
+                "Assistant model content exceeded the limit.",
+              );
+            }
+          }
+          if (
+            turn.toolCalls.length === 0 &&
+            snapshot.documents.length === 1 &&
+            !usedEvidenceTool &&
+            !deterministicDocumentReadAttempted &&
+            toolsByName.has("read_document")
+          ) {
+            deterministicDocumentReadAttempted = true;
+            recoveredDeterministicDocumentRead = true;
+            turn = {
+              content: "",
+              toolCalls: [
+                {
+                  id: `server-read-document-${input.attempt}`,
+                  name: "read_document",
+                  input: { doc_id: "doc-0" },
+                },
+              ],
+              sources: [],
+            };
+          }
+          if (recoveryBufferContent && !recoveredDeterministicDocumentRead) {
+            flushRecoveryDeltas();
+          }
+        } catch (error) {
+          if (recoveryBufferContent) flushRecoveryDeltas();
+          throw error;
         }
         const persistRoundContent = () => {
           if (
@@ -1585,19 +1635,20 @@ export class AssistantRuntimeService {
               "Assistant model content exceeded the limit.",
             );
           }
-          const deltas =
-            bufferRoundContent && roundDeltas.length > 0
-              ? roundDeltas
-              : roundDeltas.length === 0 && turn.content.length > 0
-                ? [turn.content]
-                : [];
-          for (const delta of deltas) {
-            const nextPartial = partialContent + delta;
+          if (!recoveredDeterministicDocumentRead) {
+            flushRecoveryDeltas();
+          }
+          if (
+            !recoveredDeterministicDocumentRead &&
+            safeRoundDeltas.length === 0 &&
+            turn.content.length > 0
+          ) {
+            const nextPartial = partialContent + turn.content;
             assertMikeSafePayload(nextPartial);
             persistEvent(
               MikeAssistantStreamEventSchema.parse({
                 type: "content_delta",
-                text: delta,
+                text: turn.content,
               }),
             );
             partialContent = nextPartial;
