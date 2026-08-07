@@ -5,6 +5,7 @@ import type { Document } from "@/app/components/shared/types";
 import type { AgentTaskSnapshot } from "@/app/types/agent";
 import {
   buildAgentTaskOutputRows,
+  canRecoverAgentTaskExecution,
   getAgentTaskSourceDocuments,
   getAgentTaskStepArtifacts,
   latestApprovedArtifact,
@@ -81,6 +82,7 @@ function snapshotFixture(): AgentTaskSnapshot {
         purpose: "Step 1 evidence citations",
       },
     ],
+    execution_recovery: { allowed: true, issue_code: null, detail: null },
     review: {
       status: "approved",
       decisions: [
@@ -134,6 +136,16 @@ function snapshotFixture(): AgentTaskSnapshot {
     },
   };
 }
+
+test("does not offer execution recovery for an invalid fixed contract", () => {
+  const snapshot = snapshotFixture();
+  snapshot.execution_recovery = {
+    allowed: false,
+    issue_code: "capability_grant_invalid",
+    detail: "Existing work is preserved. Start a new Work Task.",
+  };
+  assert.equal(canRecoverAgentTaskExecution(snapshot), false);
+});
 
 test("binds a required deliverable to its explicit artifact and current version", () => {
   const snapshot = snapshotFixture();

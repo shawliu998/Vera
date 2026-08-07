@@ -39,6 +39,10 @@ import {
   type AgentStepReceiptV1,
 } from "./agent-kernel/contracts/stepContract";
 import {
+  assertAgentTaskExecutionRecovery,
+  evaluateAgentTaskExecutionRecovery,
+} from "./agent-kernel/recovery/executionRecovery";
+import {
   AgentTaskStateTransitionError,
   agentTaskInputTransitionWasApplied,
   agentTaskPauseTransitionWasApplied,
@@ -546,6 +550,7 @@ export async function getAgentTaskSnapshot(
   const versionState = await getAgentReviewVersionState(db, snapshot);
   return {
     ...snapshot,
+    execution_recovery: evaluateAgentTaskExecutionRecovery(snapshot.task),
     review: {
       ...snapshot.review,
       status: deriveAgentReviewStatus(
@@ -1250,6 +1255,7 @@ export async function retryAgentTask(db: Db, taskId: string, userId: string) {
   if (!["failed", "waiting_input"].includes(snapshot.task.status)) {
     throw new Error("Only a failed or input-blocked task can be retried");
   }
+  assertAgentTaskExecutionRecovery(snapshot.task);
   const current = snapshot.task.current_plan.find(
     (step: { status: AgentStepStatus }) => step.status === "blocked",
   );
@@ -1515,6 +1521,7 @@ export async function submitAgentTaskInput(
 ) {
   const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
   if (!snapshot) return null;
+  assertAgentTaskExecutionRecovery(snapshot.task);
   const updatedAt = now();
   const transition = prepareAgentTaskInputTransition(
     snapshot,
@@ -1613,6 +1620,12 @@ export async function pauseAgentTask(db: Db, taskId: string, userId: string) {
 }
 
 export async function resumeAgentTask(db: Db, taskId: string, userId: string) {
+  const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
+  if (!snapshot) return null;
+  if (snapshot.task.status !== "paused") {
+    throw new Error("Only a paused task can be resumed");
+  }
+  assertAgentTaskExecutionRecovery(snapshot.task);
   let committed: Awaited<ReturnType<typeof commitAgentTaskResumeTransition>>;
   try {
     committed = await commitAgentTaskResumeTransition(db, { taskId, userId });

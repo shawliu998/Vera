@@ -56,6 +56,7 @@ import type {
 import type { Document, Project } from "@/app/components/shared/types";
 import {
   buildAgentTaskOutputRows,
+  canRecoverAgentTaskExecution,
   getAgentTaskSourceDocuments,
   getAgentTaskStepArtifacts,
   getAgentTaskSupportingArtifacts,
@@ -383,6 +384,9 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
   }
 
   const { task, artifacts } = snapshot;
+  const executionRecoveryBlocked =
+    ["paused", "failed", "waiting_input"].includes(task.status) &&
+    !canRecoverAgentTaskExecution(snapshot);
   const providerQueued = Boolean(
     ["running", "verifying"].includes(task.status) &&
     task.latest_checkpoint?.runner_retry,
@@ -545,7 +549,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
                 label: "Pause",
                 onClick: pauseTask,
               }
-            : task.status === "paused"
+            : task.status === "paused" && !executionRecoveryBlocked
               ? {
                   icon: <Play className="h-3.5 w-3.5" />,
                   label: "Resume",
@@ -609,7 +613,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
                   </span>
                   {["queued", "paused", "waiting_input", "failed"].includes(
                     task.status,
-                  ) ? (
+                  ) && !executionRecoveryBlocked ? (
                     <span className="inline-flex items-center gap-1.5">
                       {modelUpdating && (
                         <Loader2
@@ -1095,6 +1099,9 @@ function WorkRecord({
   onOpenCitation: (citation: AgentEvidenceCitation) => void;
 }) {
   const { task } = snapshot;
+  const executionRecoveryBlocked =
+    ["paused", "failed", "waiting_input"].includes(task.status) &&
+    !canRecoverAgentTaskExecution(snapshot);
   const current = task.current_plan.find((step) => step.status === "running");
   const completedCount = task.current_plan.filter(
     (step) => step.status === "completed",
@@ -1102,15 +1109,17 @@ function WorkRecord({
   const title =
     task.status === "completed"
       ? "Completed in " + completedCount + " steps"
-      : current
-        ? "Working · " + current.title
-        : task.status === "paused"
-          ? "Work paused"
-          : task.status === "waiting_input"
-            ? "Input required"
-            : task.status === "failed"
-              ? "Work stopped"
-              : "Ready to work";
+      : executionRecoveryBlocked
+        ? "Work preserved · new task required"
+        : current
+          ? "Working · " + current.title
+          : task.status === "paused"
+            ? "Work paused"
+            : task.status === "waiting_input"
+              ? "Input required"
+              : task.status === "failed"
+                ? "Work stopped"
+                : "Ready to work";
   const supportingArtifacts = getAgentTaskSupportingArtifacts(snapshot);
 
   return (
@@ -1122,7 +1131,7 @@ function WorkRecord({
             {completedCount} of {task.current_plan.length} steps complete
           </p>
         </div>
-        {task.status === "failed" && (
+        {task.status === "failed" && !executionRecoveryBlocked && (
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -1142,6 +1151,7 @@ function WorkRecord({
       </div>
 
       {(providerQueued ||
+        executionRecoveryBlocked ||
         task.status === "failed" ||
         task.status === "waiting_input" ||
         executionError) && (
@@ -1157,6 +1167,9 @@ function WorkRecord({
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span className="break-words [overflow-wrap:anywhere]">
             {executionError ||
+              (executionRecoveryBlocked
+                ? snapshot.execution_recovery.detail
+                : null) ||
               task.latest_checkpoint?.summary ||
               (providerQueued
                 ? "The provider is queued. Resume retries the current step."
@@ -1165,7 +1178,7 @@ function WorkRecord({
         </div>
       )}
 
-      {task.status === "waiting_input" && (
+      {task.status === "waiting_input" && !executionRecoveryBlocked && (
         <form
           className="mt-3 border-y border-gray-900/[0.07] py-3"
           onSubmit={(event) => {

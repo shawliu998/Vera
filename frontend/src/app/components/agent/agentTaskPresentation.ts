@@ -19,6 +19,10 @@ export interface AgentTaskOutputRow {
   linkedArtifact: AgentArtifactLink | null;
 }
 
+export function canRecoverAgentTaskExecution(snapshot: AgentTaskSnapshot) {
+  return snapshot.execution_recovery.allowed;
+}
+
 export function agentDeliverablePurpose(deliverable: AgentDeliverable): string {
   return (
     deliverable.purpose ??
@@ -47,8 +51,8 @@ export function latestApprovedReviewDecision(
 ): AgentReviewDecision | null {
   return (
     [...snapshot.review.decisions]
-    .reverse()
-    .find((item) => item.status === "approved") ?? null
+      .reverse()
+      .find((item) => item.status === "approved") ?? null
   );
 }
 

@@ -164,6 +164,16 @@ export type AgentEvidenceSnapshot = {
 export type AgentTaskSnapshot = {
   task: AgentTask;
   artifacts: ArtifactLink[];
+  execution_recovery:
+    | { allowed: true; issue_code: null; detail: null }
+    | {
+        allowed: false;
+        issue_code:
+          | "assignment_contract_invalid"
+          | "step_contract_invalid"
+          | "capability_grant_invalid";
+        detail: string;
+      };
   review: {
     status: AgentReviewStatus | null;
     decisions: AgentReviewDecision[];

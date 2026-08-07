@@ -66,7 +66,7 @@ function routeError(
     : error instanceof MatterContextInvalidError
       ? 400
       : detail.startsWith("Only a") ||
-          /still closing|review state changed|no longer matches|only after task completion/i.test(
+          /cannot continue safely|still closing|review state changed|no longer matches|only after task completion/i.test(
             detail,
           )
         ? 409
