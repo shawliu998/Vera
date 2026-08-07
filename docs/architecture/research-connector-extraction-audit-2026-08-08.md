@@ -83,6 +83,11 @@ approval, export, or a second source database.
   normalizer. Missing current-user credentials produce `disconnected`; the
   runtime never borrows another user's credential, accepts a model-selected
   connector identifier, or serializes key, secret, or token material.
+- A Task-aware acquisition bridge now binds one fixed connector request to the
+  current Task, Step, attempt, Matter, current user, fresh runtime, and central
+  body-consuming importer. A missing current-user connection becomes a
+  resumable `provider_configuration` pause before egress instead of a hard
+  legal-result failure or silent ungranted execution.
 - The current EPO OPS endpoint and CQL semantics were checked against the EPO
   OPS 3.2 reference guide and official service page on 2026-08-08:
   <https://www.epo.org/en/searching-for-patents/data/web-services/ops> and
@@ -90,11 +95,10 @@ approval, export, or a second source database.
 
 ## Remaining gates
 
-1. Add a server-owned source-acquisition execution path before compiling an
-   EPO OPS grant. The current `read_sources` executor only reads fixed Matter
-   Versions, so adding a pin there now would be a false capability claim.
-   Credential storage and fresh current-user runtime resolution are
-   implemented; ordinary patent analysis Tasks still correctly receive no pin.
+1. Compile a distinct server-owned `source.acquire` Step and its fixed search
+   scope/selection checkpoint before granting the acquisition bridge. The
+   ordinary `read_sources/read` executor must remain limited to fixed Matter
+   Versions; ordinary patent analysis Tasks still correctly receive no pin.
 2. Decide whether PatSnap provides a material, licensed coverage increment over
    EPO OPS before adapting it; do not copy the old parallel patent subsystem.
 3. Run real credential, database, and product-level patent research acceptance;

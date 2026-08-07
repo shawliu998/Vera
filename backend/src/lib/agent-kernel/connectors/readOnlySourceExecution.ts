@@ -408,6 +408,29 @@ export async function executeReadOnlySourceConnector(input: {
     startedAt,
   });
   if (rejection) {
+    if (
+      rejection === "connector_disconnected" ||
+      rejection === "connector_subscription_unverified"
+    ) {
+      return {
+        kind: "provider_pause",
+        classification: "provider_configuration",
+        receipt: makeReceipt({
+          context: input.context,
+          pin,
+          authorization,
+          request,
+          egressFields: [],
+          externalCallAttempted: false,
+          status: "error",
+          errorCategory: "provider_configuration",
+          discoveryRefs: [],
+          snapshotRefs: [],
+          startedAt,
+          completedAt: now(),
+        }),
+      };
+    }
     return {
       kind: "rejected",
       code: rejection,

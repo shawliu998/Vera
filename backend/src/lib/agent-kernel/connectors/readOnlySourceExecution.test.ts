@@ -399,6 +399,34 @@ test("rejects an ungranted or drifted connector before invoking it", async () =>
   assert.equal(calls, 0);
 });
 
+test("pauses a disconnected provider as recoverable configuration without egress", async () => {
+  let calls = 0;
+  const result = await executeReadOnlySourceConnector({
+    context,
+    grant: grant(),
+    pin: pin(),
+    authorization: {
+      ...authorization,
+      connection: "disconnected",
+      subscription: "not_required",
+    },
+    request,
+    normalizer: normalizer(),
+    invoker: boundInvoker(async () => {
+      calls += 1;
+      return {};
+    }),
+    now: () => NOW,
+  });
+  assert.equal(result.kind, "provider_pause");
+  if (result.kind !== "provider_pause") return;
+  assert.equal(result.classification, "provider_configuration");
+  assert.equal(result.receipt.error_category, "provider_configuration");
+  assert.equal(result.receipt.external_call_attempted, false);
+  assert.deepEqual(result.receipt.egress_fields_sent, []);
+  assert.equal(calls, 0);
+});
+
 test("enforces the fixed timeout even when a bound invoker does not settle", async () => {
   const timeoutPin = pin({
     limits: {
