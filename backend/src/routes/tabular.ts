@@ -42,6 +42,17 @@ import {
     findMissingUserEmails,
     loadProfileUsersByEmail,
 } from "../lib/userLookup";
+import { classifyAgentTaskError } from "../lib/agentTaskRetryPolicy";
+import {
+    mapWithConcurrency,
+    parseTabularGenerationLine,
+    planTabularRecovery,
+    type TabularCellResult,
+    type TabularGenerationColumn,
+} from "../lib/tabularGeneration";
+
+const TABULAR_DOCUMENT_CONCURRENCY = 2;
+const TABULAR_CELL_RECOVERY_LIMIT = 2;
 
 function formatPromptSuffix(format?: string, tags?: string[]): string {
     switch (format) {
@@ -724,11 +735,14 @@ tabularRouter.post(
         if (!result) {
             await db
                 .from("tabular_cells")
-                .update({ status: "error" })
+                .update({ status: "pending" })
                 .eq("review_id", reviewId)
                 .eq("document_id", document_id)
                 .eq("column_index", column_index);
-            return void res.status(500).json({ detail: "Generation failed" });
+            return void res.status(503).json({
+                code: "provider_unavailable",
+                detail: "Generation paused before this cell completed. Retry this cell when the model is available.",
+            });
         }
 
         await db
@@ -827,8 +841,10 @@ tabularRouter.post("/:reviewId/generate", requireAuth, async (req, res) => {
     const write = (line: string) => res.write(line);
 
     try {
-        await Promise.all(
-            docs.map(async (doc) => {
+        await mapWithConcurrency(
+            docs,
+            TABULAR_DOCUMENT_CONCURRENCY,
+            async (doc) => {
                 const docId = doc.id as string;
                 let markdown = "";
 
@@ -887,6 +903,9 @@ tabularRouter.post("/:reviewId/generate", requireAuth, async (req, res) => {
 
                 // Single LLM call for all columns, streaming one JSON line per column
                 const receivedColumns = new Set<number>();
+                let streamFailed = false;
+                let providerIssue: ReturnType<typeof classifyAgentTaskError> =
+                    null;
                 try {
                     await queryTabularAllColumns(
                         tabular_model,
@@ -894,7 +913,6 @@ tabularRouter.post("/:reviewId/generate", requireAuth, async (req, res) => {
                         markdown,
                         columnsToProcess,
                         async (columnIndex, result) => {
-                            receivedColumns.add(columnIndex);
                             await db
                                 .from("tabular_cells")
                                 .update({
@@ -904,6 +922,7 @@ tabularRouter.post("/:reviewId/generate", requireAuth, async (req, res) => {
                                 .eq("review_id", reviewId)
                                 .eq("document_id", docId)
                                 .eq("column_index", columnIndex);
+                            receivedColumns.add(columnIndex);
                             write(
                                 `data: ${JSON.stringify({ type: "cell_update", document_id: docId, column_index: columnIndex, content: result, status: "done" })}\n\n`,
                             );
@@ -911,27 +930,66 @@ tabularRouter.post("/:reviewId/generate", requireAuth, async (req, res) => {
                         api_keys,
                     );
                 } catch (err) {
+                    streamFailed = true;
+                    providerIssue = classifyAgentTaskError(err);
                     console.error(
                         `[tabular/generate] queryTabularAllColumns error doc=${docId}`,
                         safeErrorLog(err),
                     );
                 }
 
-                // Mark any columns the LLM didn't return as error
-                for (const col of columnsToProcess) {
-                    if (!receivedColumns.has(col.index)) {
+                const recovery = planTabularRecovery(
+                    columnsToProcess,
+                    receivedColumns,
+                    {
+                        streamFailed,
+                        automaticRecoveryLimit: TABULAR_CELL_RECOVERY_LIMIT,
+                    },
+                );
+                if (!streamFailed) {
+                    for (const col of recovery.recover) {
+                        const recovered = await queryTabularCell(
+                            tabular_model,
+                            filename,
+                            markdown,
+                            col.prompt,
+                            col.format,
+                            col.tags,
+                            api_keys,
+                        );
+                        if (!recovered) continue;
+                        receivedColumns.add(col.index);
                         await db
                             .from("tabular_cells")
-                            .update({ status: "error" })
+                            .update({
+                                content: JSON.stringify(recovered),
+                                status: "done",
+                            })
                             .eq("review_id", reviewId)
                             .eq("document_id", docId)
                             .eq("column_index", col.index);
                         write(
-                            `data: ${JSON.stringify({ type: "cell_update", document_id: docId, column_index: col.index, content: null, status: "error" })}\n\n`,
+                            `data: ${JSON.stringify({ type: "cell_update", document_id: docId, column_index: col.index, content: recovered, status: "done" })}\n\n`,
                         );
                     }
                 }
-            }),
+
+                // Preserve completed cells. Any unproven cell becomes pending so a
+                // later retry resumes only that cell instead of declaring failure.
+                for (const col of columnsToProcess) {
+                    if (!receivedColumns.has(col.index)) {
+                        await db
+                            .from("tabular_cells")
+                            .update({ content: null, status: "pending" })
+                            .eq("review_id", reviewId)
+                            .eq("document_id", docId)
+                            .eq("column_index", col.index);
+                        write(
+                            `data: ${JSON.stringify({ type: "cell_update", document_id: docId, column_index: col.index, content: null, status: "pending", issue_code: providerIssue?.classification ?? (streamFailed ? "generation_interrupted" : "structured_output_incomplete") })}\n\n`,
+                        );
+                    }
+                }
+            },
         );
 
         write("data: [DONE]\n\n");
@@ -1642,25 +1700,12 @@ function buildTabularContext(
     return lines.join("\n");
 }
 
-type CellResult = {
-    summary: string;
-    flag: "green" | "grey" | "yellow" | "red";
-    reasoning: string;
-};
-type Column = {
-    index: number;
-    name: string;
-    prompt: string;
-    format?: string;
-    tags?: string[];
-};
-
 async function queryTabularAllColumns(
     model: string,
     filename: string,
     documentText: string,
-    columns: Column[],
-    onResult: (columnIndex: number, result: CellResult) => Promise<void>,
+    columns: TabularGenerationColumn[],
+    onResult: (columnIndex: number, result: TabularCellResult) => Promise<void>,
     apiKeys?: import("../lib/llm").UserApiKeys,
 ): Promise<void> {
     const columnsDesc = columns
@@ -1689,59 +1734,41 @@ Rules:
 
     let contentBuffer = "";
     const pending: Promise<unknown>[] = [];
+    const expectedColumnIndexes = new Set(
+        columns.map((column) => column.index),
+    );
+    const emittedColumnIndexes = new Set<number>();
 
     const processLine = async (line: string) => {
-        const trimmed = line.trim();
-        if (!trimmed) return;
-        try {
-            const parsed = JSON.parse(trimmed) as {
-                column_index?: unknown;
-                summary?: unknown;
-                flag?: unknown;
-                reasoning?: unknown;
-            };
-            if (typeof parsed.column_index !== "number") return;
-            const col = columns.find((c) => c.index === parsed.column_index);
-            if (!col) return;
-            await onResult(parsed.column_index, {
-                summary: String(parsed.summary ?? "").trim() || "Not addressed",
-                flag: (["green", "grey", "yellow", "red"] as const).includes(
-                    parsed.flag as "green",
-                )
-                    ? (parsed.flag as CellResult["flag"])
-                    : "grey",
-                reasoning: String(parsed.reasoning ?? ""),
-            });
-        } catch {
-            // malformed line — skip
+        const parsed = parseTabularGenerationLine(line, expectedColumnIndexes);
+        if (
+            parsed.kind !== "result" ||
+            emittedColumnIndexes.has(parsed.columnIndex)
+        ) {
+            return;
         }
+        emittedColumnIndexes.add(parsed.columnIndex);
+        await onResult(parsed.columnIndex, parsed.result);
     };
 
-    try {
-        await streamChatWithTools({
-            model,
-            systemPrompt: SYSTEM,
-            messages: [{ role: "user", content: USER }],
-            tools: [],
-            apiKeys,
-            callbacks: {
-                onContentDelta: (delta) => {
-                    contentBuffer += delta;
-                    let newlineIdx: number;
-                    while ((newlineIdx = contentBuffer.indexOf("\n")) !== -1) {
-                        const completedLine = contentBuffer.slice(
-                            0,
-                            newlineIdx,
-                        );
-                        contentBuffer = contentBuffer.slice(newlineIdx + 1);
-                        pending.push(processLine(completedLine));
-                    }
-                },
+    await streamChatWithTools({
+        model,
+        systemPrompt: SYSTEM,
+        messages: [{ role: "user", content: USER }],
+        tools: [],
+        apiKeys,
+        callbacks: {
+            onContentDelta: (delta) => {
+                contentBuffer += delta;
+                let newlineIdx: number;
+                while ((newlineIdx = contentBuffer.indexOf("\n")) !== -1) {
+                    const completedLine = contentBuffer.slice(0, newlineIdx);
+                    contentBuffer = contentBuffer.slice(newlineIdx + 1);
+                    pending.push(processLine(completedLine));
+                }
             },
-        });
-    } catch (err) {
-        console.error("[queryTabularAllColumns] stream failed", safeErrorLog(err));
-    }
+        },
+    });
 
     if (contentBuffer.trim()) pending.push(processLine(contentBuffer));
     await Promise.all(pending);

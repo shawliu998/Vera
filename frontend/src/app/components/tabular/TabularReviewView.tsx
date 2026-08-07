@@ -323,12 +323,14 @@ export function TRView({ reviewId, projectId }: Props) {
             setCells((prev) =>
                 prev.map((c) =>
                     c.document_id === docId && c.column_index === colIndex
-                        ? { ...c, status: "error" as const }
+                        ? { ...c, status: "pending" as const, content: null }
                         : c,
                 ),
             );
             setExpandedCell((prev) =>
-                prev ? { ...prev, status: "error" as const } : null,
+                prev
+                    ? { ...prev, status: "pending" as const, content: null }
+                    : null,
             );
         }
     }
