@@ -107,9 +107,9 @@ async function saveContractRevisionVersionToMike(
     file: File,
     filename?: string,
 ) {
-    const { saveContractRevisionWordVersion } =
+    const { saveAgentTaskWordArtifactVersion } =
         await import("@/app/lib/mikeApi");
-    return saveContractRevisionWordVersion(
+    return saveAgentTaskWordArtifactVersion(
         taskId,
         documentId,
         baseVersionId,
