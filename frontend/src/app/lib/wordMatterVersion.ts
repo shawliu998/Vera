@@ -8,6 +8,17 @@ import {
     writeCurrentWordCustomProperties,
 } from "@/app/lib/wordOfficeBridge";
 import {
+    assertWordContractRevisionOpenBinding,
+    encodeWordContractRevisionBinding,
+    successorWordContractRevisionBinding,
+    type WordContractRevisionBinding,
+} from "@/app/lib/wordContractRevisionBinding";
+import {
+    encodeWordMemoSourceManifest,
+    type BoundWordMemoSourceManifest,
+} from "@/app/lib/wordMemoSourceManifest";
+import type { WordMemoTaskBinding } from "@/app/lib/wordMemoTaskBinding";
+import {
     assertWordTaskArtifactOpenBinding,
     encodeWordTaskArtifactBinding,
     successorWordTaskArtifactBinding,
@@ -31,6 +42,13 @@ type UploadVersion = (
     file: File,
     filename?: string,
 ) => Promise<DocumentVersion>;
+type SaveContractRevisionVersion = (
+    taskId: string,
+    documentId: string,
+    baseVersionId: string,
+    file: File,
+    filename?: string,
+) => Promise<DocumentVersion>;
 type SaveTaskArtifactVersion = (
     taskId: string,
     documentId: string,
@@ -38,6 +56,27 @@ type SaveTaskArtifactVersion = (
     file: File,
     filename?: string,
 ) => Promise<DocumentVersion>;
+type SaveBoundMemo = (input: {
+    manifest: BoundWordMemoSourceManifest;
+    baseVersionId: string;
+    file: File;
+    filename?: string;
+}) => Promise<WordMemoTaskBinding>;
+
+export type BoundMemoVersionSaveResult = {
+    binding: WordMemoTaskBinding;
+    manifest: BoundWordMemoSourceManifest;
+    receiptSynchronized: boolean;
+    receiptSyncError: string | null;
+};
+
+export type ContractRevisionVersionSaveResult = {
+    version: DocumentVersion;
+    successorBinding: WordContractRevisionBinding;
+    receiptSynchronized: boolean;
+    receiptSyncError: string | null;
+    reopenRequired: boolean;
+};
 
 export type TaskArtifactVersionSaveResult = {
     version: DocumentVersion;
@@ -61,6 +100,24 @@ async function uploadVersionToMike(
     return uploadDocumentVersion(documentId, file, filename);
 }
 
+async function saveContractRevisionVersionToMike(
+    taskId: string,
+    documentId: string,
+    baseVersionId: string,
+    file: File,
+    filename?: string,
+) {
+    const { saveContractRevisionWordVersion } =
+        await import("@/app/lib/mikeApi");
+    return saveContractRevisionWordVersion(
+        taskId,
+        documentId,
+        baseVersionId,
+        file,
+        filename,
+    );
+}
+
 async function saveTaskArtifactVersionToMike(
     taskId: string,
     documentId: string,
@@ -77,6 +134,12 @@ async function saveTaskArtifactVersionToMike(
         file,
         filename,
     );
+}
+
+async function saveBoundMemoToTask(input: Parameters<SaveBoundMemo>[0]) {
+    const { saveBoundWordMemoTaskFile } =
+        await import("@/app/lib/wordMemoTaskBinding");
+    return saveBoundWordMemoTaskFile(input);
 }
 
 export class MatterDocumentVersionDriftError extends Error {
@@ -181,6 +244,74 @@ export async function saveCurrentWordDocumentAsMatterVersion(args: {
     return uploadVersion(args.document.id, file, filename);
 }
 
+/**
+ * Saves only the prepared contract revision bound to the exact open Word
+ * Document + Version. The immutable open-file identity and the mutable
+ * server-current check are intentionally independent.
+ */
+export async function saveCurrentWordDocumentAsContractRevisionVersion(args: {
+    document: MatterDocument;
+    base: MatterDocumentVersionBase;
+    openBinding: WordContractRevisionBinding | null | undefined;
+    loadVersions?: LoadVersions;
+    readWordFile?: typeof readCurrentWordDocumentFile;
+    saveContractRevisionVersion?: SaveContractRevisionVersion;
+    writeWordCustomProperties?: typeof writeCurrentWordCustomProperties;
+}): Promise<ContractRevisionVersionSaveResult> {
+    if (args.document.id !== args.base.documentId) {
+        throw new Error("The selected Matter document changed before saving.");
+    }
+
+    const openBinding = assertWordContractRevisionOpenBinding(
+        args.openBinding,
+        args.base,
+    );
+    const loadVersions = args.loadVersions ?? loadVersionsFromMike;
+    const readWordFile = args.readWordFile ?? readCurrentWordDocumentFile;
+    const saveContractRevisionVersion =
+        args.saveContractRevisionVersion ?? saveContractRevisionVersionToMike;
+
+    assertVersionBaseMatches(args.base, await loadVersions(args.document.id));
+    const filename = wordVersionFilename(args.document.filename);
+    const file = await readWordFile({ filename });
+    assertVersionBaseMatches(args.base, await loadVersions(args.document.id));
+    const version = await saveContractRevisionVersion(
+        openBinding.taskId,
+        args.document.id,
+        args.base.versionId,
+        file,
+        filename,
+    );
+    const successorBinding = successorWordContractRevisionBinding(
+        openBinding,
+        version.id,
+    );
+
+    try {
+        await (
+            args.writeWordCustomProperties ?? writeCurrentWordCustomProperties
+        )(encodeWordContractRevisionBinding(successorBinding));
+        return {
+            version,
+            successorBinding,
+            receiptSynchronized: true,
+            receiptSyncError: null,
+            reopenRequired: false,
+        };
+    } catch (error) {
+        return {
+            version,
+            successorBinding,
+            receiptSynchronized: false,
+            receiptSyncError:
+                error instanceof Error && error.message.trim()
+                    ? error.message
+                    : "Word could not update the saved revision receipt.",
+            reopenRequired: true,
+        };
+    }
+}
+
 export async function saveCurrentWordDocumentAsTaskArtifactVersion(args: {
     taskId: string;
     projectId: string;
@@ -243,6 +374,62 @@ export async function saveCurrentWordDocumentAsTaskArtifactVersion(args: {
                     ? error.message
                     : "The open Word receipt could not be updated.",
             reopenRequired: true,
+        };
+    }
+}
+
+export async function saveCurrentWordDocumentAsBoundMemoVersion(args: {
+    manifest: BoundWordMemoSourceManifest;
+    binding: WordMemoTaskBinding;
+    readWordFile?: typeof readCurrentWordDocumentFile;
+    saveBoundMemo?: SaveBoundMemo;
+    writeWordCustomProperties?: typeof writeCurrentWordCustomProperties;
+}): Promise<BoundMemoVersionSaveResult> {
+    if (
+        args.binding.taskId !== args.manifest.taskId ||
+        args.binding.projectId !== args.manifest.projectId ||
+        args.binding.reviewId !== args.manifest.reviewId ||
+        args.binding.memoDocumentId !== args.manifest.memoDocumentId ||
+        args.binding.memoVersionId !== args.manifest.memoVersionId ||
+        args.binding.inputDigest !== args.manifest.inputDigest
+    ) {
+        throw new Error(
+            "The current Word Memo binding no longer matches its manifest.",
+        );
+    }
+    const filename = wordVersionFilename(args.binding.memoFilename);
+    const file = await (args.readWordFile ?? readCurrentWordDocumentFile)({
+        filename,
+    });
+    const binding = await (args.saveBoundMemo ?? saveBoundMemoToTask)({
+        manifest: args.manifest,
+        baseVersionId: args.manifest.memoVersionId,
+        file,
+        filename,
+    });
+    const manifest: BoundWordMemoSourceManifest = {
+        ...args.manifest,
+        memoVersionId: binding.memoVersionId,
+    };
+    try {
+        await (
+            args.writeWordCustomProperties ?? writeCurrentWordCustomProperties
+        )(encodeWordMemoSourceManifest(manifest));
+        return {
+            binding,
+            manifest,
+            receiptSynchronized: true,
+            receiptSyncError: null,
+        };
+    } catch (error) {
+        return {
+            binding,
+            manifest,
+            receiptSynchronized: false,
+            receiptSyncError:
+                error instanceof Error && error.message.trim()
+                    ? error.message
+                    : "Word could not update the saved Memo Version receipt.",
         };
     }
 }

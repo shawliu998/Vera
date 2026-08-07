@@ -5,11 +5,19 @@ import type {
     Project,
 } from "@/app/components/shared/types";
 import type { DocumentVersion } from "./mikeApi";
+import {
+    WordContractRevisionOpenIdentityError,
+    type WordContractRevisionBinding,
+} from "./wordContractRevisionBinding";
+import type { BoundWordMemoSourceManifest } from "./wordMemoSourceManifest";
+import type { WordMemoTaskBinding } from "./wordMemoTaskBinding";
 import type { WordTaskArtifactBinding } from "./wordTaskArtifactBinding";
 import {
     currentMatterDocumentVersionBase,
     listMatterWordDocuments,
     MatterDocumentVersionDriftError,
+    saveCurrentWordDocumentAsBoundMemoVersion,
+    saveCurrentWordDocumentAsContractRevisionVersion,
     saveCurrentWordDocumentAsMatterVersion,
     saveCurrentWordDocumentAsTaskArtifactVersion,
     wordVersionFilename,
@@ -60,6 +68,53 @@ const taskArtifactBinding: WordTaskArtifactBinding = {
     deliverableKey: "claim-comparison-memo",
     documentId: "document-1",
     versionId: "version-2",
+};
+
+const contractRevisionBinding: WordContractRevisionBinding = {
+    schemaVersion: 1,
+    kind: "contract-playbook-word-handoff-v1",
+    taskId: "task-1",
+    projectId: "matter-1",
+    documentId: "document-1",
+    versionId: "version-2",
+};
+
+const memoManifest: BoundWordMemoSourceManifest = {
+    schemaVersion: 1,
+    generatorVersion: "tabular-review-word-memo-v1",
+    projectId: "matter-1",
+    reviewId: "review-1",
+    taskId: "task-1",
+    memoDocumentId: "memo-1",
+    memoVersionId: "memo-version-1",
+    inputDigest: "digest-1",
+    citations: [],
+};
+
+const memoBinding: WordMemoTaskBinding = {
+    taskId: "task-1",
+    taskStatus: "completed",
+    projectId: "matter-1",
+    reviewId: "review-1",
+    memoDocumentId: "memo-1",
+    memoVersionId: "memo-version-1",
+    memoVersionNumber: 1,
+    memoFilename: "Review Memo.docx",
+    executionChatId: "chat-1",
+    inputDigest: "digest-1",
+    reviewTitle: "Review",
+    matterName: "Matter",
+    verifierStatus: "passed",
+    citations: [],
+    sources: [
+        {
+            documentId: "source-1",
+            versionId: "source-version-1",
+            filename: "Source.docx",
+            fileType: "docx",
+            role: "source",
+        },
+    ],
 };
 
 test("lists only explicit Word targets from the selected Matter", () => {
@@ -287,4 +342,162 @@ test("Task artifact save rejects the wrong open Version before Word export", asy
         /not this Task's current Word artifact/,
     );
     assert.equal(reads, 0);
+});
+
+test("prepared contract revision save uses its Task route and advances the open receipt", async () => {
+    const writtenProperties: Array<{ name: string; value: string }> = [];
+    const result = await saveCurrentWordDocumentAsContractRevisionVersion({
+        document: matterDocument(),
+        base: currentMatterDocumentVersionBase("document-1", BASE_SNAPSHOT),
+        openBinding: contractRevisionBinding,
+        loadVersions: async () => BASE_SNAPSHOT,
+        readWordFile: async ({ filename }) => new File(["edited"], filename),
+        saveContractRevisionVersion: async (
+            taskId,
+            documentId,
+            baseVersionId,
+        ) => {
+            assert.equal(taskId, "task-1");
+            assert.equal(documentId, "document-1");
+            assert.equal(baseVersionId, "version-2");
+            return version("version-3", 3);
+        },
+        writeWordCustomProperties: async (properties) => {
+            writtenProperties.push(...properties);
+        },
+    });
+
+    assert.equal(result.version.id, "version-3");
+    assert.equal(result.successorBinding.versionId, "version-3");
+    assert.equal(result.receiptSynchronized, true);
+    assert.equal(result.reopenRequired, false);
+    assert.ok(
+        writtenProperties.some((property) =>
+            property.value.includes('"versionId":"version-3"'),
+        ),
+    );
+});
+
+test("prepared contract revision rejects stale Word identity before reading bytes", async () => {
+    let reads = 0;
+    let saves = 0;
+    await assert.rejects(
+        saveCurrentWordDocumentAsContractRevisionVersion({
+            document: matterDocument(),
+            base: currentMatterDocumentVersionBase(
+                "document-1",
+                BASE_SNAPSHOT,
+            ),
+            openBinding: {
+                ...contractRevisionBinding,
+                versionId: "version-1",
+            },
+            loadVersions: async () => BASE_SNAPSHOT,
+            readWordFile: async ({ filename }) => {
+                reads += 1;
+                return new File([], filename);
+            },
+            saveContractRevisionVersion: async () => {
+                saves += 1;
+                return version("version-3", 3);
+            },
+        }),
+        WordContractRevisionOpenIdentityError,
+    );
+    assert.equal(reads, 0);
+    assert.equal(saves, 0);
+});
+
+test("prepared contract revision preserves a server save when the local receipt cannot synchronize", async () => {
+    const result = await saveCurrentWordDocumentAsContractRevisionVersion({
+        document: matterDocument(),
+        base: currentMatterDocumentVersionBase("document-1", BASE_SNAPSHOT),
+        openBinding: contractRevisionBinding,
+        loadVersions: async () => BASE_SNAPSHOT,
+        readWordFile: async ({ filename }) => new File(["edited"], filename),
+        saveContractRevisionVersion: async () => version("version-3", 3),
+        writeWordCustomProperties: async () => {
+            throw new Error("Office host disconnected");
+        },
+    });
+
+    assert.equal(result.version.id, "version-3");
+    assert.equal(result.successorBinding.versionId, "version-3");
+    assert.equal(result.receiptSynchronized, false);
+    assert.equal(result.reopenRequired, true);
+    assert.equal(result.receiptSyncError, "Office host disconnected");
+});
+
+test("Task-bound Memo save uses its authoritative base and advances only the Memo receipt", async () => {
+    const writtenProperties: Array<{ name: string; value: string }> = [];
+    const result = await saveCurrentWordDocumentAsBoundMemoVersion({
+        manifest: memoManifest,
+        binding: memoBinding,
+        readWordFile: async ({ filename }) => new File(["edited"], filename),
+        saveBoundMemo: async (input) => {
+            assert.equal(input.baseVersionId, "memo-version-1");
+            assert.equal(input.filename, "Review Memo.docx");
+            return {
+                ...memoBinding,
+                taskStatus: "verifying",
+                memoVersionId: "memo-version-2",
+                memoVersionNumber: 2,
+                verifierStatus: "running",
+            };
+        },
+        writeWordCustomProperties: async (properties) => {
+            writtenProperties.push(...properties);
+        },
+    });
+
+    assert.equal(result.binding.memoVersionId, "memo-version-2");
+    assert.equal(result.manifest.memoVersionId, "memo-version-2");
+    assert.equal(result.receiptSynchronized, true);
+    assert.ok(
+        writtenProperties.some((property) =>
+            property.value.includes('"memoVersionId":"memo-version-2"'),
+        ),
+    );
+});
+
+test("Task-bound Memo rejects a drifted server binding before exporting Word", async () => {
+    let reads = 0;
+    await assert.rejects(
+        saveCurrentWordDocumentAsBoundMemoVersion({
+            manifest: memoManifest,
+            binding: {
+                ...memoBinding,
+                memoVersionId: "memo-version-2",
+            },
+            readWordFile: async ({ filename }) => {
+                reads += 1;
+                return new File([], filename);
+            },
+        }),
+        /binding no longer matches its manifest/,
+    );
+    assert.equal(reads, 0);
+});
+
+test("Task-bound Memo preserves the server successor when Word receipt sync fails", async () => {
+    const result = await saveCurrentWordDocumentAsBoundMemoVersion({
+        manifest: memoManifest,
+        binding: memoBinding,
+        readWordFile: async ({ filename }) => new File(["edited"], filename),
+        saveBoundMemo: async () => ({
+            ...memoBinding,
+            taskStatus: "verifying",
+            memoVersionId: "memo-version-2",
+            memoVersionNumber: 2,
+            verifierStatus: "running",
+        }),
+        writeWordCustomProperties: async () => {
+            throw new Error("Office host disconnected");
+        },
+    });
+
+    assert.equal(result.binding.memoVersionId, "memo-version-2");
+    assert.equal(result.manifest.memoVersionId, "memo-version-2");
+    assert.equal(result.receiptSynchronized, false);
+    assert.equal(result.receiptSyncError, "Office host disconnected");
 });

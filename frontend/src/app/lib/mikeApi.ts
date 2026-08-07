@@ -725,6 +725,30 @@ export async function saveAgentTaskWordArtifactVersion(
     return response.json() as Promise<DocumentVersion>;
 }
 
+export async function saveContractRevisionWordVersion(
+    taskId: string,
+    documentId: string,
+    baseVersionId: string,
+    file: File,
+    filename?: string,
+): Promise<DocumentVersion> {
+    const authHeaders = await getAuthHeader();
+    const form = new FormData();
+    form.append("document_id", documentId);
+    form.append("base_version_id", baseVersionId);
+    form.append("file", file, filename ?? file.name);
+    const response = await fetch(
+        `${API_BASE}/agent-tasks/${encodeURIComponent(taskId)}/contract-revision/word-file`,
+        {
+            method: "PUT",
+            headers: { ...authHeaders },
+            body: form,
+        },
+    );
+    if (!response.ok) throw new Error(await response.text());
+    return response.json() as Promise<DocumentVersion>;
+}
+
 export async function replaceDocumentVersionFile(
     documentId: string,
     versionId: string,
