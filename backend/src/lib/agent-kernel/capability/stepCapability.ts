@@ -10,6 +10,7 @@ const LEGACY_AGENT_STEP_CAPABILITY_GRANT_VERSION =
 
 const TOOL_NAMES_BY_OPERATION = {
   read: ["ask_inputs", "read_document", "find_in_document"],
+  "source.acquire": [],
   compare: ["ask_inputs", "read_document", "find_in_document"],
   extract: ["ask_inputs", "read_document", "find_in_document"],
   classify: ["ask_inputs", "read_document", "find_in_document"],
@@ -93,7 +94,8 @@ const grantSchema = z
     }
     if (
       hasConnectorPins &&
-      (grant.capability !== "read_sources" || grant.operation !== "read")
+      (grant.capability !== "read_sources" ||
+        grant.operation !== "source.acquire")
     ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
@@ -157,11 +159,13 @@ export function resolveAgentStepCapabilityGrant(input: {
   if (
     readOnlyConnectorPins.length &&
     (input.contract.capability !== "read_sources" ||
-      input.contract.operation !== "read" ||
-      input.contract.source_requirement.mode !== "authority")
+      input.contract.operation !== "source.acquire" ||
+      input.contract.source_requirement.mode === "none" ||
+      input.contract.source_requirement.jurisdictions.length === 0 ||
+      input.contract.source_requirement.as_of_date === null)
   ) {
     throw new Error(
-      "Read-only connectors require an authority-scoped read_sources Step",
+      "Read-only connectors require one fixed source.acquire Step with jurisdiction and as-of scope",
     );
   }
   return grantSchema.parse({

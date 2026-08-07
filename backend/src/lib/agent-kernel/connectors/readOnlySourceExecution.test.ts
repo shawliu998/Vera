@@ -75,7 +75,7 @@ function readContract(mode: "authority" | "pinned" = "authority") {
     schema_version: "agent_step_contract_v1",
     position: 0,
     capability: "read_sources",
-    operation: "read",
+    operation: "source.acquire",
     output_expectation: { kind: "checkpoint" },
     source_requirement: {
       mode,
@@ -675,15 +675,15 @@ test("coverage cannot claim completeness while a bounded gap remains", () => {
   );
 });
 
-test("only an authority-scoped read Step can receive a connector pin", () => {
+test("only a fixed source.acquire Step can receive a connector pin", () => {
   assert.throws(
     () =>
       resolveAgentStepCapabilityGrant({
-        contract: readContract("pinned"),
+        contract: { ...readContract("pinned"), operation: "read" },
         availableToolNames: ["read_document"],
         readOnlyConnectorPins: [pin()],
       }),
-    /authority-scoped read_sources/,
+    /fixed source\.acquire Step/,
   );
   const resolved = grant();
   assert.equal(resolved.mcp_tools_allowed, false);

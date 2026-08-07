@@ -21,7 +21,7 @@ const contract = {
   schema_version: "agent_step_contract_v1",
   position: 0,
   capability: "read_sources",
-  operation: "read",
+  operation: "source.acquire",
   output_expectation: { kind: "checkpoint" },
   source_requirement: {
     mode: "authority",

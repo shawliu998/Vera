@@ -21,6 +21,7 @@ export type AgentStepCapability = z.infer<typeof agentStepCapabilitySchema>;
 
 export const agentStepOperationSchema = z.enum([
   "read",
+  "source.acquire",
   "compare",
   "extract",
   "classify",
@@ -186,7 +187,9 @@ export function operationMatchesCapability(
   operation: AgentStepOperation,
   capability: AgentStepCapability,
 ) {
-  if (capability === "read_sources") return operation === "read";
+  if (capability === "read_sources") {
+    return operation === "read" || operation === "source.acquire";
+  }
   if (capability === "analyze") {
     return ["compare", "extract", "classify"].includes(operation);
   }

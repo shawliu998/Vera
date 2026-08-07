@@ -215,7 +215,7 @@ function preflight(input: {
   if (
     !input.grant.research_tools_allowed ||
     input.grant.capability !== "read_sources" ||
-    input.grant.operation !== "read" ||
+    input.grant.operation !== "source.acquire" ||
     input.grant.consequential_actions_allowed
   ) {
     return "connector_grant_not_authorized";
