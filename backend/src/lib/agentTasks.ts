@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { createServerSupabase } from "./supabase";
 import { taskDeliverablePurpose } from "./agentTaskDeliverables";
 import type {
@@ -37,12 +39,15 @@ import {
 } from "./agent-kernel/contracts/stepContract";
 import {
   AgentTaskStateTransitionError,
+  agentTaskInputTransitionWasApplied,
   agentTaskRetryTransitionWasApplied,
   agentTaskStateTransitionWasApplied,
   agentTaskStopTransitionWasApplied,
+  commitAgentTaskInputTransition,
   commitAgentTaskRetryTransition,
   commitAgentTaskStateTransition,
   commitAgentTaskStopTransition,
+  type AgentTaskInputTransitionInput,
   type AgentTaskRetryTransitionInput,
   type AgentTaskStateTransitionInput,
   type AgentTaskStopTransitionInput,
@@ -103,6 +108,7 @@ export type AgentReviewDecision = {
 };
 
 export type AgentTaskSupplementalInput = {
+  submission_id?: string;
   step_id: string;
   attempt: number;
   submitted_at: string;
@@ -194,6 +200,9 @@ export function readAgentTaskSupplementalInput(task: {
     return null;
   }
   return {
+    ...(typeof row.submission_id === "string" && row.submission_id.trim()
+      ? { submission_id: row.submission_id.trim() }
+      : {}),
     step_id: row.step_id,
     attempt: row.attempt,
     submitted_at: row.submitted_at,
@@ -222,6 +231,7 @@ export function prepareAgentTaskInputTransition(
   },
   input: { message?: string; documentIds?: string[] },
   submittedAt = now(),
+  submissionId = randomUUID(),
 ) {
   const message = input.message?.trim() ?? "";
   const documentIds = Array.from(
@@ -267,6 +277,7 @@ export function prepareAgentTaskInputTransition(
     ]),
   ).slice(-100);
   const userInput = {
+    submission_id: submissionId,
     step_id: current.id,
     attempt: nextAttempt,
     submitted_at: submittedAt,
@@ -277,10 +288,13 @@ export function prepareAgentTaskInputTransition(
     current,
     nextAttempt,
     documentIds,
+    submissionId,
     resolvedRequiredInputId: resolvedRequiredInput?.requestId ?? null,
-    status: (activeIndex === snapshot.task.current_plan.length - 1
-      ? "verifying"
-      : "running") as AgentTaskStatus,
+    status: (snapshot.task.current_plan.some(
+      (step, position) => position > activeIndex && step.status === "pending",
+    )
+      ? "running"
+      : "verifying") as AgentTaskStatus,
     checkpoint: {
       ...checkpoint,
       ...(resolvedRequiredInputIds.length
@@ -308,33 +322,6 @@ export function agentTaskInputDocumentsMatch(
     requested.size === available.size &&
     [...requested].every((id) => available.has(id))
   );
-}
-
-export async function reserveAgentTaskInputStep(
-  db: Db,
-  input: {
-    taskId: string;
-    stepId: string;
-    currentAttempt: number;
-    nextAttempt: number;
-    updatedAt: string;
-  },
-) {
-  const { data, error } = await db
-    .from("agent_steps")
-    .update({
-      status: "running",
-      attempt: input.nextAttempt,
-      updated_at: input.updatedAt,
-    })
-    .eq("id", input.stepId)
-    .eq("task_id", input.taskId)
-    .eq("status", "blocked")
-    .eq("attempt", input.currentAttempt)
-    .select("id")
-    .maybeSingle();
-  if (error) throw dbError(error, "Failed to reserve task step");
-  return Boolean(data);
 }
 
 export async function createAgentTask(
@@ -1391,7 +1378,7 @@ export async function submitAgentTaskInput(
     input,
     updatedAt,
   );
-  const { current, nextAttempt, documentIds } = transition;
+  const { current, documentIds } = transition;
   const fixedMatterContext = readFixedMatterContext(snapshot.task);
   const extendedMatterContext =
     fixedMatterContext && documentIds.length
@@ -1418,62 +1405,56 @@ export async function submitAgentTaskInput(
         [FIXED_MATTER_CONTEXT_CHECKPOINT_KEY]: extendedMatterContext,
       }
     : revisedCheckpoint;
-  const reserved = await reserveAgentTaskInputStep(db, {
+  const atomicInput: AgentTaskInputTransitionInput = {
     taskId,
+    userId,
     stepId: current.id,
-    currentAttempt: current.attempt,
-    nextAttempt,
-    updatedAt,
-  });
-  if (!reserved) {
-    throw new Error("Only one response can resume the blocked task step");
-  }
-
-  let activated = false;
+    expectedStepAttempt: current.attempt,
+    documentIds,
+    latestCheckpoint: checkpoint,
+    submissionId: transition.submissionId,
+  };
+  let committed: Awaited<ReturnType<typeof commitAgentTaskInputTransition>>;
   try {
-    await addAgentArtifactLinks(
-      db,
-      taskId,
-      documentIds.map((artifactId) => ({
-        artifact_type: "document" as const,
-        artifact_id: artifactId,
-        purpose: "Source document",
-      })),
-    );
-    const { data: updatedTask, error: taskError } = await db
-      .from("agent_tasks")
-      .update({
-        status: transition.status,
-        current_step: current.id,
-        latest_checkpoint: checkpoint,
-        updated_at: updatedAt,
-      })
-      .eq("id", taskId)
-      .eq("user_id", userId)
-      .eq("status", "waiting_input")
-      .select("id")
-      .maybeSingle();
-    if (taskError) throw dbError(taskError, "Failed to resume task with input");
-    if (!updatedTask) {
-      throw new Error("Only one response can resume the blocked task step");
+    committed = await commitAgentTaskInputTransition(db, atomicInput);
+  } catch (error) {
+    if (!(error instanceof AgentTaskStateTransitionError)) throw error;
+    const recovered = await getAgentTaskSnapshot(db, taskId, userId);
+    if (agentTaskInputTransitionWasApplied(recovered, atomicInput)) {
+      return recovered;
     }
-    activated = true;
-  } finally {
-    if (!activated) {
-      await db
-        .from("agent_steps")
-        .update({
-          status: "blocked",
-          attempt: current.attempt,
-          updated_at: now(),
-        })
-        .eq("id", current.id)
-        .eq("task_id", taskId)
-        .eq("status", "running")
-        .eq("attempt", nextAttempt);
-    }
+    throw error;
   }
-  return getAgentTaskSnapshot(db, taskId, userId);
+  const recovered = await getAgentTaskSnapshot(db, taskId, userId);
+  if (committed.outcome === "activated") {
+    if (
+      committed.taskStatus !== transition.status ||
+      committed.currentStep !== current.id
+    ) {
+      throw new Error("The input transition returned an unexpected Task phase");
+    }
+    return recovered;
+  }
+  if (agentTaskInputTransitionWasApplied(recovered, atomicInput)) {
+    return recovered;
+  }
+  if (committed.outcome === "lease_busy") {
+    throw new Error(
+      "The previous execution is still closing. Submit the input again in a moment.",
+    );
+  }
+  if (committed.outcome === "source_invalid") {
+    throw new Error(
+      "One or more supplemental documents are not ready current Versions in this Matter.",
+    );
+  }
+  if (committed.outcome === "context_invalid") {
+    throw new Error(
+      "The fixed Matter source context changed before the input was committed.",
+    );
+  }
+  if (!recovered) return null;
+  throw new Error("Only one response can resume the blocked task step");
 }
 
 export async function pauseAgentTask(db: Db, taskId: string, userId: string) {

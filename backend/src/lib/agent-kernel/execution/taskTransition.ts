@@ -42,6 +42,16 @@ export type AgentTaskRetryTransitionInput = {
   latestCheckpoint: unknown;
 };
 
+export type AgentTaskInputTransitionInput = {
+  taskId: string;
+  userId: string;
+  stepId: string;
+  expectedStepAttempt: number;
+  documentIds: string[];
+  latestCheckpoint: unknown;
+  submissionId: string;
+};
+
 export class AgentTaskStateTransitionError extends Error {
   constructor(
     readonly code:
@@ -202,6 +212,48 @@ export async function commitAgentTaskRetryTransition(
   );
 }
 
+export async function commitAgentTaskInputTransition(
+  db: Db,
+  input: AgentTaskInputTransitionInput,
+) {
+  const { data, error } = await db.rpc("submit_agent_task_input_v1", {
+    p_task_id: input.taskId,
+    p_user_id: input.userId,
+    p_step_id: input.stepId,
+    p_expected_step_attempt: input.expectedStepAttempt,
+    p_document_ids: input.documentIds,
+    p_latest_checkpoint: input.latestCheckpoint,
+  });
+  if (error) {
+    throw transitionError(
+      `Failed to submit Agent Task input atomically: ${error.message}`,
+      {
+        task_id: input.taskId,
+        step_id: input.stepId,
+        expected_step_attempt: input.expectedStepAttempt,
+        submission_id: input.submissionId,
+      },
+    );
+  }
+  return readOutcome(
+    data,
+    [
+      "activated",
+      "conflict",
+      "context_invalid",
+      "invalid_input",
+      "lease_busy",
+      "not_found",
+      "source_invalid",
+    ],
+    {
+      task_id: input.taskId,
+      step_id: input.stepId,
+      submission_id: input.submissionId,
+    },
+  );
+}
+
 export function agentTaskStateTransitionWasApplied(
   snapshot: {
     task: {
@@ -283,5 +335,37 @@ export function agentTaskRetryTransitionWasApplied(
     step.status === "running" &&
     step.attempt === input.expectedStepAttempt + 1 &&
     snapshot.task.current_step === input.stepId,
+  );
+}
+
+export function agentTaskInputTransitionWasApplied(
+  snapshot: {
+    task: {
+      status: string;
+      current_step?: string | null;
+      latest_checkpoint?: unknown;
+      current_plan: Array<{ id: string; status: string; attempt: number }>;
+    };
+  } | null,
+  input: AgentTaskInputTransitionInput,
+) {
+  if (!snapshot) return false;
+  const step = snapshot.task.current_plan.find(
+    (candidate) => candidate.id === input.stepId,
+  );
+  const checkpoint = snapshot.task.latest_checkpoint;
+  const userInput =
+    checkpoint && typeof checkpoint === "object" && !Array.isArray(checkpoint)
+      ? (checkpoint as { user_input?: unknown }).user_input
+      : null;
+  const submissionId =
+    userInput && typeof userInput === "object" && !Array.isArray(userInput)
+      ? (userInput as { submission_id?: unknown }).submission_id
+      : null;
+  return Boolean(
+    step &&
+    step.status !== "pending" &&
+    step.attempt === input.expectedStepAttempt + 1 &&
+    submissionId === input.submissionId,
   );
 }

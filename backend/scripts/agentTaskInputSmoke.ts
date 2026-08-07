@@ -3,7 +3,6 @@ import {
   agentTaskInputDocumentsMatch,
   prepareAgentTaskInputTransition,
   readAgentTaskSupplementalInput,
-  reserveAgentTaskInputStep,
 } from "../src/lib/agentTasks";
 
 const submittedAt = "2026-07-21T08:00:00.000Z";
@@ -37,48 +36,12 @@ function waitingSnapshot(options?: {
   };
 }
 
-function fakeReservationDb() {
-  const row = {
-    id: "step_1",
-    task_id: "task_1",
-    status: "blocked",
-    attempt: 1,
-  };
-  return {
-    from() {
-      const filters: Record<string, unknown> = {};
-      let update: Record<string, unknown> = {};
-      const builder = {
-        update(value: Record<string, unknown>) {
-          update = value;
-          return builder;
-        },
-        eq(key: string, value: unknown) {
-          filters[key] = value;
-          return builder;
-        },
-        select() {
-          return builder;
-        },
-        async maybeSingle() {
-          const matches = Object.entries(filters).every(
-            ([key, value]) => row[key as keyof typeof row] === value,
-          );
-          if (!matches) return { data: null, error: null };
-          Object.assign(row, update);
-          return { data: { id: row.id }, error: null };
-        },
-      };
-      return builder;
-    },
-  };
-}
-
 async function main() {
   const textOnly = prepareAgentTaskInputTransition(
     waitingSnapshot(),
     { message: "  适用新加坡法；立场为客户方。  " },
     submittedAt,
+    "submission_text_only",
   );
   assert.equal(textOnly.status, "running");
   assert.equal(textOnly.nextAttempt, 2);
@@ -90,11 +53,18 @@ async function main() {
     "适用新加坡法；立场为客户方。",
     "a refreshed or restarted executor must recover the response",
   );
+  assert.equal(
+    readAgentTaskSupplementalInput({
+      latest_checkpoint: textOnly.checkpoint,
+    })?.submission_id,
+    "submission_text_only",
+  );
 
   const documentsOnly = prepareAgentTaskInputTransition(
     waitingSnapshot(),
     { documentIds: ["doc_1", "doc_1", " doc_2 "] },
     submittedAt,
+    "submission_documents_only",
   );
   assert.deepEqual(documentsOnly.documentIds, ["doc_1", "doc_2"]);
   assert.equal(
@@ -108,6 +78,7 @@ async function main() {
     waitingSnapshot(),
     { message: "Use a concise business tone.", documentIds: ["doc_3"] },
     submittedAt,
+    "submission_combined",
   );
   assert.equal(
     readAgentTaskSupplementalInput({
@@ -139,6 +110,7 @@ async function main() {
     waitingSnapshot({ blockedPosition: 2, attempt: 3 }),
     { message: "Confirm the final source limitation." },
     submittedAt,
+    "submission_verifier",
   );
   assert.equal(verifierInput.status, "verifying");
   assert.equal(verifierInput.nextAttempt, 4);
@@ -157,24 +129,6 @@ async function main() {
     ),
     false,
     "a document outside the task Matter must be rejected",
-  );
-
-  const reservationDb = fakeReservationDb();
-  const reservation = {
-    taskId: "task_1",
-    stepId: "step_1",
-    currentAttempt: 1,
-    nextAttempt: 2,
-    updatedAt: submittedAt,
-  };
-  assert.equal(
-    await reserveAgentTaskInputStep(reservationDb as never, reservation),
-    true,
-  );
-  assert.equal(
-    await reserveAgentTaskInputStep(reservationDb as never, reservation),
-    false,
-    "the conditional blocked-step reservation must reject a double submit",
   );
 
   console.log(

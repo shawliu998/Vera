@@ -4,12 +4,15 @@ import test from "node:test";
 
 import {
   AgentTaskStateTransitionError,
+  agentTaskInputTransitionWasApplied,
   agentTaskRetryTransitionWasApplied,
   agentTaskStateTransitionWasApplied,
   agentTaskStopTransitionWasApplied,
+  commitAgentTaskInputTransition,
   commitAgentTaskRetryTransition,
   commitAgentTaskStateTransition,
   commitAgentTaskStopTransition,
+  type AgentTaskInputTransitionInput,
   type AgentTaskRetryTransitionInput,
   type AgentTaskStateTransitionInput,
   type AgentTaskStopTransitionInput,
@@ -305,4 +308,114 @@ test("keeps recovery migrations mirrored and fences stop/retry leases", async ()
   assert.match(backend, /execution_lease_expires_at > clock_timestamp\(\)/i);
   assert.match(backend, /from public, anon, authenticated/i);
   assert.match(backend, /to service_role/i);
+});
+
+test("maps supplemental input to one atomic activation RPC", async () => {
+  let call: { name: string; args: Record<string, unknown> } | null = null;
+  const db = {
+    async rpc(name: string, args: Record<string, unknown>) {
+      call = { name, args };
+      return {
+        data: [
+          {
+            outcome: "activated",
+            task_status: "running",
+            current_step: input.stepId,
+          },
+        ],
+        error: null,
+      };
+    },
+  };
+  const supplemental: AgentTaskInputTransitionInput = {
+    taskId: input.taskId,
+    userId: input.userId,
+    stepId: input.stepId,
+    expectedStepAttempt: 2,
+    documentIds: ["00000000-0000-4000-8000-000000000004"],
+    latestCheckpoint: {
+      user_input: { submission_id: "submission-fixture" },
+    },
+    submissionId: "submission-fixture",
+  };
+  assert.equal(
+    (await commitAgentTaskInputTransition(db as never, supplemental)).outcome,
+    "activated",
+  );
+  assert.equal(call?.name, "submit_agent_task_input_v1");
+  assert.deepEqual(call?.args.p_document_ids, supplemental.documentIds);
+  assert.equal(call?.args.p_expected_step_attempt, 2);
+});
+
+test("accepts an uncertain input commit only for its exact submission id", () => {
+  const supplemental: AgentTaskInputTransitionInput = {
+    taskId: input.taskId,
+    userId: input.userId,
+    stepId: input.stepId,
+    expectedStepAttempt: 2,
+    documentIds: [],
+    latestCheckpoint: {},
+    submissionId: "submission-fixture",
+  };
+  const snapshot = {
+    task: {
+      status: "running",
+      current_step: input.stepId,
+      latest_checkpoint: {
+        user_input: { submission_id: "submission-fixture" },
+      },
+      current_plan: [{ id: input.stepId, status: "running", attempt: 3 }],
+    },
+  };
+  assert.equal(
+    agentTaskInputTransitionWasApplied(snapshot, supplemental),
+    true,
+  );
+  assert.equal(
+    agentTaskInputTransitionWasApplied(snapshot, {
+      ...supplemental,
+      submissionId: "different-submission",
+    }),
+    false,
+  );
+  assert.equal(
+    agentTaskInputTransitionWasApplied(
+      {
+        task: {
+          status: "completed",
+          current_step: "a-later-step",
+          latest_checkpoint: snapshot.task.latest_checkpoint,
+          current_plan: [{ id: input.stepId, status: "completed", attempt: 3 }],
+        },
+      },
+      supplemental,
+    ),
+    true,
+    "a fast executor may advance after the atomic input commit but before recovery reads",
+  );
+});
+
+test("keeps atomic input migrations mirrored and source/version bound", async () => {
+  const backend = await readFile(
+    new URL(
+      "../../../../migrations/20260807_04_agent_task_atomic_input.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const supabase = await readFile(
+    new URL(
+      "../../../../../supabase/migrations/20260807000004_agent_task_atomic_input.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.equal(backend, supabase);
+  assert.match(
+    backend,
+    /d\.current_version_id::text = source ->> 'version_id'/i,
+  );
+  assert.match(backend, /on conflict \(task_id, artifact_type, artifact_id\)/i);
+  assert.match(backend, /execution_lease_expires_at > clock_timestamp\(\)/i);
+  assert.match(backend, /from public, anon, authenticated/i);
 });
