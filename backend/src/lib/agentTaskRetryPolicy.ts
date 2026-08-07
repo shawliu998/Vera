@@ -1,5 +1,7 @@
+import type { AgentTaskRetryClassification } from "./agent-kernel/outcomes/executionOutcome";
+
 export type TransientAgentTaskError = {
-  classification: "rate_limit" | "provider_unavailable" | "network";
+  classification: AgentTaskRetryClassification;
   retryAfterMs: number | null;
 };
 
@@ -12,7 +14,7 @@ export const MAX_AGENT_TASK_TRANSIENT_WAIT_MS = 60_000;
 
 const RATE_LIMIT_HTTP_STATUSES = new Set([429]);
 const PROVIDER_UNAVAILABLE_HTTP_STATUSES = new Set([500, 502, 503]);
-const NETWORK_HTTP_STATUSES = new Set([408, 504]);
+const TIMEOUT_HTTP_STATUSES = new Set([408, 504]);
 const REQUIRED_TOOL_CALL_PROTOCOL_ERROR =
   /^(DeepSeek|Kimi|Gemini|Zhipu|Claude|OpenAI) did not return the required ([A-Za-z][A-Za-z0-9_-]*) tool call for this iteration\.$/;
 
@@ -48,7 +50,10 @@ function retryAfterHeader(error: unknown) {
     headers?: unknown;
     response?: { headers?: unknown };
   };
-  if (typeof row.retryAfter === "string" || typeof row.retryAfter === "number") {
+  if (
+    typeof row.retryAfter === "string" ||
+    typeof row.retryAfter === "number"
+  ) {
     return String(row.retryAfter);
   }
   for (const headers of [row.headers, row.response?.headers]) {
@@ -68,7 +73,9 @@ function retryAfterHeader(error: unknown) {
       return String(value);
     }
   }
-  return errorMessage(error).match(/retry-after\s*[:=]\s*([^\s,;]+)/i)?.[1] ?? null;
+  return (
+    errorMessage(error).match(/retry-after\s*[:=]\s*([^\s,;]+)/i)?.[1] ?? null
+  );
 }
 
 export function parseRetryAfterMs(value: string | null, nowMs: number) {
@@ -93,7 +100,7 @@ function hasProviderCapacitySignal(message: string) {
   );
 }
 
-function hasNetworkSignal(error: unknown, message: string) {
+function hasTimeoutSignal(error: unknown, message: string) {
   const name =
     error && typeof error === "object"
       ? (error as { name?: unknown }).name
@@ -101,14 +108,20 @@ function hasNetworkSignal(error: unknown, message: string) {
   return (
     name === "TimeoutError" ||
     name === "AbortError" ||
-    /\b(?:econnreset|etimedout|enetunreach|eai_again|deadline[_ ]exceeded)\b|fetch failed|network error|socket hang up|\btimed? out\b|\btimeout\b|\babort(?:ed)?\b/i.test(
+    /\b(?:etimedout|deadline[_ ]exceeded)\b|\btimed? out\b|\btimeout\b|\babort(?:ed)?\b/i.test(
       message,
     )
   );
 }
 
+function hasNetworkSignal(message: string) {
+  return /\b(?:econnreset|enetunreach|eai_again)\b|fetch failed|network error|socket hang up/i.test(
+    message,
+  );
+}
+
 /**
- * Classifies only provider capacity and network failures that can safely
+ * Classifies only provider capacity, timeout, and network failures that can safely
  * resume the current server-owned Task and Step. HTTP 200 is fail-closed
  * unless its SSE error text carries one of the explicit provider signals.
  */
@@ -128,7 +141,13 @@ export function classifyAgentTaskError(
       retryAfterMs: parseRetryAfterMs(retryAfterHeader(error), nowMs),
     };
   }
-  if (status != null && status >= 400 && status < 500 && status !== 408 && status !== 429) {
+  if (
+    status != null &&
+    status >= 400 &&
+    status < 500 &&
+    status !== 408 &&
+    status !== 429
+  ) {
     return null;
   }
   if (status === 429 || rateLimited) {
@@ -143,7 +162,16 @@ export function classifyAgentTaskError(
       retryAfterMs: parseRetryAfterMs(retryAfterHeader(error), nowMs),
     };
   }
-  if (NETWORK_HTTP_STATUSES.has(status ?? -1) || hasNetworkSignal(error, message)) {
+  if (
+    TIMEOUT_HTTP_STATUSES.has(status ?? -1) ||
+    hasTimeoutSignal(error, message)
+  ) {
+    return {
+      classification: "timeout",
+      retryAfterMs: parseRetryAfterMs(retryAfterHeader(error), nowMs),
+    };
+  }
+  if (hasNetworkSignal(message)) {
     return {
       classification: "network",
       retryAfterMs: parseRetryAfterMs(retryAfterHeader(error), nowMs),

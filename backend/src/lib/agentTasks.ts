@@ -10,6 +10,16 @@ import {
   getAgentReviewVersionState,
 } from "./agentTaskReviewVersions";
 import type { ApprovedArtifactSnapshot } from "./agentTaskReviews";
+import {
+  mergeAgentTaskProviderPauseCheckpoint,
+  type AgentTaskExecutionPauseClassification,
+  type AgentTaskRetryCheckpoint,
+} from "./agent-kernel/outcomes/executionOutcome";
+
+export type {
+  AgentTaskExecutionPauseClassification,
+  AgentTaskRetryCheckpoint,
+} from "./agent-kernel/outcomes/executionOutcome";
 
 export type AgentTaskStatus =
   | "queued"
@@ -57,25 +67,6 @@ export type AgentReviewDecision = {
   reviewer_name: string | null;
   note: string;
   artifact_snapshot: unknown[];
-  created_at: string;
-};
-
-export type AgentTaskRetryCheckpoint = {
-  attempt: number;
-  retry_at: string;
-  classification: "rate_limit" | "provider_unavailable" | "network";
-};
-
-export type AgentTaskExecutionPauseClassification =
-  | "provider_capacity"
-  | "provider_network"
-  | "provider_protocol";
-
-type AgentTaskExecutionPauseCheckpointV1 = {
-  kind: "agent_task_execution_pause_v1";
-  classification: AgentTaskExecutionPauseClassification;
-  step_id: string;
-  attempt: number;
   created_at: string;
 };
 
@@ -798,7 +789,7 @@ export async function deferAgentTaskForProvider(
   taskId: string,
   userId: string,
   summary: string,
-  options: { classification?: AgentTaskExecutionPauseClassification } = {},
+  options: { classification: AgentTaskExecutionPauseClassification },
 ) {
   const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
   if (!snapshot) return null;
@@ -814,32 +805,13 @@ export async function deferAgentTaskForProvider(
     (step: { status: AgentStepStatus }) => step.status === "running",
   );
   const updatedAt = now();
-  const retainedCheckpoint =
-    task.latest_checkpoint &&
-    typeof task.latest_checkpoint === "object" &&
-    !Array.isArray(task.latest_checkpoint)
-      ? (task.latest_checkpoint as Record<string, unknown>)
-      : {};
-  const checkpoint = current
-    ? {
-        ...retainedCheckpoint,
-        step_id: current.id,
-        iteration: current.attempt,
-        summary,
-        created_at: updatedAt,
-        ...(options.classification
-          ? {
-              execution_pause: {
-                kind: "agent_task_execution_pause_v1",
-                classification: options.classification,
-                step_id: current.id,
-                attempt: current.attempt,
-                created_at: updatedAt,
-              } satisfies AgentTaskExecutionPauseCheckpointV1,
-            }
-          : {}),
-      }
-    : task.latest_checkpoint;
+  const checkpoint = mergeAgentTaskProviderPauseCheckpoint({
+    previous: task.latest_checkpoint,
+    currentStep: current ? { id: current.id, attempt: current.attempt } : null,
+    classification: options.classification,
+    summary,
+    createdAt: updatedAt,
+  });
   let update = db
     .from("agent_tasks")
     .update({
@@ -903,7 +875,7 @@ export function readAgentTaskRetryCheckpoint(task: {
     !Number.isInteger(row.attempt) ||
     row.attempt < 1 ||
     typeof row.retry_at !== "string" ||
-    !["rate_limit", "provider_unavailable", "network"].includes(
+    !["rate_limit", "provider_unavailable", "timeout", "network"].includes(
       String(row.classification),
     )
   ) {

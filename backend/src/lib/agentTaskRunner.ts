@@ -4,9 +4,13 @@ import {
   readAgentTaskRetryCheckpoint,
   recordAgentTaskRetryCheckpoint,
   stopAgentTask,
+} from "./agentTasks";
+import {
+  providerPauseClassificationForRetry,
+  providerPauseSummary,
   type AgentTaskExecutionPauseClassification,
   type AgentTaskRetryCheckpoint,
-} from "./agentTasks";
+} from "./agent-kernel/outcomes/executionOutcome";
 import {
   advanceAgentTaskExecution,
   agentTaskExecutionErrorMessage,
@@ -169,8 +173,7 @@ export class AgentTaskRunner {
         if (!transient) {
           const protocol = classifyAgentTaskProviderProtocolError(error);
           if (protocol) {
-            const summary =
-              "The selected model did not complete the required provider tool protocol. This step is paused without discarding existing work; resume it or choose a compatible model.";
+            const summary = providerPauseSummary("provider_protocol", 0);
             if (this.dependencies.deferTask) {
               await this.dependencies.deferTask(
                 job,
@@ -189,11 +192,13 @@ export class AgentTaskRunner {
           return;
         }
         if (retryAttempt >= MAX_AGENT_TASK_TRANSIENT_RETRIES) {
-          const summary = `The selected model remained unavailable after ${MAX_AGENT_TASK_TRANSIENT_RETRIES} automatic retries. This step is paused without discarding existing work; resume it when the provider is available.`;
-          const classification: AgentTaskExecutionPauseClassification =
-            transient.classification === "network"
-              ? "provider_network"
-              : "provider_capacity";
+          const classification = providerPauseClassificationForRetry(
+            transient.classification,
+          );
+          const summary = providerPauseSummary(
+            classification,
+            MAX_AGENT_TASK_TRANSIENT_RETRIES,
+          );
           if (this.dependencies.deferTask) {
             await this.dependencies.deferTask(job, summary, classification);
           } else {

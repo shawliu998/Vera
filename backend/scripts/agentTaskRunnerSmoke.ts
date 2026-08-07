@@ -260,6 +260,70 @@ async function retryExhaustionSuite() {
   assert.equal(deferralClassification, "provider_capacity");
 }
 
+async function providerTransportPauseClassificationSuite() {
+  const cases = [
+    {
+      name: "timeout",
+      error: Object.assign(new Error("provider timed out"), {
+        name: "TimeoutError",
+      }),
+      expectedClassification: "provider_timeout",
+      expectedSummary: /timed out/i,
+    },
+    {
+      name: "network",
+      error: new Error("ECONNRESET"),
+      expectedClassification: "provider_network",
+      expectedSummary: /connection/i,
+    },
+  ] as const;
+
+  for (const transportCase of cases) {
+    const task: FakeTask = { status: "running", latest_checkpoint: null };
+    let iterations = 0;
+    let retryWrites = 0;
+    let failures = 0;
+    let deferrals = 0;
+    const runner = new AgentTaskRunner({
+      loadTask: async () => snapshot(task),
+      runIteration: async () => {
+        iterations += 1;
+        throw transportCase.error;
+      },
+      recordRetry: async (_job, retry) => {
+        retryWrites += 1;
+        task.latest_checkpoint = { runner_retry: retry };
+        return snapshot(task);
+      },
+      failTask: async () => {
+        failures += 1;
+        task.status = "failed";
+      },
+      deferTask: async (_job, summary, classification) => {
+        deferrals += 1;
+        assert.equal(classification, transportCase.expectedClassification);
+        assert.match(summary, transportCase.expectedSummary);
+        task.status = "paused";
+      },
+      recoverJobs: async () => [],
+      sleep: async () => undefined,
+      now: () => 0,
+      random: () => 0.5,
+    });
+
+    runner.wake({
+      taskId: `task_transport_${transportCase.name}`,
+      userId: "user_1",
+    });
+    await runner.waitForIdle();
+    assert.equal(iterations, 4);
+    assert.equal(retryWrites, 3);
+    assert.equal(deferrals, 1);
+    assert.equal(failures, 0);
+    assert.equal(task.status, "paused");
+  }
+}
+
 async function sseProviderPauseAndResumeSuite() {
   for (const providerError of [
     { message: "SSE data.error code 1302", expected: "provider_capacity" },
@@ -302,7 +366,9 @@ async function sseProviderPauseAndResumeSuite() {
         if (iterations <= 4) {
           assert.equal(step.attempt, 1);
           assert.equal(durableEffectsFingerprint(), initialEffectsFingerprint);
-          throw Object.assign(new Error(providerError.message), { status: "200" });
+          throw Object.assign(new Error(providerError.message), {
+            status: "200",
+          });
         }
         assert.equal(step.attempt, 1);
         assert.equal(durableEffects.has(completedEffectId), false);
@@ -351,8 +417,16 @@ async function sseProviderPauseAndResumeSuite() {
 
     runner.wake(job);
     await runner.waitForIdle();
-    assert.equal(retries, 3, "each SSE capacity error has exactly three retries");
-    assert.equal(failures, 0, "provider capacity exhaustion must not fail work");
+    assert.equal(
+      retries,
+      3,
+      "each SSE capacity error has exactly three retries",
+    );
+    assert.equal(
+      failures,
+      0,
+      "provider capacity exhaustion must not fail work",
+    );
     assert.equal(task.status, "paused");
     assert.equal(pausedTaskId, job.taskId);
     assert.equal(step.attempt, 1, "pausing must not advance the Step attempt");
@@ -376,14 +450,22 @@ async function sseProviderPauseAndResumeSuite() {
     runner.wake(job);
     await runner.waitForIdle();
     assert.equal(task.status, "completed");
-    assert.equal(iterations, 5, "the resumed task continues after the provider recovers");
+    assert.equal(
+      iterations,
+      5,
+      "the resumed task continues after the provider recovers",
+    );
     assert.equal(successfulExecution, 1);
     assert.deepEqual([...durableEffects].sort(), [
       "runner-seam:existing-artifact-link",
       "runner-seam:existing-citation",
       completedEffectId,
     ]);
-    assert.equal(durableEffects.size, 3, "the success effect must be idempotent");
+    assert.equal(
+      durableEffects.size,
+      3,
+      "the success effect must be idempotent",
+    );
   }
 }
 
@@ -422,7 +504,10 @@ async function providerProtocolPauseAndResumeSuite() {
         iterations += 1;
         if (iterations === 1) {
           assert.equal(step.attempt, 1);
-          assert.equal([...durableEffects].join("|"), initialEffectsFingerprint);
+          assert.equal(
+            [...durableEffects].join("|"),
+            initialEffectsFingerprint,
+          );
           throw new Error(
             `${provider} did not return the required read_document tool call for this iteration.`,
           );
@@ -479,10 +564,10 @@ async function providerProtocolPauseAndResumeSuite() {
     await runner.waitForIdle();
     assert.equal(task.status, "completed");
     assert.equal(successfulExecution, 1);
-    assert.deepEqual([...durableEffects], [
-      "runner-seam:existing-artifact-link",
-      completedEffectId,
-    ]);
+    assert.deepEqual(
+      [...durableEffects],
+      ["runner-seam:existing-artifact-link", completedEffectId],
+    );
     assert.equal(durableEffects.size, 2);
   }
 }
@@ -713,6 +798,7 @@ async function main() {
   await singleConcurrencySuite();
   await plannerRetrySuite();
   await retryExhaustionSuite();
+  await providerTransportPauseClassificationSuite();
   await sseProviderPauseAndResumeSuite();
   await providerProtocolPauseAndResumeSuite();
   await unknownProviderProtocolFailureSuite();

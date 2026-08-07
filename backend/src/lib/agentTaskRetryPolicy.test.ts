@@ -50,10 +50,9 @@ test("fails closed for unknown HTTP 200 SSE errors", () => {
 });
 
 test("retains the prior message-only transient classifications", () => {
-  const cases: Array<[
-    string,
-    "rate_limit" | "provider_unavailable" | "network",
-  ]> = [
+  const cases: Array<
+    [string, "rate_limit" | "provider_unavailable" | "timeout" | "network"]
+  > = [
     ["resource exhausted", "rate_limit"],
     ["resource_exhausted", "rate_limit"],
     ["provider overloaded", "provider_unavailable"],
@@ -61,12 +60,12 @@ test("retains the prior message-only transient classifications", () => {
     ["service unavailable", "provider_unavailable"],
     ["Service is too busy", "provider_unavailable"],
     ["temporarily unavailable", "provider_unavailable"],
-    ["deadline_exceeded", "network"],
-    ["timed out", "network"],
-    ["timeout", "network"],
+    ["deadline_exceeded", "timeout"],
+    ["timed out", "timeout"],
+    ["timeout", "timeout"],
     ["fetch failed", "network"],
     ["ECONNRESET", "network"],
-    ["ETIMEDOUT", "network"],
+    ["ETIMEDOUT", "timeout"],
     ["ENETUNREACH", "network"],
     ["EAI_AGAIN", "network"],
     ["socket hang up", "network"],
@@ -80,7 +79,7 @@ test("retains the prior message-only transient classifications", () => {
   const aborted = new Error("provider request aborted");
   aborted.name = "AbortError";
   assert.deepEqual(classifyAgentTaskError(aborted, now), {
-    classification: "network",
+    classification: "timeout",
     retryAfterMs: null,
   });
 });
@@ -119,10 +118,7 @@ test("bounds Retry-After and exponential backoff", () => {
     calculateAgentTaskBackoffMs(9, { retryAfterMs: 90_000 }),
     MAX_AGENT_TASK_TRANSIENT_WAIT_MS,
   );
-  assert.equal(
-    calculateAgentTaskBackoffMs(1, { retryAfterMs: -1 }),
-    0,
-  );
+  assert.equal(calculateAgentTaskBackoffMs(1, { retryAfterMs: -1 }), 0);
 });
 
 test("classifies only an exact required-tool provider protocol diagnostic", () => {
@@ -164,6 +160,9 @@ test("fails closed for non-exact provider protocol and policy diagnostics", () =
     "OpenAI rejected a mutation target outside the fixed document version.",
     "OpenAI did not return required tool call for this iteration.",
   ]) {
-    assert.equal(classifyAgentTaskProviderProtocolError(new Error(message)), null);
+    assert.equal(
+      classifyAgentTaskProviderProtocolError(new Error(message)),
+      null,
+    );
   }
 });
