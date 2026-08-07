@@ -1,0 +1,184 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import type { Document } from "@/app/components/shared/types";
+import type { AgentTaskSnapshot } from "@/app/types/agent";
+import {
+  buildAgentTaskOutputRows,
+  getAgentTaskSourceDocuments,
+  getAgentTaskStepArtifacts,
+  latestApprovedArtifact,
+} from "./agentTaskPresentation";
+
+function snapshotFixture(): AgentTaskSnapshot {
+  return {
+    task: {
+      id: "task",
+      matter_id: "matter",
+      goal: "Review agreement",
+      mode: "work",
+      status: "completed",
+      execution_model: "model",
+      deliverables: [
+        {
+          key: "review-memo",
+          title: "Review memo",
+          required: true,
+          artifact_type: "draft",
+          artifact_id: "memo-current",
+        },
+        {
+          key: "optional",
+          title: "Optional note",
+          required: false,
+        },
+      ],
+      current_plan: [
+        {
+          id: "step-1",
+          task_id: "task",
+          title: "Draft review memo",
+          status: "completed",
+          expected_output: "Review memo draft",
+          attempt: 1,
+          result_summary: "Done",
+        },
+      ],
+      current_step: null,
+      latest_checkpoint: null,
+      created_at: "now",
+      updated_at: "now",
+    },
+    artifacts: [
+      {
+        task_id: "task",
+        artifact_type: "document",
+        artifact_id: "source",
+        purpose: "Source document",
+      },
+      {
+        task_id: "task",
+        artifact_type: "draft",
+        artifact_id: "memo-old",
+        purpose: "Review memo draft",
+      },
+      {
+        task_id: "task",
+        artifact_type: "draft",
+        artifact_id: "memo-current",
+        purpose: "Review memo draft",
+      },
+      {
+        task_id: "task",
+        artifact_type: "citation_snapshot",
+        artifact_id: "evidence-old",
+        purpose: "Step 1 evidence citations",
+      },
+      {
+        task_id: "task",
+        artifact_type: "citation_snapshot",
+        artifact_id: "evidence-current",
+        purpose: "Step 1 evidence citations",
+      },
+    ],
+    review: {
+      status: "approved",
+      decisions: [
+        {
+          id: "decision",
+          task_id: "task",
+          status: "approved",
+          reviewer_id: null,
+          reviewer_email: null,
+          reviewer_name: null,
+          note: "",
+          created_at: "now",
+          artifact_snapshot: [
+            {
+              artifact_type: "draft",
+              artifact_id: "memo-current",
+              purpose: "Review memo draft",
+              document_id: "memo-current",
+              version_id: "version-2",
+              version_number: 2,
+              filename: "memo.docx",
+              file_type: "docx",
+              size_bytes: 10,
+              sha256: "hash",
+            },
+          ],
+        },
+      ],
+      version_state: {
+        latest_approved_decision_id: "decision",
+        latest_approved_at: "now",
+        has_previous_approval: true,
+        has_unapproved_changes: false,
+        current_artifacts: [
+          {
+            artifact_type: "draft",
+            artifact_id: "memo-current",
+            purpose: "Review memo draft",
+            current_version_id: "version-2",
+            current_version_number: 2,
+            current_filename: "memo.docx",
+            current_file_type: "docx",
+            current_version_available: true,
+            approved_version_id: "version-2",
+            approved_version_number: 2,
+            edited_after_approval: false,
+            review_current_required: false,
+          },
+        ],
+      },
+    },
+  };
+}
+
+test("binds a required deliverable to its explicit artifact and current version", () => {
+  const snapshot = snapshotFixture();
+  const rows = buildAgentTaskOutputRows(snapshot);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].linkedArtifact?.artifact_id, "memo-current");
+  assert.equal(rows[0].currentVersion?.current_version_id, "version-2");
+  assert.equal(rows[0].approvedArtifact?.version_id, "version-2");
+  assert.equal(
+    latestApprovedArtifact(snapshot, "memo-current")?.version_id,
+    "version-2",
+  );
+});
+
+test("keeps only the latest evidence snapshot and related deliverable for a step", () => {
+  const snapshot = snapshotFixture();
+  assert.deepEqual(
+    getAgentTaskStepArtifacts(snapshot, snapshot.task.current_plan[0], 0).map(
+      (artifact) => artifact.artifact_id,
+    ),
+    ["memo-old", "memo-current", "evidence-current"],
+  );
+});
+
+test("selects source documents only through Task Artifact links", () => {
+  const snapshot = snapshotFixture();
+  const base = {
+    project_id: "matter",
+    file_type: "docx",
+    storage_path: null,
+    pdf_storage_path: null,
+    size_bytes: 1,
+    page_count: 1,
+    structure_tree: null,
+    status: "ready" as const,
+    created_at: "now",
+  };
+  const documents: Document[] = [
+    { ...base, id: "source", filename: "source.docx" },
+    { ...base, id: "unlinked", filename: "other.docx" },
+  ];
+  assert.deepEqual(
+    getAgentTaskSourceDocuments(snapshot, documents).map(
+      (document) => document.id,
+    ),
+    ["source"],
+  );
+});

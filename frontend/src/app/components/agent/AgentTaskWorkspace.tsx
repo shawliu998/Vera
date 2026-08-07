@@ -56,6 +56,14 @@ import type {
   ApprovedArtifactSnapshot,
 } from "@/app/types/agent";
 import type { Document, Project } from "@/app/components/shared/types";
+import {
+  buildAgentTaskOutputRows,
+  getAgentTaskSourceDocuments,
+  getAgentTaskStepArtifacts,
+  getAgentTaskSupportingArtifacts,
+  latestApprovedArtifact,
+  latestApprovedReviewDecision,
+} from "./agentTaskPresentation";
 import { useAgentTaskSnapshot } from "./useAgentTaskSnapshot";
 
 const STATUS_LABELS: Record<AgentTaskStatus, string> = {
@@ -390,12 +398,9 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
     task.latest_checkpoint?.runner_retry,
   );
   const matterName = matter?.name ?? "Matter";
-  const sourceDocuments = (matter?.documents ?? []).filter((document) =>
-    artifacts.some(
-      (artifact) =>
-        artifact.purpose === "Source document" &&
-        artifact.artifact_id === document.id,
-    ),
+  const sourceDocuments = getAgentTaskSourceDocuments(
+    snapshot,
+    matter?.documents ?? [],
   );
   const executionModel = task.execution_model || "gemini-3-flash-preview";
   const executionModelLabel =
@@ -492,12 +497,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
     ) {
       const lockedVersionId =
         snapshot.review.status === "approved"
-          ? [...snapshot.review.decisions]
-              .reverse()
-              .find((decision) => decision.status === "approved")
-              ?.artifact_snapshot.find(
-                (locked) => locked.artifact_id === artifact.artifact_id,
-              )?.version_id
+          ? latestApprovedArtifact(snapshot, artifact.artifact_id)?.version_id
           : undefined;
       const query = new URLSearchParams({
         open_document: artifact.artifact_id,
@@ -745,62 +745,8 @@ function DeliverablesPanel({
   const [reviewAction, setReviewAction] = useState<
     "approved" | "changes_requested" | null
   >(null);
-  const latestApprovedDecision = [...snapshot.review.decisions]
-    .reverse()
-    .find((decision) => decision.status === "approved");
-  const approvedByArtifact = new Map(
-    (latestApprovedDecision?.artifact_snapshot ?? []).map((artifact) => [
-      artifact.artifact_id,
-      artifact,
-    ]),
-  );
-  const versionByArtifact = new Map(
-    snapshot.review.version_state.current_artifacts.map((artifact) => [
-      artifact.artifact_id,
-      artifact,
-    ]),
-  );
-  const outputRows = snapshot.task.deliverables
-    .filter((deliverable) => deliverable.required)
-    .map((deliverable) => {
-      const linkedArtifact =
-        snapshot.artifacts.find(
-          (linked) => linked.artifact_id === deliverable.artifact_id,
-        ) ??
-        [...snapshot.artifacts]
-          .reverse()
-          .find(
-            (linked) =>
-              linked.purpose ===
-                (deliverable.purpose ??
-                  (deliverable.key === "risk-matrix"
-                    ? "Risk matrix"
-                    : deliverable.key === "review-memo"
-                      ? "Review memo draft"
-                      : deliverable.title)) &&
-              (!deliverable.artifact_type ||
-                linked.artifact_type === deliverable.artifact_type),
-          ) ??
-        null;
-      const currentVersion = linkedArtifact
-        ? (versionByArtifact.get(linkedArtifact.artifact_id) ?? null)
-        : null;
-      return {
-        key: deliverable.key,
-        label: deliverable.title,
-        detail:
-          currentVersion?.current_filename ??
-          (deliverable.artifact_type === "tabular_review"
-            ? "Excel workbook"
-            : "Word document"),
-        version: currentVersion?.current_version_number ?? null,
-        currentVersion,
-        approvedArtifact: linkedArtifact
-          ? (approvedByArtifact.get(linkedArtifact.artifact_id) ?? null)
-          : null,
-        linkedArtifact,
-      };
-    });
+  const latestApprovedDecision = latestApprovedReviewDecision(snapshot);
+  const outputRows = buildAgentTaskOutputRows(snapshot);
   const hasEditedVersions =
     snapshot.review.version_state.has_unapproved_changes;
   const releaseCopy =
@@ -1175,11 +1121,7 @@ function WorkRecord({
             : task.status === "failed"
               ? "Work stopped"
               : "Ready to work";
-  const supportingArtifacts = snapshot.artifacts.filter(
-    (artifact) =>
-      artifact.artifact_type === "chat" ||
-      artifact.artifact_type === "workflow_run",
-  );
+  const supportingArtifacts = getAgentTaskSupportingArtifacts(snapshot);
 
   return (
     <section className="py-5" aria-live="polite">
@@ -1324,38 +1266,11 @@ function WorkRecord({
       <ol className="mt-3 overflow-hidden rounded-xl bg-white/70 shadow-sm">
         {task.current_plan.map((step, index) => {
           const Icon = STEP_ICONS[step.status];
-          const stepPosition = index + 1;
-          const evidencePurpose =
-            "Step " + stepPosition + " evidence citations";
-          const latestEvidence = [...snapshot.artifacts]
-            .reverse()
-            .find(
-              (artifact) =>
-                artifact.artifact_type === "citation_snapshot" &&
-                artifact.purpose === evidencePurpose,
-            );
-          const relatedArtifacts = snapshot.artifacts.filter((artifact) => {
-            if (artifact.artifact_id === latestEvidence?.artifact_id) {
-              return true;
-            }
-            const stepText =
-              `${step.title} ${step.expected_output}`.toLowerCase();
-            return snapshot.task.deliverables.some((deliverable) => {
-              const purpose =
-                deliverable.purpose ??
-                (deliverable.key === "risk-matrix"
-                  ? "Risk matrix"
-                  : deliverable.key === "review-memo"
-                    ? "Review memo draft"
-                    : deliverable.title);
-              return (
-                (deliverable.artifact_id === artifact.artifact_id ||
-                  artifact.purpose === purpose) &&
-                (stepText.includes(deliverable.title.toLowerCase()) ||
-                  stepText.includes(purpose.toLowerCase()))
-              );
-            });
-          });
+          const relatedArtifacts = getAgentTaskStepArtifacts(
+            snapshot,
+            step,
+            index,
+          );
           return (
             <li
               key={step.id}
