@@ -818,6 +818,17 @@ export async function getDocumentUrl(
     return apiRequest(`/single-documents/${documentId}/url${qs}`);
 }
 
+export async function getDocumentVersionDocx(
+    documentId: string,
+    versionId: string,
+): Promise<Blob> {
+    const qs = `?version_id=${encodeURIComponent(versionId)}`;
+    const result = await apiBlobRequest(
+        `/single-documents/${encodeURIComponent(documentId)}/docx${qs}`,
+    );
+    return result.blob;
+}
+
 export async function downloadDocumentsZip(
     documentIds: string[],
 ): Promise<Blob> {
