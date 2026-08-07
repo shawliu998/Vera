@@ -123,6 +123,10 @@ test("progress checkpoint replacement retains assignment and durable execution r
           { kind: "agent_assignment_context_revision_v1" },
         ],
         resolved_required_input_ids: ["required-input-1"],
+        revision_request: {
+          kind: "agent_task_revision_v1",
+          revision_id: "revision-1",
+        },
         step_receipts: [{ kind: "agent_step_receipt_v1" }],
         runner_retry: { attempt: 2 },
         user_input: { message: "transient" },
@@ -135,6 +139,10 @@ test("progress checkpoint replacement retains assignment and durable execution r
       contract: { goal_spec: { kind: "agent_goal_v1" } },
       assignment_revisions: [{ kind: "agent_assignment_context_revision_v1" }],
       resolved_required_input_ids: ["required-input-1"],
+      revision_request: {
+        kind: "agent_task_revision_v1",
+        revision_id: "revision-1",
+      },
       step_receipts: [{ kind: "agent_step_receipt_v1" }],
       step_id: "step-2",
       iteration: 1,

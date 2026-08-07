@@ -5,14 +5,20 @@ import test from "node:test";
 import {
   AgentTaskStateTransitionError,
   agentTaskInputTransitionWasApplied,
+  agentTaskReviewDecisionTransitionWasApplied,
+  agentTaskRevisionTransitionWasApplied,
   agentTaskRetryTransitionWasApplied,
   agentTaskStateTransitionWasApplied,
   agentTaskStopTransitionWasApplied,
   commitAgentTaskInputTransition,
+  commitAgentTaskReviewDecisionTransition,
+  commitAgentTaskRevisionTransition,
   commitAgentTaskRetryTransition,
   commitAgentTaskStateTransition,
   commitAgentTaskStopTransition,
   type AgentTaskInputTransitionInput,
+  type AgentTaskReviewDecisionTransitionInput,
+  type AgentTaskRevisionTransitionInput,
   type AgentTaskRetryTransitionInput,
   type AgentTaskStateTransitionInput,
   type AgentTaskStopTransitionInput,
@@ -418,4 +424,187 @@ test("keeps atomic input migrations mirrored and source/version bound", async ()
   assert.match(backend, /on conflict \(task_id, artifact_type, artifact_id\)/i);
   assert.match(backend, /execution_lease_expires_at > clock_timestamp\(\)/i);
   assert.match(backend, /from public, anon, authenticated/i);
+});
+
+test("maps lawyer review and revision to serialized atomic RPCs", async () => {
+  const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  const db = {
+    async rpc(name: string, args: Record<string, unknown>) {
+      calls.push({ name, args });
+      return {
+        data: [
+          name === "record_agent_task_review_decision_v1"
+            ? {
+                outcome: "recorded",
+                task_status: "completed",
+                current_step: input.stepId,
+              }
+            : {
+                outcome: "revised",
+                task_status: "running",
+                current_step: input.stepId,
+              },
+        ],
+        error: null,
+      };
+    },
+  };
+  const review: AgentTaskReviewDecisionTransitionInput = {
+    decisionId: "00000000-0000-4000-8000-000000000004",
+    taskId: input.taskId,
+    userId: input.userId,
+    expectedLatestDecisionId: "00000000-0000-4000-8000-000000000005",
+    status: "changes_requested",
+    note: "Correct the governing-law analysis.",
+    reviewerEmail: "reviewer@example.com",
+    reviewerName: "Reviewer",
+    artifactSnapshot: [],
+  };
+  const revision: AgentTaskRevisionTransitionInput = {
+    taskId: input.taskId,
+    userId: input.userId,
+    revisionId: "00000000-0000-4000-8000-000000000006",
+    reviewDecisionId: review.decisionId,
+    firstStepId: input.stepId,
+    revisionStart: 2,
+    expectedFirstStepAttempt: 1,
+    latestCheckpoint: {
+      revision_request: {
+        revision_id: "00000000-0000-4000-8000-000000000006",
+      },
+    },
+  };
+  assert.equal(
+    (await commitAgentTaskReviewDecisionTransition(db as never, review))
+      .outcome,
+    "recorded",
+  );
+  assert.equal(
+    (await commitAgentTaskRevisionTransition(db as never, revision)).outcome,
+    "revised",
+  );
+  assert.deepEqual(
+    calls.map((call) => call.name),
+    ["record_agent_task_review_decision_v1", "start_agent_task_revision_v1"],
+  );
+  assert.equal(
+    calls[0]?.args.p_expected_latest_decision_id,
+    "00000000-0000-4000-8000-000000000005",
+  );
+  assert.equal(calls[1]?.args.p_expected_first_step_attempt, 1);
+});
+
+test("recognizes only the exact review decision and revision identity", () => {
+  const review: AgentTaskReviewDecisionTransitionInput = {
+    decisionId: "00000000-0000-4000-8000-000000000004",
+    taskId: input.taskId,
+    userId: input.userId,
+    expectedLatestDecisionId: null,
+    status: "changes_requested",
+    note: "Revise.",
+    reviewerEmail: null,
+    reviewerName: null,
+    artifactSnapshot: [],
+  };
+  assert.equal(
+    agentTaskReviewDecisionTransitionWasApplied(
+      {
+        review: {
+          decisions: [
+            {
+              id: review.decisionId,
+              status: review.status,
+              reviewer_id: review.userId,
+              reviewer_email: review.reviewerEmail,
+              reviewer_name: review.reviewerName,
+              note: review.note,
+              artifact_snapshot: review.artifactSnapshot,
+            },
+          ],
+        },
+      },
+      review,
+    ),
+    true,
+  );
+  assert.equal(
+    agentTaskReviewDecisionTransitionWasApplied(
+      {
+        review: {
+          decisions: [
+            {
+              id: review.decisionId,
+              status: review.status,
+              reviewer_id: review.userId,
+              reviewer_email: review.reviewerEmail,
+              reviewer_name: review.reviewerName,
+              note: "A different direction.",
+              artifact_snapshot: review.artifactSnapshot,
+            },
+          ],
+        },
+      },
+      review,
+    ),
+    false,
+  );
+  const revision: AgentTaskRevisionTransitionInput = {
+    taskId: input.taskId,
+    userId: input.userId,
+    revisionId: "00000000-0000-4000-8000-000000000006",
+    reviewDecisionId: review.decisionId,
+    firstStepId: input.stepId,
+    revisionStart: 2,
+    expectedFirstStepAttempt: 1,
+    latestCheckpoint: {},
+  };
+  const revised = {
+    task: {
+      latest_checkpoint: {
+        revision_request: {
+          revision_id: revision.revisionId,
+          review_decision_id: revision.reviewDecisionId,
+          first_step_id: revision.firstStepId,
+          revision_start: revision.revisionStart,
+          attempt: revision.expectedFirstStepAttempt + 1,
+        },
+      },
+      current_plan: [{ id: input.stepId, status: "running", attempt: 2 }],
+    },
+  };
+  assert.equal(agentTaskRevisionTransitionWasApplied(revised, revision), true);
+  assert.equal(
+    agentTaskRevisionTransitionWasApplied(revised, {
+      ...revision,
+      revisionId: "00000000-0000-4000-8000-000000000007",
+    }),
+    false,
+  );
+});
+
+test("keeps atomic review/revision migrations mirrored and fenced", async () => {
+  const backend = await readFile(
+    new URL(
+      "../../../../migrations/20260807_05_agent_task_atomic_review_revision.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const supabase = await readFile(
+    new URL(
+      "../../../../../supabase/migrations/20260807000005_agent_task_atomic_review_revision.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.equal(backend, supabase);
+  assert.match(backend, /for update of d/i);
+  assert.match(backend, /status not in \('completed', 'skipped'\)/i);
+  assert.match(
+    backend,
+    /latest_checkpoint -> 'contract'[\s\S]*is distinct from p_latest_checkpoint -> 'contract'/i,
+  );
+  assert.match(backend, /execution_lease_expires_at > clock_timestamp\(\)/i);
+  assert.match(backend, /from public, anon, authenticated/i);
+  assert.match(backend, /to service_role/i);
 });

@@ -7,6 +7,7 @@ import {
   getAgentTaskSnapshot,
   listAgentTasks,
   pauseAgentTask,
+  recordAgentTaskReviewDecision,
   reviseAgentTask,
   resumeAgentTask,
   retryAgentTask,
@@ -34,6 +35,7 @@ import { buildContentDisposition } from "../lib/storage";
 import { contentTypeForDocumentType } from "../lib/documentTypes";
 import { getAgentTaskEvidence } from "../lib/agentTaskEvidence";
 import { MatterContextInvalidError } from "../lib/agent-kernel/context/matterContext";
+import { isAgentTaskStateTransitionError } from "../lib/agent-kernel/execution/taskTransition";
 import { compileFixedMatterContext } from "../lib/agent-kernel/context/matterContextRepository";
 import {
   buildAgentTaskContractCheckpoint,
@@ -59,10 +61,14 @@ function routeError(
 ) {
   const detail =
     error instanceof Error ? error.message : "Agent task request failed";
-  const status =
-    error instanceof MatterContextInvalidError
+  const status = isAgentTaskStateTransitionError(error)
+    ? 503
+    : error instanceof MatterContextInvalidError
       ? 400
-      : detail.startsWith("Only a")
+      : detail.startsWith("Only a") ||
+          /still closing|review state changed|no longer matches|only after task completion/i.test(
+            detail,
+          )
         ? 409
         : 500;
   res.status(status).json({ detail });
@@ -325,23 +331,25 @@ agentTasksRouter.post(
         .select("display_name")
         .eq("user_id", userId)
         .maybeSingle();
-      const { error } = await db.from("agent_task_review_decisions").insert({
-        task_id: req.params.taskId,
+      const updated = await recordAgentTaskReviewDecision(db, {
+        taskId: req.params.taskId,
+        userId,
+        expectedLatestDecisionId: snapshot.review.decisions.at(-1)?.id ?? null,
         status,
-        reviewer_id: userId,
-        reviewer_email:
+        reviewerEmail:
           (res.locals.userEmail as string | undefined)?.toLowerCase() || null,
-        reviewer_name:
+        reviewerName:
           typeof profile?.display_name === "string" &&
           profile.display_name.trim()
             ? profile.display_name.trim()
             : null,
         note,
-        artifact_snapshot: artifactSnapshot,
+        artifactSnapshot,
       });
-      if (error) throw error;
-
-      res.json(await getAgentTaskSnapshot(db, req.params.taskId, userId));
+      if (!updated) {
+        return void res.status(404).json({ detail: "Agent task not found" });
+      }
+      res.json(updated);
     } catch (error) {
       routeError(res, error);
     }

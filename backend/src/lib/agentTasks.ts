@@ -34,20 +34,27 @@ import {
   type AgentRequiredInputV1,
 } from "./agent-kernel/contracts/requiredInput";
 import {
+  readAgentStepContracts,
   readAgentStepReceipts,
   type AgentStepReceiptV1,
 } from "./agent-kernel/contracts/stepContract";
 import {
   AgentTaskStateTransitionError,
   agentTaskInputTransitionWasApplied,
+  agentTaskReviewDecisionTransitionWasApplied,
+  agentTaskRevisionTransitionWasApplied,
   agentTaskRetryTransitionWasApplied,
   agentTaskStateTransitionWasApplied,
   agentTaskStopTransitionWasApplied,
   commitAgentTaskInputTransition,
+  commitAgentTaskReviewDecisionTransition,
+  commitAgentTaskRevisionTransition,
   commitAgentTaskRetryTransition,
   commitAgentTaskStateTransition,
   commitAgentTaskStopTransition,
   type AgentTaskInputTransitionInput,
+  type AgentTaskReviewDecisionTransitionInput,
+  type AgentTaskRevisionTransitionInput,
   type AgentTaskRetryTransitionInput,
   type AgentTaskStateTransitionInput,
   type AgentTaskStopTransitionInput,
@@ -1275,9 +1282,11 @@ export async function retryAgentTask(db: Db, taskId: string, userId: string) {
   throw new Error("Only one request can retry this task stage");
 }
 
-export async function reviseAgentTask(db: Db, taskId: string, userId: string) {
-  const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
-  if (!snapshot) return null;
+export function prepareAgentTaskRevisionTransition(
+  snapshot: NonNullable<Awaited<ReturnType<typeof getAgentTaskSnapshot>>>,
+  startedAt = now(),
+  revisionId = randomUUID(),
+) {
   if (snapshot.task.status !== "completed") {
     throw new Error("Only a completed task can start a revision");
   }
@@ -1285,72 +1294,174 @@ export async function reviseAgentTask(db: Db, taskId: string, userId: string) {
   if (latestDecision?.status !== "changes_requested") {
     throw new Error("Only a task with requested changes can start a revision");
   }
+  if (!latestDecision.note.trim()) {
+    throw new Error("Requested changes must include a lawyer direction");
+  }
 
   const verifierPosition = snapshot.task.current_plan.length - 1;
-  const generatedStep = snapshot.task.current_plan.findIndex(
-    (step: { title: string; expected_output: string }, position: number) =>
-      position > 0 &&
-      position < verifierPosition &&
-      /create|draft|revise|proofread|matrix|table|work product|生成|起草|修订|表格|矩阵/i.test(
-        `${step.title} ${step.expected_output}`,
-      ),
-  );
+  const contractRead = readAgentStepContracts(snapshot.task);
+  if (contractRead.state === "invalid") {
+    throw new Error(`Step Contract is invalid: ${contractRead.reason}`);
+  }
+  const contractedRevisionStart =
+    contractRead.state === "valid"
+      ? contractRead.contracts.findIndex(
+          (contract, position) =>
+            position > 0 &&
+            position < verifierPosition &&
+            contract.capability !== "read_sources" &&
+            contract.capability !== "verify",
+        )
+      : -1;
   const revisionStart =
-    generatedStep >= 0 ? generatedStep : Math.min(2, verifierPosition);
-  const { data: revisionSteps, error: stepsError } = await db
-    .from("agent_steps")
-    .select("id,attempt,position")
-    .eq("task_id", taskId)
-    .gte("position", revisionStart)
-    .order("position", { ascending: true });
-  if (stepsError) throw dbError(stepsError, "Failed to load revision steps");
-  const first = revisionSteps?.[0];
+    contractedRevisionStart >= 0
+      ? contractedRevisionStart
+      : Math.min(1, verifierPosition);
+  const first = snapshot.task.current_plan[revisionStart];
   if (!first) throw new Error("Task has no revisable deliverable steps");
+  if (
+    snapshot.task.current_plan.some(
+      (step: { status: AgentStepStatus }) =>
+        step.status !== "completed" && step.status !== "skipped",
+    )
+  ) {
+    throw new Error("Completed task has inconsistent revision Step states");
+  }
 
-  const updatedAt = now();
-  const { error: resetError } = await db
-    .from("agent_steps")
-    .update({
-      status: "pending",
-      result_summary: null,
-      updated_at: updatedAt,
-    })
-    .eq("task_id", taskId)
-    .gte("position", revisionStart);
-  if (resetError) throw dbError(resetError, "Failed to reset revision steps");
+  const nextAttempt = first.attempt + 1;
+  const revisionRequest = {
+    kind: "agent_task_revision_v1",
+    revision_id: revisionId,
+    review_decision_id: latestDecision.id,
+    first_step_id: first.id,
+    revision_start: revisionStart,
+    attempt: nextAttempt,
+    requested_at: startedAt,
+  };
+  return {
+    revisionStart,
+    first,
+    nextAttempt,
+    revisionId,
+    latestDecision,
+    checkpoint: mergeImmutableAgentTaskCheckpoint(
+      snapshot.task.latest_checkpoint,
+      {
+        step_id: first.id,
+        iteration: nextAttempt,
+        summary: `Revision requested: ${latestDecision.note.trim()}`.slice(
+          0,
+          4000,
+        ),
+        created_at: startedAt,
+        revision_request: revisionRequest,
+      },
+    ),
+  };
+}
 
-  const { error: startError } = await db
-    .from("agent_steps")
-    .update({
-      status: "running",
-      attempt: ((first.attempt as number | null) ?? 0) + 1,
-      updated_at: updatedAt,
-    })
-    .eq("id", first.id)
-    .eq("task_id", taskId);
-  if (startError) throw dbError(startError, "Failed to start task revision");
+export async function recordAgentTaskReviewDecision(
+  db: Db,
+  input: Omit<AgentTaskReviewDecisionTransitionInput, "decisionId"> & {
+    decisionId?: string;
+  },
+) {
+  const transition: AgentTaskReviewDecisionTransitionInput = {
+    ...input,
+    decisionId: input.decisionId ?? randomUUID(),
+  };
+  let committed: Awaited<
+    ReturnType<typeof commitAgentTaskReviewDecisionTransition>
+  >;
+  try {
+    committed = await commitAgentTaskReviewDecisionTransition(db, transition);
+  } catch (error) {
+    if (!(error instanceof AgentTaskStateTransitionError)) throw error;
+    const recovered = await getAgentTaskSnapshot(
+      db,
+      transition.taskId,
+      transition.userId,
+    );
+    if (agentTaskReviewDecisionTransitionWasApplied(recovered, transition)) {
+      return recovered;
+    }
+    throw error;
+  }
+  const recovered = await getAgentTaskSnapshot(
+    db,
+    transition.taskId,
+    transition.userId,
+  );
+  if (
+    committed.outcome === "recorded" ||
+    agentTaskReviewDecisionTransitionWasApplied(recovered, transition)
+  ) {
+    return recovered;
+  }
+  if (committed.outcome === "lease_busy") {
+    throw new Error(
+      "Task execution is still closing. Record the review decision again in a moment.",
+    );
+  }
+  if (committed.outcome === "task_not_completed") {
+    throw new Error("Lawyer review is available only after task completion");
+  }
+  if (committed.outcome === "invalid_artifacts") {
+    throw new Error(
+      "The approval snapshot no longer matches the current Matter deliverables.",
+    );
+  }
+  if (!recovered) return null;
+  throw new Error(
+    "The Task review state changed before the decision was saved",
+  );
+}
 
-  const note = latestDecision.note.trim();
-  const { error: taskError } = await db
-    .from("agent_tasks")
-    .update({
-      status: "running",
-      current_step: first.id,
-      latest_checkpoint: mergeImmutableAgentTaskCheckpoint(
-        snapshot.task.latest_checkpoint,
-        {
-          step_id: first.id,
-          iteration: ((first.attempt as number | null) ?? 0) + 1,
-          summary: `Revision requested: ${note}`.slice(0, 4000),
-          created_at: updatedAt,
-        },
-      ),
-      updated_at: updatedAt,
-    })
-    .eq("id", taskId)
-    .eq("user_id", userId);
-  if (taskError) throw dbError(taskError, "Failed to start task revision");
-  return getAgentTaskSnapshot(db, taskId, userId);
+export async function reviseAgentTask(db: Db, taskId: string, userId: string) {
+  const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
+  if (!snapshot) return null;
+  const prepared = prepareAgentTaskRevisionTransition(snapshot);
+  const transition: AgentTaskRevisionTransitionInput = {
+    taskId,
+    userId,
+    revisionId: prepared.revisionId,
+    reviewDecisionId: prepared.latestDecision.id,
+    firstStepId: prepared.first.id,
+    revisionStart: prepared.revisionStart,
+    expectedFirstStepAttempt: prepared.first.attempt,
+    latestCheckpoint: prepared.checkpoint,
+  };
+  let committed: Awaited<ReturnType<typeof commitAgentTaskRevisionTransition>>;
+  try {
+    committed = await commitAgentTaskRevisionTransition(db, transition);
+  } catch (error) {
+    if (!(error instanceof AgentTaskStateTransitionError)) throw error;
+    const recovered = await getAgentTaskSnapshot(db, taskId, userId);
+    if (agentTaskRevisionTransitionWasApplied(recovered, transition)) {
+      return recovered;
+    }
+    throw error;
+  }
+  const recovered = await getAgentTaskSnapshot(db, taskId, userId);
+  if (committed.outcome === "revised") {
+    if (
+      committed.taskStatus !== "running" ||
+      committed.currentStep !== prepared.first.id
+    ) {
+      throw new Error("The revision transition returned an unexpected phase");
+    }
+    return recovered;
+  }
+  if (agentTaskRevisionTransitionWasApplied(recovered, transition)) {
+    return recovered;
+  }
+  if (committed.outcome === "lease_busy") {
+    throw new Error(
+      "The previous execution is still closing. Start the revision again in a moment.",
+    );
+  }
+  if (!recovered) return null;
+  throw new Error("Only one request can start this task revision");
 }
 
 export async function attachAgentTaskDocuments(

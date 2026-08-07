@@ -11,6 +11,7 @@
     "test:agent-task-model": "tsx scripts/agentTaskModelSmoke.ts",
     "test:agent-task-planner": "tsx scripts/agentTaskPlannerSmoke.ts",
     "test:agent-task-input": "tsx scripts/agentTaskInputSmoke.ts",
+    "test:agent-task-revision": "tsx scripts/agentTaskRevisionSmoke.ts",
     "test:agent-task-review-gate": "tsx --test src/lib/agentTaskReviews.test.ts",
     "test:agent-task-review-version": "tsx scripts/agentTaskReviewVersionSmoke.ts",
     "test:agent-task-runner": "tsx scripts/agentTaskRunnerSmoke.ts",

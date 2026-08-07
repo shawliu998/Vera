@@ -143,9 +143,9 @@ export function readFixedMatterContext(task: {
 }
 
 /**
- * Preserve server-owned assignment fields and durable execution receipts when
- * a mutable progress checkpoint is replaced. Transient retry/user-input fields
- * must not leak into the next checkpoint.
+ * Preserve server-owned assignment fields, the active revision identity and
+ * durable execution receipts when a mutable progress checkpoint is replaced.
+ * Transient retry/user-input fields must not leak into the next checkpoint.
  */
 export function mergeImmutableAgentTaskCheckpoint(
   previous: unknown,
@@ -160,6 +160,7 @@ export function mergeImmutableAgentTaskCheckpoint(
       "contract",
       "assignment_revisions",
       "resolved_required_input_ids",
+      "revision_request",
       "step_receipts",
     ]) {
       if (Object.hasOwn(row, key)) retained[key] = row[key];

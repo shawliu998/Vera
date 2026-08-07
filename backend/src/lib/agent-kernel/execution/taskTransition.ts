@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+
 import type { createServerSupabase } from "../../supabase";
 
 type Db = ReturnType<typeof createServerSupabase>;
@@ -50,6 +52,29 @@ export type AgentTaskInputTransitionInput = {
   documentIds: string[];
   latestCheckpoint: unknown;
   submissionId: string;
+};
+
+export type AgentTaskReviewDecisionTransitionInput = {
+  decisionId: string;
+  taskId: string;
+  userId: string;
+  expectedLatestDecisionId: string | null;
+  status: "approved" | "changes_requested";
+  note: string;
+  reviewerEmail: string | null;
+  reviewerName: string | null;
+  artifactSnapshot: unknown[];
+};
+
+export type AgentTaskRevisionTransitionInput = {
+  taskId: string;
+  userId: string;
+  revisionId: string;
+  reviewDecisionId: string;
+  firstStepId: string;
+  revisionStart: number;
+  expectedFirstStepAttempt: number;
+  latestCheckpoint: unknown;
 };
 
 export class AgentTaskStateTransitionError extends Error {
@@ -254,6 +279,83 @@ export async function commitAgentTaskInputTransition(
   );
 }
 
+export async function commitAgentTaskReviewDecisionTransition(
+  db: Db,
+  input: AgentTaskReviewDecisionTransitionInput,
+) {
+  const { data, error } = await db.rpc("record_agent_task_review_decision_v1", {
+    p_decision_id: input.decisionId,
+    p_task_id: input.taskId,
+    p_user_id: input.userId,
+    p_expected_latest_decision_id: input.expectedLatestDecisionId,
+    p_status: input.status,
+    p_note: input.note,
+    p_reviewer_email: input.reviewerEmail,
+    p_reviewer_name: input.reviewerName,
+    p_artifact_snapshot: input.artifactSnapshot,
+  });
+  if (error) {
+    throw transitionError(
+      `Failed to record the Agent Task review decision atomically: ${error.message}`,
+      {
+        task_id: input.taskId,
+        decision_id: input.decisionId,
+        status: input.status,
+      },
+    );
+  }
+  return readOutcome(
+    data,
+    [
+      "recorded",
+      "conflict",
+      "invalid_artifacts",
+      "invalid_input",
+      "lease_busy",
+      "not_found",
+      "task_not_completed",
+    ],
+    { task_id: input.taskId, decision_id: input.decisionId },
+  );
+}
+
+export async function commitAgentTaskRevisionTransition(
+  db: Db,
+  input: AgentTaskRevisionTransitionInput,
+) {
+  const { data, error } = await db.rpc("start_agent_task_revision_v1", {
+    p_task_id: input.taskId,
+    p_user_id: input.userId,
+    p_revision_id: input.revisionId,
+    p_review_decision_id: input.reviewDecisionId,
+    p_first_step_id: input.firstStepId,
+    p_revision_start: input.revisionStart,
+    p_expected_first_step_attempt: input.expectedFirstStepAttempt,
+    p_latest_checkpoint: input.latestCheckpoint,
+  });
+  if (error) {
+    throw transitionError(
+      `Failed to start the Agent Task revision atomically: ${error.message}`,
+      {
+        task_id: input.taskId,
+        revision_id: input.revisionId,
+        review_decision_id: input.reviewDecisionId,
+        first_step_id: input.firstStepId,
+        expected_first_step_attempt: input.expectedFirstStepAttempt,
+      },
+    );
+  }
+  return readOutcome(
+    data,
+    ["revised", "conflict", "invalid_input", "lease_busy", "not_found"],
+    {
+      task_id: input.taskId,
+      revision_id: input.revisionId,
+      review_decision_id: input.reviewDecisionId,
+    },
+  );
+}
+
 export function agentTaskStateTransitionWasApplied(
   snapshot: {
     task: {
@@ -367,5 +469,73 @@ export function agentTaskInputTransitionWasApplied(
     step.status !== "pending" &&
     step.attempt === input.expectedStepAttempt + 1 &&
     submissionId === input.submissionId,
+  );
+}
+
+export function agentTaskReviewDecisionTransitionWasApplied(
+  snapshot: {
+    review: {
+      decisions: Array<{
+        id: string;
+        status: string;
+        reviewer_id: string | null;
+        reviewer_email: string | null;
+        reviewer_name: string | null;
+        note: string;
+        artifact_snapshot: unknown[];
+      }>;
+    };
+  } | null,
+  input: AgentTaskReviewDecisionTransitionInput,
+) {
+  return Boolean(
+    snapshot?.review.decisions.some(
+      (decision) =>
+        decision.id === input.decisionId &&
+        decision.status === input.status &&
+        decision.reviewer_id === input.userId &&
+        decision.reviewer_email === input.reviewerEmail &&
+        decision.reviewer_name === input.reviewerName &&
+        decision.note === input.note &&
+        isDeepStrictEqual(decision.artifact_snapshot, input.artifactSnapshot),
+    ),
+  );
+}
+
+export function agentTaskRevisionTransitionWasApplied(
+  snapshot: {
+    task: {
+      latest_checkpoint?: unknown;
+      current_plan: Array<{ id: string; status: string; attempt: number }>;
+    };
+  } | null,
+  input: AgentTaskRevisionTransitionInput,
+) {
+  if (!snapshot) return false;
+  const checkpoint = snapshot.task.latest_checkpoint;
+  const revision =
+    checkpoint && typeof checkpoint === "object" && !Array.isArray(checkpoint)
+      ? (checkpoint as { revision_request?: unknown }).revision_request
+      : null;
+  const revisionId =
+    revision && typeof revision === "object" && !Array.isArray(revision)
+      ? (revision as { revision_id?: unknown }).revision_id
+      : null;
+  const revisionRow =
+    revision && typeof revision === "object" && !Array.isArray(revision)
+      ? (revision as Record<string, unknown>)
+      : null;
+  const first = snapshot.task.current_plan.find(
+    (step) => step.id === input.firstStepId,
+  );
+  return Boolean(
+    first &&
+    first.status !== "pending" &&
+    first.attempt === input.expectedFirstStepAttempt + 1 &&
+    revisionId === input.revisionId &&
+    revisionRow?.review_decision_id === input.reviewDecisionId &&
+    revisionRow?.first_step_id === input.firstStepId &&
+    revisionRow?.revision_start === input.revisionStart &&
+    revisionRow?.attempt === input.expectedFirstStepAttempt + 1,
   );
 }
