@@ -5,7 +5,13 @@ import { resolveAgentStepCapabilityGrant } from "./agent-kernel/capability/stepC
 import { READ_ONLY_SOURCE_REQUEST_VERSION } from "./agent-kernel/connectors/readOnlySourceContract";
 import type { AgentStepContractV1 } from "./agent-kernel/contracts/stepContract";
 import { EPO_OPS_SOURCE_CONNECTOR_PIN } from "./agent-packs/patent/epoOpsSourcePack";
-import { executeCurrentUserProviderSourceAcquisition } from "./providerSourceAcquisition";
+import {
+  PROVIDER_SOURCE_ACQUISITION_SPEC_VERSION,
+  compileProviderSourceSearchRequest,
+  compileProviderSourceSelectedReadRequest,
+  executeCurrentUserProviderSourceAcquisition,
+  validateProviderSourceAcquisitionSpec,
+} from "./providerSourceAcquisition";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const MATTER_ID = "22222222-2222-4222-8222-222222222222";
@@ -56,6 +62,114 @@ const request = {
   page: 1,
   page_size: 10,
 };
+
+const spec = {
+  schema_version: PROVIDER_SOURCE_ACQUISITION_SPEC_VERSION,
+  connector_id: EPO_OPS_SOURCE_CONNECTOR_PIN.connector_id,
+  query: "ti=sensor",
+  jurisdiction: "US",
+  as_of_date: "2026-08-08",
+  maximum_pages: 2,
+  page_size: 10,
+  maximum_selections: 5,
+};
+
+const discovery = {
+  schema_version: "read_only_source_discovery_v1",
+  discovery_ref: "epo-ops:publication:US7654321A1",
+  provider_id: "epo-ops",
+  external_id: "publication:US7654321A1",
+  source_kind: "patent_publication",
+  title: "Sensor system",
+  canonical_url:
+    "https://worldwide.espacenet.com/patent/search?q=pn%3DUS7654321A1",
+  published_on: "2025-01-01",
+  not_citable: true,
+  metadata: {},
+};
+
+test("the fixed acquisition spec compiles bounded search and selected-read requests", () => {
+  assert.deepEqual(
+    compileProviderSourceSearchRequest({
+      spec,
+      pin: EPO_OPS_SOURCE_CONNECTOR_PIN,
+      requestRef: "search-page-2",
+      page: 2,
+    }),
+    {
+      schema_version: READ_ONLY_SOURCE_REQUEST_VERSION,
+      request_ref: "search-page-2",
+      operation: "search",
+      query: "ti=sensor",
+      external_id: null,
+      jurisdiction: "US",
+      as_of_date: "2026-08-08",
+      page: 2,
+      page_size: 10,
+    },
+  );
+  assert.deepEqual(
+    compileProviderSourceSelectedReadRequest({
+      spec,
+      pin: EPO_OPS_SOURCE_CONNECTOR_PIN,
+      requestRef: "selected-1",
+      discovery,
+    }),
+    {
+      schema_version: READ_ONLY_SOURCE_REQUEST_VERSION,
+      request_ref: "selected-1",
+      operation: "read_snapshot",
+      query: null,
+      external_id: "publication:US7654321A1",
+      jurisdiction: "US",
+      as_of_date: "2026-08-08",
+      page: null,
+      page_size: null,
+    },
+  );
+});
+
+test("the acquisition compiler rejects connector, page, jurisdiction, and discovery widening", () => {
+  assert.throws(
+    () =>
+      compileProviderSourceSearchRequest({
+        spec,
+        pin: EPO_OPS_SOURCE_CONNECTOR_PIN,
+        requestRef: "page-3",
+        page: 3,
+      }),
+    /page exceeds fixed scope/,
+  );
+  assert.throws(
+    () =>
+      validateProviderSourceAcquisitionSpec(
+        { ...spec, jurisdiction: "ZZ" },
+        EPO_OPS_SOURCE_CONNECTOR_PIN,
+      ),
+    /exceeds its fixed pin/,
+  );
+  assert.throws(
+    () =>
+      validateProviderSourceAcquisitionSpec(
+        { ...spec, connector_id: "model.selected.connector" },
+        EPO_OPS_SOURCE_CONNECTOR_PIN,
+      ),
+    /exceeds its fixed pin/,
+  );
+  assert.throws(
+    () =>
+      compileProviderSourceSelectedReadRequest({
+        spec,
+        pin: EPO_OPS_SOURCE_CONNECTOR_PIN,
+        requestRef: "forged-selection",
+        discovery: {
+          ...discovery,
+          provider_id: "other-provider",
+        },
+      }),
+    /does not match the fixed connector/,
+  );
+});
 
 test("the acquisition bridge binds current user, Task scope, runtime, and central pipeline", async () => {
   const seen: Record<string, unknown> = {};

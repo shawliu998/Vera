@@ -93,6 +93,11 @@ approval, export, or a second source database.
   and as-of scope, may receive a connector pin; it has no model-callable host
   tools. Existing fixed-Matter reads, including patent analysis and litigation
   review, cannot acquire external material by accident.
+- A fixed acquisition specification now binds connector identity, query,
+  jurisdiction, as-of date, maximum pages, page size, and maximum lawyer
+  selections to the connector pin. Search requests are compiled only from that
+  specification; selected reads are compiled only from an actual validated,
+  non-citable discovery, not from a model-supplied external identifier.
 - The current EPO OPS endpoint and CQL semantics were checked against the EPO
   OPS 3.2 reference guide and official service page on 2026-08-08:
   <https://www.epo.org/en/searching-for-patents/data/web-services/ops> and
@@ -100,9 +105,10 @@ approval, export, or a second source database.
 
 ## Remaining gates
 
-1. Compile the fixed search scope and lawyer-selection checkpoint for one
-   explicit `source.acquire` workflow before granting the acquisition bridge.
-   Ordinary patent analysis Tasks still correctly receive no pin.
+1. Persist the fixed acquisition specification and bounded discoveries in the
+   existing Task checkpoint, then add the exact lawyer-selection transition for
+   one explicit `source.acquire` workflow. Ordinary patent analysis Tasks still
+   correctly receive no pin.
 2. Decide whether PatSnap provides a material, licensed coverage increment over
    EPO OPS before adapting it; do not copy the old parallel patent subsystem.
 3. Run real credential, database, and product-level patent research acceptance;
