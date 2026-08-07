@@ -4,6 +4,21 @@ This directory records a real Microsoft Word for Mac sideload attempt. Browser
 evidence and Office Host evidence are kept separate; no browser result is counted
 as an Office Host pass.
 
+## Mac host activation diagnostic — 2026-08-07
+
+Run `node office-addin/scripts/check-word-mac-host.mjs` from the repository root
+before repeating a Mac Word sideload. The read-only diagnostic compares the
+committed XML manifest with Word's `Documents/wef` registration and distinguishes
+manifest discovery from AppCommands ribbon activation. A non-zero exit prints
+structured issue codes rather than mutating Word or its cache.
+
+Do not keep backups, notes, or other non-manifest files inside `Documents/wef`.
+Microsoft's sideload tooling enumerates every file there and may fail while
+stopping or refreshing the add-in. Store recoverable copies outside the Word
+container. If `manifest_parsed_but_not_in_appcommands_cache` remains after clean
+registration, close Word first and clear the complete Word add-in cache according
+to Microsoft's cache-clear procedure; do not delete individual cached manifests.
+
 ## Matter version round-trip Host acceptance — 2026-07-22
 
 This acceptance uses the existing deterministic Tabular Review Word-memo export,
