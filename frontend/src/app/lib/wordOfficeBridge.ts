@@ -267,9 +267,23 @@ interface WordTrackedChangeCollectionRuntime {
     load: (properties?: string) => unknown;
 }
 
+interface WordCustomPropertyRuntime {
+    key?: string;
+    value?: unknown;
+}
+
+interface WordCustomPropertyCollectionRuntime {
+    items: WordCustomPropertyRuntime[];
+    load: (properties?: string) => unknown;
+    add?: (key: string, value: string) => WordCustomPropertyRuntime;
+}
+
 interface WordDocumentRuntime {
     body: WordBodyRuntime;
     changeTrackingMode?: string;
+    properties?: {
+        customProperties?: WordCustomPropertyCollectionRuntime;
+    };
     load: (properties: string) => unknown;
     getSelection: () => WordRangeRuntime;
 }
@@ -991,6 +1005,60 @@ export async function readCurrentWordDocumentContext(args?: {
         args?.wordRuntime ?? officeWindow()?.Word,
     );
     return host.getDocumentContext();
+}
+
+export async function readCurrentWordCustomProperties(args?: {
+    wordRuntime?: OfficeJsWordRuntime;
+}): Promise<Record<string, string>> {
+    const word = args?.wordRuntime ?? officeWindow()?.Word;
+    if (typeof word?.run !== "function") {
+        throw new WordHostCapabilityError("getDocumentContext");
+    }
+    return word.run(async (context) => {
+        const collection = context.document.properties?.customProperties;
+        if (!collection) {
+            throw new WordHostCapabilityError("getDocumentContext");
+        }
+        collection.load("items/key,items/value");
+        await context.sync();
+        return Object.fromEntries(
+            collection.items.flatMap((property) =>
+                typeof property.key === "string" &&
+                typeof property.value === "string"
+                    ? [[property.key, property.value]]
+                    : [],
+            ),
+        );
+    });
+}
+
+export async function writeCurrentWordCustomProperties(
+    properties: ReadonlyArray<{ name: string; value: string }>,
+    args?: { wordRuntime?: OfficeJsWordRuntime },
+): Promise<void> {
+    if (
+        properties.length === 0 ||
+        properties.some(
+            (property) =>
+                !property.name.trim() || typeof property.value !== "string",
+        )
+    ) {
+        throw new Error("At least one valid Word custom property is required.");
+    }
+    const word = args?.wordRuntime ?? officeWindow()?.Word;
+    if (typeof word?.run !== "function") {
+        throw new WordHostCapabilityError("getDocumentContext");
+    }
+    await word.run(async (context) => {
+        const collection = context.document.properties?.customProperties;
+        if (!collection || typeof collection.add !== "function") {
+            throw new WordHostCapabilityError("getDocumentContext");
+        }
+        for (const property of properties) {
+            collection.add(property.name, property.value);
+        }
+        await context.sync();
+    });
 }
 
 export async function locateWordAnchor(args: {

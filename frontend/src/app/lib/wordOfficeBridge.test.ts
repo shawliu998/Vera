@@ -3,10 +3,12 @@ import {
     AmbiguousWordAnchorError,
     detectWordHost,
     OfficeJsWordHost,
+    readCurrentWordCustomProperties,
     readCurrentWordDocumentFile,
     ReadOnlyWordDocumentError,
     StaleWordAnchorError,
     UnsupportedWordRegionError,
+    writeCurrentWordCustomProperties,
     type OfficeJsRuntime,
     type OfficeJsWordRuntime,
     type WordCitationAnchor,
@@ -71,6 +73,8 @@ function wordRuntime(args: {
         text?: string;
         type?: string;
     }>;
+    customProperties?: Array<{ key: string; value: unknown }>;
+    onAddCustomProperty?: (key: string, value: string) => void;
 }): OfficeJsWordRuntime {
     const selection = args.selection ?? fakeRange({ text: "selected" });
     const body = {
@@ -91,6 +95,18 @@ function wordRuntime(args: {
     };
     const documentRuntime = {
         body,
+        properties: args.customProperties
+            ? {
+                  customProperties: {
+                      items: args.customProperties,
+                      load: () => undefined,
+                      add: (key: string, value: string) => {
+                          args.onAddCustomProperty?.(key, value);
+                          return { key, value };
+                      },
+                  },
+              }
+            : undefined,
         changeTrackingMode: "Off",
         load: (properties: string) => {
             args.documentLoads?.push(properties);
@@ -672,6 +688,47 @@ async function run(): Promise<void> {
         "ANCHOR_AMBIGUOUS",
     );
     assert.equal(noHintAmbiguous.matchCount, 2);
+
+    assert.deepEqual(
+        await readCurrentWordCustomProperties({
+            wordRuntime: wordRuntime({
+                customProperties: [
+                    { key: "VeraTaskArtifactBindingCount", value: "1" },
+                    {
+                        key: "VeraTaskArtifactBinding001",
+                        value: '{"versionId":"version-1"}',
+                    },
+                    { key: "IgnoredNumber", value: 3 },
+                ],
+            }),
+        }),
+        {
+            VeraTaskArtifactBindingCount: "1",
+            VeraTaskArtifactBinding001: '{"versionId":"version-1"}',
+        },
+    );
+
+    const writtenCustomProperties: Array<[string, string]> = [];
+    await writeCurrentWordCustomProperties(
+        [
+            { name: "VeraTaskArtifactBindingCount", value: "1" },
+            {
+                name: "VeraTaskArtifactBinding001",
+                value: '{"versionId":"version-2"}',
+            },
+        ],
+        {
+            wordRuntime: wordRuntime({
+                customProperties: [],
+                onAddCustomProperty: (key, value) =>
+                    writtenCustomProperties.push([key, value]),
+            }),
+        },
+    );
+    assert.deepEqual(writtenCustomProperties, [
+        ["VeraTaskArtifactBindingCount", "1"],
+        ["VeraTaskArtifactBinding001", '{"versionId":"version-2"}'],
+    ]);
 
     const wordApi12RunCalls = { count: 0 };
     const wordApi12Host = new OfficeJsWordHost(

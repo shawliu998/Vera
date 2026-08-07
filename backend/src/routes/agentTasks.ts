@@ -45,6 +45,11 @@ import {
   resolveAgentStepCapabilityGrant,
   WORK_TASK_HOST_TOOL_NAMES,
 } from "../lib/agent-kernel/capability/stepCapability";
+import {
+  AgentTaskWordArtifactError,
+  putAgentTaskWordArtifactEdit,
+} from "../lib/agentTaskWordArtifact";
+import { singleFileUpload } from "../lib/upload";
 
 export const agentTasksRouter = Router();
 
@@ -504,6 +509,50 @@ agentTasksRouter.post("/:taskId/documents", requireAuth, async (req, res) => {
     routeError(res, error);
   }
 });
+
+agentTasksRouter.put(
+  "/:taskId/word-artifact/word-file",
+  requireAuth,
+  singleFileUpload("file"),
+  async (req, res) => {
+    const documentId =
+      typeof req.body?.document_id === "string"
+        ? req.body.document_id.trim()
+        : "";
+    const baseVersionId =
+      typeof req.body?.base_version_id === "string"
+        ? req.body.base_version_id.trim()
+        : "";
+    if (!req.file || !documentId || !baseVersionId) {
+      return void res.status(400).json({
+        detail:
+          "A DOCX file, Task artifact document_id, and base_version_id are required.",
+      });
+    }
+    try {
+      const version = await putAgentTaskWordArtifactEdit(
+        createServerSupabase(),
+        {
+          taskId: req.params.taskId,
+          userId: res.locals.userId as string,
+          documentId,
+          baseVersionId,
+          filename: req.file.originalname,
+          buffer: req.file.buffer,
+        },
+      );
+      res.json(version);
+    } catch (error) {
+      if (error instanceof AgentTaskWordArtifactError) {
+        return void res.status(error.status).json({
+          detail: error.message,
+          issue_code: error.code,
+        });
+      }
+      routeError(res, error);
+    }
+  },
+);
 
 agentTasksRouter.post("/:taskId/input", requireAuth, async (req, res) => {
   const message =

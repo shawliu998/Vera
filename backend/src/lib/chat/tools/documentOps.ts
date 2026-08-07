@@ -24,6 +24,13 @@ import {
 } from "../../documentTypes";
 import { extractPresentationText } from "../../officeText";
 import { spreadsheetToLLMText } from "../../spreadsheet";
+import {
+  bindTaskWordArtifactReceipt,
+  readTaskWordArtifactReceipt,
+  sameTaskWordArtifactReceipt,
+  type TaskWordArtifactReceiptV1,
+} from "../../taskWordArtifactReceipt";
+import { sameUuidIdentity } from "../../uuidIdentity";
 
 export function citationReminder(docLabel: string, filename: string): string {
   const isSpreadsheet = isSpreadsheetDocumentType(
@@ -886,7 +893,68 @@ ${slides
 export type GeneratedMutationIdentity = {
   documentId: string;
   versionId: string;
+  taskWordArtifact?: {
+    taskId: string;
+    projectId: string;
+    deliverableKey: string;
+  };
 };
+
+function generatedTaskWordArtifactReceipt(
+  mutationIdentity: GeneratedMutationIdentity,
+): TaskWordArtifactReceiptV1 | null {
+  const binding = mutationIdentity.taskWordArtifact;
+  if (!binding) return null;
+  return {
+    schemaVersion: 1,
+    kind: "agent-task-word-artifact-v1",
+    taskId: binding.taskId,
+    projectId: binding.projectId,
+    deliverableKey: binding.deliverableKey,
+    documentId: mutationIdentity.documentId,
+    versionId: mutationIdentity.versionId,
+  };
+}
+
+export async function bindGeneratedTaskWordArtifact(input: {
+  extension: "docx" | "xlsx" | "pptx";
+  buffer: Buffer;
+  projectId?: string | null;
+  mutationIdentity?: GeneratedMutationIdentity;
+}) {
+  const receipt = input.mutationIdentity
+    ? generatedTaskWordArtifactReceipt(input.mutationIdentity)
+    : null;
+  if (!receipt) return input.buffer;
+  if (
+    input.extension !== "docx" ||
+    !input.projectId ||
+    !sameUuidIdentity(input.projectId, receipt.projectId)
+  ) {
+    throw new Error(
+      "The generated Task Word artifact is outside its fixed Matter or document type",
+    );
+  }
+  return bindTaskWordArtifactReceipt(input.buffer, receipt);
+}
+
+async function verifyRecoveredTaskWordArtifact(input: {
+  storagePath: string;
+  mutationIdentity: GeneratedMutationIdentity;
+}) {
+  const expected = generatedTaskWordArtifactReceipt(input.mutationIdentity);
+  if (!expected) return;
+  const stored = await downloadFile(input.storagePath);
+  if (!stored) {
+    throw new Error("The recovered Task Word artifact bytes are unavailable");
+  }
+  const actual = await readTaskWordArtifactReceipt(Buffer.from(stored));
+  if (!actual || !sameTaskWordArtifactReceipt(actual, expected)) {
+    throw new Error(
+      "The recovered Task Word artifact does not match its fixed Task identity",
+    );
+  }
+}
 
 export function isValidGenerateDocxInput(input: Record<string, unknown>) {
   return (
@@ -929,8 +997,13 @@ async function persistGeneratedFile(params: {
   projectId?: string | null;
   mutationIdentity?: GeneratedMutationIdentity;
 }) {
-  const { title, extension, buffer, userId, db, projectId, mutationIdentity } =
-    params;
+  const { title, extension, userId, db, projectId, mutationIdentity } = params;
+  const buffer = await bindGeneratedTaskWordArtifact({
+    extension,
+    buffer: params.buffer,
+    projectId,
+    mutationIdentity,
+  });
   const storageDocumentId =
     mutationIdentity?.documentId ?? crypto.randomUUID().replace(/-/g, "");
   const filename = safeGeneratedFilename(title, extension);
@@ -978,6 +1051,10 @@ async function persistGeneratedFile(params: {
       version &&
       document.current_version_id === mutationIdentity.versionId
     ) {
+      await verifyRecoveredTaskWordArtifact({
+        storagePath: version.storage_path,
+        mutationIdentity,
+      });
       const recoveredFilename = version.filename ?? filename;
       return {
         filename: recoveredFilename,

@@ -60,6 +60,13 @@ function samePersistedIdentity(left: string, right: string): boolean {
     );
 }
 
+export function sameWordTaskArtifactIdentity(
+    left: string,
+    right: string,
+): boolean {
+    return samePersistedIdentity(left, right);
+}
+
 function isWordTaskArtifactBinding(
     value: unknown,
 ): value is WordTaskArtifactBinding {

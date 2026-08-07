@@ -5,11 +5,13 @@ import type {
     Project,
 } from "@/app/components/shared/types";
 import type { DocumentVersion } from "./mikeApi";
+import type { WordTaskArtifactBinding } from "./wordTaskArtifactBinding";
 import {
     currentMatterDocumentVersionBase,
     listMatterWordDocuments,
     MatterDocumentVersionDriftError,
     saveCurrentWordDocumentAsMatterVersion,
+    saveCurrentWordDocumentAsTaskArtifactVersion,
     wordVersionFilename,
 } from "./wordMatterVersion";
 
@@ -48,6 +50,16 @@ function version(
 const BASE_SNAPSHOT = {
     current_version_id: "version-2",
     versions: [version("version-1", 1), version("version-2", 2)],
+};
+
+const taskArtifactBinding: WordTaskArtifactBinding = {
+    schemaVersion: 1,
+    kind: "agent-task-word-artifact-v1",
+    taskId: "task-1",
+    projectId: "matter-1",
+    deliverableKey: "claim-comparison-memo",
+    documentId: "document-1",
+    versionId: "version-2",
 };
 
 test("lists only explicit Word targets from the selected Matter", () => {
@@ -187,4 +199,92 @@ test("fails closed when the Matter version changes during Word export", async ()
     );
     assert.equal(loadCount, 2);
     assert.equal(uploadCount, 0);
+});
+
+test("Task artifact save uses the bound server route and advances the local receipt", async () => {
+    const document = matterDocument();
+    const writtenProperties: Array<{ name: string; value: string }> = [];
+    const result = await saveCurrentWordDocumentAsTaskArtifactVersion({
+        taskId: taskArtifactBinding.taskId,
+        projectId: taskArtifactBinding.projectId,
+        deliverableKey: taskArtifactBinding.deliverableKey,
+        document,
+        base: currentMatterDocumentVersionBase(document.id, BASE_SNAPSHOT),
+        openBinding: taskArtifactBinding,
+        loadVersions: async () => BASE_SNAPSHOT,
+        readWordFile: async ({ filename }) =>
+            new File(["edited"], filename),
+        saveTaskArtifactVersion: async (
+            taskId,
+            documentId,
+            baseVersionId,
+            file,
+        ) => {
+            assert.equal(taskId, "task-1");
+            assert.equal(documentId, "document-1");
+            assert.equal(baseVersionId, "version-2");
+            assert.equal(file.name, "Contract.docx");
+            return version("version-3", 3);
+        },
+        writeWordCustomProperties: async (properties) => {
+            writtenProperties.push(...properties);
+        },
+    });
+    assert.equal(result.version.id, "version-3");
+    assert.equal(result.successorBinding.versionId, "version-3");
+    assert.equal(result.receiptSynchronized, true);
+    assert.equal(result.reopenRequired, false);
+    assert.ok(
+        writtenProperties.some((property) =>
+            property.value.includes('"versionId":"version-3"'),
+        ),
+    );
+});
+
+test("a server-saved Task artifact is preserved when the open Word receipt cannot synchronize", async () => {
+    const document = matterDocument();
+    const result = await saveCurrentWordDocumentAsTaskArtifactVersion({
+        taskId: taskArtifactBinding.taskId,
+        projectId: taskArtifactBinding.projectId,
+        deliverableKey: taskArtifactBinding.deliverableKey,
+        document,
+        base: currentMatterDocumentVersionBase(document.id, BASE_SNAPSHOT),
+        openBinding: taskArtifactBinding,
+        loadVersions: async () => BASE_SNAPSHOT,
+        readWordFile: async ({ filename }) => new File([], filename),
+        saveTaskArtifactVersion: async () => version("version-3", 3),
+        writeWordCustomProperties: async () => {
+            throw new Error("Office host disconnected");
+        },
+    });
+    assert.equal(result.version.id, "version-3");
+    assert.equal(result.receiptSynchronized, false);
+    assert.equal(result.reopenRequired, true);
+    assert.equal(result.receiptSyncError, "Office host disconnected");
+});
+
+test("Task artifact save rejects the wrong open Version before Word export", async () => {
+    let reads = 0;
+    await assert.rejects(
+        saveCurrentWordDocumentAsTaskArtifactVersion({
+            taskId: taskArtifactBinding.taskId,
+            projectId: taskArtifactBinding.projectId,
+            deliverableKey: taskArtifactBinding.deliverableKey,
+            document: matterDocument(),
+            base: currentMatterDocumentVersionBase(
+                "document-1",
+                BASE_SNAPSHOT,
+            ),
+            openBinding: {
+                ...taskArtifactBinding,
+                versionId: "version-1",
+            },
+            readWordFile: async ({ filename }) => {
+                reads += 1;
+                return new File([], filename);
+            },
+        }),
+        /not this Task's current Word artifact/,
+    );
+    assert.equal(reads, 0);
 });

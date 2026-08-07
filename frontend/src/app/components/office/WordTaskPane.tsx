@@ -44,6 +44,7 @@ import {
     MikeApiError,
     streamProjectChat,
 } from "@/app/lib/mikeApi";
+import { getAgentTask } from "@/app/lib/agentClient";
 import { useSelectedModel } from "@/app/hooks/useSelectedModel";
 import {
     applyTrackedReplacementAtAnchor,
@@ -53,6 +54,7 @@ import {
     insertSuggestionComment,
     locateWordAnchor,
     readCurrentWordDocumentContext,
+    readCurrentWordCustomProperties,
     readCurrentWordSelection,
     type WordHostState,
 } from "@/app/lib/wordOfficeBridge";
@@ -60,8 +62,16 @@ import {
     listMatterWordDocuments,
     loadMatterDocumentVersionBase,
     saveCurrentWordDocumentAsMatterVersion,
+    saveCurrentWordDocumentAsTaskArtifactVersion,
     type MatterDocumentVersionBase,
 } from "@/app/lib/wordMatterVersion";
+import {
+    assertWordTaskArtifactServerBinding,
+    classifyWordTaskArtifactBinding,
+    sameWordTaskArtifactIdentity,
+    type WordTaskArtifactBinding,
+    type WordTaskArtifactBindingClassification,
+} from "@/app/lib/wordTaskArtifactBinding";
 import {
     buildWordDocumentReviewPrompt,
     buildWordSuggestionPrompt,
@@ -248,6 +258,10 @@ type RestoreIssue =
     | { kind: "unavailable"; message: string };
 
 type TaskPaneTab = "assistant" | "review" | "actions";
+type WordTaskArtifactBindingState =
+    | WordTaskArtifactBindingClassification
+    | { kind: "checking" }
+    | { kind: "read-error"; error: string };
 
 function isReviewStandardDocument(document: MatterDocument): boolean {
     return (
@@ -457,6 +471,12 @@ export function WordTaskPane() {
     const [matterVersionLoading, setMatterVersionLoading] = useState(false);
     const [matterVersionSaving, setMatterVersionSaving] = useState(false);
     const [matterVersionMessage, setMatterVersionMessage] = useState<string | null>(null);
+    const [taskArtifactBindingState, setTaskArtifactBindingState] =
+        useState<WordTaskArtifactBindingState>({ kind: "checking" });
+    const [taskArtifactServerVerified, setTaskArtifactServerVerified] =
+        useState(false);
+    const [taskArtifactReopenRequired, setTaskArtifactReopenRequired] =
+        useState(false);
     const [scope, setScope] = useState<WordReviewScope>(() =>
         resumePointer?.scope ??
         (searchParams.get("scope") === "document" ? "document" : "selection"),
@@ -501,6 +521,15 @@ export function WordTaskPane() {
         new Map<string, Promise<string>>(),
     );
 
+    const taskArtifactBinding: WordTaskArtifactBinding | null =
+        taskArtifactBindingState.kind === "bound"
+            ? taskArtifactBindingState.binding
+            : null;
+    const taskArtifactIdentityError =
+        "The current document is not this Task's current Word artifact. Reopen it from Vera.";
+    const taskArtifactPartialSaveMessage =
+        "The new version was saved, but Vera could not update the open Word state. Reopen the current artifact from its Task before editing again.";
+
     const selectedProject = useMemo(
         () => projects.find((project) => project.id === selectedProjectId) ?? null,
         [projects, selectedProjectId],
@@ -512,6 +541,33 @@ export function WordTaskPane() {
             ) ?? null,
         [matterDocuments, selectedMatterDocumentId],
     );
+    const taskArtifactIdentityMatches =
+        taskArtifactBinding !== null &&
+        taskArtifactServerVerified &&
+        sameWordTaskArtifactIdentity(
+            selectedProjectId,
+            taskArtifactBinding.projectId,
+        ) &&
+        selectedMatterDocument !== null &&
+        sameWordTaskArtifactIdentity(
+            selectedMatterDocument.id,
+            taskArtifactBinding.documentId,
+        ) &&
+        matterDocumentVersionBase !== null &&
+        sameWordTaskArtifactIdentity(
+            matterDocumentVersionBase.documentId,
+            taskArtifactBinding.documentId,
+        ) &&
+        sameWordTaskArtifactIdentity(
+            matterDocumentVersionBase.versionId,
+            taskArtifactBinding.versionId,
+        );
+    const taskArtifactSaveBlocked =
+        taskArtifactReopenRequired ||
+        taskArtifactBindingState.kind === "checking" ||
+        taskArtifactBindingState.kind === "read-error" ||
+        taskArtifactBindingState.kind === "invalid" ||
+        (taskArtifactBinding !== null && !taskArtifactIdentityMatches);
     const reviewStandardDocuments = useMemo(
         () =>
             matterDocuments.filter(
@@ -741,6 +797,74 @@ export function WordTaskPane() {
             cancelled = true;
         };
     }, [isPreview, officeScriptReady]);
+
+    useEffect(() => {
+        if (isPreview) {
+            setTaskArtifactBindingState({ kind: "absent" });
+            setTaskArtifactServerVerified(false);
+            setTaskArtifactReopenRequired(false);
+            return;
+        }
+        if (host.kind !== "word") {
+            setTaskArtifactBindingState({ kind: "checking" });
+            setTaskArtifactServerVerified(false);
+            return;
+        }
+        let cancelled = false;
+        setTaskArtifactBindingState({ kind: "checking" });
+        setTaskArtifactServerVerified(false);
+        setTaskArtifactReopenRequired(false);
+        void readCurrentWordCustomProperties()
+            .then((properties) => {
+                if (cancelled) return;
+                const classification =
+                    classifyWordTaskArtifactBinding(properties);
+                setTaskArtifactBindingState(classification);
+                if (classification.kind === "bound") {
+                    setSelectedProjectId(classification.binding.projectId);
+                } else if (classification.kind === "invalid") {
+                    setMatterDocumentError(taskArtifactIdentityError);
+                }
+            })
+            .catch((error) => {
+                if (!cancelled) {
+                    const message = readableError(error);
+                    setTaskArtifactBindingState({
+                        kind: "read-error",
+                        error: message,
+                    });
+                    setMatterDocumentError(message);
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [host.kind, isPreview, taskArtifactIdentityError]);
+
+    useEffect(() => {
+        setTaskArtifactServerVerified(false);
+        if (isPreview || host.kind !== "word" || !taskArtifactBinding) {
+            return;
+        }
+        let cancelled = false;
+        void getAgentTask(taskArtifactBinding.taskId)
+            .then((snapshot) => {
+                if (cancelled) return;
+                assertWordTaskArtifactServerBinding(
+                    taskArtifactBinding,
+                    snapshot,
+                );
+                setSelectedProjectId(taskArtifactBinding.projectId);
+                setScope("document");
+                setTaskArtifactServerVerified(true);
+            })
+            .catch((error) => {
+                if (!cancelled) setMatterDocumentError(readableError(error));
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [host.kind, isPreview, taskArtifactBinding]);
 
     useEffect(() => {
         if (host.kind === "word" && host.canReadSelection) {
@@ -1053,6 +1177,89 @@ export function WordTaskPane() {
     useEffect(() => {
         if (
             isPreview ||
+            host.kind !== "word" ||
+            !taskArtifactBinding ||
+            !taskArtifactServerVerified
+        ) {
+            return;
+        }
+        if (
+            !sameWordTaskArtifactIdentity(
+                selectedProjectId,
+                taskArtifactBinding.projectId,
+            )
+        ) {
+            setSelectedProjectId(taskArtifactBinding.projectId);
+            return;
+        }
+        if (matterDocumentsLoading || matterDocuments.length === 0) return;
+        const document = matterDocuments.find((candidate) =>
+            sameWordTaskArtifactIdentity(
+                candidate.id,
+                taskArtifactBinding.documentId,
+            ),
+        );
+        if (!document) {
+            setMatterDocumentError(taskArtifactIdentityError);
+            return;
+        }
+        if (
+            sameWordTaskArtifactIdentity(
+                selectedMatterDocumentId,
+                document.id,
+            ) &&
+            matterDocumentVersionBase &&
+            sameWordTaskArtifactIdentity(
+                matterDocumentVersionBase.documentId,
+                document.id,
+            )
+        ) {
+            return;
+        }
+        let cancelled = false;
+        setSelectedMatterDocumentId(document.id);
+        setMatterDocumentVersionBase(null);
+        setMatterDocumentError(null);
+        setMatterVersionMessage(null);
+        setMatterVersionLoading(true);
+        void loadMatterDocumentVersionBase(document.id)
+            .then((base) => {
+                if (cancelled) return;
+                setMatterDocumentVersionBase(base);
+                if (
+                    !sameWordTaskArtifactIdentity(
+                        base.versionId,
+                        taskArtifactBinding.versionId,
+                    )
+                ) {
+                    setMatterDocumentError(taskArtifactIdentityError);
+                }
+            })
+            .catch((error) => {
+                if (!cancelled) setMatterDocumentError(readableError(error));
+            })
+            .finally(() => {
+                if (!cancelled) setMatterVersionLoading(false);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        host.kind,
+        isPreview,
+        matterDocumentVersionBase,
+        matterDocuments,
+        matterDocumentsLoading,
+        selectedMatterDocumentId,
+        selectedProjectId,
+        taskArtifactBinding,
+        taskArtifactIdentityError,
+        taskArtifactServerVerified,
+    ]);
+
+    useEffect(() => {
+        if (
+            isPreview ||
             !resumePointer ||
             !resumeActive ||
             restoreStartedRef.current ||
@@ -1317,10 +1524,53 @@ export function WordTaskPane() {
         ) {
             return;
         }
+        if (taskArtifactSaveBlocked) {
+            setMatterDocumentError(
+                taskArtifactReopenRequired
+                    ? taskArtifactPartialSaveMessage
+                    : taskArtifactBindingState.kind === "read-error"
+                      ? taskArtifactBindingState.error
+                      : taskArtifactIdentityError,
+            );
+            return;
+        }
         setMatterVersionSaving(true);
         setMatterDocumentError(null);
         setMatterVersionMessage(null);
         try {
+            if (taskArtifactBinding) {
+                const saved =
+                    await saveCurrentWordDocumentAsTaskArtifactVersion({
+                        taskId: taskArtifactBinding.taskId,
+                        projectId: taskArtifactBinding.projectId,
+                        deliverableKey: taskArtifactBinding.deliverableKey,
+                        document: selectedMatterDocument,
+                        base: matterDocumentVersionBase,
+                        openBinding: taskArtifactBinding,
+                    });
+                setMatterDocumentVersionBase({
+                    documentId: selectedMatterDocument.id,
+                    versionId: saved.version.id,
+                    versionNumber: saved.version.version_number,
+                });
+                if (saved.receiptSynchronized) {
+                    setTaskArtifactBindingState({
+                        kind: "bound",
+                        binding: saved.successorBinding,
+                    });
+                    setTaskArtifactServerVerified(true);
+                    setTaskArtifactReopenRequired(false);
+                    setMatterVersionMessage(
+                        saved.version.version_number
+                            ? `Saved ${selectedMatterDocument.filename} as V${saved.version.version_number}.`
+                            : `Saved ${selectedMatterDocument.filename} as a new version.`,
+                    );
+                } else {
+                    setTaskArtifactReopenRequired(true);
+                    setMatterVersionMessage(taskArtifactPartialSaveMessage);
+                }
+                return;
+            }
             const version = await saveCurrentWordDocumentAsMatterVersion({
                 document: selectedMatterDocument,
                 base: matterDocumentVersionBase,
@@ -2807,7 +3057,8 @@ export function WordTaskPane() {
                                                             host.kind !== "word" ||
                                                             matterVersionSaving ||
                                                             generating ||
-                                                            restoringReview
+                                                            restoringReview ||
+                                                            taskArtifactSaveBlocked
                                                         }
                                                         onClick={() =>
                                                             void saveWordDocumentVersion()

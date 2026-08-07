@@ -695,6 +695,11 @@ export async function executeAgentStep(input: {
           } as const)
         : ({ toolName: "generate_docx", artifactType: "draft" } as const)
       : null;
+  const expectedDeliverableKey = repairPass
+    ? repairDeliverable?.key
+    : stepContract?.output_expectation.kind === "artifact"
+      ? stepContract.output_expectation.deliverable_key
+      : undefined;
   const authorizeToolBatch = stepContract
     ? async (calls: ToolInvocation[]) => {
         const mutations = calls.filter(
@@ -811,10 +816,27 @@ export async function executeAgentStep(input: {
     mutationTargetForCall: stepContract
       ? (call) => {
           const receipt = mutationReceipts.get(call.id);
+          if (
+            receipt?.tool_name === "generate_docx" &&
+            !expectedDeliverableKey
+          ) {
+            throw new Error(
+              "A generated Task Word artifact requires one fixed deliverable key",
+            );
+          }
           return receipt
             ? {
                 documentId: receipt.target.document_id,
                 versionId: receipt.target.version_id,
+                ...(receipt.tool_name === "generate_docx"
+                  ? {
+                      taskWordArtifact: {
+                        taskId: snapshot.task.id,
+                        projectId: snapshot.task.matter_id,
+                        deliverableKey: expectedDeliverableKey!,
+                      },
+                    }
+                  : {}),
               }
             : null;
         }

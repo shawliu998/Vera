@@ -3,7 +3,16 @@ import type {
     Project,
 } from "@/app/components/shared/types";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
-import { readCurrentWordDocumentFile } from "@/app/lib/wordOfficeBridge";
+import {
+    readCurrentWordDocumentFile,
+    writeCurrentWordCustomProperties,
+} from "@/app/lib/wordOfficeBridge";
+import {
+    assertWordTaskArtifactOpenBinding,
+    encodeWordTaskArtifactBinding,
+    successorWordTaskArtifactBinding,
+    type WordTaskArtifactBinding,
+} from "@/app/lib/wordTaskArtifactBinding";
 
 export type MatterDocumentVersionBase = {
     documentId: string;
@@ -22,6 +31,21 @@ type UploadVersion = (
     file: File,
     filename?: string,
 ) => Promise<DocumentVersion>;
+type SaveTaskArtifactVersion = (
+    taskId: string,
+    documentId: string,
+    baseVersionId: string,
+    file: File,
+    filename?: string,
+) => Promise<DocumentVersion>;
+
+export type TaskArtifactVersionSaveResult = {
+    version: DocumentVersion;
+    successorBinding: WordTaskArtifactBinding;
+    receiptSynchronized: boolean;
+    receiptSyncError: string | null;
+    reopenRequired: boolean;
+};
 
 async function loadVersionsFromMike(documentId: string) {
     const { listDocumentVersions } = await import("@/app/lib/mikeApi");
@@ -35,6 +59,24 @@ async function uploadVersionToMike(
 ) {
     const { uploadDocumentVersion } = await import("@/app/lib/mikeApi");
     return uploadDocumentVersion(documentId, file, filename);
+}
+
+async function saveTaskArtifactVersionToMike(
+    taskId: string,
+    documentId: string,
+    baseVersionId: string,
+    file: File,
+    filename?: string,
+) {
+    const { saveAgentTaskWordArtifactVersion } =
+        await import("@/app/lib/mikeApi");
+    return saveAgentTaskWordArtifactVersion(
+        taskId,
+        documentId,
+        baseVersionId,
+        file,
+        filename,
+    );
 }
 
 export class MatterDocumentVersionDriftError extends Error {
@@ -137,4 +179,70 @@ export async function saveCurrentWordDocumentAsMatterVersion(args: {
         await loadVersions(args.document.id),
     );
     return uploadVersion(args.document.id, file, filename);
+}
+
+export async function saveCurrentWordDocumentAsTaskArtifactVersion(args: {
+    taskId: string;
+    projectId: string;
+    deliverableKey: string;
+    document: MatterDocument;
+    base: MatterDocumentVersionBase;
+    openBinding: WordTaskArtifactBinding | null | undefined;
+    loadVersions?: LoadVersions;
+    readWordFile?: typeof readCurrentWordDocumentFile;
+    saveTaskArtifactVersion?: SaveTaskArtifactVersion;
+    writeWordCustomProperties?: typeof writeCurrentWordCustomProperties;
+}): Promise<TaskArtifactVersionSaveResult> {
+    if (args.document.id !== args.base.documentId) {
+        throw new Error("The selected Matter document changed before saving.");
+    }
+    const openBinding = assertWordTaskArtifactOpenBinding(args.openBinding, {
+        taskId: args.taskId,
+        projectId: args.projectId,
+        deliverableKey: args.deliverableKey,
+        documentId: args.document.id,
+        versionId: args.base.versionId,
+    });
+    const loadVersions = args.loadVersions ?? loadVersionsFromMike;
+    const readWordFile = args.readWordFile ?? readCurrentWordDocumentFile;
+    const saveTaskArtifactVersion =
+        args.saveTaskArtifactVersion ?? saveTaskArtifactVersionToMike;
+    assertVersionBaseMatches(args.base, await loadVersions(args.document.id));
+    const filename = wordVersionFilename(args.document.filename);
+    const file = await readWordFile({ filename });
+    assertVersionBaseMatches(args.base, await loadVersions(args.document.id));
+    const version = await saveTaskArtifactVersion(
+        openBinding.taskId,
+        args.document.id,
+        args.base.versionId,
+        file,
+        filename,
+    );
+    const successorBinding = successorWordTaskArtifactBinding(
+        openBinding,
+        version.id,
+    );
+    try {
+        await (
+            args.writeWordCustomProperties ?? writeCurrentWordCustomProperties
+        )(encodeWordTaskArtifactBinding(successorBinding));
+        return {
+            version,
+            successorBinding,
+            receiptSynchronized: true,
+            receiptSyncError: null,
+            reopenRequired: false,
+        };
+    } catch (error) {
+        return {
+            version,
+            successorBinding,
+            receiptSynchronized: false,
+            receiptSyncError:
+                error instanceof Error
+                    ? error.message
+                    : "The open Word receipt could not be updated.",
+            reopenRequired: true,
+        };
+    }
 }
