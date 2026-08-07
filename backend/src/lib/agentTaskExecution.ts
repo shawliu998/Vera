@@ -41,12 +41,16 @@ import {
   type AgentStepPostcondition,
 } from "./agent-kernel/contracts/stepContract";
 import { assertAgentStepCapabilityGrants } from "./agent-kernel/capability/stepCapability";
+import { isAgentStepEffectTransitionError } from "./agent-kernel/effects/stepEffect";
 import {
   AgentTaskLeaseBusyError,
   type AgentTaskLeaseGuard,
   withAgentTaskLease,
 } from "./agent-kernel/execution/taskLease";
-import { isAgentTaskStateTransitionError } from "./agent-kernel/execution/taskTransition";
+import {
+  AgentTaskStateTransitionError,
+  isAgentTaskStateTransitionError,
+} from "./agent-kernel/execution/taskTransition";
 import { AgentVerifierStructuredOutputError } from "./agent-kernel/verification/verifierCore";
 
 type Db = ReturnType<typeof createServerSupabase>;
@@ -433,11 +437,27 @@ export async function advanceAgentTaskExecution(input: {
       snapshot: current,
       userId,
       userEmail,
+      leaseOwner: input.leaseGuard.ownerToken,
       shouldContinue,
     });
   } catch (error) {
     if (isAgentTaskExecutionInterrupted(error)) {
       return getAgentTaskSnapshot(db, taskId, userId);
+    }
+    if (isAgentStepEffectTransitionError(error)) {
+      if (error.outcome === "lease_lost") {
+        return getAgentTaskSnapshot(db, taskId, userId);
+      }
+      return pauseAgentTaskForStateTransition(
+        db,
+        taskId,
+        userId,
+        new AgentTaskStateTransitionError(
+          "task_state_transition_conflict",
+          error.message,
+          error.facts,
+        ),
+      );
     }
     if (error instanceof AgentVerifierStructuredOutputError) {
       return deferAgentTaskForProvider(
@@ -584,6 +604,7 @@ export async function advanceAgentTaskExecution(input: {
           snapshot: current,
           userId,
           userEmail,
+          leaseOwner: input.leaseGuard.ownerToken,
           shouldContinue,
           instructionOverride: `This is the single permitted repair pass. Repair: ${reasons}. Re-read the sources, update or recreate only the affected deliverables, and preserve lawyer-review status.`,
           repairArtifactPurpose: taskDeliverablePurpose(repairTarget),
@@ -606,6 +627,7 @@ export async function advanceAgentTaskExecution(input: {
           snapshot: repairedSnapshot,
           userId,
           userEmail,
+          leaseOwner: input.leaseGuard.ownerToken,
           shouldContinue,
           instructionOverride:
             "Re-run the five verifier checks after the one permitted repair. Do not repair again. Return PASS or GAP for every check.",

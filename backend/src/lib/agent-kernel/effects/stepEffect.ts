@@ -7,7 +7,6 @@ import type { createServerSupabase } from "../../supabase";
 type Db = ReturnType<typeof createServerSupabase>;
 
 export const AGENT_STEP_EFFECT_RECEIPT_KEY = "effect_receipts" as const;
-const MAX_CAS_ATTEMPTS = 5;
 
 const effectReceiptSchema = z
   .object({
@@ -142,16 +141,6 @@ function readReceiptMap(resultData: unknown) {
   );
 }
 
-function nextUpdatedAt(previous: unknown) {
-  const previousTime =
-    typeof previous === "string" ? Date.parse(previous) : Number.NaN;
-  return new Date(
-    Number.isFinite(previousTime)
-      ? Math.max(Date.now(), previousTime + 1)
-      : Date.now(),
-  ).toISOString();
-}
-
 function sameReservation(
   left: AgentStepEffectReceiptV1,
   right: AgentStepEffectReceiptV1,
@@ -167,66 +156,127 @@ function sameReservation(
   );
 }
 
+export class AgentStepEffectTransitionError extends Error {
+  constructor(
+    readonly outcome:
+      | "artifact_invalid"
+      | "conflict"
+      | "invalid_input"
+      | "lease_lost"
+      | "not_found",
+    readonly facts: Record<string, unknown>,
+  ) {
+    super(
+      outcome === "lease_lost"
+        ? "The Step effect lost its execution lease before publication"
+        : "The Step effect could not be published from the current Task state",
+    );
+    this.name = "AgentStepEffectTransitionError";
+  }
+}
+
+export function isAgentStepEffectTransitionError(
+  error: unknown,
+): error is AgentStepEffectTransitionError {
+  return (
+    error instanceof AgentStepEffectTransitionError ||
+    Boolean(
+      error &&
+      typeof error === "object" &&
+      (error as { name?: unknown }).name === "AgentStepEffectTransitionError",
+    )
+  );
+}
+
+function firstRow(value: unknown) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function readTransitionReceipt(
+  data: unknown,
+  input: {
+    taskId: string;
+    userId: string;
+    leaseOwner: string;
+    receipt: AgentStepEffectReceiptV1;
+  },
+) {
+  const row = firstRow(data) as Record<string, unknown> | null;
+  const outcome = row?.outcome;
+  if (
+    outcome === "artifact_invalid" ||
+    outcome === "conflict" ||
+    outcome === "invalid_input" ||
+    outcome === "lease_lost" ||
+    outcome === "not_found"
+  ) {
+    throw new AgentStepEffectTransitionError(outcome, {
+      task_id: input.taskId,
+      user_id: input.userId,
+      step_id: input.receipt.step_id,
+      step_attempt: input.receipt.attempt,
+      lease_owner: input.leaseOwner,
+      effect_key: input.receipt.effect_key,
+    });
+  }
+  if (
+    !(["reserved", "recovered", "committed"] as unknown[]).includes(outcome)
+  ) {
+    throw new AgentStepEffectTransitionError("invalid_input", {
+      task_id: input.taskId,
+      step_id: input.receipt.step_id,
+      effect_key: input.receipt.effect_key,
+      outcome: outcome ?? null,
+    });
+  }
+  const receipt = effectReceiptSchema.safeParse(row?.effect_receipt);
+  if (!receipt.success || !sameReservation(receipt.data, input.receipt)) {
+    throw new AgentStepEffectTransitionError("invalid_input", {
+      task_id: input.taskId,
+      step_id: input.receipt.step_id,
+      effect_key: input.receipt.effect_key,
+      reason: "returned_receipt_mismatch",
+    });
+  }
+  return receipt.data;
+}
+
 export async function reserveAgentStepEffect(
   db: Db,
-  input: { taskId: string; receipt: AgentStepEffectReceiptV1 },
+  input: {
+    taskId: string;
+    userId: string;
+    leaseOwner: string;
+    receipt: AgentStepEffectReceiptV1;
+  },
 ) {
   const wanted = effectReceiptSchema.parse(input.receipt);
-  for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
-    const { data: step, error } = await db
-      .from("agent_steps")
-      .select("id,result_data,updated_at")
-      .eq("id", wanted.step_id)
-      .eq("task_id", input.taskId)
-      .eq("status", "running")
-      .maybeSingle();
-    if (error) throw new Error(error.message);
-    if (!step) throw new Error("The effect Step is no longer running");
-    const resultData =
-      step.result_data &&
-      typeof step.result_data === "object" &&
-      !Array.isArray(step.result_data)
-        ? (step.result_data as Record<string, unknown>)
-        : {};
-    const receipts = readReceiptMap(resultData);
-    const existing = receipts[wanted.effect_key];
-    if (existing) {
-      if (!sameReservation(existing, wanted)) {
-        throw new Error(
-          "A recovered Step attempted different input or a different effect target",
-        );
-      }
-      return existing;
-    }
-    const updatedAt = nextUpdatedAt(step.updated_at);
-    const { data: updated, error: updateError } = await db
-      .from("agent_steps")
-      .update({
-        result_data: {
-          ...resultData,
-          [AGENT_STEP_EFFECT_RECEIPT_KEY]: {
-            ...receipts,
-            [wanted.effect_key]: wanted,
-          },
-        },
-        updated_at: updatedAt,
-      })
-      .eq("id", wanted.step_id)
-      .eq("task_id", input.taskId)
-      .eq("status", "running")
-      .eq("updated_at", step.updated_at)
-      .select("id")
-      .maybeSingle();
-    if (updateError) throw new Error(updateError.message);
-    if (updated) return wanted;
+  const { data, error } = await db.rpc("reserve_agent_step_effect_v1", {
+    p_task_id: input.taskId,
+    p_user_id: input.userId,
+    p_step_id: wanted.step_id,
+    p_step_attempt: wanted.attempt,
+    p_lease_owner: input.leaseOwner,
+    p_effect_key: wanted.effect_key,
+    p_receipt: wanted,
+  });
+  if (error) {
+    throw new AgentStepEffectTransitionError("invalid_input", {
+      task_id: input.taskId,
+      step_id: wanted.step_id,
+      effect_key: wanted.effect_key,
+      database_error: error.message,
+    });
   }
-  throw new Error("The Step changed repeatedly before its effect was reserved");
+  return readTransitionReceipt(data, { ...input, receipt: wanted });
 }
 
 export async function commitAgentStepEffect(
   db: Db,
   input: {
     taskId: string;
+    userId: string;
+    leaseOwner: string;
     receipt: AgentStepEffectReceiptV1;
     artifactType: "draft" | "tabular_review";
     documentId: string;
@@ -235,69 +285,52 @@ export async function commitAgentStepEffect(
   },
 ) {
   const wanted = effectReceiptSchema.parse(input.receipt);
+  const reservation = effectReceiptSchema.parse({
+    ...wanted,
+    status: "reserved",
+    effect: null,
+    committed_at: null,
+  });
   if (
     input.documentId !== wanted.target.document_id ||
     input.versionId !== wanted.target.version_id
   ) {
     throw new Error("The created Artifact does not match its reserved target");
   }
-  for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
-    const { data: step, error } = await db
-      .from("agent_steps")
-      .select("id,result_data,updated_at")
-      .eq("id", wanted.step_id)
-      .eq("task_id", input.taskId)
-      .eq("status", "running")
-      .maybeSingle();
-    if (error) throw new Error(error.message);
-    if (!step) throw new Error("The effect Step is no longer running");
-    const resultData =
-      step.result_data &&
-      typeof step.result_data === "object" &&
-      !Array.isArray(step.result_data)
-        ? (step.result_data as Record<string, unknown>)
-        : {};
-    const receipts = readReceiptMap(resultData);
-    const existing = receipts[wanted.effect_key];
-    if (!existing || !sameReservation(existing, wanted)) {
-      throw new Error("The reserved Step effect is missing or inconsistent");
-    }
-    if (existing.status === "committed") return existing;
-    const committed = effectReceiptSchema.parse({
-      ...existing,
-      status: "committed",
-      effect: {
-        document_id: input.documentId,
-        version_id: input.versionId,
-        artifact_type: input.artifactType,
-      },
-      committed_at: input.committedAt ?? new Date().toISOString(),
+  const { data, error } = await db.rpc("commit_agent_step_effect_v1", {
+    p_task_id: input.taskId,
+    p_user_id: input.userId,
+    p_step_id: wanted.step_id,
+    p_step_attempt: wanted.attempt,
+    p_lease_owner: input.leaseOwner,
+    p_effect_key: wanted.effect_key,
+    p_reserved_receipt: reservation,
+    p_artifact_type: input.artifactType,
+    p_document_id: input.documentId,
+    p_version_id: input.versionId,
+    p_committed_at: input.committedAt ?? new Date().toISOString(),
+  });
+  if (error) {
+    throw new AgentStepEffectTransitionError("invalid_input", {
+      task_id: input.taskId,
+      step_id: wanted.step_id,
+      effect_key: wanted.effect_key,
+      database_error: error.message,
     });
-    const updatedAt = nextUpdatedAt(step.updated_at);
-    const { data: updated, error: updateError } = await db
-      .from("agent_steps")
-      .update({
-        result_data: {
-          ...resultData,
-          [AGENT_STEP_EFFECT_RECEIPT_KEY]: {
-            ...receipts,
-            [wanted.effect_key]: committed,
-          },
-        },
-        updated_at: updatedAt,
-      })
-      .eq("id", wanted.step_id)
-      .eq("task_id", input.taskId)
-      .eq("status", "running")
-      .eq("updated_at", step.updated_at)
-      .select("id")
-      .maybeSingle();
-    if (updateError) throw new Error(updateError.message);
-    if (updated) return committed;
   }
-  throw new Error(
-    "The Step changed repeatedly before its effect was committed",
-  );
+  const committed = readTransitionReceipt(data, {
+    ...input,
+    receipt: reservation,
+  });
+  if (committed.status !== "committed") {
+    throw new AgentStepEffectTransitionError("invalid_input", {
+      task_id: input.taskId,
+      step_id: wanted.step_id,
+      effect_key: wanted.effect_key,
+      reason: "commit_returned_uncommitted_receipt",
+    });
+  }
+  return committed;
 }
 
 export function readAgentStepEffectReceipts(resultData: unknown) {

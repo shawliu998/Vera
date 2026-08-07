@@ -425,6 +425,7 @@ export async function executeAgentStep(input: {
   snapshot: NonNullable<TaskSnapshot>;
   userId: string;
   userEmail?: string;
+  leaseOwner: string;
   instructionOverride?: string;
   repairArtifactPurpose?: string;
   shouldContinue?: () => Promise<boolean>;
@@ -730,6 +731,8 @@ export async function executeAgentStep(input: {
           });
           const receipt = await reserveAgentStepEffect(db, {
             taskId: snapshot.task.id,
+            userId,
+            leaseOwner: input.leaseOwner,
             receipt: wanted,
           });
           mutationReceipts.set(call.id, receipt);
@@ -770,6 +773,8 @@ export async function executeAgentStep(input: {
         }
         await commitAgentStepEffect(db, {
           taskId: snapshot.task.id,
+          userId,
+          leaseOwner: input.leaseOwner,
           receipt,
           artifactType: expectedMutation.artifactType,
           documentId: created[0].document_id,
