@@ -1,5 +1,7 @@
 # Kernel v1 progress and domain acceptance audit — 2026-08-07
 
+Last updated: 2026-08-08
+
 Product authority: [`PRODUCT.md`](../../PRODUCT.md)
 
 Architecture authority: [`vera-kernel-v1.md`](./vera-kernel-v1.md)
@@ -22,7 +24,7 @@ repeated on the current branch.
 | 5. Effect boundary/lease/transitions | Implemented | effect, lease and atomic transition modules; SQL smoke and real Task recovery | Direct database coupling remains frozen migration debt in five adapter files. |
 | 6. Verifier/repair | Implemented | verifier core, marker repair, repair eligibility, Artifact re-verification | Gold-workflow semantic verifier acceptance remains pending. |
 | 7. Shared Word/Tabular | Partially implemented | exact Task Artifact Version binding; external-edit preservation; partial Tabular cell recovery; Word and Tabular tests | Mac Word manifest is parsed but absent from AppCommands. Clear the complete cache only after Word closes, then perform real Host and Mike/Vera acceptance. |
-| 8. Research connector | Pending extraction | existing citation-research manifest and legal-source implementations remain available | Introduce the provider-neutral read-only connector boundary, reconcile the patent import migration, and run focused research gates before claiming completion. |
+| 8. Research connector | Foundation implemented | `connectors/readOnlySourceContract.ts`; `readOnlySourceExecution.ts`; V2 capability grants with V1 recovery; provider-neutral dependency and execution tests | Adapt the legal-research and patent-source Packs to the boundary, bind current connector authorization, import only through the central Matter Document/Version seam, reconcile the patent import migration, and run focused research gates before claiming completion. |
 
 The new `dependencyBoundary.test.ts` prevents Kernel production code from
 importing routes, frontend code, or domain Packs. It also freezes the five
@@ -65,5 +67,6 @@ preserved release capabilities.
 
 1. When Word is closed, complete Batch 7 Host activation and visual acceptance.
 2. Run fresh contract, patentability and litigation Tasks through the product UI.
-3. Extract the Batch 8 connector boundary and reconcile patent source import.
+3. Adapt the Batch 8 legal-research and patent-source Packs to the extracted
+   read-only connector boundary and reconcile patent source import.
 4. Use the gold-flow evidence to remove legacy Aletheia slices incrementally.

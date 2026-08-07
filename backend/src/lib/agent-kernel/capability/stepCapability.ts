@@ -1,8 +1,11 @@
 import { z } from "zod";
 
 import type { AgentStepContractV1 } from "../contracts/stepContract";
+import { readOnlySourceConnectorPinSchema } from "../connectors/readOnlySourceContract";
 
 export const AGENT_STEP_CAPABILITY_GRANT_VERSION =
+  "agent_step_capability_grant_v2" as const;
+const LEGACY_AGENT_STEP_CAPABILITY_GRANT_VERSION =
   "agent_step_capability_grant_v1" as const;
 
 const TOOL_NAMES_BY_OPERATION = {
@@ -51,9 +54,9 @@ export const WORK_TASK_HOST_TOOL_NAMES = Array.from(
   ]),
 );
 
-const grantSchema = z
+const legacyGrantSchema = z
   .object({
-    schema_version: z.literal(AGENT_STEP_CAPABILITY_GRANT_VERSION),
+    schema_version: z.literal(LEGACY_AGENT_STEP_CAPABILITY_GRANT_VERSION),
     step_position: z.number().int().min(0).max(5),
     capability: z.string().trim().min(1).max(80),
     operation: z.string().trim().min(1).max(80),
@@ -64,10 +67,69 @@ const grantSchema = z
   })
   .strict();
 
-export type AgentStepCapabilityGrantV1 = z.infer<typeof grantSchema>;
+const grantSchema = z
+  .object({
+    schema_version: z.literal(AGENT_STEP_CAPABILITY_GRANT_VERSION),
+    step_position: z.number().int().min(0).max(5),
+    capability: z.string().trim().min(1).max(80),
+    operation: z.string().trim().min(1).max(80),
+    allowed_tool_names: z.array(z.string().trim().min(1).max(120)).max(16),
+    mcp_tools_allowed: z.literal(false),
+    research_tools_allowed: z.boolean(),
+    read_only_connector_pins: z
+      .array(readOnlySourceConnectorPinSchema)
+      .max(4),
+    consequential_actions_allowed: z.literal(false),
+  })
+  .strict()
+  .superRefine((grant, context) => {
+    const hasConnectorPins = grant.read_only_connector_pins.length > 0;
+    if (grant.research_tools_allowed !== hasConnectorPins) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["research_tools_allowed"],
+        message: "Research access must match the fixed connector pins",
+      });
+    }
+    if (
+      hasConnectorPins &&
+      (grant.capability !== "read_sources" || grant.operation !== "read")
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["read_only_connector_pins"],
+        message: "Only a read_sources Step may receive read-only connectors",
+      });
+    }
+    const connectorIds = grant.read_only_connector_pins.map(
+      (pin) => pin.connector_id,
+    );
+    if (new Set(connectorIds).size !== connectorIds.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["read_only_connector_pins"],
+        message: "Connector pins must have unique identities",
+      });
+    }
+  });
+
+export type AgentStepCapabilityGrantV2 = z.infer<typeof grantSchema>;
+/** Compatibility alias for pre-extraction callers; resolved grants are V2. */
+export type AgentStepCapabilityGrantV1 = AgentStepCapabilityGrantV2;
+
+function normalizeAgentStepCapabilityGrant(value: unknown) {
+  const current = grantSchema.safeParse(value);
+  if (current.success) return current.data;
+  const legacy = legacyGrantSchema.parse(value);
+  return grantSchema.parse({
+    ...legacy,
+    schema_version: AGENT_STEP_CAPABILITY_GRANT_VERSION,
+    read_only_connector_pins: [],
+  });
+}
 
 export function validateAgentStepCapabilityGrant(value: unknown) {
-  return grantSchema.parse(value);
+  return normalizeAgentStepCapabilityGrant(value);
 }
 
 /**
@@ -78,6 +140,7 @@ export function resolveAgentStepCapabilityGrant(input: {
   contract: AgentStepContractV1;
   availableToolNames: readonly string[];
   requestedToolNames?: readonly string[];
+  readOnlyConnectorPins?: readonly unknown[];
 }) {
   const available = new Set(input.availableToolNames);
   const requested = input.requestedToolNames
@@ -87,6 +150,20 @@ export function resolveAgentStepCapabilityGrant(input: {
     (toolName) =>
       available.has(toolName) && (!requested || requested.has(toolName)),
   );
+  const readOnlyConnectorPins = z
+    .array(readOnlySourceConnectorPinSchema)
+    .max(4)
+    .parse(input.readOnlyConnectorPins ?? []);
+  if (
+    readOnlyConnectorPins.length &&
+    (input.contract.capability !== "read_sources" ||
+      input.contract.operation !== "read" ||
+      input.contract.source_requirement.mode !== "authority")
+  ) {
+    throw new Error(
+      "Read-only connectors require an authority-scoped read_sources Step",
+    );
+  }
   return grantSchema.parse({
     schema_version: AGENT_STEP_CAPABILITY_GRANT_VERSION,
     step_position: input.contract.position,
@@ -94,7 +171,8 @@ export function resolveAgentStepCapabilityGrant(input: {
     operation: input.contract.operation,
     allowed_tool_names: allowed,
     mcp_tools_allowed: false,
-    research_tools_allowed: false,
+    research_tools_allowed: readOnlyConnectorPins.length > 0,
+    read_only_connector_pins: readOnlyConnectorPins,
     consequential_actions_allowed: false,
   });
 }
@@ -126,7 +204,7 @@ export function resolveBoundedRepairToolNames(input: {
 export type AgentStepCapabilityGrantRead =
   | { state: "legacy" }
   | { state: "invalid"; reason: string }
-  | { state: "valid"; grants: AgentStepCapabilityGrantV1[] };
+  | { state: "valid"; grants: AgentStepCapabilityGrantV2[] };
 
 export function readAgentStepCapabilityGrants(task: {
   latest_checkpoint?: unknown;
@@ -150,11 +228,12 @@ export function readAgentStepCapabilityGrants(task: {
       : { state: "legacy" };
   }
   try {
-    const grants = z
-      .array(grantSchema)
+    const serializedGrants = z
+      .array(z.unknown())
       .min(3)
       .max(6)
       .parse(contract.capability_grants);
+    const grants = serializedGrants.map(normalizeAgentStepCapabilityGrant);
     if (
       Array.isArray(task.current_plan) &&
       grants.length !== task.current_plan.length

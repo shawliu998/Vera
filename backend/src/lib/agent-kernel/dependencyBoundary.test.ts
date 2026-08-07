@@ -79,3 +79,22 @@ test("direct Supabase coupling is frozen to the current extraction adapters", as
     "verification/artifactReverification.ts",
   ]);
 });
+
+test("read-only connector Kernel code remains provider-neutral", async () => {
+  const connectorRoot = path.join(kernelRoot, "connectors");
+  const violations: string[] = [];
+  for (const file of await productionFiles(connectorRoot)) {
+    const source = executableSource(await readFile(file, "utf8"));
+    const providerTerms = source.match(
+      /\b(?:courtlistener|epo|patsnap|pkulaw|yuandian|wolters)\b/gi,
+    );
+    if (providerTerms?.length) {
+      violations.push(
+        `${relative(file)} contains provider-specific terms: ${[
+          ...new Set(providerTerms.map((term) => term.toLowerCase())),
+        ].join(", ")}`,
+      );
+    }
+  }
+  assert.deepEqual(violations, []);
+});

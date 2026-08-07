@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  AGENT_STEP_CAPABILITY_GRANT_VERSION,
   readAgentStepCapabilityGrants,
   resolveBoundedRepairToolNames,
   resolveAgentStepCapabilityGrant,
@@ -304,6 +305,31 @@ test("malformed or missing versioned Step/grant contracts fail closed", () => {
   const badPosition = structuredClone(versionedTask());
   badPosition.latest_checkpoint.contract.capability_grants[2]!.step_position = 4;
   assert.equal(readAgentStepCapabilityGrants(badPosition).state, "invalid");
+
+  const incompleteV2 = structuredClone(versionedTask());
+  delete (
+    incompleteV2.latest_checkpoint.contract.capability_grants[0] as unknown as Record<
+      string,
+      unknown
+    >
+  ).read_only_connector_pins;
+  assert.equal(readAgentStepCapabilityGrants(incompleteV2).state, "invalid");
+
+  const legacy = structuredClone(versionedTask());
+  for (const grant of legacy.latest_checkpoint.contract.capability_grants) {
+    const mutable = grant as unknown as Record<string, unknown>;
+    mutable.schema_version = "agent_step_capability_grant_v1";
+    delete mutable.read_only_connector_pins;
+  }
+  const normalizedLegacy = readAgentStepCapabilityGrants(legacy);
+  assert.equal(normalizedLegacy.state, "valid");
+  if (normalizedLegacy.state === "valid") {
+    assert.equal(
+      normalizedLegacy.grants[0]?.schema_version,
+      AGENT_STEP_CAPABILITY_GRANT_VERSION,
+    );
+    assert.deepEqual(normalizedLegacy.grants[0]?.read_only_connector_pins, []);
+  }
 });
 
 test("required input is structured, validated, and replay-suppressed", () => {
