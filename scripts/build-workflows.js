@@ -977,10 +977,11 @@ function validateLock(lock) {
   const mikeTabularCount = lock.selection.tabular.length;
   const firstPartyAssistantCount = lock.firstParty.selection.length;
   if (
-    lock.expected?.activeAssistantCount !== mikeAssistantCount ||
+    lock.expected?.activeAssistantCount !==
+      mikeAssistantCount + firstPartyAssistantCount ||
     lock.expected?.activeTabularCount !== mikeTabularCount ||
     lock.expected?.activeWorkflowCount !==
-      mikeAssistantCount + mikeTabularCount ||
+      mikeAssistantCount + mikeTabularCount + firstPartyAssistantCount ||
     lock.expected?.assistantCount !==
       mikeAssistantCount + firstPartyAssistantCount ||
     lock.expected?.tabularCount !== mikeTabularCount ||
@@ -1642,7 +1643,9 @@ function verifyArtifacts(artifacts, lock) {
       (slug) => lock.firstParty.workflows[slug].id,
     ),
   );
-  const mikeWorkflows = artifacts.systemWorkflows;
+  const mikeWorkflows = artifacts.systemWorkflows.filter(
+    (workflow) => !firstPartyIds.has(workflow.id),
+  );
   const mikeSkillManifests = artifacts.skillManifests.filter(
     (manifest) => !firstPartyIds.has(manifest.id),
   );
@@ -1801,15 +1804,12 @@ function main(args = process.argv.slice(2)) {
   const lock = loadLock();
   const acquired = acquireSource(lock, options.source);
   try {
-    const activeWorkflows = loadSelectedWorkflows(
-      acquired.sourceRoot,
-      lock,
-    );
-    const manifestWorkflows = loadAllSelectedWorkflows(
+    const activeWorkflows = loadAllSelectedWorkflows(
       acquired.sourceRoot,
       lock,
       REPOSITORY_ROOT,
     );
+    const manifestWorkflows = activeWorkflows;
     const artifacts = buildArtifacts(activeWorkflows, manifestWorkflows, lock);
     const digests = verifyArtifacts(artifacts, lock);
     const current = fs.existsSync(BACKEND_OUT) ? readText(BACKEND_OUT) : null;
@@ -1821,20 +1821,20 @@ function main(args = process.argv.slice(2)) {
         );
       }
       console.log(
-        `Workflow sync check passed: ${activeWorkflows.length} active Mike workflows and ${manifestWorkflows.length} manifests (including ${lock.firstParty.selection.length} Vera first-party); Mike ${lock.commit}; system semantic ${digests.systemSemanticSha256}.`,
+        `Workflow sync check passed: ${activeWorkflows.length} active system workflows (including ${lock.firstParty.selection.length} Vera first-party) and ${manifestWorkflows.length} manifests; Mike ${lock.commit}; system semantic ${digests.systemSemanticSha256}.`,
       );
       return;
     }
 
     if (current === artifacts.backendText) {
       console.log(
-        `Workflow artifact already current: ${activeWorkflows.length} active Mike workflows and ${manifestWorkflows.length} manifests; zero byte drift.`,
+        `Workflow artifact already current: ${activeWorkflows.length} active system workflows and ${manifestWorkflows.length} manifests; zero byte drift.`,
       );
       return;
     }
     writeAtomically(BACKEND_OUT, artifacts.backendText);
     console.log(
-      `Generated ${activeWorkflows.length} active Mike workflows and ${manifestWorkflows.length} locked Skill manifests.`,
+      `Generated ${activeWorkflows.length} active system workflows and ${manifestWorkflows.length} locked Skill manifests.`,
     );
   } finally {
     acquired.cleanup();

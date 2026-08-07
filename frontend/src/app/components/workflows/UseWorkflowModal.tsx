@@ -14,6 +14,8 @@ import { ModalSelect } from "../modals/ModalSelect";
 import { ModalTextarea } from "../modals/ModalTextarea";
 import { WorkflowPickerContent } from "./WorkflowPickerContent";
 import { workflowDetailPath } from "./workflowRoutes";
+import { useSelectedModel } from "@/app/hooks/useSelectedModel";
+import { buildWorkflowChatStartMessage } from "@/app/lib/workflowChatStart";
 
 interface Props {
     workflows: Workflow[];
@@ -53,6 +55,7 @@ export function UseWorkflowModal({ workflows, workflow, onClose, skipSelect = fa
     const [saving, setSaving] = useState(false);
 
     const router = useRouter();
+    const [model] = useSelectedModel();
     const { saveChat, setNewChatMessages } = useChatHistoryContext();
     const { loading: dirLoading, projects } = useDirectoryData(
         screen === "details",
@@ -103,20 +106,13 @@ export function UseWorkflowModal({ workflows, workflow, onClose, skipSelect = fa
             const projectId = inProject ? selectedProjectId! : undefined;
             const chatId = await saveChat(projectId);
             if (!chatId) return;
-            const files = selectedDocuments.map((document) => ({
-                filename: document.filename,
-                document_id: document.id,
-            }));
-            const content = assistantPrompt.trim()
-                ? `implement workflow\n${assistantPrompt.trim()}`
-                : "implement workflow";
             setNewChatMessages([
-                {
-                    role: "user",
-                    content,
-                    files: files.length > 0 ? files : undefined,
-                    workflow: { id: wf.id, title: wf.metadata.title },
-                },
+                buildWorkflowChatStartMessage({
+                    workflow: wf,
+                    documents: selectedDocuments,
+                    assistantPrompt,
+                    model,
+                }),
             ]);
             handleClose();
             router.push(

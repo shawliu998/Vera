@@ -157,14 +157,14 @@ function parseGeneratedSkillManifests(source) {
   return JSON.parse(source.slice(start, end + 2));
 }
 
-test("lock pins 24 active Mike workflows plus twelve Vera-only manifests", () => {
+test("lock pins 24 Mike and twelve Vera workflows as active system workflows", () => {
   const lock = loadLock();
   assert.equal(lock.commit, PINNED_COMMIT);
   assert.equal(lock.selection.assistant.length, 13);
   assert.equal(lock.selection.tabular.length, 11);
   assert.equal(lock.firstParty.selection.length, 12);
-  assert.equal(lock.expected.activeWorkflowCount, 24);
-  assert.equal(lock.expected.activeAssistantCount, 13);
+  assert.equal(lock.expected.activeWorkflowCount, 36);
+  assert.equal(lock.expected.activeAssistantCount, 25);
   assert.equal(lock.expected.activeTabularCount, 11);
   assert.equal(lock.expected.workflowCount, 36);
   assert.equal(lock.expected.assistantCount, 25);
@@ -759,7 +759,7 @@ test("fixture digests fail closed for drift, symlinks, escapes, and lock coverag
   );
 });
 
-test("committed artifact retains the 24 active Mike workflows and all manifests", () => {
+test("committed artifact publishes all locked Mike and Vera workflows", () => {
   const lock = loadLock();
   const source = fs.readFileSync(GENERATED_PATH, "utf8");
   assert.match(
@@ -772,6 +772,9 @@ test("committed artifact retains the 24 active Mike workflows and all manifests"
   const activeExpectedIds = [
     ...lock.selection.assistant,
     ...lock.selection.tabular,
+    ...lock.firstParty.selection.map((slug) =>
+      lock.firstParty.workflows[slug].id.replace(/^builtin-/, ""),
+    ),
   ]
     .map((slug) => `builtin-${slug}`)
     .sort((a, b) => a.localeCompare(b));
@@ -792,7 +795,7 @@ test("committed artifact retains the 24 active Mike workflows and all manifests"
   assert.equal(
     workflows.filter((workflow) => workflow.metadata.type === "assistant")
       .length,
-    13,
+    25,
   );
   assert.equal(
     workflows.filter((workflow) => workflow.metadata.type === "tabular").length,
@@ -815,15 +818,12 @@ test("committed artifact retains the 24 active Mike workflows and all manifests"
   );
   assert.equal(
     workflows.filter((workflow) => firstPartyIds.has(workflow.id)).length,
-    0,
+    12,
   );
   const mikeManifests = manifests.filter((manifest) => !firstPartyIds.has(manifest.id));
   assert.equal(sha256(JSON.stringify(mikeManifests)), lock.expected.mikeSkillManifestSemanticSha256);
   assert.equal(sha256(JSON.stringify(manifests)), lock.expected.skillManifestSemanticSha256);
-  const allWorkflows = [
-    ...workflows,
-    ...loadFirstPartyWorkflows(REPOSITORY_ROOT, lock),
-  ];
+  const allWorkflows = workflows;
   for (const manifest of manifests) {
     const workflow = allWorkflows.find((item) => item.id === manifest.id);
     assert.ok(workflow);
