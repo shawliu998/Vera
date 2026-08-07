@@ -820,6 +820,13 @@ test("committed artifact publishes all locked Mike and Vera workflows", () => {
     workflows.filter((workflow) => firstPartyIds.has(workflow.id)).length,
     12,
   );
+  for (const workflow of workflows) {
+    if (firstPartyIds.has(workflow.id)) {
+      assert.equal(workflow.execution_mode, "work_task");
+    } else {
+      assert.equal(Object.hasOwn(workflow, "execution_mode"), false);
+    }
+  }
   const mikeManifests = manifests.filter((manifest) => !firstPartyIds.has(manifest.id));
   assert.equal(sha256(JSON.stringify(mikeManifests)), lock.expected.mikeSkillManifestSemanticSha256);
   assert.equal(sha256(JSON.stringify(manifests)), lock.expected.skillManifestSemanticSha256);

@@ -1336,9 +1336,9 @@
     "assistantCount": 25,
     "tabularCount": 11,
     "semanticSha256": "b9bfb16f3633c20c01991826a9aaf9904d64d985d0047c5e6c6d86d27d18366f",
-    "systemSemanticSha256": "107ad4f933cde7b4713a1598bb2fa5d9c06fd4e3c966d1397b96e9b80f54443d",
+    "systemSemanticSha256": "2839438740033ecc40591fe540f451e081fc1c16cd29cd7705649b42abd41eba",
     "mikeSkillManifestSemanticSha256": "48a5db161907efa194d962823e8af5dd5d11f06006aa4860606eb4fcbf285394",
     "skillManifestSemanticSha256": "3e057b19c294b2fb2c3c95f83f9035ac1ce507d43e57c80702a2f4d241991067",
-    "generatedFileSha256": "301b045e220fb0b66d697483e4bcf8c8141c6633bcfddff8ef10e4e835b18492"
+    "generatedFileSha256": "67e73ddfd05edf6e071d0abd8c5a9170c44fd4da1c53c4766a9848d1748876c3"
   }
 }

@@ -15,7 +15,11 @@ import { ModalTextarea } from "../modals/ModalTextarea";
 import { WorkflowPickerContent } from "./WorkflowPickerContent";
 import { workflowDetailPath } from "./workflowRoutes";
 import { useSelectedModel } from "@/app/hooks/useSelectedModel";
-import { buildWorkflowChatStartMessage } from "@/app/lib/workflowChatStart";
+import {
+    buildWorkflowChatStartMessage,
+    buildWorkflowTaskGoal,
+} from "@/app/lib/workflowChatStart";
+import { createAgentTask } from "@/app/lib/agentClient";
 
 interface Props {
     workflows: Workflow[];
@@ -96,6 +100,8 @@ export function UseWorkflowModal({ workflows, workflow, onClose, skipSelect = fa
 
     if (!workflow) return null;
     const wf = selected ?? workflow;
+    const usesWorkTask = wf.execution_mode === "work_task";
+    const usesMatter = usesWorkTask || inProject;
 
     // ---------------------------------------------------------------------------
     // Handlers
@@ -103,7 +109,7 @@ export function UseWorkflowModal({ workflows, workflow, onClose, skipSelect = fa
     async function handleStartChat() {
         setSaving(true);
         try {
-            const projectId = inProject ? selectedProjectId! : undefined;
+            const projectId = usesMatter ? selectedProjectId! : undefined;
             const chatId = await saveChat(projectId);
             if (!chatId) return;
             setNewChatMessages([
@@ -125,9 +131,30 @@ export function UseWorkflowModal({ workflows, workflow, onClose, skipSelect = fa
         }
     }
 
+    async function handleStartWorkTask() {
+        if (!selectedProjectId) return;
+        setSaving(true);
+        try {
+            const snapshot = await createAgentTask({
+                goal: buildWorkflowTaskGoal({
+                    workflowTitle: wf.metadata.title,
+                    assistantPrompt,
+                }),
+                matterId: selectedProjectId,
+                model,
+                documentIds: selectedDocuments.map((document) => document.id),
+                workflowId: wf.id,
+            });
+            handleClose();
+            router.push(`/agent-tasks/${snapshot.task.id}`);
+        } finally {
+            setSaving(false);
+        }
+    }
+
     async function handleCreateReview() {
         const docIds = selectedDocuments.map((document) => document.id);
-        const projectId = inProject ? selectedProjectId! : undefined;
+        const projectId = usesMatter ? selectedProjectId! : undefined;
 
         setSaving(true);
         try {
@@ -157,9 +184,11 @@ export function UseWorkflowModal({ workflows, workflow, onClose, skipSelect = fa
             project.name +
             (project.cm_number ? ` (#${project.cm_number})` : ""),
     }));
-    const location = inProject ? "project" : "workspace";
+    const location = usesMatter ? "project" : "workspace";
     const locationOptions =
-        wf.metadata.type === "assistant"
+        usesWorkTask
+            ? [{ value: "project" as const, label: "Matter work task" }]
+            : wf.metadata.type === "assistant"
             ? [
                   { value: "workspace" as const, label: "Assistant" },
                   { value: "project" as const, label: "Project assistant" },
@@ -185,7 +214,11 @@ export function UseWorkflowModal({ workflows, workflow, onClose, skipSelect = fa
                       Workflows
                   </button>,
                   wf.metadata.title,
-                  wf.metadata.type === "assistant" ? "New Chat" : "New Review",
+                  usesWorkTask
+                      ? "New Work Task"
+                      : wf.metadata.type === "assistant"
+                        ? "New Chat"
+                        : "New Review",
                   screen === "details" ? "Details" : "Attach Documents",
               ];
 
@@ -232,14 +265,20 @@ export function UseWorkflowModal({ workflows, workflow, onClose, skipSelect = fa
                             label: "Next",
                             onClick: () => setScreen("documents"),
                             disabled:
-                                saving || (inProject && !selectedProjectId),
+                                saving || (usesMatter && !selectedProjectId),
                         }
                     : wf.metadata.type === "assistant"
                       ? {
-                            label: saving ? "Starting…" : "Start Chat",
-                            onClick: handleStartChat,
+                            label: saving
+                                ? "Starting…"
+                                : usesWorkTask
+                                  ? "Start Work Task"
+                                  : "Start Chat",
+                            onClick: usesWorkTask
+                                ? handleStartWorkTask
+                                : handleStartChat,
                             disabled:
-                                saving || (inProject && !selectedProjectId),
+                                saving || (usesMatter && !selectedProjectId),
                         }
                       : {
                             label: saving ? "Creating…" : "Create Review",
@@ -247,7 +286,7 @@ export function UseWorkflowModal({ workflows, workflow, onClose, skipSelect = fa
                             disabled:
                                 saving ||
                                 selectedDocuments.length === 0 ||
-                                (inProject && !selectedProjectId),
+                                (usesMatter && !selectedProjectId),
                         }
             }
             cancelAction={false}
@@ -288,7 +327,7 @@ export function UseWorkflowModal({ workflows, workflow, onClose, skipSelect = fa
                             />
                         </div>
 
-                        {inProject && (
+                        {usesMatter && (
                             <div>
                                 <ModalFieldLabel htmlFor="workflow-project">
                                     Project
@@ -338,10 +377,10 @@ export function UseWorkflowModal({ workflows, workflow, onClose, skipSelect = fa
                 <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                     <div className="flex min-h-0 flex-1 flex-col">
                         <FileDirectory
-                            documents={inProject ? projectDocs : undefined}
+                            documents={usesMatter ? projectDocs : undefined}
                             selectedDocuments={selectedDocuments}
                             onChange={setSelectedDocuments}
-                            showTabs={!inProject}
+                            showTabs={!usesMatter}
                         />
                     </div>
                 </div>

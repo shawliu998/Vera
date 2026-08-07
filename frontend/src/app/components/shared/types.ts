@@ -619,6 +619,7 @@ export interface Workflow {
   };
   skill_md: string | null;
   columns_config: ColumnConfig[] | null;
+  execution_mode?: "work_task";
   is_system: boolean;
   created_at: string;
   shared_by_name?: string | null;

@@ -41,7 +41,10 @@ import {
   type AgentStepPostcondition,
 } from "./agent-kernel/contracts/stepContract";
 import { assertAgentStepCapabilityGrants } from "./agent-kernel/capability/stepCapability";
-import { isAgentStepEffectTransitionError } from "./agent-kernel/effects/stepEffect";
+import {
+  isAgentStepEffectTransitionError,
+  readAgentStepEffectReceipts,
+} from "./agent-kernel/effects/stepEffect";
 import {
   AgentTaskLeaseBusyError,
   type AgentTaskLeaseGuard,
@@ -210,6 +213,121 @@ async function buildCurrentStepReceipt(
   });
 }
 
+export function recoverCommittedStepEffectArtifact(
+  snapshot: Snapshot,
+  options?: { includePriorAttempt?: boolean },
+) {
+  const stepIndex = snapshot.task.current_plan.findIndex(
+    (step: { status: string }) => step.status === "running",
+  );
+  const step = snapshot.task.current_plan[stepIndex];
+  if (!step) return null;
+
+  const contractRead = readAgentStepContracts(snapshot.task);
+  if (contractRead.state !== "valid") return null;
+  const contract = contractRead.contracts[stepIndex];
+  if (!contract || contract.output_expectation.kind !== "artifact") return null;
+  const expectation = contract.output_expectation;
+
+  let receipts;
+  try {
+    receipts = readAgentStepEffectReceipts(step.result_data);
+  } catch {
+    return null;
+  }
+  const candidates = receipts.filter(
+    (receipt) =>
+      receipt.status === "committed" &&
+      receipt.step_id === step.id &&
+      (options?.includePriorAttempt
+        ? receipt.attempt <= step.attempt
+        : receipt.attempt === step.attempt) &&
+      receipt.effect?.artifact_type === expectation.artifact_type,
+  );
+  const recoveredAttempt = candidates.reduce(
+    (latest, receipt) => Math.max(latest, receipt.attempt),
+    0,
+  );
+  const committed = candidates.filter(
+    (receipt) => receipt.attempt === recoveredAttempt,
+  );
+  if (committed.length !== 1 || !committed[0].effect) return null;
+
+  const deliverable = requiredTaskDeliverables(snapshot.task).find(
+    (candidate) => candidate.key === expectation.deliverable_key,
+  );
+  if (!deliverable) return null;
+
+  return {
+    summary:
+      "The declared Artifact was created and preserved. A later duplicate mutation request in the same Step was rejected by the idempotency fence; the preserved current Version will continue to deterministic verification and lawyer review.",
+    artifacts: [
+      {
+        artifact_type: committed[0].effect.artifact_type,
+        artifact_id: committed[0].effect.document_id,
+        purpose: taskDeliverablePurpose(deliverable),
+      },
+    ],
+    waitingForInput: false,
+    citationCheck: { total: 0, relocatable: 0, missing: 0 },
+    committedVersionId: committed[0].effect.version_id,
+    receiptAttempt: committed[0].attempt,
+  };
+}
+
+async function committedStepEffectIsCurrent(
+  db: Db,
+  snapshot: Snapshot,
+  recovered: NonNullable<ReturnType<typeof recoverCommittedStepEffectArtifact>>,
+) {
+  const artifact = recovered.artifacts[0];
+  const { data, error } = await db
+    .from("documents")
+    .select("id,project_id,status,current_version_id")
+    .eq("id", artifact.artifact_id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return Boolean(
+    data &&
+    data.project_id === snapshot.task.matter_id &&
+    data.status === "ready" &&
+    data.current_version_id === recovered.committedVersionId,
+  );
+}
+
+export function checkpointAllowsPriorEffectRecovery(checkpoint: unknown) {
+  if (
+    !checkpoint ||
+    typeof checkpoint !== "object" ||
+    Array.isArray(checkpoint)
+  ) {
+    return false;
+  }
+  const row = checkpoint as Record<string, unknown>;
+  if (Object.hasOwn(row, "state_transition_pause")) {
+    const pause = row.state_transition_pause;
+    if (!pause || typeof pause !== "object" || Array.isArray(pause)) {
+      return false;
+    }
+    const issue = (pause as Record<string, unknown>).issue;
+    return Boolean(
+      issue &&
+      typeof issue === "object" &&
+      !Array.isArray(issue) &&
+      (issue as Record<string, unknown>).kind === "agent_execution_issue_v1" &&
+      (issue as Record<string, unknown>).code ===
+        "task_state_transition_conflict" &&
+      (issue as Record<string, unknown>).recoverable === true,
+    );
+  }
+  return (
+    row.summary ===
+      "The Step effect could not be published from the current Task state" ||
+    row.summary ===
+      "The server could not safely commit this Step transition. Existing work was preserved; resume after checking the execution service."
+  );
+}
+
 async function completeVerifierForLawyerReview(input: {
   db: Db;
   taskId: string;
@@ -284,12 +402,26 @@ export function agentTaskExecutionErrorMessage(error: unknown) {
   return message;
 }
 
-async function taskCanContinue(db: Db, taskId: string, userId: string) {
+export function agentTaskStatusAllowsExecution(
+  status: string,
+  phase: "start" | "continue",
+) {
+  return phase === "start"
+    ? status === "queued"
+    : ["running", "verifying"].includes(status);
+}
+
+async function taskCanContinue(
+  db: Db,
+  taskId: string,
+  userId: string,
+  phase: "start" | "continue" = "continue",
+) {
   const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
   return {
     snapshot,
     active: Boolean(
-      snapshot && ["running", "verifying"].includes(snapshot.task.status),
+      snapshot && agentTaskStatusAllowsExecution(snapshot.task.status, phase),
     ),
   };
 }
@@ -303,14 +435,16 @@ export async function advanceAgentTaskExecution(input: {
   leaseGuard?: AgentTaskLeaseGuard;
 }): Promise<Snapshot | null> {
   const { db, taskId, userId, userEmail } = input;
-  const executionCanContinue = async () => {
+  const executionCanContinue = async (
+    phase: "start" | "continue" = "continue",
+  ) => {
     if (input.leaseGuard && !(await input.leaseGuard.verifyOwner())) {
       return {
         snapshot: await getAgentTaskSnapshot(db, taskId, userId),
         active: false,
       };
     }
-    return taskCanContinue(db, taskId, userId);
+    return taskCanContinue(db, taskId, userId, phase);
   };
   const shouldContinue = async () => (await executionCanContinue()).active;
   const current = await getAgentTaskSnapshot(db, taskId, userId);
@@ -418,7 +552,7 @@ export async function advanceAgentTaskExecution(input: {
       );
       if (!updated) return null;
     }
-    const beforeStart = await executionCanContinue();
+    const beforeStart = await executionCanContinue("start");
     if (!beforeStart.active) return beforeStart.snapshot;
     return commitAgentTaskAdvance({
       db,
@@ -429,6 +563,33 @@ export async function advanceAgentTaskExecution(input: {
   }
   if (!["running", "verifying"].includes(current.task.status)) {
     return current;
+  }
+
+  const priorCommittedEffect = recoverCommittedStepEffectArtifact(current, {
+    includePriorAttempt: true,
+  });
+  const runningStep = current.task.current_plan.find(
+    (step: { status: string }) => step.status === "running",
+  );
+  if (
+    priorCommittedEffect &&
+    runningStep &&
+    priorCommittedEffect.receiptAttempt < runningStep.attempt &&
+    checkpointAllowsPriorEffectRecovery(current.task.latest_checkpoint) &&
+    (await committedStepEffectIsCurrent(db, current, priorCommittedEffect))
+  ) {
+    const stepReceipt = await buildCurrentStepReceipt(
+      db,
+      current,
+      priorCommittedEffect,
+    );
+    return commitAgentTaskAdvance({
+      db,
+      taskId,
+      userId,
+      leaseGuard: input.leaseGuard,
+      result: { ...priorCommittedEffect, stepReceipt },
+    });
   }
 
   let execution;
@@ -448,6 +609,28 @@ export async function advanceAgentTaskExecution(input: {
     if (isAgentStepEffectTransitionError(error)) {
       if (error.outcome === "lease_lost") {
         return getAgentTaskSnapshot(db, taskId, userId);
+      }
+      const recoveredSnapshot = await getAgentTaskSnapshot(db, taskId, userId);
+      const recovered = recoveredSnapshot
+        ? recoverCommittedStepEffectArtifact(recoveredSnapshot)
+        : null;
+      if (
+        recoveredSnapshot &&
+        recovered &&
+        (await committedStepEffectIsCurrent(db, recoveredSnapshot, recovered))
+      ) {
+        const stepReceipt = await buildCurrentStepReceipt(
+          db,
+          recoveredSnapshot,
+          recovered,
+        );
+        return commitAgentTaskAdvance({
+          db,
+          taskId,
+          userId,
+          leaseGuard: input.leaseGuard,
+          result: { ...recovered, stepReceipt },
+        });
       }
       return pauseAgentTaskForStateTransition(
         db,

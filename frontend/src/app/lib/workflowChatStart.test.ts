@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Document, Workflow } from "../components/shared/types";
-import { buildWorkflowChatStartMessage } from "./workflowChatStart";
+import {
+    buildWorkflowChatStartMessage,
+    buildWorkflowTaskGoal,
+} from "./workflowChatStart";
 
 const workflow = {
     id: "builtin-patentability-assessment",
@@ -42,4 +45,14 @@ test("workflow auto-start preserves the selected model on the submitted message"
         { filename: "target-claim.docx", document_id: "source-1" },
         { filename: "prior-art.docx", document_id: "source-2" },
     ]);
+});
+
+test("workflow work-task launch creates a stable lawyer-visible goal", () => {
+    assert.equal(
+        buildWorkflowTaskGoal({
+            workflowTitle: workflow.metadata.title,
+            assistantPrompt: "  Use the fixed synthetic fixture only.  ",
+        }),
+        "Run Patentability Assessment.\n\nAdditional instructions: Use the fixed synthetic fixture only.",
+    );
 });

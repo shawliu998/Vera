@@ -25,3 +25,14 @@ export function buildWorkflowChatStartMessage(args: {
         model: args.model,
     };
 }
+
+export function buildWorkflowTaskGoal(args: {
+    workflowTitle: string;
+    assistantPrompt: string;
+}) {
+    const additionalPrompt = args.assistantPrompt.trim();
+    const workflowGoal = `Run ${args.workflowTitle}.`;
+    return additionalPrompt
+        ? `${workflowGoal}\n\nAdditional instructions: ${additionalPrompt}`
+        : workflowGoal;
+}
