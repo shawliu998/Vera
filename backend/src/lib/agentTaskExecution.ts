@@ -5,6 +5,7 @@ import {
   getAgentTaskSnapshot,
   linkAgentTaskArtifacts,
   pauseAgentTaskForContext,
+  pauseAgentTaskForStateTransition,
   pauseAgentTaskForStepPostcondition,
   recordAgentTaskCheckpoint,
   stopAgentTask,
@@ -45,6 +46,7 @@ import {
   type AgentTaskLeaseGuard,
   withAgentTaskLease,
 } from "./agent-kernel/execution/taskLease";
+import { isAgentTaskStateTransitionError } from "./agent-kernel/execution/taskTransition";
 import { AgentVerifierStructuredOutputError } from "./agent-kernel/verification/verifierCore";
 
 type Db = ReturnType<typeof createServerSupabase>;
@@ -211,6 +213,7 @@ async function completeVerifierForLawyerReview(input: {
   snapshot: Snapshot;
   execution: Awaited<ReturnType<typeof executeAgentStep>>;
   summary: string;
+  leaseGuard: AgentTaskLeaseGuard;
 }) {
   const result = { ...input.execution, summary: input.summary };
   const stepReceipt = await buildCurrentStepReceipt(
@@ -218,10 +221,41 @@ async function completeVerifierForLawyerReview(input: {
     input.snapshot,
     result,
   );
-  return advanceAgentTask(input.db, input.taskId, input.userId, {
-    ...result,
-    stepReceipt,
+  return commitAgentTaskAdvance({
+    db: input.db,
+    taskId: input.taskId,
+    userId: input.userId,
+    leaseGuard: input.leaseGuard,
+    result: { ...result, stepReceipt },
   });
+}
+
+async function commitAgentTaskAdvance(input: {
+  db: Db;
+  taskId: string;
+  userId: string;
+  leaseGuard: AgentTaskLeaseGuard;
+  result?: Parameters<typeof advanceAgentTask>[3];
+}) {
+  try {
+    return await advanceAgentTask(
+      input.db,
+      input.taskId,
+      input.userId,
+      input.result,
+      { leaseOwner: input.leaseGuard.ownerToken },
+    );
+  } catch (error) {
+    if (isAgentTaskStateTransitionError(error)) {
+      return pauseAgentTaskForStateTransition(
+        input.db,
+        input.taskId,
+        input.userId,
+        error,
+      );
+    }
+    throw error;
+  }
 }
 
 export function agentTaskExecutionErrorMessage(error: unknown) {
@@ -381,7 +415,12 @@ export async function advanceAgentTaskExecution(input: {
     }
     const beforeStart = await executionCanContinue();
     if (!beforeStart.active) return beforeStart.snapshot;
-    return advanceAgentTask(db, taskId, userId);
+    return commitAgentTaskAdvance({
+      db,
+      taskId,
+      userId,
+      leaseGuard: input.leaseGuard,
+    });
   }
   if (!["running", "verifying"].includes(current.task.status)) {
     return current;
@@ -437,6 +476,7 @@ export async function advanceAgentTaskExecution(input: {
       snapshot: current,
       execution,
       summary: execution.summary,
+      leaseGuard: input.leaseGuard,
     });
   }
 
@@ -495,6 +535,7 @@ export async function advanceAgentTaskExecution(input: {
           snapshot: current,
           execution,
           summary: `Automated verification still requires lawyer review after one bounded repair: ${reasons}. Existing deliverables were preserved.`,
+          leaseGuard: input.leaseGuard,
         });
       }
 
@@ -530,6 +571,7 @@ export async function advanceAgentTaskExecution(input: {
           execution,
           summary:
             "Verification preserved the existing deliverables but could not prove one unique document target for automatic repair. Lawyer review is required.",
+          leaseGuard: input.leaseGuard,
         });
       }
       let repair;
@@ -625,6 +667,7 @@ export async function advanceAgentTaskExecution(input: {
             ],
           },
           summary: `Automated verification still requires lawyer review after one bounded repair: ${missing}. Existing deliverables were preserved.`,
+          leaseGuard: input.leaseGuard,
         });
       }
       execution = {
@@ -645,6 +688,7 @@ export async function advanceAgentTaskExecution(input: {
         execution,
         summary:
           "Deterministic citation relocation could not be completed. Existing deliverables were preserved for lawyer review.",
+        leaseGuard: input.leaseGuard,
       });
     }
   }
@@ -653,9 +697,12 @@ export async function advanceAgentTaskExecution(input: {
   if (!beforeCommit.active) return beforeCommit.snapshot;
   try {
     const stepReceipt = await buildCurrentStepReceipt(db, current, execution);
-    return advanceAgentTask(db, taskId, userId, {
-      ...execution,
-      stepReceipt,
+    return commitAgentTaskAdvance({
+      db,
+      taskId,
+      userId,
+      leaseGuard: input.leaseGuard,
+      result: { ...execution, stepReceipt },
     });
   } catch (error) {
     if (error instanceof AgentStepPostconditionError) {

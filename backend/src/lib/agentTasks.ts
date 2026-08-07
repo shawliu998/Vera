@@ -35,6 +35,12 @@ import {
   readAgentStepReceipts,
   type AgentStepReceiptV1,
 } from "./agent-kernel/contracts/stepContract";
+import {
+  AgentTaskStateTransitionError,
+  agentTaskStateTransitionWasApplied,
+  commitAgentTaskStateTransition,
+  type AgentTaskStateTransitionInput,
+} from "./agent-kernel/execution/taskTransition";
 
 export type {
   AgentTaskExecutionPauseClassification,
@@ -732,12 +738,18 @@ export async function advanceAgentTask(
   db: Db,
   taskId: string,
   userId: string,
-  result?: {
-    summary?: string;
-    artifacts?: AgentArtifactLinkInput[];
-    stepReceipt?: AgentStepReceiptV1;
-  },
+  result:
+    | {
+        summary?: string;
+        artifacts?: AgentArtifactLinkInput[];
+        stepReceipt?: AgentStepReceiptV1;
+      }
+    | undefined,
+  options: { leaseOwner: string },
 ) {
+  if (!options.leaseOwner) {
+    throw new Error("Agent Task state transitions require an execution lease");
+  }
   const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
   if (!snapshot) return null;
   const task = snapshot.task as {
@@ -757,59 +769,42 @@ export async function advanceAgentTask(
   }>;
   let currentIndex = steps.findIndex((step) => step.status === "running");
   const updatedAt = now();
-
-  if (task.status === "queued") {
+  const isStart = task.status === "queued";
+  if (isStart) {
     currentIndex = steps.findIndex((step) => step.status === "pending");
-    if (currentIndex < 0) throw new Error("Task has no executable steps");
-    const current = steps[currentIndex];
-    const { error } = await db
-      .from("agent_steps")
-      .update({
-        status: "running",
-        attempt: current.attempt + 1,
-        updated_at: updatedAt,
-      })
-      .eq("id", current.id)
-      .eq("task_id", taskId);
-    if (error) throw dbError(error, "Failed to start task step");
+    if (currentIndex < 0) {
+      throw new AgentTaskStateTransitionError(
+        "task_state_transition_conflict",
+        "Queued Task has no executable Step.",
+        { task_id: taskId, task_status: task.status },
+      );
+    }
   } else {
-    if (currentIndex < 0) throw new Error("Running task has no current step");
-    const current = steps[currentIndex];
-    const summary = result?.summary?.trim() || "Step completed.";
-    const { error } = await db
-      .from("agent_steps")
-      .update({
-        status: "completed",
-        result_summary: summary,
-        updated_at: updatedAt,
-      })
-      .eq("id", current.id)
-      .eq("task_id", taskId);
-    if (error) throw dbError(error, "Failed to complete task step");
+    if (currentIndex < 0) {
+      throw new AgentTaskStateTransitionError(
+        "task_state_transition_conflict",
+        "Active Task has no running Step.",
+        {
+          task_id: taskId,
+          task_status: task.status,
+          current_step: task.current_step,
+        },
+      );
+    }
     if (result?.artifacts?.length) {
       await linkAgentTaskArtifacts(db, taskId, userId, result.artifacts);
     }
-    currentIndex += 1;
-    if (currentIndex < steps.length) {
-      const next = steps[currentIndex];
-      const { error: nextError } = await db
-        .from("agent_steps")
-        .update({
-          status: "running",
-          attempt: next.attempt + 1,
-          updated_at: updatedAt,
-        })
-        .eq("id", next.id)
-        .eq("task_id", taskId);
-      if (nextError) throw dbError(nextError, "Failed to start next task step");
-    }
   }
 
-  const isComplete = currentIndex >= steps.length;
-  const isVerifying = !isComplete && currentIndex === steps.length - 1;
-  const activeStep = isComplete ? null : steps[currentIndex];
-  const completedStep =
-    task.status === "queued" ? null : steps[currentIndex - 1];
+  const current = steps[currentIndex];
+  const nextPendingIndex = isStart
+    ? currentIndex
+    : steps.findIndex(
+        (step, position) =>
+          position > currentIndex && step.status === "pending",
+      );
+  const isComplete = !isStart && nextPendingIndex < 0;
+  const completedStep = isStart ? null : current;
   const priorReceipts = readAgentStepReceipts(snapshot.task.latest_checkpoint);
   const nextReceipts = result?.stepReceipt
     ? [
@@ -823,39 +818,125 @@ export async function advanceAgentTask(
         result.stepReceipt,
       ].slice(-60)
     : priorReceipts;
-  const { error: taskUpdateError } = await db
+  const summary = isStart ? null : result?.summary?.trim() || "Step completed.";
+  const transition: AgentTaskStateTransitionInput = {
+    taskId,
+    userId,
+    leaseOwner: options.leaseOwner,
+    expectedTaskStatus: task.status as "queued" | "running" | "verifying",
+    stepId: current.id,
+    expectedStepAttempt: current.attempt,
+    resultSummary: summary,
+    latestCheckpoint: completedStep
+      ? mergeImmutableAgentTaskCheckpoint(snapshot.task.latest_checkpoint, {
+          step_id: completedStep.id,
+          iteration: completedStep.attempt,
+          summary: summary ?? "Step completed.",
+          created_at: updatedAt,
+          ...(result?.stepReceipt ? { step_receipts: nextReceipts } : {}),
+        })
+      : snapshot.task.latest_checkpoint,
+    reviewNote: isComplete
+      ? result?.stepReceipt?.outcome === "review_required"
+        ? "Automated verification preserved the current deliverables and identified a gap requiring lawyer review before final export."
+        : "Execution and automated verification completed. Lawyer review is required before final export."
+      : null,
+  };
+  try {
+    const committed = await commitAgentTaskStateTransition(db, transition);
+    if (committed.outcome === "advanced") {
+      return getAgentTaskSnapshot(db, taskId, userId);
+    }
+    const recovered = await getAgentTaskSnapshot(db, taskId, userId);
+    if (agentTaskStateTransitionWasApplied(recovered, transition)) {
+      return recovered;
+    }
+    if (committed.outcome === "lease_lost") {
+      return recovered;
+    }
+    if (
+      !recovered ||
+      !["queued", "running", "verifying"].includes(recovered.task.status)
+    ) {
+      return recovered;
+    }
+    throw new AgentTaskStateTransitionError(
+      "task_state_transition_conflict",
+      "The Agent Task state changed before this Step could be committed.",
+      {
+        task_id: taskId,
+        step_id: current.id,
+        expected_task_status: task.status,
+        expected_step_attempt: current.attempt,
+        transition_outcome: committed.outcome,
+      },
+    );
+  } catch (error) {
+    if (!(error instanceof AgentTaskStateTransitionError)) throw error;
+    const recovered = await getAgentTaskSnapshot(db, taskId, userId);
+    if (agentTaskStateTransitionWasApplied(recovered, transition)) {
+      return recovered;
+    }
+    throw error;
+  }
+}
+
+export async function pauseAgentTaskForStateTransition(
+  db: Db,
+  taskId: string,
+  userId: string,
+  error: AgentTaskStateTransitionError,
+) {
+  const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
+  if (!snapshot) return null;
+  if (!["queued", "running", "verifying"].includes(snapshot.task.status)) {
+    return snapshot;
+  }
+  const current = snapshot.task.current_plan.find(
+    (step: { status: AgentStepStatus }) => step.status === "running",
+  );
+  const updatedAt = now();
+  const previous =
+    snapshot.task.latest_checkpoint &&
+    typeof snapshot.task.latest_checkpoint === "object" &&
+    !Array.isArray(snapshot.task.latest_checkpoint)
+      ? (snapshot.task.latest_checkpoint as Record<string, unknown>)
+      : {};
+  let update = db
     .from("agent_tasks")
     .update({
-      status: isComplete ? "completed" : isVerifying ? "verifying" : "running",
-      current_step: activeStep?.id ?? null,
-      latest_checkpoint: completedStep
-        ? mergeImmutableAgentTaskCheckpoint(snapshot.task.latest_checkpoint, {
-            step_id: completedStep.id,
-            iteration: completedStep.attempt,
-            summary: result?.summary?.trim() || "Step completed.",
-            created_at: updatedAt,
-            ...(result?.stepReceipt ? { step_receipts: nextReceipts } : {}),
-          })
-        : snapshot.task.latest_checkpoint,
+      status: "paused",
+      latest_checkpoint: {
+        ...previous,
+        step_id: current?.id ?? snapshot.task.current_step ?? "planner",
+        iteration: current?.attempt ?? 0,
+        summary:
+          "The server could not safely commit this Step transition. Existing work was preserved; resume after checking the execution service.",
+        created_at: updatedAt,
+        state_transition_pause: {
+          kind: "agent_task_state_transition_pause_v1",
+          created_at: updatedAt,
+          issue: {
+            kind: "agent_execution_issue_v1",
+            code: error.code,
+            category: "execution",
+            recoverable: true,
+            retry_scope: "current_step",
+            facts: error.facts,
+          },
+        },
+      },
       updated_at: updatedAt,
     })
     .eq("id", taskId)
-    .eq("user_id", userId);
-  if (taskUpdateError)
-    throw dbError(taskUpdateError, "Failed to update task state");
-  if (isComplete) {
-    const { error: reviewError } = await db
-      .from("agent_task_review_decisions")
-      .insert({
-        task_id: taskId,
-        status: "review_required",
-        note:
-          result?.stepReceipt?.outcome === "review_required"
-            ? "Automated verification preserved the current deliverables and identified a gap requiring lawyer review before final export."
-            : "Execution and automated verification completed. Lawyer review is required before final export.",
-        artifact_snapshot: [],
-      });
-    if (reviewError) throw dbError(reviewError, "Failed to open lawyer review");
+    .eq("user_id", userId)
+    .eq("status", snapshot.task.status);
+  update = snapshot.task.current_step
+    ? update.eq("current_step", snapshot.task.current_step)
+    : update.is("current_step", null);
+  const { error: pauseError } = await update;
+  if (pauseError) {
+    throw dbError(pauseError, "Failed to pause task after a state conflict");
   }
   return getAgentTaskSnapshot(db, taskId, userId);
 }
@@ -1396,9 +1477,15 @@ export async function resumeAgentTask(db: Db, taskId: string, userId: string) {
         : "running";
   const { error } = await db
     .from("agent_tasks")
-    .update({ status, updated_at: now() })
+    .update({
+      status,
+      current_step:
+        activeIndex < 0 ? null : snapshot.task.current_plan[activeIndex].id,
+      updated_at: now(),
+    })
     .eq("id", taskId)
-    .eq("user_id", userId);
+    .eq("user_id", userId)
+    .eq("status", "paused");
   if (error) throw dbError(error, "Failed to resume task");
   return getAgentTaskSnapshot(db, taskId, userId);
 }
