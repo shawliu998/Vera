@@ -32,6 +32,7 @@ import {
 } from "./agent-kernel/execution/taskLease";
 
 const ACTIVE_STATUSES = ["queued", "running", "verifying"] as const;
+export const DEFAULT_AGENT_TASK_RECOVERY_SWEEP_MS = 15_000;
 
 export {
   calculateAgentTaskBackoffMs,
@@ -97,9 +98,14 @@ export class AgentTaskRunner {
   }
 
   async recover() {
+    await this.sweep();
+    await this.waitForIdle();
+  }
+
+  async sweep() {
     const jobs = await this.dependencies.recoverJobs();
     for (const job of jobs) this.wake(job);
-    await this.waitForIdle();
+    return jobs.length;
   }
 
   async waitForIdle() {
@@ -174,14 +180,15 @@ export class AgentTaskRunner {
         retryAttempt = 0;
       } catch (error) {
         if (isAgentTaskLeaseBusyError(error)) {
-          this.queued.set(job.taskId, job);
+          // Another process owns the durable execution lease. Do not spin in
+          // memory: the periodic recovery sweep will retry this active Task.
           return;
         }
         const transient = classifyAgentTaskError(error, now());
         if (!transient) {
           const protocol = classifyAgentTaskProviderProtocolError(error);
           if (protocol) {
-            const summary = providerPauseSummary("provider_protocol", 0);
+            const summary = providerPauseSummary(protocol.classification, 0);
             if (this.dependencies.deferTask) {
               await this.dependencies.deferTask(
                 job,
@@ -303,4 +310,48 @@ export function cancelAgentTaskRunner(taskId: string) {
 
 export async function recoverAgentTaskRunner() {
   await agentTaskRunner.recover();
+}
+
+let recoverySweepTimer: ReturnType<typeof setInterval> | null = null;
+let recoverySweepPromise: Promise<void> | null = null;
+
+export function startAgentTaskRecoveryLoop(options?: {
+  intervalMs?: number;
+  onError?: (error: unknown) => void;
+}) {
+  if (recoverySweepTimer) return false;
+  const intervalMs = Math.max(
+    1_000,
+    Math.min(
+      options?.intervalMs ?? DEFAULT_AGENT_TASK_RECOVERY_SWEEP_MS,
+      60_000,
+    ),
+  );
+  const sweep = () => {
+    if (recoverySweepPromise) return;
+    recoverySweepPromise = agentTaskRunner
+      .sweep()
+      .then(() => {})
+      .catch((error) => options?.onError?.(error))
+      .finally(() => {
+        recoverySweepPromise = null;
+      });
+  };
+  sweep();
+  recoverySweepTimer = setInterval(sweep, intervalMs);
+  if (
+    recoverySweepTimer &&
+    typeof recoverySweepTimer === "object" &&
+    "unref" in recoverySweepTimer
+  ) {
+    recoverySweepTimer.unref();
+  }
+  return true;
+}
+
+export function stopAgentTaskRecoveryLoop() {
+  if (!recoverySweepTimer) return false;
+  clearInterval(recoverySweepTimer);
+  recoverySweepTimer = null;
+  return true;
 }

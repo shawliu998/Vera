@@ -9,6 +9,7 @@ export type ApiKeyProvider =
     | "openai"
     | "deepseek"
     | "kimi"
+    | "zhipu"
     | "openrouter"
     | "courtlistener";
 export type ApiKeySource = "user" | "env" | null;
@@ -29,6 +30,7 @@ const PROVIDERS: ApiKeyProvider[] = [
     "openai",
     "deepseek",
     "kimi",
+    "zhipu",
     "openrouter",
     "courtlistener",
 ];
@@ -49,6 +51,12 @@ function envApiKey(provider: ApiKeyProvider): string | null {
             return process.env.DEEPSEEK_API_KEY?.trim() || null;
         case "kimi":
             return process.env.MOONSHOT_API_KEY?.trim() || null;
+        case "zhipu":
+            return (
+                process.env.ZHIPU_API_KEY?.trim() ||
+                process.env.BIGMODEL_API_KEY?.trim() ||
+                null
+            );
         case "openrouter":
             return process.env.OPENROUTER_API_KEY?.trim() || null;
         case "courtlistener":
@@ -124,6 +132,7 @@ export async function getUserApiKeyStatus(
         openai: false,
         deepseek: false,
         kimi: false,
+        zhipu: false,
         openrouter: false,
         courtlistener: false,
         sources: {
@@ -132,6 +141,7 @@ export async function getUserApiKeyStatus(
             openai: null,
             deepseek: null,
             kimi: null,
+            zhipu: null,
             openrouter: null,
             courtlistener: null,
         },
@@ -171,6 +181,7 @@ export async function getUserApiKeys(
         openai: envApiKey("openai"),
         deepseek: envApiKey("deepseek"),
         kimi: envApiKey("kimi"),
+        zhipu: envApiKey("zhipu"),
         openrouter: envApiKey("openrouter"),
         courtlistener: envApiKey("courtlistener"),
     };

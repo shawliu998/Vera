@@ -9,6 +9,7 @@
     "audit:agent-task-state": "tsx scripts/auditAgentTaskState.ts",
     "test:deepseek": "tsx scripts/deepseekAdapterSmoke.ts",
     "test:kimi": "tsx scripts/kimiAdapterSmoke.ts",
+    "test:zhipu": "tsx scripts/zhipuAdapterSmoke.ts",
     "test:agent-task-model": "tsx scripts/agentTaskModelSmoke.ts",
     "test:agent-task-planner": "tsx scripts/agentTaskPlannerSmoke.ts",
     "test:agent-task-input": "tsx scripts/agentTaskInputSmoke.ts",

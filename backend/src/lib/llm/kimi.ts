@@ -7,11 +7,21 @@ import type {
 } from "./types";
 import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
 
-// Kimi K3 uses the OpenAI-compatible Chat Completions protocol. Keep this
-// adapter separate from the OpenAI Responses adapter: their streaming and tool
-// continuation payloads are different contracts.
+// Kimi and Zhipu use the OpenAI-compatible Chat Completions protocol. Keep
+// this shared adapter separate from the OpenAI Responses adapter: their
+// streaming and tool-continuation payloads are different contracts.
 const KIMI_CHAT_URL = "https://api.moonshot.ai/v1/chat/completions";
-const MAX_OUTPUT_TOKENS = 16_384;
+const ZHIPU_CHAT_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+
+type CompatibleProvider = "kimi" | "zhipu";
+
+type CompatibleProviderConfig = {
+  provider: CompatibleProvider;
+  label: "Kimi" | "Zhipu";
+  chatUrl: string;
+  key: string;
+  maxOutputTokens: number;
+};
 
 type KimiToolCall = {
   id: string;
@@ -48,14 +58,32 @@ type StreamChunk = {
   }>;
 };
 
-function apiKey(override?: string | null): string {
-  const key = override?.trim() || process.env.MOONSHOT_API_KEY?.trim() || "";
+function providerConfig(
+  provider: CompatibleProvider,
+  override?: string | null,
+): CompatibleProviderConfig {
+  const isZhipu = provider === "zhipu";
+  const key =
+    override?.trim() ||
+    (isZhipu
+      ? process.env.ZHIPU_API_KEY?.trim() ||
+        process.env.BIGMODEL_API_KEY?.trim()
+      : process.env.MOONSHOT_API_KEY?.trim()) ||
+    "";
   if (!key) {
     throw new Error(
-      "Kimi API key is not configured. Set MOONSHOT_API_KEY or add a user Kimi key.",
+      isZhipu
+        ? "Zhipu API key is not configured. Set ZHIPU_API_KEY or add a user Zhipu key."
+        : "Kimi API key is not configured. Set MOONSHOT_API_KEY or add a user Kimi key.",
     );
   }
-  return key;
+  return {
+    provider,
+    label: isZhipu ? "Zhipu" : "Kimi",
+    chatUrl: isZhipu ? ZHIPU_CHAT_URL : KIMI_CHAT_URL,
+    key,
+    maxOutputTokens: isZhipu ? 32_768 : 16_384,
+  };
 }
 
 function abortError(): Error {
@@ -71,6 +99,7 @@ function throwIfAborted(signal?: AbortSignal) {
 function responseError(
   status: number,
   body: string,
+  label: CompatibleProviderConfig["label"],
   retryAfter?: string | null,
 ) {
   let detail = body.trim();
@@ -80,14 +109,15 @@ function responseError(
     };
     const message = parsed.error?.message?.trim();
     const code = parsed.error?.code;
-    if (message) detail = code ? `Kimi error (${code}): ${message}` : message;
+    if (message)
+      detail = code ? `${label} error (${code}): ${message}` : message;
   } catch {
     // Preserve a bounded provider response when it is not JSON.
   }
   const error = new Error(
-    detail.startsWith("Kimi error")
+    detail.startsWith(`${label} error`)
       ? detail.slice(0, 2_000)
-      : `Kimi request failed (${status}): ${detail.slice(0, 2_000) || "Unknown error"}`,
+      : `${label} request failed (${status}): ${detail.slice(0, 2_000) || "Unknown error"}`,
   );
   (error as Error & { status?: number; retryAfter?: string }).status = status;
   if (retryAfter) {
@@ -127,7 +157,10 @@ function parseToolInput(value: string): Record<string, unknown> {
   }
 }
 
-function toMessages(systemPrompt: string, messages: LlmMessage[]): KimiMessage[] {
+function toMessages(
+  systemPrompt: string,
+  messages: LlmMessage[],
+): KimiMessage[] {
   return [
     ...(systemPrompt
       ? ([{ role: "system", content: systemPrompt }] as KimiMessage[])
@@ -148,15 +181,15 @@ async function createChatCompletion(input: {
   stream: boolean;
   maxTokens: number;
   enableThinking: boolean;
-  key: string;
+  config: CompatibleProviderConfig;
   signal?: AbortSignal;
 }) {
   let response: Response;
   try {
-    response = await fetch(KIMI_CHAT_URL, {
+    response = await fetch(input.config.chatUrl, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${input.key}`,
+        Authorization: `Bearer ${input.config.key}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -165,32 +198,45 @@ async function createChatCompletion(input: {
         tools: input.tools?.length ? input.tools : undefined,
         tool_choice: input.tools?.length ? "auto" : undefined,
         stream: input.stream,
-        // Kimi K3 documents max_completion_tokens, not OpenAI's legacy
-        // max_tokens. K3 always reasons; lower effort keeps normal chat and
-        // bulk review bounded while Work Tasks can request higher effort.
-        max_completion_tokens: input.maxTokens,
-        reasoning_effort: input.enableThinking ? "high" : "low",
+        ...(input.config.provider === "zhipu"
+          ? {
+              max_tokens: input.maxTokens,
+              thinking: {
+                type: input.enableThinking ? "enabled" : "disabled",
+              },
+              tool_stream:
+                input.stream && input.tools?.length ? true : undefined,
+            }
+          : {
+              // Kimi K3 documents max_completion_tokens, not OpenAI's
+              // legacy max_tokens. K3 always reasons; lower effort keeps
+              // normal chat bounded while Work Tasks can request more.
+              max_completion_tokens: input.maxTokens,
+              reasoning_effort: input.enableThinking ? "high" : "low",
+            }),
       }),
       signal: input.signal,
     });
   } catch (error) {
     if (input.signal?.aborted) throw abortError();
     throw new Error(
-      `Kimi network error: ${error instanceof Error ? error.message : String(error)}`,
+      `${input.config.label} network error: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
   if (!response.ok) {
     throw responseError(
       response.status,
       await response.text().catch(() => ""),
+      input.config.label,
       response.headers.get("retry-after"),
     );
   }
   return response;
 }
 
-export async function streamKimi(
+async function streamOpenAiCompatible(
   params: StreamChatParams,
+  provider: CompatibleProvider,
 ): Promise<StreamChatResult> {
   const {
     model,
@@ -203,10 +249,10 @@ export async function streamKimi(
   } = params;
   const maxIterations = params.maxIterations ?? 10;
   const messages = toMessages(systemPrompt, params.messages);
-  const key = apiKey(apiKeys?.kimi);
+  const config = providerConfig(provider, apiKeys?.[provider]);
   let fullText = "";
   const rawStreamRecorder = createRawLlmStreamRecorder({
-    provider: "kimi",
+    provider: config.provider,
     model,
   });
 
@@ -218,12 +264,14 @@ export async function streamKimi(
         messages,
         tools,
         stream: true,
-        maxTokens: MAX_OUTPUT_TOKENS,
+        maxTokens: config.maxOutputTokens,
         enableThinking,
-        key,
+        config,
         signal: params.abortSignal,
       });
-      if (!response.body) throw new Error("Kimi response had no body");
+      if (!response.body) {
+        throw new Error(`${config.label} response had no body`);
+      }
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -244,7 +292,7 @@ export async function streamKimi(
         buffer = parsed.rest;
         for (const event of parsed.events) {
           logRawLlmStream({
-            provider: "kimi",
+            provider: config.provider,
             model,
             iteration,
             label: "chunk",
@@ -257,7 +305,7 @@ export async function streamKimi(
           });
           const chunk = event as StreamChunk;
           if (chunk.error) {
-            throw responseError(200, JSON.stringify(chunk));
+            throw responseError(200, JSON.stringify(chunk), config.label);
           }
           const choice = chunk.choices?.[0];
           if (!choice) continue;
@@ -298,13 +346,13 @@ export async function streamKimi(
         finishReason === "content_filter" ||
         finishReason === "insufficient_system_resource"
       ) {
-        throw new Error(`Kimi stream stopped (${finishReason})`);
+        throw new Error(`${config.label} stream stopped (${finishReason})`);
       }
 
       const nativeToolCalls: KimiToolCall[] = [...toolCallParts.entries()]
         .sort(([left], [right]) => left - right)
         .map(([index, call]) => ({
-          id: call.id || `kimi_call_${iteration}_${index}`,
+          id: call.id || `${config.provider}_call_${iteration}_${index}`,
           type: "function" as const,
           function: { name: call.name, arguments: call.arguments || "{}" },
         }))
@@ -321,8 +369,8 @@ export async function streamKimi(
       if (!normalizedCalls.length || !runTools) break;
       const results = await runTools(normalizedCalls);
       throwIfAborted(params.abortSignal);
-      // Kimi requires the complete assistant message (including thought and
-      // tool calls) before the matching tool messages on the next request.
+      // Both providers require the complete assistant message (including
+      // reasoning and tool calls) before matching tool messages.
       messages.push({
         role: "assistant",
         content,
@@ -348,13 +396,17 @@ export async function streamKimi(
   }
 }
 
-export async function completeKimiText(params: {
-  model: string;
-  systemPrompt?: string;
-  user: string;
-  maxTokens?: number;
-  apiKeys?: { kimi?: string | null };
-}): Promise<string> {
+async function completeOpenAiCompatibleText(
+  provider: CompatibleProvider,
+  params: {
+    model: string;
+    systemPrompt?: string;
+    user: string;
+    maxTokens?: number;
+    apiKeys?: { kimi?: string | null; zhipu?: string | null };
+  },
+): Promise<string> {
+  const config = providerConfig(provider, params.apiKeys?.[provider]);
   const response = await createChatCompletion({
     model: params.model,
     messages: toMessages(params.systemPrompt ?? "", [
@@ -363,10 +415,38 @@ export async function completeKimiText(params: {
     stream: false,
     maxTokens: params.maxTokens ?? 512,
     enableThinking: false,
-    key: apiKey(params.apiKeys?.kimi),
+    config,
   });
   const payload = (await response.json()) as {
     choices?: Array<{ message?: { content?: string | null } }>;
   };
   return payload.choices?.[0]?.message?.content ?? "";
+}
+
+export function streamKimi(params: StreamChatParams) {
+  return streamOpenAiCompatible(params, "kimi");
+}
+
+export function streamZhipu(params: StreamChatParams) {
+  return streamOpenAiCompatible(params, "zhipu");
+}
+
+export function completeKimiText(params: {
+  model: string;
+  systemPrompt?: string;
+  user: string;
+  maxTokens?: number;
+  apiKeys?: { kimi?: string | null };
+}) {
+  return completeOpenAiCompatibleText("kimi", params);
+}
+
+export function completeZhipuText(params: {
+  model: string;
+  systemPrompt?: string;
+  user: string;
+  maxTokens?: number;
+  apiKeys?: { zhipu?: string | null };
+}) {
+  return completeOpenAiCompatibleText("zhipu", params);
 }

@@ -179,7 +179,9 @@ begin
   end if;
 
   select * into v from public.resume_agent_task_state_v1(
-    '45000000-0000-4000-8000-000000000001', 'user-pause'
+    '45000000-0000-4000-8000-000000000001',
+    'user-pause',
+    '{"fresh":true,"summary":"resume"}'::jsonb
   );
   if v.outcome <> 'resumed' or v.task_status <> 'verifying' then
     raise exception 'running Task resume failed: %', row_to_json(v);
@@ -190,6 +192,14 @@ begin
       and status = 'running' and attempt = 1
   ) then
     raise exception 'resume silently created a retry';
+  end if;
+  if not exists (
+    select 1 from public.agent_tasks
+    where id = '45000000-0000-4000-8000-000000000001'
+      and latest_checkpoint =
+        '{"fresh":true,"summary":"resume"}'::jsonb
+  ) then
+    raise exception 'resume did not atomically bind the cleared checkpoint';
   end if;
 
   select acquired into v_acquired
@@ -230,14 +240,18 @@ begin
     raise exception 'queued planner pause failed: %', row_to_json(v);
   end if;
   select * into v from public.resume_agent_task_state_v1(
-    '45000000-0000-4000-8000-000000000002', 'user-pause'
+    '45000000-0000-4000-8000-000000000002',
+    'user-pause',
+    '{}'::jsonb
   );
   if v.outcome <> 'resumed' or v.task_status <> 'queued' then
     raise exception 'queued planner resume failed: %', row_to_json(v);
   end if;
 
   select * into v from public.resume_agent_task_state_v1(
-    '45000000-0000-4000-8000-000000000003', 'user-pause'
+    '45000000-0000-4000-8000-000000000003',
+    'user-pause',
+    '{}'::jsonb
   );
   if v.outcome <> 'conflict' then
     raise exception 'torn two-running-Step Task resumed: %', row_to_json(v);
@@ -250,7 +264,9 @@ do $$
 begin
   begin
     perform * from public.resume_agent_task_state_v1(
-      '45000000-0000-4000-8000-000000000001', 'user-pause'
+      '45000000-0000-4000-8000-000000000001',
+      'user-pause',
+      '{}'::jsonb
     );
     raise exception 'authenticated unexpectedly executed pause/resume RPC';
   exception

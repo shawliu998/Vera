@@ -18,6 +18,7 @@ test("builds server-owned structured provider pause issues", () => {
     ["provider_network", "provider_network_exhausted", true],
     ["provider_protocol", "provider_protocol_incompatible", false],
     ["provider_structured_output", "provider_structured_output_invalid", false],
+    ["provider_configuration", "provider_configuration_required", false],
   ] as const;
   for (const [classification, code, exhausted] of cases) {
     const checkpoint = buildAgentTaskExecutionPauseCheckpoint({
@@ -61,6 +62,10 @@ test("separates timeout, network and capacity retry outcomes", () => {
   assert.match(
     providerPauseSummary("provider_structured_output", 0),
     /structured verifier result/i,
+  );
+  assert.match(
+    providerPauseSummary("provider_configuration", 0),
+    /API key, balance, or model access/i,
   );
 });
 

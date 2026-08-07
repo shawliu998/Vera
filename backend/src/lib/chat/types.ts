@@ -114,6 +114,7 @@ export type AskInputItem =
       id: string;
       kind: "documents";
       document_types: string[];
+      required: boolean;
       response_prefix?: string;
     };
 

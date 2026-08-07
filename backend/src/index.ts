@@ -14,7 +14,7 @@ import { userRouter } from "./routes/user";
 import { downloadsRouter } from "./routes/downloads";
 import { caseLawRouter } from "./routes/caseLaw";
 import { agentTasksRouter } from "./routes/agentTasks";
-import { recoverAgentTaskRunner } from "./lib/agentTaskRunner";
+import { startAgentTaskRecoveryLoop } from "./lib/agentTaskRunner";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
@@ -183,10 +183,12 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.listen(PORT, () => {
   console.log(`Mike backend running on port ${PORT}`);
-  void recoverAgentTaskRunner().catch((error) => {
-    console.error(
-      "Work Task recovery failed:",
-      error instanceof Error ? error.message : "Unknown recovery error",
-    );
+  startAgentTaskRecoveryLoop({
+    onError: (error) => {
+      console.error(
+        "Work Task recovery failed:",
+        error instanceof Error ? error.message : "Unknown recovery error",
+      );
+    },
   });
 });

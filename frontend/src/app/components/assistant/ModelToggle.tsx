@@ -18,7 +18,7 @@ import type { ApiKeyState } from "@/app/lib/mikeApi";
 export interface ModelOption {
     id: string;
     label: string;
-    group: "Anthropic" | "Google" | "OpenAI" | "DeepSeek" | "Kimi";
+    group: "Anthropic" | "Google" | "OpenAI" | "DeepSeek" | "Kimi" | "Zhipu";
 }
 
 export const MODELS: ModelOption[] = [
@@ -42,6 +42,8 @@ export const MODELS: ModelOption[] = [
         group: "DeepSeek",
     },
     { id: "kimi-k3", label: "Kimi K3", group: "Kimi" },
+    { id: "glm-5.2", label: "GLM-5.2", group: "Zhipu" },
+    { id: "glm-4.7-flashx", label: "GLM-4.7 FlashX", group: "Zhipu" },
 ];
 
 export const SETTINGS_MODELS: ModelOption[] = [
@@ -65,6 +67,7 @@ const GROUP_ORDER: ModelOption["group"][] = [
     "OpenAI",
     "DeepSeek",
     "Kimi",
+    "Zhipu",
 ];
 const itemClassName =
     "rounded-xl px-2.5 py-1.5 text-gray-700 focus:bg-app-surface-hover focus:text-gray-900 data-[highlighted]:bg-app-surface-hover data-[highlighted]:text-gray-900";

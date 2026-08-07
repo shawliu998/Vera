@@ -705,6 +705,7 @@ test("maps pause and resume to server-owned atomic transitions", async () => {
       await commitAgentTaskResumeTransition(db as never, {
         taskId: input.taskId,
         userId: input.userId,
+        latestCheckpoint: { summary: "Resume without stale retry" },
       })
     ).outcome,
     "resumed",
@@ -716,6 +717,9 @@ test("maps pause and resume to server-owned atomic transitions", async () => {
   assert.equal(calls[0]?.args.p_expected_step_attempt, 2);
   assert.equal(calls[0]?.args.p_lease_owner, input.leaseOwner);
   assert.equal(calls[0]?.args.p_force_revoke, false);
+  assert.deepEqual(calls[1]?.args.p_latest_checkpoint, {
+    summary: "Resume without stale retry",
+  });
 });
 
 test("recognizes pause and resume recovery without changing the Step attempt", () => {
@@ -770,8 +774,20 @@ test("recognizes pause and resume recovery without changing the Step attempt", (
     false,
   );
   assert.equal(
-    agentTaskResumeTransitionWasApplied({ task: { status: "verifying" } }),
+    agentTaskResumeTransitionWasApplied({
+      task: { status: "verifying", latest_checkpoint: { summary: "resumed" } },
+    }),
     true,
+  );
+  assert.equal(
+    agentTaskResumeTransitionWasApplied({
+      task: {
+        status: "running",
+        latest_checkpoint: { runner_retry: { attempt: 3 } },
+      },
+    }),
+    false,
+    "an active status alone must not accept a torn resume with stale retry state",
   );
   assert.equal(
     agentTaskResumeTransitionWasApplied({ task: { status: "paused" } }),
@@ -798,6 +814,30 @@ test("keeps pause/resume migrations mirrored, lease-fenced and service-only", as
   assert.match(backend, /status in \('queued', 'running', 'verifying'\)/i);
   assert.match(backend, /execution_lease_owner = null/i);
   assert.match(backend, /v_step\.attempt <> v_expected_step_attempt/i);
+  assert.match(backend, /from public, anon, authenticated/i);
+  assert.match(backend, /to service_role/i);
+});
+
+test("keeps atomic resume retry-reset migrations mirrored and bounded", async () => {
+  const backend = await readFile(
+    new URL(
+      "../../../../migrations/20260808_01_agent_task_resume_retry_reset.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const supabase = await readFile(
+    new URL(
+      "../../../../../supabase/migrations/20260808000001_agent_task_resume_retry_reset.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.equal(backend, supabase);
+  assert.match(backend, /drop function if exists[\s\S]*uuid, text\)/i);
+  assert.match(backend, /p_latest_checkpoint jsonb/i);
+  assert.match(backend, /latest_checkpoint = p_latest_checkpoint/i);
+  assert.match(backend, /status not in \('completed', 'skipped'\)/i);
   assert.match(backend, /from public, anon, authenticated/i);
   assert.match(backend, /to service_role/i);
 });

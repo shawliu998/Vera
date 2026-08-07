@@ -157,6 +157,7 @@ function ModelPreferenceDropdown({
         "OpenAI",
         "DeepSeek",
         "Kimi",
+        "Zhipu",
     ];
 
     return (

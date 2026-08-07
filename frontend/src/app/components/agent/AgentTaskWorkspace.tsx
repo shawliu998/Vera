@@ -64,7 +64,9 @@ import {
   latestApprovedReviewDecision,
 } from "./agentTaskPresentation";
 import { AgentTaskEvidenceCitationList } from "./AgentTaskEvidenceCitationList";
+import { AgentRequiredInputForm } from "./AgentRequiredInputForm";
 import { AgentTaskResult } from "./AgentTaskResult";
+import { getAgentRequiredInput } from "./agentRequiredInput";
 import { useAgentTaskSnapshot } from "./useAgentTaskSnapshot";
 
 const STATUS_LABELS: Record<AgentTaskStatus, string> = {
@@ -251,9 +253,10 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
     setTaskInputError(null);
   }
 
-  async function continueWithTaskInput() {
+  async function continueWithTaskInput(messageOverride?: string) {
     if (!snapshot || taskInputSubmitting) return;
-    if (!taskInput.trim() && !taskInputDocuments.length) {
+    const message = messageOverride?.trim() || taskInput.trim();
+    if (!message && !taskInputDocuments.length) {
       setTaskInputError("Add a short response or attach a Matter document.");
       return;
     }
@@ -262,7 +265,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
     try {
       commitSnapshot(
         await submitAgentTaskInput(taskId, {
-          message: taskInput,
+          message,
           documentIds: taskInputDocuments.map((document) => document.id),
         }),
       );
@@ -1088,7 +1091,7 @@ function WorkRecord({
   inputSubmitting: boolean;
   inputError: string | null;
   onInputMessageChange: (value: string) => void;
-  onContinueInput: () => Promise<void>;
+  onContinueInput: (messageOverride?: string) => Promise<void>;
   onRetry: () => Promise<void>;
   onAttachDocuments: () => void;
   onOpenArtifact: (artifact: AgentTaskSnapshot["artifacts"][number]) => void;
@@ -1121,6 +1124,7 @@ function WorkRecord({
                 ? "Work stopped"
                 : "Ready to work";
   const supportingArtifacts = getAgentTaskSupportingArtifacts(snapshot);
+  const requiredInput = getAgentRequiredInput(task.latest_checkpoint);
 
   return (
     <section className="py-5" aria-live="polite">
@@ -1178,93 +1182,111 @@ function WorkRecord({
         </div>
       )}
 
-      {task.status === "waiting_input" && !executionRecoveryBlocked && (
-        <form
-          className="mt-3 border-y border-gray-900/[0.07] py-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void onContinueInput();
-          }}
-        >
-          <label
-            htmlFor="task-supplemental-input"
-            className="text-xs font-medium text-gray-800"
-          >
-            Your response
-          </label>
-          <textarea
-            id="task-supplemental-input"
-            value={inputMessage}
-            onChange={(event) => onInputMessageChange(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-                event.preventDefault();
-                void onContinueInput();
-              }
-            }}
-            maxLength={4000}
-            rows={2}
-            disabled={inputSubmitting}
-            placeholder="Add the missing date, position, governing law, output preference, or confirmation…"
-            className="mt-1.5 w-full resize-y rounded-lg bg-white px-3 py-2 text-sm leading-5 text-gray-950 outline-none ring-1 ring-gray-900/[0.1] placeholder:text-gray-600 focus:ring-2 focus:ring-blue-500/70 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500"
+      {task.status === "waiting_input" &&
+        !executionRecoveryBlocked &&
+        requiredInput && (
+          <AgentRequiredInputForm
+            key={requiredInput.request_id}
+            requiredInput={requiredInput}
+            documents={inputDocuments}
+            note={inputMessage}
+            submitting={inputSubmitting}
+            error={inputError}
+            onNoteChange={onInputMessageChange}
+            onAttachDocuments={onAttachDocuments}
+            onSubmit={onContinueInput}
           />
-          {inputDocuments.length > 0 && (
-            <div className="mt-2 flex min-w-0 flex-wrap gap-1.5">
-              {inputDocuments.map((document) => (
-                <span
-                  key={document.id}
-                  title={document.filename}
-                  className="inline-flex h-6 max-w-full items-center rounded-md bg-gray-100 px-2 text-[11px] text-gray-700"
-                >
-                  <span className="max-w-[320px] truncate">
-                    {document.filename}
-                  </span>
-                </span>
-              ))}
-            </div>
-          )}
-          {inputError && (
-            <p
-              role="alert"
-              className="mt-2 break-words text-xs leading-4 text-red-700 [overflow-wrap:anywhere]"
+        )}
+
+      {task.status === "waiting_input" &&
+        !executionRecoveryBlocked &&
+        !requiredInput && (
+          <form
+            className="mt-3 border-y border-gray-900/[0.07] py-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void onContinueInput();
+            }}
+          >
+            <label
+              htmlFor="task-supplemental-input"
+              className="text-xs font-medium text-gray-800"
             >
-              {inputError}
-            </p>
-          )}
-          <div className="mt-2.5 flex flex-wrap items-center gap-2">
-            <button
-              type="submit"
-              disabled={
-                inputSubmitting ||
-                (!inputMessage.trim() && inputDocuments.length === 0)
-              }
-              className="inline-flex h-8 items-center gap-1.5 rounded-full bg-gray-950 px-3.5 text-xs font-medium text-white shadow-sm outline-none transition-colors hover:bg-black focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45"
-            >
-              {inputSubmitting && (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              )}
-              Continue
-            </button>
-            <button
-              type="button"
-              onClick={onAttachDocuments}
+              Your response
+            </label>
+            <textarea
+              id="task-supplemental-input"
+              value={inputMessage}
+              onChange={(event) => onInputMessageChange(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                  event.preventDefault();
+                  void onContinueInput();
+                }
+              }}
+              maxLength={4000}
+              rows={2}
               disabled={inputSubmitting}
-              className="inline-flex h-8 items-center rounded-full bg-white px-3.5 text-xs font-medium text-gray-700 shadow-sm outline-none transition-colors hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 disabled:opacity-45"
-            >
-              Attach documents
-            </button>
-            <Link
-              href={"/projects/" + task.matter_id}
-              className="inline-flex h-8 items-center px-1.5 text-xs font-medium text-gray-600 outline-none hover:text-gray-950 focus-visible:ring-2 focus-visible:ring-blue-500/70"
-            >
-              Open Matter
-            </Link>
-            <span className="ml-auto hidden text-[10px] text-gray-500 sm:inline">
-              Cmd/Ctrl+Enter
-            </span>
-          </div>
-        </form>
-      )}
+              placeholder="Add the missing date, position, governing law, output preference, or confirmation…"
+              className="mt-1.5 w-full resize-y rounded-lg bg-white px-3 py-2 text-sm leading-5 text-gray-950 outline-none ring-1 ring-gray-900/[0.1] placeholder:text-gray-600 focus:ring-2 focus:ring-blue-500/70 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500"
+            />
+            {inputDocuments.length > 0 && (
+              <div className="mt-2 flex min-w-0 flex-wrap gap-1.5">
+                {inputDocuments.map((document) => (
+                  <span
+                    key={document.id}
+                    title={document.filename}
+                    className="inline-flex h-6 max-w-full items-center rounded-md bg-gray-100 px-2 text-[11px] text-gray-700"
+                  >
+                    <span className="max-w-[320px] truncate">
+                      {document.filename}
+                    </span>
+                  </span>
+                ))}
+              </div>
+            )}
+            {inputError && (
+              <p
+                role="alert"
+                className="mt-2 break-words text-xs leading-4 text-red-700 [overflow-wrap:anywhere]"
+              >
+                {inputError}
+              </p>
+            )}
+            <div className="mt-2.5 flex flex-wrap items-center gap-2">
+              <button
+                type="submit"
+                disabled={
+                  inputSubmitting ||
+                  (!inputMessage.trim() && inputDocuments.length === 0)
+                }
+                className="inline-flex h-8 items-center gap-1.5 rounded-full bg-gray-950 px-3.5 text-xs font-medium text-white shadow-sm outline-none transition-colors hover:bg-black focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                {inputSubmitting && (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                )}
+                Continue
+              </button>
+              <button
+                type="button"
+                onClick={onAttachDocuments}
+                disabled={inputSubmitting}
+                className="inline-flex h-8 items-center rounded-full bg-white px-3.5 text-xs font-medium text-gray-700 shadow-sm outline-none transition-colors hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 disabled:opacity-45"
+              >
+                Attach documents
+              </button>
+              <Link
+                href={"/projects/" + task.matter_id}
+                className="inline-flex h-8 items-center px-1.5 text-xs font-medium text-gray-600 outline-none hover:text-gray-950 focus-visible:ring-2 focus-visible:ring-blue-500/70"
+              >
+                Open Matter
+              </Link>
+              <span className="ml-auto hidden text-[10px] text-gray-500 sm:inline">
+                Cmd/Ctrl+Enter
+              </span>
+            </div>
+          </form>
+        )}
 
       <ol className="mt-3 overflow-hidden rounded-xl bg-white/70 shadow-sm">
         {task.current_plan.map((step, index) => {

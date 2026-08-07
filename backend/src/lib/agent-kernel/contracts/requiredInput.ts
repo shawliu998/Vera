@@ -23,6 +23,7 @@ const documentsItemSchema = z
     id: bounded(80),
     kind: z.literal("documents"),
     document_types: z.array(bounded(300)).min(1).max(8),
+    required: z.boolean().default(true),
     response_prefix: bounded(200).optional(),
   })
   .strict();
@@ -86,7 +87,7 @@ function requestId(stepId: string, items: z.infer<typeof itemSchema>[]) {
           normalized(item.question),
           item.options.map((o) => normalized(o.value)),
         ]
-      : [item.id, item.document_types.map(normalized)],
+      : [item.id, item.required, item.document_types.map(normalized)],
   );
   return `ri_${stableHash(JSON.stringify([stepId, identity]))}`;
 }
@@ -96,7 +97,7 @@ function prompt(items: z.infer<typeof itemSchema>[]) {
     .map((item) =>
       item.kind === "choice"
         ? item.question
-        : `Attach the required Matter document${item.document_types.length === 1 ? "" : "s"}: ${item.document_types.join(", ")}.`,
+        : `${item.required ? "Attach the required" : "Optionally attach supporting"} Matter document${item.document_types.length === 1 ? "" : "s"}: ${item.document_types.join(", ")}.`,
     )
     .join(" ")
     .slice(0, 4000);
@@ -165,9 +166,13 @@ export function requiredInputFromAssistantEvents(
       kind: "required_input_v1",
       request_id: id,
       step_id: input.stepId,
-      reason_code: items.some((item) => item.kind === "documents")
+      reason_code: items.some(
+        (item) => item.kind === "documents" && item.required,
+      )
         ? "missing_source"
-        : "lawyer_choice",
+        : items.some((item) => item.kind === "choice")
+          ? "lawyer_choice"
+          : "missing_fact",
       prompt: prompt(items),
       items,
       resume_strategy: "retry_step",
@@ -184,7 +189,7 @@ export function validateRequiredInputSubmission(
   const message = input.message?.trim() ?? "";
   const documentIds = input.documentIds ?? [];
   if (
-    required.items.some((item) => item.kind === "documents") &&
+    required.items.some((item) => item.kind === "documents" && item.required) &&
     documentIds.length === 0
   ) {
     throw new Error("The requested Matter document is required to continue");
@@ -209,6 +214,7 @@ export function createDocumentsRequiredInput(input: {
     {
       id: "required-source-documents",
       kind: "documents" as const,
+      required: true,
       document_types: input.documentTypes
         ?.map((value) => value.trim())
         .filter(Boolean) ?? ["Source documents"],

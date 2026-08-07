@@ -6,7 +6,8 @@ export type ModelProvider =
     | "gemini"
     | "openai"
     | "deepseek"
-    | "kimi";
+    | "kimi"
+    | "zhipu";
 
 export function getModelProvider(modelId: string): ModelProvider | null {
     const model = SETTINGS_MODELS.find((m) => m.id === modelId);
@@ -35,6 +36,7 @@ export function providerLabel(provider: ModelProvider): string {
     if (provider === "openai") return "OpenAI";
     if (provider === "deepseek") return "DeepSeek";
     if (provider === "kimi") return "Kimi";
+    if (provider === "zhipu") return "Zhipu GLM";
     return "Google (Gemini)";
 }
 
@@ -45,5 +47,6 @@ export function modelGroupToProvider(
     if (group === "OpenAI") return "openai";
     if (group === "DeepSeek") return "deepseek";
     if (group === "Kimi") return "kimi";
+    if (group === "Zhipu") return "zhipu";
     return "gemini";
 }

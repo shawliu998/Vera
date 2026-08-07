@@ -350,6 +350,39 @@ test("required input is structured, validated, and replay-suppressed", () => {
     () => validateRequiredInputSubmission(documents, { message: "Continue" }),
     /Matter document/,
   );
+
+  const optionalDocuments = requiredInputFromAssistantEvents(
+    [
+      {
+        type: "ask_inputs",
+        items: [
+          {
+            id: "background-facts",
+            kind: "choice",
+            question: "Should unknown background facts remain unresolved?",
+            options: [{ value: "Keep unresolved" }],
+            allow_other: false,
+            other_label: "Other",
+          },
+          {
+            id: "supporting-facts",
+            kind: "documents",
+            document_types: ["Optional background materials"],
+            required: false,
+          },
+        ],
+      },
+    ],
+    { stepId: "step-3", createdAt: "2026-08-07T00:00:00.000Z" },
+  );
+  assert.ok(optionalDocuments);
+  assert.equal(optionalDocuments.reason_code, "lawyer_choice");
+  assert.match(optionalDocuments.prompt, /Optionally attach/);
+  assert.doesNotThrow(() =>
+    validateRequiredInputSubmission(optionalDocuments, {
+      message: "Keep unresolved",
+    }),
+  );
   assert.deepEqual(
     readResolvedRequiredInputIds({
       resolved_required_input_ids: [required?.request_id, 3, null],

@@ -39,6 +39,41 @@ export type AgentCheckpoint = {
     message?: string;
     document_ids: string[];
   };
+  required_input?: AgentRequiredInput;
+};
+
+export type AgentRequiredInputChoice = {
+  id: string;
+  kind: "choice";
+  question: string;
+  options: { value: string }[];
+  allow_other: boolean;
+  other_label: string;
+  response_prefix?: string;
+};
+
+export type AgentRequiredInputDocuments = {
+  id: string;
+  kind: "documents";
+  document_types: string[];
+  /** Missing on legacy checkpoints; the server treats omission as required. */
+  required?: boolean;
+  response_prefix?: string;
+};
+
+export type AgentRequiredInput = {
+  kind: "required_input_v1";
+  request_id: string;
+  step_id: string;
+  reason_code:
+    | "missing_source"
+    | "missing_fact"
+    | "lawyer_choice"
+    | "source_version_changed";
+  prompt: string;
+  items: (AgentRequiredInputChoice | AgentRequiredInputDocuments)[];
+  resume_strategy: "retry_step" | "replan_remaining";
+  created_at: string;
 };
 
 export type AgentTask = {

@@ -113,6 +113,7 @@ function normalizeAskInputsEvent(
           id: id.slice(0, 80),
           kind: "documents",
           document_types: documentTypes,
+          required: row.required !== false,
           ...(responsePrefix
             ? { response_prefix: responsePrefix.slice(0, 200) }
             : {}),

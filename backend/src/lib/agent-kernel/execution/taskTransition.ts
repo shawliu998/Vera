@@ -483,11 +483,12 @@ export async function commitAgentTaskPauseTransition(
 
 export async function commitAgentTaskResumeTransition(
   db: Db,
-  input: { taskId: string; userId: string },
+  input: { taskId: string; userId: string; latestCheckpoint: unknown },
 ) {
   const { data, error } = await db.rpc("resume_agent_task_state_v1", {
     p_task_id: input.taskId,
     p_user_id: input.userId,
+    p_latest_checkpoint: input.latestCheckpoint,
   });
   if (error) {
     throw transitionError(
@@ -712,11 +713,20 @@ export function agentTaskPauseTransitionWasApplied(
 
 export function agentTaskResumeTransitionWasApplied(
   snapshot: {
-    task: { status: string };
+    task: { status: string; latest_checkpoint?: unknown };
   } | null,
 ) {
-  return Boolean(
-    snapshot &&
-    ["queued", "running", "verifying"].includes(snapshot.task.status),
+  if (
+    !snapshot ||
+    !["queued", "running", "verifying"].includes(snapshot.task.status)
+  ) {
+    return false;
+  }
+  const checkpoint = snapshot.task.latest_checkpoint;
+  return !(
+    checkpoint &&
+    typeof checkpoint === "object" &&
+    !Array.isArray(checkpoint) &&
+    Object.hasOwn(checkpoint, "runner_retry")
   );
 }

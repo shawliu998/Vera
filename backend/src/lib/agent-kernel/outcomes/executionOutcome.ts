@@ -16,6 +16,7 @@ const pauseClassificationSchema = z.enum([
   "provider_network",
   "provider_protocol",
   "provider_structured_output",
+  "provider_configuration",
 ]);
 const providerIssueCodeSchema = z.enum([
   "provider_capacity_exhausted",
@@ -23,6 +24,7 @@ const providerIssueCodeSchema = z.enum([
   "provider_network_exhausted",
   "provider_protocol_incompatible",
   "provider_structured_output_invalid",
+  "provider_configuration_required",
 ]);
 
 export type AgentTaskRetryClassification = z.infer<
@@ -86,6 +88,7 @@ const executionPauseSchema = z
     const retriesExpected = ![
       "provider_protocol",
       "provider_structured_output",
+      "provider_configuration",
     ].includes(value.classification);
     if (value.issue.facts.automatic_retries_exhausted !== retriesExpected) {
       context.addIssue({
@@ -130,6 +133,8 @@ function providerIssueCode(
       return "provider_protocol_incompatible";
     case "provider_structured_output":
       return "provider_structured_output_invalid";
+    case "provider_configuration":
+      return "provider_configuration_required";
   }
 }
 
@@ -150,6 +155,8 @@ export function providerPauseSummary(
       return "The selected model did not complete the required provider tool protocol. This step is paused without discarding existing work; resume it or choose a compatible model.";
     case "provider_structured_output":
       return "The selected model returned an invalid structured verifier result. This step is paused without discarding existing work; resume it or choose a model with reliable structured output.";
+    case "provider_configuration":
+      return "The selected provider cannot run this step because its API key, balance, or model access needs attention. Existing work is preserved; update Model settings or choose another configured model, then resume this step.";
     case "provider_timeout":
       return `The selected model timed out after ${automaticRetries} automatic retries. This step is paused without discarding existing work; resume it when the provider responds normally.`;
     case "provider_network":
@@ -183,6 +190,7 @@ export function buildAgentTaskExecutionPauseCheckpoint(input: {
         automatic_retries_exhausted: ![
           "provider_protocol",
           "provider_structured_output",
+          "provider_configuration",
         ].includes(input.classification),
       },
     },

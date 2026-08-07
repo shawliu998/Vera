@@ -159,6 +159,21 @@ test("classifies verifier structured-output drift separately", () => {
   });
 });
 
+test("classifies provider key, balance, and entitlement errors as resumable configuration pauses", () => {
+  for (const message of [
+    "DeepSeek error (invalid_request_error): Insufficient Balance",
+    "OpenAI error: Incorrect API key provided",
+    "Claude authentication failed: expired API key",
+    "Gemini: account does not have access to model",
+    "智谱模型无权限",
+  ]) {
+    assert.deepEqual(
+      classifyAgentTaskProviderProtocolError(new Error(message)),
+      { classification: "provider_configuration" },
+    );
+  }
+});
+
 test("fails closed for non-exact provider protocol and policy diagnostics", () => {
   for (const message of [
     "UnknownAI did not return the required read_document tool call for this iteration.",

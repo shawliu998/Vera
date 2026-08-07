@@ -124,7 +124,7 @@ export const TOOLS = [
     function: {
       name: "ask_inputs",
       description:
-        "Ask the user for one or more decisions, clarifications, or document uploads before continuing. Use this when guessing would materially affect the answer or when required documents have not been attached. Put all needed questions and document requests in one items array. After calling ask_inputs, do not continue the substantive task until the user responds in a later message.",
+        "Ask the user for one or more decisions, clarifications, or document uploads before continuing. Use this when guessing would materially affect the answer or when required documents have not been attached. Put all needed questions and document requests in one items array. A documents item is blocking by default; set required to false when the task can safely continue without that upload. After calling ask_inputs, do not continue the substantive task until the user responds in a later message.",
       parameters: {
         type: "object",
         properties: {
@@ -133,7 +133,7 @@ export const TOOLS = [
             minItems: 1,
             maxItems: 12,
             description:
-              "The list of user inputs needed before continuing. Use choice items for decisions/clarifications and documents items for required uploads.",
+              "The list of user inputs needed before continuing. Use choice items for decisions/clarifications and documents items for required or optional supporting uploads.",
             items: {
               type: "object",
               properties: {
@@ -187,6 +187,11 @@ export const TOOLS = [
                   items: {
                     type: "string",
                   },
+                },
+                required: {
+                  type: "boolean",
+                  description:
+                    "For documents items only: whether at least one requested Matter document is mandatory before the task may resume. Defaults to true. Set false only when the task can continue safely without the upload, for example when an explicit choice allows facts to remain unresolved.",
                 },
                 response_prefix: {
                   type: "string",

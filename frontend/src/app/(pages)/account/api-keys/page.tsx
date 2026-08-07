@@ -42,6 +42,11 @@ const MODEL_API_KEY_FIELDS = [
         placeholder: "sk-...",
     },
     {
+        provider: "zhipu",
+        label: "Zhipu GLM API Key",
+        placeholder: "智谱开放平台 API Key",
+    },
+    {
         provider: "openrouter",
         label: "OpenRouter API Key",
         placeholder: "sk-or-...",

@@ -6,7 +6,10 @@ export type TransientAgentTaskError = {
 };
 
 export type AgentTaskProviderProtocolError = {
-  classification: "provider_protocol" | "provider_structured_output";
+  classification:
+    | "provider_protocol"
+    | "provider_structured_output"
+    | "provider_configuration";
 };
 
 export const MAX_AGENT_TASK_TRANSIENT_RETRIES = 3;
@@ -120,6 +123,12 @@ function hasNetworkSignal(message: string) {
   );
 }
 
+function hasProviderConfigurationSignal(message: string) {
+  return /insufficient (?:balance|credits?|quota)|余额不足|credit balance|billing|payment required|(?:invalid|incorrect|expired) api.?key|api.?key.*(?:invalid|incorrect|expired)|authentication failed|does not have access to (?:the )?model|model.*(?:access denied|permission denied|not entitled)|模型.*(?:无权限|未授权)/i.test(
+    message,
+  );
+}
+
 /**
  * Classifies only provider capacity, timeout, and network failures that can safely
  * resume the current server-owned Task and Step. HTTP 200 is fail-closed
@@ -188,7 +197,11 @@ export function classifyAgentTaskError(
 export function classifyAgentTaskProviderProtocolError(
   error: unknown,
 ): AgentTaskProviderProtocolError | null {
-  if (REQUIRED_TOOL_CALL_PROTOCOL_ERROR.test(errorMessage(error))) {
+  const message = errorMessage(error);
+  if (hasProviderConfigurationSignal(message)) {
+    return { classification: "provider_configuration" };
+  }
+  if (REQUIRED_TOOL_CALL_PROTOCOL_ERROR.test(message)) {
     return { classification: "provider_protocol" };
   }
   const name =

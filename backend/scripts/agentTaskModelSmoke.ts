@@ -65,8 +65,7 @@ function makeStubDb(taskStatus: string, userId = "user_1") {
         if (table === "agent_tasks") {
           const matchesUser =
             filters.user_id === undefined || filters.user_id === task.user_id;
-          const matchesId =
-            filters.id === undefined || filters.id === task.id;
+          const matchesId = filters.id === undefined || filters.id === task.id;
           return { data: matchesUser && matchesId ? task : null, error: null };
         }
         return { data: null, error: null };
@@ -105,6 +104,9 @@ function makeStubDb(taskStatus: string, userId = "user_1") {
             ) {
               task.execution_model = values.execution_model as string;
               task.updated_at = values.updated_at as string;
+              if (Object.hasOwn(values, "latest_checkpoint")) {
+                task.latest_checkpoint = values.latest_checkpoint as null;
+              }
             }
             return applyUpdate(nextFilters);
           },
@@ -155,11 +157,21 @@ function makeStubDb(taskStatus: string, userId = "user_1") {
     return base;
   };
 
-  return { db: db as unknown as ReturnType<typeof import("../src/lib/supabase").createServerSupabase>, task };
+  return {
+    db: db as unknown as ReturnType<
+      typeof import("../src/lib/supabase").createServerSupabase
+    >,
+    task,
+  };
 }
 
 async function main() {
-  const allowedStates = ["queued", "paused", "waiting_input", "failed"] as const;
+  const allowedStates = [
+    "queued",
+    "paused",
+    "waiting_input",
+    "failed",
+  ] as const;
   for (const status of allowedStates) {
     const { db, task } = makeStubDb(status);
     const result = await updateAgentTaskExecutionModel(
@@ -173,11 +185,45 @@ async function main() {
     assert.equal(task.execution_model, "deepseek-v4-flash");
   }
 
+  const retrying = makeStubDb("paused");
+  retrying.task.latest_checkpoint = {
+    step_id: "step_1",
+    iteration: 2,
+    summary: "Model is busy. Retrying automatically.",
+    runner_retry: {
+      attempt: 3,
+      retry_at: "2026-08-08T00:00:00.000Z",
+      classification: "timeout",
+    },
+  } as never;
+  await updateAgentTaskExecutionModel(
+    retrying.db,
+    "task_1",
+    "user_1",
+    "deepseek-v4-pro",
+  );
+  assert.equal(
+    (retrying.task.latest_checkpoint as Record<string, unknown>).runner_retry,
+    undefined,
+  );
+  assert.match(
+    String(
+      (retrying.task.latest_checkpoint as Record<string, unknown>).summary,
+    ),
+    /Model changed to deepseek-v4-pro/,
+  );
+
   const blockedStates = ["running", "verifying", "completed"] as const;
   for (const status of blockedStates) {
     const { db } = makeStubDb(status);
     await assert.rejects(
-      () => updateAgentTaskExecutionModel(db, "task_1", "user_1", "deepseek-v4-flash"),
+      () =>
+        updateAgentTaskExecutionModel(
+          db,
+          "task_1",
+          "user_1",
+          "deepseek-v4-flash",
+        ),
       /Only a queued, paused, failed, or input-blocked task can switch models/,
       `expected rejection for status ${status}`,
     );

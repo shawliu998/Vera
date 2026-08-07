@@ -54,6 +54,7 @@ function providerLabel(provider: Provider): string {
     if (provider === "openai") return "OpenAI";
     if (provider === "deepseek") return "DeepSeek";
     if (provider === "kimi") return "Kimi";
+    if (provider === "zhipu") return "Zhipu";
     return "Gemini";
 }
 

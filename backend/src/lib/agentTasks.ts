@@ -1626,9 +1626,29 @@ export async function resumeAgentTask(db: Db, taskId: string, userId: string) {
     throw new Error("Only a paused task can be resumed");
   }
   assertAgentTaskExecutionRecovery(snapshot.task);
+  const retryCheckpoint = readAgentTaskRetryCheckpoint(snapshot.task);
+  const clearedCheckpoint = clearAgentTaskRunnerRetryCheckpoint(
+    snapshot.task.latest_checkpoint,
+  );
+  const latestCheckpoint =
+    retryCheckpoint &&
+    clearedCheckpoint &&
+    typeof clearedCheckpoint === "object" &&
+    !Array.isArray(clearedCheckpoint)
+      ? {
+          ...clearedCheckpoint,
+          summary:
+            "Task resumed. Retrying the current step with a fresh automatic retry budget.",
+          created_at: now(),
+        }
+      : clearedCheckpoint;
   let committed: Awaited<ReturnType<typeof commitAgentTaskResumeTransition>>;
   try {
-    committed = await commitAgentTaskResumeTransition(db, { taskId, userId });
+    committed = await commitAgentTaskResumeTransition(db, {
+      taskId,
+      userId,
+      latestCheckpoint,
+    });
   } catch (error) {
     if (!(error instanceof AgentTaskStateTransitionError)) throw error;
     const recovered = await getAgentTaskSnapshot(db, taskId, userId);
@@ -1654,7 +1674,7 @@ export async function updateAgentTaskExecutionModel(
 ) {
   const { data: task, error: taskError } = await db
     .from("agent_tasks")
-    .select("id,status")
+    .select("id,status,latest_checkpoint")
     .eq("id", taskId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -1665,11 +1685,34 @@ export async function updateAgentTaskExecutionModel(
       `Only a queued, paused, failed, or input-blocked task can switch models (current: ${task.status})`,
     );
   }
+  const updatedAt = now();
+  const retryCheckpoint = readAgentTaskRetryCheckpoint({
+    latest_checkpoint: task.latest_checkpoint,
+  });
+  const clearedCheckpoint = retryCheckpoint
+    ? clearAgentTaskRunnerRetryCheckpoint(task.latest_checkpoint)
+    : task.latest_checkpoint;
+  const nextCheckpoint =
+    retryCheckpoint &&
+    clearedCheckpoint &&
+    typeof clearedCheckpoint === "object" &&
+    !Array.isArray(clearedCheckpoint)
+      ? {
+          ...clearedCheckpoint,
+          summary: `Model changed to ${executionModel}. Resume retries the current step with the new model.`,
+          created_at: updatedAt,
+        }
+      : clearedCheckpoint;
   const { error } = await db
     .from("agent_tasks")
-    .update({ execution_model: executionModel, updated_at: now() })
+    .update({
+      execution_model: executionModel,
+      latest_checkpoint: nextCheckpoint,
+      updated_at: updatedAt,
+    })
     .eq("id", taskId)
-    .eq("user_id", userId);
+    .eq("user_id", userId)
+    .eq("status", task.status);
   if (error) throw dbError(error, "Failed to update task model");
   return getAgentTaskSnapshot(db, taskId, userId);
 }

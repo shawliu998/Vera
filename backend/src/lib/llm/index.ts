@@ -2,7 +2,7 @@ import { streamClaude, completeClaudeText } from "./claude";
 import { streamGemini, completeGeminiText } from "./gemini";
 import { streamOpenAI, completeOpenAIText } from "./openai";
 import { streamDeepSeek, completeDeepSeekText } from "./deepseek";
-import { streamKimi, completeKimiText } from "./kimi";
+import { streamKimi, completeKimiText, streamZhipu, completeZhipuText } from "./kimi";
 import { providerForModel } from "./models";
 import type { StreamChatParams, StreamChatResult, UserApiKeys } from "./types";
 
@@ -17,6 +17,7 @@ export async function streamChatWithTools(
     if (provider === "openai") return streamOpenAI(params);
     if (provider === "deepseek") return streamDeepSeek(params);
     if (provider === "kimi") return streamKimi(params);
+    if (provider === "zhipu") return streamZhipu(params);
     return streamGemini(params);
 }
 
@@ -32,5 +33,6 @@ export async function completeText(params: {
     if (provider === "openai") return completeOpenAIText(params);
     if (provider === "deepseek") return completeDeepSeekText(params);
     if (provider === "kimi") return completeKimiText(params);
+    if (provider === "zhipu") return completeZhipuText(params);
     return completeGeminiText(params);
 }

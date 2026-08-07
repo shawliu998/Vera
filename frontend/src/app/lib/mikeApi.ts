@@ -276,6 +276,7 @@ export type ApiKeyProvider =
     | "openai"
     | "deepseek"
     | "kimi"
+    | "zhipu"
     | "openrouter"
     | "courtlistener";
 export type ApiKeySource = "user" | "env" | null;

@@ -615,6 +615,51 @@ async function unknownProviderProtocolFailureSuite() {
   assert.equal(task.status, "failed");
 }
 
+async function providerConfigurationPauseSuite() {
+  for (const message of [
+    "DeepSeek error (invalid_request_error): Insufficient Balance",
+    "OpenAI error: Incorrect API key provided",
+    "Gemini account does not have access to model",
+  ]) {
+    const task: FakeTask = { status: "running", latest_checkpoint: null };
+    let iterations = 0;
+    let retryWrites = 0;
+    let failures = 0;
+    let deferrals = 0;
+    const runner = new AgentTaskRunner({
+      loadTask: async () => snapshot(task),
+      runIteration: async () => {
+        iterations += 1;
+        throw Object.assign(new Error(message), { status: 400 });
+      },
+      recordRetry: async () => {
+        retryWrites += 1;
+        return snapshot(task);
+      },
+      failTask: async () => {
+        failures += 1;
+        task.status = "failed";
+      },
+      deferTask: async (_job, summary, classification) => {
+        deferrals += 1;
+        assert.equal(classification, "provider_configuration");
+        assert.match(summary, /API key, balance, or model access/i);
+        task.status = "paused";
+      },
+      recoverJobs: async () => [],
+      sleep: async () => undefined,
+    });
+
+    runner.wake({ taskId: `task_config_${iterations}`, userId: "user_1" });
+    await runner.waitForIdle();
+    assert.equal(iterations, 1);
+    assert.equal(retryWrites, 0);
+    assert.equal(failures, 0);
+    assert.equal(deferrals, 1);
+    assert.equal(task.status, "paused");
+  }
+}
+
 async function singleConcurrencySuite() {
   const tasks = new Map<string, FakeTask>([
     ["task_a", { status: "running", latest_checkpoint: null }],
@@ -673,6 +718,88 @@ async function recoverySuite() {
   });
   await runner.recover();
   assert.equal(recoveredRuns, 1);
+  assert.equal(task.status, "completed");
+}
+
+async function recoverySweepRestoresLostLeaseContenderSuite() {
+  const task: FakeTask = { status: "running", latest_checkpoint: null };
+  const job = { taskId: "task_lease_contender", userId: "user_1" };
+  let runs = 0;
+  let recoveries = 0;
+  const runner = new AgentTaskRunner({
+    loadTask: async () => snapshot(task),
+    runIteration: async () => {
+      runs += 1;
+      if (runs === 1) {
+        const error = new Error(
+          "Agent Task execution is already owned by another runner",
+        );
+        error.name = "AgentTaskLeaseBusyError";
+        throw error;
+      }
+      task.status = "completed";
+      return snapshot(task);
+    },
+    recordRetry: async () => snapshot(task),
+    failTask: async () => {
+      task.status = "failed";
+    },
+    recoverJobs: async () => {
+      recoveries += 1;
+      return [job];
+    },
+    sleep: async () => undefined,
+  });
+
+  runner.wake(job);
+  await runner.waitForIdle();
+  assert.equal(runs, 1, "a lease contender must not spin in memory");
+  assert.equal(task.status, "running");
+
+  assert.equal(await runner.sweep(), 1);
+  await runner.waitForIdle();
+  assert.equal(recoveries, 1);
+  assert.equal(runs, 2, "the durable sweep must restore the active Task");
+  assert.equal(task.status, "completed");
+}
+
+async function overduePersistedRetryRunsImmediatelySuite() {
+  const task: FakeTask = {
+    status: "running",
+    latest_checkpoint: {
+      step_id: "step_overdue",
+      iteration: 2,
+      runner_retry: {
+        attempt: 2,
+        retry_at: new Date(9_000).toISOString(),
+        classification: "provider_unavailable",
+      },
+    },
+  };
+  const sleeps: number[] = [];
+  let runs = 0;
+  const runner = new AgentTaskRunner({
+    loadTask: async () => snapshot(task),
+    runIteration: async () => {
+      runs += 1;
+      task.status = "completed";
+      task.latest_checkpoint = null;
+      return snapshot(task);
+    },
+    recordRetry: async () => snapshot(task),
+    failTask: async () => {
+      task.status = "failed";
+    },
+    recoverJobs: async () => [{ taskId: "task_overdue", userId: "user_1" }],
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
+    now: () => 10_000,
+  });
+
+  await runner.recover();
+  assert.deepEqual(sleeps, [], "an overdue durable retry must not wait again");
+  assert.equal(runs, 1);
   assert.equal(task.status, "completed");
 }
 
@@ -802,8 +929,11 @@ async function main() {
   await sseProviderPauseAndResumeSuite();
   await providerProtocolPauseAndResumeSuite();
   await unknownProviderProtocolFailureSuite();
+  await providerConfigurationPauseSuite();
   await pauseResumeSuite();
   await recoverySuite();
+  await recoverySweepRestoresLostLeaseContenderSuite();
+  await overduePersistedRetryRunsImmediatelySuite();
   await recoveryRetryWaitBoundSuite();
 
   console.log(
