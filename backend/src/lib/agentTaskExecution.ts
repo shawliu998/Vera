@@ -39,6 +39,11 @@ import {
   type AgentStepPostcondition,
 } from "./agent-kernel/contracts/stepContract";
 import { assertAgentStepCapabilityGrants } from "./agent-kernel/capability/stepCapability";
+import {
+  AgentTaskLeaseBusyError,
+  type AgentTaskLeaseGuard,
+  withAgentTaskLease,
+} from "./agent-kernel/execution/taskLease";
 
 type Db = ReturnType<typeof createServerSupabase>;
 type Snapshot = NonNullable<Awaited<ReturnType<typeof getAgentTaskSnapshot>>>;
@@ -258,10 +263,20 @@ export async function advanceAgentTaskExecution(input: {
   taskId: string;
   userId: string;
   userEmail?: string;
-}) {
+  throwOnLeaseBusy?: boolean;
+  leaseGuard?: AgentTaskLeaseGuard;
+}): Promise<Snapshot | null> {
   const { db, taskId, userId, userEmail } = input;
-  const shouldContinue = async () =>
-    (await taskCanContinue(db, taskId, userId)).active;
+  const executionCanContinue = async () => {
+    if (input.leaseGuard && !(await input.leaseGuard.verifyOwner())) {
+      return {
+        snapshot: await getAgentTaskSnapshot(db, taskId, userId),
+        active: false,
+      };
+    }
+    return taskCanContinue(db, taskId, userId);
+  };
+  const shouldContinue = async () => (await executionCanContinue()).active;
   const current = await getAgentTaskSnapshot(db, taskId, userId);
   if (!current) return null;
   assertAgentTaskAssignmentContract(current.task);
@@ -321,6 +336,29 @@ export async function advanceAgentTaskExecution(input: {
     }
     throw error;
   }
+  if (!input.leaseGuard) {
+    const lease = await withAgentTaskLease(
+      {
+        db,
+        taskId,
+        userId,
+        getSnapshot: () => getAgentTaskSnapshot(db, taskId, userId),
+      },
+      {},
+      (leaseGuard) =>
+        advanceAgentTaskExecution({
+          ...input,
+          leaseGuard,
+        }),
+    );
+    if (lease.status === "unavailable") {
+      if (lease.reason === "busy" && input.throwOnLeaseBusy) {
+        throw new AgentTaskLeaseBusyError();
+      }
+      return lease.snapshot as Snapshot | null;
+    }
+    return lease.result;
+  }
   if (current.task.status === "queued") {
     const planningRequest = readAgentTaskPlanningRequest(current.task);
     if (planningRequest) {
@@ -334,6 +372,8 @@ export async function advanceAgentTaskExecution(input: {
         request: planningRequest,
         contextManifest: fixedMatterContext,
       });
+      const beforePlanWrite = await executionCanContinue();
+      if (!beforePlanWrite.active) return beforePlanWrite.snapshot;
       const updated = await applyAgentTaskPlan(
         db,
         taskId,
@@ -342,6 +382,8 @@ export async function advanceAgentTaskExecution(input: {
       );
       if (!updated) return null;
     }
+    const beforeStart = await executionCanContinue();
+    if (!beforeStart.active) return beforeStart.snapshot;
     return advanceAgentTask(db, taskId, userId);
   }
   if (!["running", "verifying"].includes(current.task.status)) {
@@ -368,7 +410,7 @@ export async function advanceAgentTaskExecution(input: {
     });
   }
 
-  const afterExecution = await taskCanContinue(db, taskId, userId);
+  const afterExecution = await executionCanContinue();
   if (!afterExecution.active) return afterExecution.snapshot;
   if (execution.waitingForInput) {
     return stopAgentTask(db, taskId, userId, {
@@ -479,7 +521,7 @@ export async function advanceAgentTaskExecution(input: {
           instructionOverride: `This is the single permitted repair pass. Repair: ${reasons}. Re-read the sources, update or recreate only the affected deliverables, and preserve lawyer-review status.`,
           repairArtifactPurpose: taskDeliverablePurpose(repairTarget),
         });
-        const afterRepair = await taskCanContinue(db, taskId, userId);
+        const afterRepair = await executionCanContinue();
         if (!afterRepair.active) return afterRepair.snapshot;
         await linkAgentTaskArtifacts(db, taskId, userId, repair.artifacts);
         const repairedSnapshot = {
@@ -501,7 +543,7 @@ export async function advanceAgentTaskExecution(input: {
           instructionOverride:
             "Re-run the five verifier checks after the one permitted repair. Do not repair again. Return PASS or GAP for every check.",
         });
-        const afterRecheck = await taskCanContinue(db, taskId, userId);
+        const afterRecheck = await executionCanContinue();
         if (!afterRecheck.active) return afterRecheck.snapshot;
         recheck.citationCheck = await verifyTaskCitationLinks(
           db,
@@ -584,7 +626,7 @@ export async function advanceAgentTaskExecution(input: {
     }
   }
 
-  const beforeCommit = await taskCanContinue(db, taskId, userId);
+  const beforeCommit = await executionCanContinue();
   if (!beforeCommit.active) return beforeCommit.snapshot;
   try {
     const stepReceipt = await buildCurrentStepReceipt(db, current, execution);

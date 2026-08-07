@@ -8,10 +8,7 @@ import {
   type CaseCitationEvent,
   type CourtlistenerToolEvent,
 } from "./courtlistenerTools";
-import {
-  executeMcpToolCall,
-  type McpToolEvent,
-} from "../../mcpConnectors";
+import { executeMcpToolCall, type McpToolEvent } from "../../mcpConnectors";
 import { createServerSupabase } from "../../supabase";
 import {
   type DocStore,
@@ -25,11 +22,7 @@ import {
   devLog,
   resolveDocLabel,
 } from "../types";
-import {
-  downloadFile,
-  storageKey,
-  uploadFile,
-} from "../../storage";
+import { downloadFile, storageKey, uploadFile } from "../../storage";
 import { convertedPdfKey } from "../../convert";
 import { contentTypeForDocumentType } from "../../documentTypes";
 import { buildDownloadUrl } from "../../downloadTokens";
@@ -53,9 +46,11 @@ import {
   type TurnReadState,
   type DocCreatedResult,
   type DocReplicatedResult,
+  type GeneratedMutationIdentity,
   type TextMatch,
+  isValidGenerateDocxInput,
+  isValidGenerateExcelInput,
 } from "./documentOps";
-
 
 type CourtlistenerCaseRecord = {
   clusterId: number;
@@ -91,7 +86,9 @@ function cleanAskInputString(value: unknown, fallback = ""): string {
   return text || fallback;
 }
 
-function normalizeAskInputsEvent(args: Record<string, unknown>): AskInputsEvent {
+function normalizeAskInputsEvent(
+  args: Record<string, unknown>,
+): AskInputsEvent {
   const rawItems = Array.isArray(args.items) ? args.items : [];
   const items = rawItems
     .map((item, index): AskInputItem | null => {
@@ -168,20 +165,21 @@ function upsertCourtlistenerCases(
 ): CourtlistenerCaseRecord[] {
   const records: CourtlistenerCaseRecord[] = [];
   for (const input of inputs) {
-    if (typeof input.clusterId !== "number" || !Number.isFinite(input.clusterId)) {
+    if (
+      typeof input.clusterId !== "number" ||
+      !Number.isFinite(input.clusterId)
+    ) {
       continue;
     }
     const clusterId = Math.floor(input.clusterId);
-    const current =
-      state.casesByClusterId.get(clusterId) ??
-      {
-        clusterId,
-        caseName: null,
-        citations: [],
-        url: null,
-        pdfUrl: null,
-        dateFiled: null,
-      };
+    const current = state.casesByClusterId.get(clusterId) ?? {
+      clusterId,
+      caseName: null,
+      citations: [],
+      url: null,
+      pdfUrl: null,
+      dateFiled: null,
+    };
     const nextCitations = [
       ...current.citations,
       ...(input.citation ? [input.citation] : []),
@@ -259,7 +257,9 @@ function courtlistenerCaseInputFromFetchedCase(
 ): CourtlistenerCaseInput {
   const record = recordFromUnknown(fetchedCase);
   const clusterId =
-    numberField(record, "clusterId") ?? numberField(record, "id") ?? fallbackClusterId;
+    numberField(record, "clusterId") ??
+    numberField(record, "id") ??
+    fallbackClusterId;
   return {
     clusterId,
     caseName: stringField(record, "caseName"),
@@ -285,8 +285,7 @@ function courtlistenerOpinionMetadata(raw: unknown) {
       ? stripCaseOpinionHtml(stringField(opinion, "html")!)
       : null);
   return {
-    opinion_id:
-      numberField(opinion, "opinionId") ?? numberField(opinion, "id"),
+    opinion_id: numberField(opinion, "opinionId") ?? numberField(opinion, "id"),
     type: stringField(opinion, "type"),
     author: stringField(opinion, "author"),
     per_curiam: stringField(opinion, "per_curiam"),
@@ -395,7 +394,8 @@ function parseFindInCaseArgs(args: Record<string, unknown>): FindInCaseArgs {
     clusterId:
       typeof args.clusterId === "number" && Number.isFinite(args.clusterId)
         ? Math.floor(args.clusterId)
-        : typeof args.cluster_id === "number" && Number.isFinite(args.cluster_id)
+        : typeof args.cluster_id === "number" &&
+            Number.isFinite(args.cluster_id)
           ? Math.floor(args.cluster_id)
           : null,
     query: typeof args.query === "string" ? args.query : "",
@@ -411,7 +411,10 @@ function parseFindInCaseArgs(args: Record<string, unknown>): FindInCaseArgs {
 }
 
 function findInCaseSearchSummary(
-  event: Extract<CourtlistenerToolEvent, { type: "courtlistener_find_in_case" }>,
+  event: Extract<
+    CourtlistenerToolEvent,
+    { type: "courtlistener_find_in_case" }
+  >,
 ) {
   return {
     cluster_id: event.cluster_id,
@@ -446,6 +449,7 @@ export async function runToolCalls(
   projectId?: string | null,
   courtlistenerState?: CourtlistenerTurnState,
   apiKeys?: import("../../llm").UserApiKeys,
+  mutationTargets?: ReadonlyMap<string, GeneratedMutationIdentity>,
 ): Promise<{
   toolResults: unknown[];
   docsRead: { filename: string; document_id?: string }[];
@@ -474,11 +478,9 @@ export async function runToolCalls(
   const courtlistenerEvents: CourtlistenerToolEvent[] = [];
   const caseCitationEvents: CaseCitationEvent[] = [];
   const mcpEvents: McpToolEvent[] = [];
-  const courtState: CourtlistenerTurnState =
-    courtlistenerState ??
-    {
-      casesByClusterId: new Map(),
-    };
+  const courtState: CourtlistenerTurnState = courtlistenerState ?? {
+    casesByClusterId: new Map(),
+  };
   const groupedFindInCaseSearches = toolCalls
     .filter((tc) => tc.function.name === COURTLISTENER_TOOL_NAMES.findInCase)
     .map((tc) => {
@@ -1061,7 +1063,9 @@ export async function runToolCalls(
       }
 
       const record =
-        typeof clusterId === "number" ? courtState.casesByClusterId.get(clusterId) : undefined;
+        typeof clusterId === "number"
+          ? courtState.casesByClusterId.get(clusterId)
+          : undefined;
       if (!record) {
         const payload = cachedCaseNotFetchedResult(clusterId);
         const event: CourtlistenerToolEvent = {
@@ -1158,7 +1162,9 @@ export async function runToolCalls(
       );
 
       const record =
-        typeof clusterId === "number" ? courtState.casesByClusterId.get(clusterId) : undefined;
+        typeof clusterId === "number"
+          ? courtState.casesByClusterId.get(clusterId)
+          : undefined;
       if (!record) {
         const payload = cachedCaseNotFetchedResult(clusterId);
         const event: CourtlistenerToolEvent = {
@@ -1202,8 +1208,7 @@ export async function runToolCalls(
           opinions: (record.opinions ?? [])
             .map(courtlistenerOpinionMetadata)
             .filter(
-              (opinion): opinion is NonNullable<typeof opinion> =>
-                !!opinion,
+              (opinion): opinion is NonNullable<typeof opinion> => !!opinion,
             ),
           error: multipleOpinions
             ? "Multiple opinions are available. Call courtlistener_read_case again with the opinionId or opinionIds needed."
@@ -1796,6 +1801,18 @@ export async function runToolCalls(
         }
       }
     } else if (tc.function.name === "generate_docx") {
+      if (!isValidGenerateDocxInput(args)) {
+        toolResults.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: JSON.stringify({
+            ok: false,
+            error:
+              "generate_docx requires a non-empty title and a sections array. Correct the arguments and try again.",
+          }),
+        });
+        continue;
+      }
       const title = args.title as string;
       const landscape = !!args.landscape;
       devLog(
@@ -1810,7 +1827,11 @@ export async function runToolCalls(
         args.sections as unknown[],
         userId,
         db,
-        { landscape, projectId: projectId ?? null },
+        {
+          landscape,
+          projectId: projectId ?? null,
+          mutationIdentity: mutationTargets?.get(tc.id),
+        },
       );
       registerGeneratedDocument(
         tc,
@@ -1821,20 +1842,7 @@ export async function runToolCalls(
     } else if (tc.function.name === "generate_excel") {
       const title = typeof args.title === "string" ? args.title.trim() : "";
       const sheets = Array.isArray(args.sheets) ? args.sheets : [];
-      const validSheets =
-        sheets.length > 0 &&
-        sheets.every((sheet) => {
-          if (!sheet || typeof sheet !== "object") return false;
-          const candidate = sheet as Record<string, unknown>;
-          return (
-            typeof candidate.name === "string" &&
-            candidate.name.trim().length > 0 &&
-            Array.isArray(candidate.columns) &&
-            candidate.columns.length > 0 &&
-            Array.isArray(candidate.rows)
-          );
-        });
-      if (!title || !validSheets) {
+      if (!isValidGenerateExcelInput(args)) {
         toolResults.push({
           role: "tool",
           tool_call_id: tc.id,
@@ -1851,13 +1859,10 @@ export async function runToolCalls(
       write(
         `data: ${JSON.stringify({ type: "doc_created_start", filename: previewFilename })}\n\n`,
       );
-      const result = await generateExcel(
-        title,
-        sheets,
-        userId,
-        db,
-        { projectId: projectId ?? null },
-      );
+      const result = await generateExcel(title, sheets, userId, db, {
+        projectId: projectId ?? null,
+        mutationIdentity: mutationTargets?.get(tc.id),
+      });
       registerGeneratedDocument(
         tc,
         result as Record<string, unknown>,

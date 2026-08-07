@@ -26,6 +26,7 @@ import {
   type TransientAgentTaskError,
 } from "./agentTaskRetryPolicy";
 import { createServerSupabase } from "./supabase";
+import { isAgentTaskLeaseBusyError } from "./agent-kernel/execution/taskLease";
 
 const ACTIVE_STATUSES = ["queued", "running", "verifying"] as const;
 
@@ -169,6 +170,10 @@ export class AgentTaskRunner {
         snapshot = await this.dependencies.runIteration(job);
         retryAttempt = 0;
       } catch (error) {
+        if (isAgentTaskLeaseBusyError(error)) {
+          this.queued.set(job.taskId, job);
+          return;
+        }
         const transient = classifyAgentTaskError(error, now());
         if (!transient) {
           const protocol = classifyAgentTaskProviderProtocolError(error);
@@ -247,6 +252,7 @@ export const agentTaskRunner = new AgentTaskRunner({
       taskId: job.taskId,
       userId: job.userId,
       userEmail: job.userEmail,
+      throwOnLeaseBusy: true,
     }),
   recordRetry: (job, retry) =>
     recordAgentTaskRetryCheckpoint(

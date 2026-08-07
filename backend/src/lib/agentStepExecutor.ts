@@ -6,6 +6,7 @@ import {
   stripTransientAssistantEvents,
   type AssistantEvent,
   type ChatMessage,
+  type ToolInvocation,
 } from "./chat";
 import {
   addAgentArtifactLinks,
@@ -44,6 +45,17 @@ import {
   createDocumentsRequiredInput,
   type AgentRequiredInputV1,
 } from "./agent-kernel/contracts/requiredInput";
+import {
+  isValidGenerateDocxInput,
+  isValidGenerateExcelInput,
+} from "./chat/tools/documentOps";
+import {
+  buildAgentStepEffectReservation,
+  commitAgentStepEffect,
+  reserveAgentStepEffect,
+  type AgentStepEffectReceiptV1,
+  type AgentStepMutationTool,
+} from "./agent-kernel/effects/stepEffect";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -617,6 +629,99 @@ export async function executeAgentStep(input: {
     snapshot.task.execution_model
       ? snapshot.task.execution_model
       : DEFAULT_MAIN_MODEL;
+  const mutationReceipts = new Map<string, AgentStepEffectReceiptV1>();
+  const expectedMutation = repairPass
+    ? repairDeliverable?.artifact_type === "tabular_review"
+      ? ({
+          toolName: "generate_excel",
+          artifactType: "tabular_review",
+        } as const)
+      : ({ toolName: "generate_docx", artifactType: "draft" } as const)
+    : stepContract?.output_expectation.kind === "artifact"
+      ? stepContract.output_expectation.artifact_type === "tabular_review"
+        ? ({
+            toolName: "generate_excel",
+            artifactType: "tabular_review",
+          } as const)
+        : ({ toolName: "generate_docx", artifactType: "draft" } as const)
+      : null;
+  const authorizeToolBatch = stepContract
+    ? async (calls: ToolInvocation[]) => {
+        const mutations = calls.filter(
+          (call): call is ToolInvocation & { name: AgentStepMutationTool } =>
+            call.name === "generate_docx" || call.name === "generate_excel",
+        );
+        if (mutations.length > 1) {
+          throw new Error(
+            "A versioned Step may create at most one document per tool batch",
+          );
+        }
+        for (const call of mutations) {
+          if (!expectedMutation || call.name !== expectedMutation.toolName) {
+            throw new Error(
+              "Document generation does not match the fixed Step output",
+            );
+          }
+          const mechanicallyValid =
+            call.name === "generate_docx"
+              ? isValidGenerateDocxInput(call.input)
+              : isValidGenerateExcelInput(call.input);
+          if (!mechanicallyValid) continue;
+          const wanted = buildAgentStepEffectReservation({
+            stepId: currentStep.id,
+            attempt: currentStep.attempt,
+            toolName: call.name,
+            toolInput: call.input,
+          });
+          const receipt = await reserveAgentStepEffect(db, {
+            taskId: snapshot.task.id,
+            receipt: wanted,
+          });
+          mutationReceipts.set(call.id, receipt);
+        }
+      }
+    : undefined;
+  const finalizeToolBatch = stepContract
+    ? async (
+        calls: ToolInvocation[],
+        outcome: {
+          createdDocuments: Array<{
+            document_id?: string;
+            version_id?: string;
+            filename: string;
+          }>;
+        },
+      ) => {
+        const mutations = calls.filter(
+          (call) =>
+            call.name === "generate_docx" || call.name === "generate_excel",
+        );
+        if (!mutations.length) return;
+        const receipt = mutationReceipts.get(mutations[0].id);
+        const created = outcome.createdDocuments;
+        if (!receipt && created.length === 0) return;
+        if (
+          !receipt ||
+          created.length !== 1 ||
+          !created[0].document_id ||
+          !created[0].version_id ||
+          created[0].document_id !== receipt.target.document_id ||
+          created[0].version_id !== receipt.target.version_id ||
+          !expectedMutation
+        ) {
+          throw new Error(
+            "Generated document did not match the reserved Step effect",
+          );
+        }
+        await commitAgentStepEffect(db, {
+          taskId: snapshot.task.id,
+          receipt,
+          artifactType: expectedMutation.artifactType,
+          documentId: created[0].document_id,
+          versionId: created[0].version_id,
+        });
+      }
+    : undefined;
   const { fullText, events, citations } = await runStepWithQueueRetry(
     {
       apiMessages,
@@ -653,6 +758,19 @@ export async function executeAgentStep(input: {
             }
           }
         : undefined,
+      authorizeToolBatch,
+      mutationTargetForCall: stepContract
+        ? (call) => {
+            const receipt = mutationReceipts.get(call.id);
+            return receipt
+              ? {
+                  documentId: receipt.target.document_id,
+                  versionId: receipt.target.version_id,
+                }
+              : null;
+          }
+        : undefined,
+      finalizeToolBatch,
     },
     executionModel,
     input.shouldContinue,

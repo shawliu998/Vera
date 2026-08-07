@@ -492,7 +492,7 @@ export async function getAgentTaskSnapshot(
     db
       .from("agent_steps")
       .select(
-        "id,task_id,title,status,expected_output,attempt,result_summary,position",
+        "id,task_id,title,status,expected_output,attempt,result_summary,result_data,position",
       )
       .eq("task_id", taskId)
       .order("position", { ascending: true }),
@@ -573,7 +573,7 @@ export async function listAgentTasks(
     db
       .from("agent_steps")
       .select(
-        "id,task_id,title,status,expected_output,attempt,result_summary,position",
+        "id,task_id,title,status,expected_output,attempt,result_summary,result_data,position",
       )
       .in(
         "task_id",

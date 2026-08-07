@@ -34,7 +34,17 @@ import {
   runToolCalls,
   type CourtlistenerTurnState,
 } from "./tools/toolDispatcher";
-import { type TurnEditState, type TurnReadState } from "./tools/documentOps";
+import {
+  type GeneratedMutationIdentity,
+  type TurnEditState,
+  type TurnReadState,
+} from "./tools/documentOps";
+
+export type ToolInvocation = {
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+};
 
 export type AssistantEvent =
   | { type: "reasoning"; text: string }
@@ -192,6 +202,20 @@ export async function runLLMStream(params: {
   apiKeys?: import("../llm").UserApiKeys;
   signal?: AbortSignal;
   beforeToolBatch?: () => Promise<void>;
+  authorizeToolBatch?: (calls: ToolInvocation[]) => void | Promise<void>;
+  mutationTargetForCall?: (
+    call: ToolInvocation,
+  ) => GeneratedMutationIdentity | null;
+  finalizeToolBatch?: (
+    calls: ToolInvocation[],
+    outcome: {
+      createdDocuments: Array<{
+        document_id?: string;
+        version_id?: string;
+        filename: string;
+      }>;
+    },
+  ) => void | Promise<void>;
   /**
    * If set, generate_docx will attach created docs to this project so
    * they appear in the project sidebar. Leave null for general chats —
@@ -222,6 +246,9 @@ export async function runLLMStream(params: {
     apiKeys,
     signal,
     beforeToolBatch,
+    authorizeToolBatch,
+    mutationTargetForCall,
+    finalizeToolBatch,
     projectId,
   } = params;
   const researchTools = includeResearchTools ? COURTLISTENER_TOOLS : [];
@@ -419,6 +446,7 @@ export async function runLLMStream(params: {
       runTools: async (calls) => {
         throwIfAborted(signal);
         await beforeToolBatch?.();
+        await authorizeToolBatch?.(calls);
         // Emit any text the model produced before this tool turn so the
         // UI sees it before the tool results stream in.
         flushText();
@@ -430,6 +458,12 @@ export async function runLLMStream(params: {
             arguments: JSON.stringify(c.input),
           },
         }));
+        const mutationTargets = new Map(
+          calls.flatMap((call) => {
+            const target = mutationTargetForCall?.(call);
+            return target ? [[call.id, target] as const] : [];
+          }),
+        );
         const {
           toolResults,
           docsRead,
@@ -456,8 +490,12 @@ export async function runLLMStream(params: {
           projectId,
           courtlistenerTurnState,
           apiKeys,
+          mutationTargets,
         );
         await beforeToolBatch?.();
+        await finalizeToolBatch?.(calls, {
+          createdDocuments: docsCreated,
+        });
         throwIfAborted(signal);
         for (const r of docsRead) {
           events.push({

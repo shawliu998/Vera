@@ -1,8 +1,4 @@
-import {
-  downloadFile,
-  generatedDocKey,
-  uploadFile,
-} from "../../storage";
+import { downloadFile, generatedDocKey, uploadFile } from "../../storage";
 import { convertedPdfKey, docxToPdf } from "../../convert";
 import { createServerSupabase } from "../../supabase";
 import {
@@ -28,7 +24,6 @@ import {
 } from "../../documentTypes";
 import { extractPresentationText } from "../../officeText";
 import { spreadsheetToLLMText } from "../../spreadsheet";
-
 
 export function citationReminder(docLabel: string, filename: string): string {
   const isSpreadsheet = isSpreadsheetDocumentType(
@@ -85,7 +80,11 @@ export async function generateDocx(
   sections: unknown[],
   userId: string,
   db: ReturnType<typeof createServerSupabase>,
-  options?: { landscape?: boolean; projectId?: string | null },
+  options?: {
+    landscape?: boolean;
+    projectId?: string | null;
+    mutationIdentity?: GeneratedMutationIdentity;
+  },
 ) {
   try {
     const {
@@ -502,80 +501,15 @@ export async function generateDocx(
         };
       }
     }
-    const docId = crypto.randomUUID().replace(/-/g, "");
-    const safeTitle =
-      title
-        .replace(/[^a-zA-Z0-9 -]/g, "")
-        .trim()
-        .slice(0, 64) || "document";
-    const filename = `${safeTitle}.docx`;
-    const key = generatedDocKey(userId, docId, filename);
-
-    await uploadFile(
-      key,
-      buf.buffer as ArrayBuffer,
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    );
-    const downloadUrl = buildDownloadUrl(key, filename);
-
-    // Persist to DB so generated docs are first-class documents:
-    // openable in the DocPanel and editable via edit_document. In
-    // project chats we attach to the project so it appears in the
-    // sidebar; in the general chat we leave project_id null and it
-    // stays a standalone document.
-    const { data: docRow, error: docErr } = await db
-      .from("documents")
-      .insert({
-        project_id: options?.projectId ?? null,
-        user_id: userId,
-        status: "ready",
-      })
-      .select("id")
-      .single();
-    if (docErr || !docRow) {
-      return {
-        error: `Failed to record generated document: ${docErr?.message ?? "unknown"}`,
-      };
-    }
-    const documentId = docRow.id as string;
-
-    const { data: versionRow, error: verErr } = await db
-      .from("document_versions")
-      .insert({
-        document_id: documentId,
-        storage_path: key,
-        source: "generated",
-        version_number: 1,
-        filename: filename,
-        file_type: "docx",
-        size_bytes: buf.byteLength,
-        page_count: null,
-      })
-      .select("id")
-      .single();
-    if (verErr || !versionRow) {
-      return {
-        error: `Failed to record generated document version: ${verErr?.message ?? "unknown"}`,
-      };
-    }
-    const versionId = versionRow.id as string;
-
-    await db
-      .from("documents")
-      .update({
-        current_version_id: versionId,
-      })
-      .eq("id", documentId);
-
-    return {
-      filename,
-      download_url: downloadUrl,
-      document_id: documentId,
-      version_id: versionId,
-      version_number: 1,
-      storage_path: key,
-      message: `Document '${filename}' has been generated successfully.`,
-    };
+    return persistGeneratedFile({
+      title,
+      extension: "docx",
+      buffer: buf,
+      userId,
+      db,
+      projectId: options?.projectId ?? null,
+      mutationIdentity: options?.mutationIdentity,
+    });
   } catch (e) {
     return { error: String(e) };
   }
@@ -612,8 +546,14 @@ function excelColumnName(index: number) {
 }
 
 function normalizeSheetName(value: unknown, fallback: string) {
-  const raw = typeof value === "string" && value.trim() ? value.trim() : fallback;
-  return raw.replace(/[:\\/?*[\]]/g, " ").trim().slice(0, 31) || fallback;
+  const raw =
+    typeof value === "string" && value.trim() ? value.trim() : fallback;
+  return (
+    raw
+      .replace(/[:\\/?*[\]]/g, " ")
+      .trim()
+      .slice(0, 31) || fallback
+  );
 }
 
 function normalizeRows(rows: unknown, colCount: number) {
@@ -630,7 +570,9 @@ function normalizeRows(rows: unknown, colCount: number) {
 async function buildXlsxWorkbook(title: string, sheetsInput: unknown[]) {
   const JSZip = (await import("jszip")).default;
   const zip = new JSZip();
-  const sheets = sheetsInput.length ? sheetsInput : [{ name: title, columns: [], rows: [] }];
+  const sheets = sheetsInput.length
+    ? sheetsInput
+    : [{ name: title, columns: [], rows: [] }];
 
   const normalizedSheets = sheets.map((sheet, index) => {
     const raw = (sheet && typeof sheet === "object" ? sheet : {}) as {
@@ -753,15 +695,24 @@ function pptTextParagraphs(lines: string[], opts: { title?: boolean } = {}) {
     .map((line, index) => {
       const escaped = xmlEscape(line);
       const titleAttrs = opts.title ? ' sz="3200" b="1"' : ' sz="2000"';
-      const bullet = !opts.title && index >= 0
-        ? '<a:pPr marL="342900" indent="-171450"><a:buChar char="&#8226;"/></a:pPr>'
-        : "";
+      const bullet =
+        !opts.title && index >= 0
+          ? '<a:pPr marL="342900" indent="-171450"><a:buChar char="&#8226;"/></a:pPr>'
+          : "";
       return `<a:p>${bullet}<a:r><a:rPr lang="en-US"${titleAttrs}/><a:t>${escaped}</a:t></a:r></a:p>`;
     })
     .join("");
 }
 
-function pptShape(id: number, name: string, x: number, y: number, cx: number, cy: number, body: string) {
+function pptShape(
+  id: number,
+  name: string,
+  x: number,
+  y: number,
+  cx: number,
+  cy: number,
+  body: string,
+) {
   return `<p:sp>
   <p:nvSpPr><p:cNvPr id="${id}" name="${xmlEscape(name)}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>
   <p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></p:spPr>
@@ -932,18 +883,120 @@ ${slides
   return zip.generateAsync({ type: "nodebuffer" });
 }
 
+export type GeneratedMutationIdentity = {
+  documentId: string;
+  versionId: string;
+};
+
+export function isValidGenerateDocxInput(input: Record<string, unknown>) {
+  return (
+    typeof input.title === "string" &&
+    input.title.trim().length > 0 &&
+    Array.isArray(input.sections)
+  );
+}
+
+export function isValidGenerateExcelInput(input: Record<string, unknown>) {
+  if (
+    typeof input.title !== "string" ||
+    !input.title.trim() ||
+    !Array.isArray(input.sheets) ||
+    input.sheets.length === 0
+  ) {
+    return false;
+  }
+  return input.sheets.every((sheet) => {
+    if (!sheet || typeof sheet !== "object" || Array.isArray(sheet)) {
+      return false;
+    }
+    const candidate = sheet as Record<string, unknown>;
+    return (
+      typeof candidate.name === "string" &&
+      candidate.name.trim().length > 0 &&
+      Array.isArray(candidate.columns) &&
+      candidate.columns.length > 0 &&
+      Array.isArray(candidate.rows)
+    );
+  });
+}
+
 async function persistGeneratedFile(params: {
   title: string;
-  extension: "xlsx" | "pptx";
+  extension: "docx" | "xlsx" | "pptx";
   buffer: Buffer;
   userId: string;
   db: ReturnType<typeof createServerSupabase>;
   projectId?: string | null;
+  mutationIdentity?: GeneratedMutationIdentity;
 }) {
-  const { title, extension, buffer, userId, db, projectId } = params;
-  const docId = crypto.randomUUID().replace(/-/g, "");
+  const { title, extension, buffer, userId, db, projectId, mutationIdentity } =
+    params;
+  const storageDocumentId =
+    mutationIdentity?.documentId ?? crypto.randomUUID().replace(/-/g, "");
   const filename = safeGeneratedFilename(title, extension);
-  const key = generatedDocKey(userId, docId, filename);
+  const key = generatedDocKey(userId, storageDocumentId, filename);
+
+  if (mutationIdentity) {
+    const [documentResult, versionResult] = await Promise.all([
+      db
+        .from("documents")
+        .select("id,user_id,project_id,current_version_id")
+        .eq("id", mutationIdentity.documentId)
+        .maybeSingle(),
+      db
+        .from("document_versions")
+        .select(
+          "id,document_id,storage_path,filename,file_type,version_number,deleted_at",
+        )
+        .eq("id", mutationIdentity.versionId)
+        .maybeSingle(),
+    ]);
+    if (documentResult.error) throw new Error(documentResult.error.message);
+    if (versionResult.error) throw new Error(versionResult.error.message);
+    const document = documentResult.data;
+    const version = versionResult.data;
+    if (
+      document &&
+      (document.user_id !== userId ||
+        document.project_id !== (projectId ?? null))
+    ) {
+      throw new Error("The reserved generated Document is outside this Matter");
+    }
+    if (
+      version &&
+      (version.document_id !== mutationIdentity.documentId ||
+        version.file_type !== extension ||
+        version.filename !== filename ||
+        version.storage_path !== key ||
+        version.deleted_at ||
+        !version.storage_path)
+    ) {
+      throw new Error("The reserved generated Version is inconsistent");
+    }
+    if (
+      document &&
+      version &&
+      document.current_version_id === mutationIdentity.versionId
+    ) {
+      const recoveredFilename = version.filename ?? filename;
+      return {
+        filename: recoveredFilename,
+        download_url: buildDownloadUrl(version.storage_path, recoveredFilename),
+        document_id: mutationIdentity.documentId,
+        version_id: mutationIdentity.versionId,
+        version_number: version.version_number ?? 1,
+        storage_path: version.storage_path,
+        message: `Document '${recoveredFilename}' was recovered from its committed effect.`,
+      };
+    }
+    if (
+      document?.current_version_id &&
+      document.current_version_id !== mutationIdentity.versionId
+    ) {
+      throw new Error("The reserved generated Document has a newer Version");
+    }
+  }
+
   await uploadFile(
     key,
     buffer.buffer.slice(
@@ -954,10 +1007,10 @@ async function persistGeneratedFile(params: {
   );
 
   let pdfStoragePath: string | null = null;
-  if (shouldConvertToPdf(extension)) {
+  if (extension !== "docx" && shouldConvertToPdf(extension)) {
     try {
       const pdfBuf = await docxToPdf(buffer);
-      const pdfKey = convertedPdfKey(userId, docId);
+      const pdfKey = convertedPdfKey(userId, storageDocumentId);
       await uploadFile(
         pdfKey,
         pdfBuf.buffer.slice(
@@ -976,22 +1029,40 @@ async function persistGeneratedFile(params: {
   const { data: docRow, error: docErr } = await db
     .from("documents")
     .insert({
+      ...(mutationIdentity ? { id: mutationIdentity.documentId } : {}),
       project_id: projectId ?? null,
       user_id: userId,
       status: "ready",
     })
     .select("id")
     .single();
-  if (docErr || !docRow) {
+  if (mutationIdentity && docErr?.code === "23505") {
+    const { data: existing, error } = await db
+      .from("documents")
+      .select("id,user_id,project_id,current_version_id")
+      .eq("id", mutationIdentity.documentId)
+      .maybeSingle();
+    if (
+      error ||
+      !existing ||
+      existing.user_id !== userId ||
+      existing.project_id !== (projectId ?? null) ||
+      (existing.current_version_id &&
+        existing.current_version_id !== mutationIdentity.versionId)
+    ) {
+      return { error: "The reserved generated Document is unavailable." };
+    }
+  } else if (docErr || !docRow) {
     return {
       error: `Failed to record generated document: ${docErr?.message ?? "unknown"}`,
     };
   }
-  const documentId = docRow.id as string;
+  const documentId = mutationIdentity?.documentId ?? (docRow!.id as string);
 
   const { data: versionRow, error: verErr } = await db
     .from("document_versions")
     .insert({
+      ...(mutationIdentity ? { id: mutationIdentity.versionId } : {}),
       document_id: documentId,
       storage_path: key,
       pdf_storage_path: pdfStoragePath,
@@ -1004,17 +1075,44 @@ async function persistGeneratedFile(params: {
     })
     .select("id")
     .single();
-  if (verErr || !versionRow) {
+  if (mutationIdentity && verErr?.code === "23505") {
+    const { data: existing, error } = await db
+      .from("document_versions")
+      .select("id,document_id,storage_path,filename,file_type,deleted_at")
+      .eq("id", mutationIdentity.versionId)
+      .maybeSingle();
+    if (
+      error ||
+      !existing ||
+      existing.document_id !== documentId ||
+      existing.file_type !== extension ||
+      existing.filename !== filename ||
+      existing.storage_path !== key ||
+      existing.deleted_at ||
+      !existing.storage_path
+    ) {
+      return { error: "The reserved generated Version is unavailable." };
+    }
+  } else if (verErr || !versionRow) {
     return {
       error: `Failed to record generated document version: ${verErr?.message ?? "unknown"}`,
     };
   }
-  const versionId = versionRow.id as string;
+  const versionId = mutationIdentity?.versionId ?? (versionRow!.id as string);
 
   await db
     .from("documents")
-    .update({ current_version_id: versionId })
-    .eq("id", documentId);
+    .update({ current_version_id: versionId, status: "ready" })
+    .eq("id", documentId)
+    .is("current_version_id", null);
+  const { data: current, error: currentError } = await db
+    .from("documents")
+    .select("current_version_id")
+    .eq("id", documentId)
+    .maybeSingle();
+  if (currentError || current?.current_version_id !== versionId) {
+    return { error: "The generated Document current Version changed." };
+  }
 
   return {
     filename,
@@ -1032,7 +1130,10 @@ export async function generateExcel(
   sheets: unknown[],
   userId: string,
   db: ReturnType<typeof createServerSupabase>,
-  options?: { projectId?: string | null },
+  options?: {
+    projectId?: string | null;
+    mutationIdentity?: GeneratedMutationIdentity;
+  },
 ) {
   try {
     const normalizedTitle = typeof title === "string" ? title : "Workbook";
@@ -1047,6 +1148,7 @@ export async function generateExcel(
       userId,
       db,
       projectId: options?.projectId ?? null,
+      mutationIdentity: options?.mutationIdentity,
     });
   } catch (e) {
     return { error: String(e) };
@@ -1143,8 +1245,7 @@ export async function runEditDocument(params: {
   if (!doc) return { ok: false, error: "Document not found." };
 
   const activeVersion = await loadActiveVersion(documentId, db);
-  let versionFilename =
-    activeVersion?.filename?.trim() || "Untitled document";
+  let versionFilename = activeVersion?.filename?.trim() || "Untitled document";
 
   const current = await loadCurrentVersionBytes(documentId, db);
   if (!current) return { ok: false, error: "Could not load document bytes." };
