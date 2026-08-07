@@ -13,7 +13,8 @@ import { createServerSupabase } from "./supabase";
 import { downloadFile, uploadFile, versionStorageKey } from "./storage";
 import { sameUuidIdentity } from "./uuidIdentity";
 
-type Db = ReturnType<typeof createServerSupabase>;
+export type ProviderSourceImportDb = ReturnType<typeof createServerSupabase>;
+type Db = ProviderSourceImportDb;
 const PROVIDER_SOURCE_IMPORT_RECEIPT_VERSION =
   "provider_source_import_receipt_v1" as const;
 
@@ -117,6 +118,13 @@ export type ProviderSourceImportRepository = {
     versionNumber: number;
     currentVersionId: string;
   }>;
+};
+
+export type ProviderSourceImportDependencies = {
+  repository?: ProviderSourceImportRepository;
+  upload?: typeof uploadFile;
+  download?: typeof downloadFile;
+  now?: () => string;
 };
 
 export type ProviderSourceImportReceiptV1 = {
@@ -412,12 +420,7 @@ export async function importProviderSourceSnapshot(input: {
   matterId: string;
   snapshot: unknown;
   connectorReceipt: unknown;
-  dependencies?: {
-    repository?: ProviderSourceImportRepository;
-    upload?: typeof uploadFile;
-    download?: typeof downloadFile;
-    now?: () => string;
-  };
+  dependencies?: ProviderSourceImportDependencies;
 }): Promise<ProviderSourceImportReceiptV1> {
   z.string().uuid().parse(input.userId);
   z.string().uuid().parse(input.matterId);

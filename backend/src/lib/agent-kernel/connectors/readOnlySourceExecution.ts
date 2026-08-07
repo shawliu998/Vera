@@ -34,6 +34,8 @@ export type ReadOnlySourceBoundInvokerV1 = {
   readonly connectorId: string;
   readonly host: string | null;
   readonly binding: ReadOnlySourceConnectorPinV1["binding"];
+  /** Provider-specific identity binding that must pass before network egress. */
+  acceptsRequest?(request: Readonly<ReadOnlySourceRequestV1>): boolean;
   invoke(
     payload: Readonly<Record<string, string | number>>,
     options: { timeoutMs: number; signal: AbortSignal },
@@ -233,6 +235,15 @@ function preflight(input: {
     JSON.stringify(input.invoker.binding) !== JSON.stringify(input.pin.binding)
   ) {
     return "connector_invoker_binding_mismatch";
+  }
+  if (input.invoker.acceptsRequest) {
+    try {
+      if (!input.invoker.acceptsRequest(input.request)) {
+        return "connector_request_not_bound";
+      }
+    } catch {
+      return "connector_request_not_bound";
+    }
   }
   if (
     (input.pin.binding.kind === "fixture" && input.invoker.host !== null) ||

@@ -240,6 +240,53 @@ test("executes one server-bound read-only call and keeps bodies out of receipts"
   assert.doesNotMatch(serializedReceipt, /api key|credential|secret/i);
 });
 
+test("rejects a provider-specific identity mismatch before network egress", async () => {
+  let calls = 0;
+  const result = await executeReadOnlySourceConnector({
+    context,
+    grant: grant(),
+    pin: pin(),
+    authorization,
+    request,
+    normalizer: normalizer(),
+    invoker: {
+      ...boundInvoker(async () => {
+        calls += 1;
+        return {};
+      }),
+      acceptsRequest: () => false,
+    },
+    now: () => NOW,
+  });
+  assert.equal(result.kind, "rejected");
+  if (result.kind !== "rejected") return;
+  assert.equal(result.code, "connector_request_not_bound");
+  assert.equal(result.receipt.external_call_attempted, false);
+  assert.equal(calls, 0);
+
+  const thrown = await executeReadOnlySourceConnector({
+    context,
+    grant: grant(),
+    pin: pin(),
+    authorization,
+    request,
+    normalizer: normalizer(),
+    invoker: {
+      ...boundInvoker(async () => {
+        calls += 1;
+        return {};
+      }),
+      acceptsRequest: () => {
+        throw new Error("adapter_preflight_bug");
+      },
+    },
+    now: () => NOW,
+  });
+  assert.equal(thrown.kind, "rejected");
+  assert.equal(thrown.receipt.external_call_attempted, false);
+  assert.equal(calls, 0);
+});
+
 test("a selected-source read emits no search or pagination fields", async () => {
   const readPin = pin({
     allowed_operations: ["read_snapshot"],

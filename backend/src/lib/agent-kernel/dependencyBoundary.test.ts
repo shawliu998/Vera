@@ -98,3 +98,26 @@ test("read-only connector Kernel code remains provider-neutral", async () => {
   }
   assert.deepEqual(violations, []);
 });
+
+test("Patent Packs stay outside persistence, routes, and the retired parallel subsystem", async () => {
+  const patentRoot = path.resolve(kernelRoot, "../agent-packs/patent");
+  const violations: string[] = [];
+  for (const file of await productionFiles(patentRoot)) {
+    const source = await readFile(file, "utf8");
+    for (const specifier of imports(source)) {
+      if (
+        /(?:^|\/)routes(?:\/|$)/.test(specifier) ||
+        /(?:^|\/)supabase$/.test(specifier) ||
+        /(?:^|\/)providerSourceImport$/.test(specifier) ||
+        /(?:^|\/)patentSources(?:\/|$)/.test(specifier)
+      ) {
+        violations.push(`${path.basename(file)} -> ${specifier}`);
+      }
+    }
+    const lines = source.split(/\r?\n/).length;
+    if (lines > 500) {
+      violations.push(`${path.basename(file)} has ${lines} lines`);
+    }
+  }
+  assert.deepEqual(violations, []);
+});

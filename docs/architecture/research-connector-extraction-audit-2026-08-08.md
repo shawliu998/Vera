@@ -57,11 +57,30 @@ approval, export, or a second source database.
 - The service-role-only atomic commit serializes concurrent Version-number
   allocation and current-pointer activation. A local database/storage smoke
   proves create, replay recovery, concurrent conflict, byte readback and cleanup.
+- The central source pipeline consumes body-bearing selected-read snapshots,
+  imports them immediately, and returns only body-free connector and import
+  receipts. Search discoveries never invoke the importer.
+- The EPO OPS Patent Pack uses the same connector and import boundary. The
+  server appends an exact publication-authority (`pn`) and publication-date
+  (`pd<=`) restriction to the bounded CQL instead of trusting a model to carry
+  those limits. It rejects a selected publication outside the fixed authority
+  before egress and treats missing claims/description as a preserved partial
+  source plus an incomplete coverage gap.
+- The EPO adapter is split into bounded HTTP/OAuth primitives, XML
+  normalization, and Pack orchestration. A dependency/size gate prevents the
+  Patent Pack from importing routes, Supabase, the central importer, or the
+  retired parallel `patentSources` subsystem, and caps each production file at
+  500 lines.
+- The current EPO OPS endpoint and CQL semantics were checked against the EPO
+  OPS 3.2 reference guide and official service page on 2026-08-08:
+  <https://www.epo.org/en/searching-for-patents/data/web-services/ops> and
+  <https://link.epo.org/web/searching-for-patents/data/en-ops-v3.2-documentation-version-1.3.20.pdf>.
 
 ## Remaining gates
 
-1. Adapt EPO OPS and PatSnap as Patent Pack invoker/normalizer pairs.
-2. Bind each connector to current per-user authorization without copying or
+1. Bind EPO OPS to current per-user authorization without copying or
    sharing credentials between users.
-3. Run fixture, database, and product-level legal/patent research acceptance;
+2. Decide whether PatSnap provides a material, licensed coverage increment over
+   EPO OPS before adapting it; do not copy the old parallel patent subsystem.
+3. Run real credential, database, and product-level patent research acceptance;
    then connect the same source seam to litigation authority research.

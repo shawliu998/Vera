@@ -324,6 +324,7 @@ export const readOnlySourceGapCodeSchema = z.enum([
   "pagination_truncated",
   "result_limit_reached",
   "snapshot_unavailable",
+  "full_text_unavailable",
   "status_unavailable",
   "provider_error",
 ]);
