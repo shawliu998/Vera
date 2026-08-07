@@ -19,6 +19,7 @@ import {
   verifyTaskCitationLinks,
 } from "./agentStepExecutor";
 import { createServerSupabase } from "./supabase";
+import { assertAgentTaskAssignmentContract } from "./agent-kernel/contracts/taskContract";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -64,6 +65,7 @@ export async function advanceAgentTaskExecution(input: {
     (await taskCanContinue(db, taskId, userId)).active;
   const current = await getAgentTaskSnapshot(db, taskId, userId);
   if (!current) return null;
+  assertAgentTaskAssignmentContract(current.task);
   if (current.task.status === "queued") {
     const planningRequest = readAgentTaskPlanningRequest(current.task);
     if (planningRequest) {
