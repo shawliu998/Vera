@@ -569,6 +569,14 @@ test("provider snapshots cannot forge Vera identities or unsupported source host
       }),
     /Vera object identities/,
   );
+  assert.throws(
+    () =>
+      readOnlySourceSnapshotSchema.parse({
+        ...base,
+        metadata: { source_body: "hidden duplicate" },
+      }),
+    /import-only source_body channel/,
+  );
 });
 
 test("coverage cannot claim completeness while a bounded gap remains", () => {

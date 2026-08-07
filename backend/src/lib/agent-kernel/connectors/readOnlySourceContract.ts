@@ -236,6 +236,18 @@ function validateSourceMetadata(
       message: "A provider result cannot supply Vera object identities",
     });
   }
+  const bodyBearing = keys.filter((key) =>
+    new Set(["sourcebody", "rawbody", "fulltext", "rawcontent"]).has(
+      key.replace(/[_-]/g, "").toLowerCase(),
+    ),
+  );
+  if (bodyBearing.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["metadata"],
+      message: "Source bodies must use only the import-only source_body channel",
+    });
+  }
 }
 
 const httpsSourceUrl = z
@@ -401,4 +413,8 @@ export function validateReadOnlySourceDiscovery(value: unknown) {
 
 export function validateReadOnlySourceCoverage(value: unknown) {
   return readOnlySourceCoverageSchema.parse(value);
+}
+
+export function validateReadOnlySourceReceipt(value: unknown) {
+  return readOnlySourceReceiptSchema.parse(value);
 }

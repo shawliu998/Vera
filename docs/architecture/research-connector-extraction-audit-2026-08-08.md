@@ -51,15 +51,17 @@ approval, export, or a second source database.
 - Provider capacity, configuration, network, timeout, protocol and structured
   output are separate resumable classifications.
 - Kernel production code remains provider-neutral by dependency test.
+- A selected snapshot imports idempotently into the existing Matter
+  `Document`/`DocumentVersion` model with body-free JSONB provenance; a later
+  snapshot creates a new Version of the same Document.
+- The service-role-only atomic commit serializes concurrent Version-number
+  allocation and current-pointer activation. A local database/storage smoke
+  proves create, replay recovery, concurrent conflict, byte readback and cleanup.
 
 ## Remaining gates
 
-1. Implement one idempotent, Matter-owned source importer over existing
-   `documents`, `document_versions`, storage and current-Version controls.
-2. Replace the patent-specific `patent_provider_import` source value with a
-   compatible generic provider-import migration, preserving any existing rows.
-3. Adapt EPO OPS and PatSnap as Patent Pack invoker/normalizer pairs.
-4. Bind each connector to current per-user authorization without copying or
+1. Adapt EPO OPS and PatSnap as Patent Pack invoker/normalizer pairs.
+2. Bind each connector to current per-user authorization without copying or
    sharing credentials between users.
-5. Run fixture, database, and product-level legal/patent research acceptance;
+3. Run fixture, database, and product-level legal/patent research acceptance;
    then connect the same source seam to litigation authority research.

@@ -17,6 +17,7 @@
     "test:agent-task-review-gate": "tsx --test src/lib/agentTaskReviews.test.ts",
     "test:agent-task-review-version": "tsx scripts/agentTaskReviewVersionSmoke.ts",
     "test:agent-task-runner": "tsx scripts/agentTaskRunnerSmoke.ts",
+    "test:provider-source-import-db": "tsx scripts/providerSourceImportSmoke.ts",
     "test:docx-review-markup": "tsx scripts/docxReviewMarkupSmoke.ts",
     "test:office-document-adapter": "tsx scripts/officeDocumentAdapterSmoke.ts",
     "test:upload-filename": "tsx --test src/lib/upload.test.ts",
