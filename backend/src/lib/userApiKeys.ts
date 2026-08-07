@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { z } from "zod";
 import { createServerSupabase } from "./supabase";
 import type { UserApiKeys } from "./llm";
 
@@ -17,12 +18,37 @@ export type ApiKeyStatus = Record<ApiKeyProvider, boolean> & {
     sources: Record<ApiKeyProvider, ApiKeySource>;
 };
 
+export type EpoOpsCredentials = {
+    consumerKey: string;
+    consumerSecret: string;
+};
+
+export type EpoOpsCredentialStatus = {
+    configured: boolean;
+    source: ApiKeySource;
+};
+
 type EncryptedKeyRow = {
-    provider: ApiKeyProvider;
+    provider: string;
     encrypted_key: string;
     iv: string;
     auth_tag: string;
 };
+
+const EPO_OPS_PROVIDER = "epo_ops" as const;
+const epoOpsCredentialsSchema = z
+    .object({
+        consumerKey: z.string().trim().min(1).max(512),
+        consumerSecret: z.string().trim().min(1).max(512),
+    })
+    .strict();
+const epoOpsCredentialEnvelopeSchema = z
+    .object({
+        schema_version: z.literal("epo_ops_credentials_v1"),
+        consumer_key: z.string().trim().min(1).max(512),
+        consumer_secret: z.string().trim().min(1).max(512),
+    })
+    .strict();
 
 const PROVIDERS: ApiKeyProvider[] = [
     "claude",
@@ -65,9 +91,20 @@ function envApiKey(provider: ApiKeyProvider): string | null {
             return null;
     }
 }
-
 export function hasEnvApiKey(provider: ApiKeyProvider): boolean {
     return !!envApiKey(provider);
+}
+
+function envEpoOpsCredentials(): EpoOpsCredentials | null {
+    const consumerKey = process.env.EPO_OPS_CONSUMER_KEY?.trim() || null;
+    const consumerSecret =
+        process.env.EPO_OPS_CONSUMER_SECRET?.trim() || null;
+    if (!consumerKey || !consumerSecret) return null;
+    return epoOpsCredentialsSchema.parse({ consumerKey, consumerSecret });
+}
+
+export function hasEnvEpoOpsCredentials(): boolean {
+    return envEpoOpsCredentials() !== null;
 }
 
 function encryptionKey(): Buffer {
@@ -224,6 +261,85 @@ export async function saveUserApiKey(
             user_id: userId,
             provider,
             ...encrypt(normalized),
+            updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id,provider" },
+    );
+    if (error) throw error;
+}
+
+async function getStoredEpoOpsCredentials(
+    userId: string,
+    db: Db,
+): Promise<EpoOpsCredentials | null> {
+    const { data, error } = await db
+        .from("user_api_keys")
+        .select("provider, encrypted_key, iv, auth_tag")
+        .eq("user_id", userId)
+        .eq("provider", EPO_OPS_PROVIDER)
+        .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    const plaintext = decrypt(data as EncryptedKeyRow);
+    if (!plaintext) return null;
+    try {
+        const envelope = epoOpsCredentialEnvelopeSchema.parse(
+            JSON.parse(plaintext),
+        );
+        return {
+            consumerKey: envelope.consumer_key,
+            consumerSecret: envelope.consumer_secret,
+        };
+    } catch {
+        return null;
+    }
+}
+
+/** Resolve only the current user's EPO OPS pair; never expose this via status APIs. */
+export async function getUserEpoOpsCredentials(
+    userId: string,
+    db: Db = createServerSupabase(),
+): Promise<EpoOpsCredentials | null> {
+    return envEpoOpsCredentials() ?? getStoredEpoOpsCredentials(userId, db);
+}
+
+export async function getUserEpoOpsCredentialStatus(
+    userId: string,
+    db: Db = createServerSupabase(),
+): Promise<EpoOpsCredentialStatus> {
+    if (hasEnvEpoOpsCredentials()) return { configured: true, source: "env" };
+    const credentials = await getStoredEpoOpsCredentials(userId, db);
+    return {
+        configured: credentials !== null,
+        source: credentials ? "user" : null,
+    };
+}
+
+export async function saveUserEpoOpsCredentials(
+    userId: string,
+    value: EpoOpsCredentials | null,
+    db: Db = createServerSupabase(),
+): Promise<void> {
+    if (!value) {
+        const { error } = await db
+            .from("user_api_keys")
+            .delete()
+            .eq("user_id", userId)
+            .eq("provider", EPO_OPS_PROVIDER);
+        if (error) throw error;
+        return;
+    }
+    const credentials = epoOpsCredentialsSchema.parse(value);
+    const envelope = JSON.stringify({
+        schema_version: "epo_ops_credentials_v1",
+        consumer_key: credentials.consumerKey,
+        consumer_secret: credentials.consumerSecret,
+    });
+    const { error } = await db.from("user_api_keys").upsert(
+        {
+            user_id: userId,
+            provider: EPO_OPS_PROVIDER,
+            ...encrypt(envelope),
             updated_at: new Date().toISOString(),
         },
         { onConflict: "user_id,provider" },

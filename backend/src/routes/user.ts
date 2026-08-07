@@ -13,10 +13,13 @@ import {
 } from "../lib/llm";
 import {
     type ApiKeyStatus,
+    getUserEpoOpsCredentialStatus,
     getUserApiKeyStatus,
     hasEnvApiKey,
+    hasEnvEpoOpsCredentials,
     normalizeApiKeyProvider,
     saveUserApiKey,
+    saveUserEpoOpsCredentials,
 } from "../lib/userApiKeys";
 import {
     completeUserMcpConnectorOAuth,
@@ -652,6 +655,104 @@ userRouter.put(
                 error: detail,
             });
             res.status(500).json({ detail });
+        }
+    },
+);
+
+// GET /user/source-credentials/epo-ops
+// Status only: consumer credentials are never returned to browser clients.
+userRouter.get(
+    "/source-credentials/epo-ops",
+    requireAuth,
+    async (_req, res) => {
+        const userId = res.locals.userId as string;
+        try {
+            res.json(
+                await getUserEpoOpsCredentialStatus(
+                    userId,
+                    createServerSupabase(),
+                ),
+            );
+        } catch (err) {
+            console.error("[user/source-credentials/epo-ops] status failed", {
+                userId,
+                error: errorMessage(err),
+            });
+            res.status(500).json({ detail: "Could not read credential status" });
+        }
+    },
+);
+
+// PUT /user/source-credentials/epo-ops
+userRouter.put(
+    "/source-credentials/epo-ops",
+    requireAuth,
+    requireMfaIfEnrolled,
+    async (req, res) => {
+        const userId = res.locals.userId as string;
+        const consumerKey =
+            typeof req.body?.consumer_key === "string"
+                ? req.body.consumer_key.trim()
+                : "";
+        const consumerSecret =
+            typeof req.body?.consumer_secret === "string"
+                ? req.body.consumer_secret.trim()
+                : "";
+        if (
+            !consumerKey ||
+            !consumerSecret ||
+            consumerKey.length > 512 ||
+            consumerSecret.length > 512
+        ) {
+            return void res.status(400).json({
+                detail: "consumer_key and consumer_secret must each contain 1 to 512 characters",
+            });
+        }
+        if (hasEnvEpoOpsCredentials()) {
+            return void res.status(409).json({
+                detail: "EPO OPS is configured by the server environment and cannot be changed from the browser.",
+            });
+        }
+        try {
+            const db = createServerSupabase();
+            await saveUserEpoOpsCredentials(
+                userId,
+                { consumerKey, consumerSecret },
+                db,
+            );
+            res.json(await getUserEpoOpsCredentialStatus(userId, db));
+        } catch (err) {
+            console.error("[user/source-credentials/epo-ops] save failed", {
+                userId,
+                error: errorMessage(err),
+            });
+            res.status(500).json({ detail: "Could not save EPO OPS credentials" });
+        }
+    },
+);
+
+// DELETE /user/source-credentials/epo-ops
+userRouter.delete(
+    "/source-credentials/epo-ops",
+    requireAuth,
+    requireMfaIfEnrolled,
+    async (_req, res) => {
+        const userId = res.locals.userId as string;
+        if (hasEnvEpoOpsCredentials()) {
+            return void res.status(409).json({
+                detail: "EPO OPS is configured by the server environment and cannot be changed from the browser.",
+            });
+        }
+        try {
+            const db = createServerSupabase();
+            await saveUserEpoOpsCredentials(userId, null, db);
+            res.json(await getUserEpoOpsCredentialStatus(userId, db));
+        } catch (err) {
+            console.error("[user/source-credentials/epo-ops] delete failed", {
+                userId,
+                error: errorMessage(err),
+            });
+            res.status(500).json({ detail: "Could not delete EPO OPS credentials" });
         }
     },
 );
