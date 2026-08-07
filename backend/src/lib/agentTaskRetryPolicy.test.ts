@@ -151,6 +151,14 @@ test("classifies only an exact required-tool provider protocol diagnostic", () =
   }
 });
 
+test("classifies verifier structured-output drift separately", () => {
+  const error = new Error("Verifier returned an invalid structured result");
+  error.name = "AgentVerifierStructuredOutputError";
+  assert.deepEqual(classifyAgentTaskProviderProtocolError(error), {
+    classification: "provider_structured_output",
+  });
+});
+
 test("fails closed for non-exact provider protocol and policy diagnostics", () => {
   for (const message of [
     "UnknownAI did not return the required read_document tool call for this iteration.",

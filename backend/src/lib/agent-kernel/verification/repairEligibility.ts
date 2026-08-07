@@ -94,3 +94,41 @@ export function decideAgentVerificationRepairV1(input: {
     reason: "multiple_or_unrepairable_gaps",
   };
 }
+
+type ExecutableRepairDecision = Exclude<
+  AgentVerificationRepairDecisionV1,
+  { kind: "none" | "review_required" }
+>;
+
+/**
+ * Coordinates at most one server-authorized repair and one fresh verification.
+ * The coordinator never turns verification into approval/export and never
+ * attempts a second repair when the recheck still has a gap.
+ */
+export async function coordinateOneAgentVerificationRepairV1(input: {
+  packet: AgentVerificationPacketV1;
+  result: AgentVerificationResultV1;
+  repairAlreadyAttempted: boolean;
+  executeRepair: (decision: ExecutableRepairDecision) => Promise<void>;
+  recheck: () => Promise<{
+    packet: AgentVerificationPacketV1;
+    result: AgentVerificationResultV1;
+  }>;
+}) {
+  const decision = decideAgentVerificationRepairV1(input);
+  if (decision.kind === "none" || decision.kind === "review_required") {
+    return { decision, packet: input.packet, result: input.result };
+  }
+  await input.executeRepair(decision);
+  const rechecked = await input.recheck();
+  return {
+    decision:
+      rechecked.result.outcome === "clean_pass"
+        ? ({ kind: "none", reason: "clean_pass" } as const)
+        : ({
+            kind: "review_required",
+            reason: "repair_already_attempted",
+          } as const),
+    ...rechecked,
+  };
+}

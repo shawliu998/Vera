@@ -15,12 +15,14 @@ const pauseClassificationSchema = z.enum([
   "provider_timeout",
   "provider_network",
   "provider_protocol",
+  "provider_structured_output",
 ]);
 const providerIssueCodeSchema = z.enum([
   "provider_capacity_exhausted",
   "provider_timeout_exhausted",
   "provider_network_exhausted",
   "provider_protocol_incompatible",
+  "provider_structured_output_invalid",
 ]);
 
 export type AgentTaskRetryClassification = z.infer<
@@ -81,7 +83,10 @@ const executionPauseSchema = z
         message: "Provider issue facts do not match the paused Step",
       });
     }
-    const retriesExpected = value.classification !== "provider_protocol";
+    const retriesExpected = ![
+      "provider_protocol",
+      "provider_structured_output",
+    ].includes(value.classification);
     if (value.issue.facts.automatic_retries_exhausted !== retriesExpected) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
@@ -123,6 +128,8 @@ function providerIssueCode(
       return "provider_network_exhausted";
     case "provider_protocol":
       return "provider_protocol_incompatible";
+    case "provider_structured_output":
+      return "provider_structured_output_invalid";
   }
 }
 
@@ -141,6 +148,8 @@ export function providerPauseSummary(
   switch (classification) {
     case "provider_protocol":
       return "The selected model did not complete the required provider tool protocol. This step is paused without discarding existing work; resume it or choose a compatible model.";
+    case "provider_structured_output":
+      return "The selected model returned an invalid structured verifier result. This step is paused without discarding existing work; resume it or choose a model with reliable structured output.";
     case "provider_timeout":
       return `The selected model timed out after ${automaticRetries} automatic retries. This step is paused without discarding existing work; resume it when the provider responds normally.`;
     case "provider_network":
@@ -171,8 +180,10 @@ export function buildAgentTaskExecutionPauseCheckpoint(input: {
       facts: {
         step_id: input.stepId,
         attempt: input.attempt,
-        automatic_retries_exhausted:
-          input.classification !== "provider_protocol",
+        automatic_retries_exhausted: ![
+          "provider_protocol",
+          "provider_structured_output",
+        ].includes(input.classification),
       },
     },
   });

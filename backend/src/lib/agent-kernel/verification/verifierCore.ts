@@ -36,6 +36,13 @@ const deterministicIssueSchema = z.discriminatedUnion("code", [
     .strict(),
   z
     .object({
+      code: z.literal("artifact_unavailable"),
+      deliverable_key: z.string().trim().min(1).max(120),
+      artifact_id: z.string().uuid(),
+    })
+    .strict(),
+  z
+    .object({
       code: z.literal("artifact_version_changed"),
       deliverable_key: z.string().trim().min(1).max(120),
       document_id: z.string().uuid(),
@@ -83,6 +90,14 @@ const deterministicIssueSchema = z.discriminatedUnion("code", [
     .object({
       code: z.literal("prior_step_incomplete"),
       step_positions: z.array(z.number().int().min(0).max(200)).min(1).max(200),
+    })
+    .strict(),
+  z
+    .object({
+      code: z.literal("verification_scope_exceeded"),
+      deliverable_key: z.string().trim().min(1).max(120),
+      accepted_view_characters: z.number().int().min(1),
+      projected_characters: z.number().int().min(0),
     })
     .strict(),
   z
@@ -144,23 +159,35 @@ const deliverableSchema = z
       .string()
       .regex(/^sha256:[a-f0-9]{64}$/)
       .nullable(),
-    accepted_view_text: z.string().max(200_000).nullable(),
+    accepted_view_text: z.string().max(100_000).nullable(),
+    accepted_view_complete: z.boolean(),
   })
   .strict()
   .superRefine((deliverable, context) => {
-    const documentFields = [
+    const identityFields = [
       deliverable.document_id,
       deliverable.current_version_id,
-      deliverable.accepted_view_sha256,
-      deliverable.accepted_view_text,
     ];
-    const hasAny = documentFields.some((value) => value !== null);
-    const hasEvery = documentFields.every((value) => value !== null);
-    if ((deliverable.artifact_id === null && hasAny) || (hasAny && !hasEvery)) {
+    const hasIdentity = identityFields.some((value) => value !== null);
+    const hasCompleteIdentity = identityFields.every((value) => value !== null);
+    const hasAcceptedHash = deliverable.accepted_view_sha256 !== null;
+    const hasAcceptedText = deliverable.accepted_view_text !== null;
+    if (
+      (deliverable.artifact_id === null &&
+        (hasIdentity || hasAcceptedHash || hasAcceptedText)) ||
+      (hasIdentity && !hasCompleteIdentity) ||
+      ((hasAcceptedHash || hasAcceptedText) && !hasCompleteIdentity) ||
+      (deliverable.accepted_view_complete &&
+        (!hasAcceptedHash || !hasAcceptedText)) ||
+      (!deliverable.accepted_view_complete &&
+        hasAcceptedText &&
+        !hasAcceptedHash)
+    ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["document_id"],
-        message: "Current document identity and accepted view must be complete",
+        message:
+          "Current document identity and any accepted view must be complete",
       });
     }
   });
@@ -169,7 +196,7 @@ const sourceSchema = z
   .object({
     document_id: z.string().uuid(),
     version_id: z.string().uuid(),
-    role: z.enum(["source", "template", "authority"]),
+    role: z.enum(["source", "template", "precedent", "authority"]),
   })
   .strict();
 

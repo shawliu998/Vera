@@ -9,7 +9,10 @@ import {
   parseAgentSemanticVerifierResult,
   type AgentVerificationPacketV1,
 } from "./verifierCore";
-import { decideAgentVerificationRepairV1 } from "./repairEligibility";
+import {
+  coordinateOneAgentVerificationRepairV1,
+  decideAgentVerificationRepairV1,
+} from "./repairEligibility";
 
 const ids = {
   task: "11111111-1111-4111-8111-111111111111",
@@ -48,6 +51,7 @@ function packet(
         current_version_id: ids.version,
         accepted_view_sha256: `sha256:${"a".repeat(64)}`,
         accepted_view_text: "The agreement renews automatically.",
+        accepted_view_complete: true,
       },
     ],
     source_versions: [
@@ -225,4 +229,44 @@ test("one exact semantic omission can use only its bound current Artifact", () =
     }),
     { kind: "review_required", reason: "repair_already_attempted" },
   );
+});
+
+test("repair coordinator executes once, rechecks once, then requires review", async () => {
+  const fixed = packet();
+  const semantic = {
+    kind: "agent_semantic_verifier_result_v1" as const,
+    goal_coverage: "gap" as const,
+    issues: [
+      {
+        code: "semantic_goal_omission" as const,
+        deliverable_key: "opinion",
+        goal_excerpt: "automatic renewal",
+        detail: "The opinion does not address automatic renewal.",
+      },
+    ],
+  };
+  const gap = mergeAgentVerificationResultV1({
+    packet: fixed,
+    semanticResult: semantic,
+  });
+  let repairs = 0;
+  let rechecks = 0;
+  const coordinated = await coordinateOneAgentVerificationRepairV1({
+    packet: fixed,
+    result: gap,
+    repairAlreadyAttempted: false,
+    executeRepair: async () => {
+      repairs += 1;
+    },
+    recheck: async () => {
+      rechecks += 1;
+      return { packet: fixed, result: gap };
+    },
+  });
+  assert.equal(repairs, 1);
+  assert.equal(rechecks, 1);
+  assert.deepEqual(coordinated.decision, {
+    kind: "review_required",
+    reason: "repair_already_attempted",
+  });
 });

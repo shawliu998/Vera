@@ -17,6 +17,7 @@ test("builds server-owned structured provider pause issues", () => {
     ["provider_timeout", "provider_timeout_exhausted", true],
     ["provider_network", "provider_network_exhausted", true],
     ["provider_protocol", "provider_protocol_incompatible", false],
+    ["provider_structured_output", "provider_structured_output_invalid", false],
   ] as const;
   for (const [classification, code, exhausted] of cases) {
     const checkpoint = buildAgentTaskExecutionPauseCheckpoint({
@@ -57,6 +58,10 @@ test("separates timeout, network and capacity retry outcomes", () => {
   assert.match(providerPauseSummary("provider_network", 3), /connection/i);
   assert.match(providerPauseSummary("provider_capacity", 3), /unavailable/i);
   assert.match(providerPauseSummary("provider_protocol", 0), /tool protocol/i);
+  assert.match(
+    providerPauseSummary("provider_structured_output", 0),
+    /structured verifier result/i,
+  );
 });
 
 test("normalizes legacy pauses but never repairs a malformed present issue", () => {

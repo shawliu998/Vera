@@ -1,6 +1,7 @@
 import {
   advanceAgentTask,
   applyAgentTaskPlan,
+  deferAgentTaskForProvider,
   getAgentTaskSnapshot,
   linkAgentTaskArtifacts,
   pauseAgentTaskForContext,
@@ -44,6 +45,7 @@ import {
   type AgentTaskLeaseGuard,
   withAgentTaskLease,
 } from "./agent-kernel/execution/taskLease";
+import { AgentVerifierStructuredOutputError } from "./agent-kernel/verification/verifierCore";
 
 type Db = ReturnType<typeof createServerSupabase>;
 type Snapshot = NonNullable<Awaited<ReturnType<typeof getAgentTaskSnapshot>>>;
@@ -150,24 +152,19 @@ async function buildCurrentStepReceipt(
   }
 
   if (contract.capability === "verify") {
-    const deliverables = await evaluateTaskDeliverables(db, {
-      ...snapshot,
-      artifacts: allArtifacts,
-    });
-    if (!deliverables.missing.length && !deliverables.outsideMatter.length) {
+    const verification = execution.verification;
+    artifactIds.push(
+      ...(verification?.packet.deliverables.flatMap((deliverable) =>
+        deliverable.artifact_id ? [deliverable.artifact_id] : [],
+      ) ?? []),
+    );
+    if (verification?.result.dimensions.artifact_integrity === "pass") {
       satisfied.add("required_deliverables_current");
     }
-    const priorStepsComplete = snapshot.task.current_plan
-      .slice(0, stepIndex)
-      .every(
-        (candidate: { status: string }) => candidate.status === "completed",
-      );
     if (
-      priorStepsComplete &&
-      !/\bGAP\b/i.test(execution.summary) &&
-      !deliverables.missing.length &&
-      !deliverables.outsideMatter.length &&
-      sourceRequirementSatisfied
+      verification?.result.outcome === "clean_pass" &&
+      verification.result.dimensions.workflow_completion === "pass" &&
+      verification.result.dimensions.source_support === "pass"
     ) {
       satisfied.add("verifier_passed");
     }
@@ -403,6 +400,15 @@ export async function advanceAgentTaskExecution(input: {
     if (isAgentTaskExecutionInterrupted(error)) {
       return getAgentTaskSnapshot(db, taskId, userId);
     }
+    if (error instanceof AgentVerifierStructuredOutputError) {
+      return deferAgentTaskForProvider(
+        db,
+        taskId,
+        userId,
+        "The verifier response could not be mechanically validated. Existing deliverables were preserved and this Step can be resumed.",
+        { classification: "provider_structured_output" },
+      );
+    }
     if (isTransientModelError(error)) throw error;
     return stopAgentTask(db, taskId, userId, {
       status: "failed",
@@ -420,7 +426,24 @@ export async function advanceAgentTaskExecution(input: {
     });
   }
 
-  if (current.task.status === "verifying") {
+  if (
+    current.task.status === "verifying" &&
+    execution.verification?.result.outcome === "review_required"
+  ) {
+    return completeVerifierForLawyerReview({
+      db,
+      taskId,
+      userId,
+      snapshot: current,
+      execution,
+      summary: execution.summary,
+    });
+  }
+
+  // Unversioned Tasks retain their historical verifier compatibility path.
+  // Every Task with a fixed Step Contract uses the structured current-Artifact
+  // packet above and cannot enter this free-text GAP/repair branch.
+  if (current.task.status === "verifying" && !execution.verification) {
     execution.citationCheck = await verifyTaskCitationLinks(
       db,
       current,

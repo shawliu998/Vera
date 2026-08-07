@@ -56,6 +56,13 @@ import {
   type AgentStepEffectReceiptV1,
   type AgentStepMutationTool,
 } from "./agent-kernel/effects/stepEffect";
+import {
+  mergeAgentVerificationResultV1,
+  parseAgentSemanticVerifierResult,
+  type AgentVerificationPacketV1,
+  type AgentVerificationResultV1,
+} from "./agent-kernel/verification/verifierCore";
+import { buildCurrentAgentVerificationPacket } from "./agentTaskVerificationRepository";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -191,6 +198,10 @@ export type AgentStepExecutionResult = {
   waitingForInput: boolean;
   requiredInput?: AgentRequiredInputV1 | null;
   citationCheck: { total: number; relocatable: number; missing: number };
+  verification?: {
+    packet: AgentVerificationPacketV1;
+    result: AgentVerificationResultV1;
+  } | null;
 };
 
 type RelocatedCitation = {
@@ -540,7 +551,7 @@ export async function executeAgentStep(input: {
         .filter(Boolean)
         .join("\n")
     : undefined;
-  const prompt = input.instructionOverride
+  let prompt = input.instructionOverride
     ? `${taskPrompt(
         snapshot,
         stepIndex,
@@ -579,6 +590,43 @@ export async function executeAgentStep(input: {
     (stepContract?.capability === "verify" ||
       snapshot.task.status === "verifying") &&
     !repairPass;
+  const verifierCitationCheck =
+    verifierOnly && stepContract
+      ? await verifyTaskCitationLinks(db, snapshot, userId)
+      : null;
+  const verificationPacket =
+    verifierOnly && stepContract
+      ? await buildCurrentAgentVerificationPacket({
+          db,
+          snapshot,
+          userId,
+          stepId: currentStep.id,
+          stepAttempt: currentStep.attempt,
+          profile: {
+            kind: "agent_verifier_profile_v1",
+            id: "generic-current-artifact",
+            version: "1",
+            semantic_goal_check: true,
+            repair_policy: "none",
+          },
+          citationsRequired:
+            stepContract?.source_requirement.citations_required ?? false,
+          citationCoverage: verifierCitationCheck ?? {
+            total: 0,
+            relocatable: 0,
+            missing: 0,
+          },
+        })
+      : null;
+  if (verificationPacket) {
+    prompt = [
+      "Verify only whether each current accepted-view deliverable answers the fixed WORK TASK GOAL.",
+      "The server has already decided every Artifact, Matter, current-Version, accepted-view, source, citation, locator, and prior-Step fact in deterministic_checks. Do not add, remove, repeat, or override those facts.",
+      "Report only a material goal omission. Every omission must name one declared deliverable_key and quote one exact, contiguous goal_excerpt from the fixed goal. Do not infer a requirement from a source, template, precedent, or your own legal judgment.",
+      'Return exactly one JSON object and no commentary: {"kind":"agent_semantic_verifier_result_v1","goal_coverage":"pass","issues":[]}. For a real omission, goal_coverage is gap and each issue contains only code=semantic_goal_omission, deliverable_key, goal_excerpt, and detail.',
+      `VERIFICATION PACKET\n${JSON.stringify(verificationPacket)}`,
+    ].join("\n\n");
+  }
   const activeSourceFiles = verifierOnly ? [] : sourceFiles;
   const userMessage: ChatMessage = {
     role: "user",
@@ -614,9 +662,11 @@ export async function executeAgentStep(input: {
   const apiMessages = buildMessages(
     [userMessage],
     docAvailability,
-    verifierOnly
-      ? "You are the final Vera verifier. Use only the goal, declared deliverables, saved checkpoints, and artifact manifest. Do not call tools or create documents. Return PASS or GAP for goal coverage, required Matter outputs, source support, citation relocation, and step completion. Never imply lawyer approval."
-      : "You are executing one bounded step in a Vera legal Work Task. Preserve source boundaries, never imply lawyer approval, and use the existing Mike tools when the step requires a document artifact.",
+    verificationPacket
+      ? "You are Vera's bounded semantic verifier. Use only the fixed goal and the current accepted-view deliverables in the supplied packet. Return the exact JSON contract without tools or commentary. You cannot decide source, citation, locator, Version, approval, or export facts."
+      : verifierOnly
+        ? "You are the final Vera verifier. Use only the goal, declared deliverables, saved checkpoints, and artifact manifest. Do not call tools or create documents. Return PASS or GAP for goal coverage, required Matter outputs, source support, citation relocation, and step completion. Never imply lawyer approval."
+        : "You are executing one bounded step in a Vera legal Work Task. Preserve source boundaries, never imply lawyer approval, and use the existing Mike tools when the step requires a document artifact.",
     docIndex,
     false,
   );
@@ -722,59 +772,117 @@ export async function executeAgentStep(input: {
         });
       }
     : undefined;
-  const { fullText, events, citations } = await runStepWithQueueRetry(
-    {
-      apiMessages,
-      docStore,
-      docIndex,
-      userId,
-      db,
-      write: () => {},
-      workflowStore,
-      includeResearchTools: false,
-      includeMcpTools: stepContract ? false : true,
-      disableTools: verifierOnly,
-      ...(repairPass && repairDeliverable
+  const streamArgs: Parameters<typeof runLLMStream>[0] = {
+    apiMessages,
+    docStore,
+    docIndex,
+    userId,
+    db,
+    write: () => {},
+    workflowStore,
+    includeResearchTools: false,
+    includeMcpTools: stepContract ? false : true,
+    disableTools: verifierOnly,
+    ...(repairPass && repairDeliverable
+      ? {
+          allowedToolNames: resolveBoundedRepairToolNames({
+            artifactType:
+              repairDeliverable.artifact_type === "tabular_review"
+                ? "tabular_review"
+                : "draft",
+            availableToolNames: WORK_TASK_HOST_TOOL_NAMES,
+          }),
+        }
+      : stepContract
         ? {
-            allowedToolNames: resolveBoundedRepairToolNames({
-              artifactType:
-                repairDeliverable.artifact_type === "tabular_review"
-                  ? "tabular_review"
-                  : "draft",
-              availableToolNames: WORK_TASK_HOST_TOOL_NAMES,
-            }),
+            allowedToolNames: capabilityGrant?.allowed_tool_names ?? [],
           }
-        : stepContract
-          ? {
-              allowedToolNames: capabilityGrant?.allowed_tool_names ?? [],
-            }
-          : {}),
-      apiKeys,
-      projectId: snapshot.task.matter_id,
-      beforeToolBatch: input.shouldContinue
-        ? async () => {
-            if (!(await input.shouldContinue?.())) {
-              throw new AgentTaskExecutionInterruptedError();
-            }
+        : {}),
+    apiKeys,
+    projectId: snapshot.task.matter_id,
+    beforeToolBatch: input.shouldContinue
+      ? async () => {
+          if (!(await input.shouldContinue?.())) {
+            throw new AgentTaskExecutionInterruptedError();
           }
-        : undefined,
-      authorizeToolBatch,
-      mutationTargetForCall: stepContract
-        ? (call) => {
-            const receipt = mutationReceipts.get(call.id);
-            return receipt
-              ? {
-                  documentId: receipt.target.document_id,
-                  versionId: receipt.target.version_id,
-                }
-              : null;
-          }
-        : undefined,
-      finalizeToolBatch,
-    },
+        }
+      : undefined,
+    authorizeToolBatch,
+    mutationTargetForCall: stepContract
+      ? (call) => {
+          const receipt = mutationReceipts.get(call.id);
+          return receipt
+            ? {
+                documentId: receipt.target.document_id,
+                versionId: receipt.target.version_id,
+              }
+            : null;
+        }
+      : undefined,
+    finalizeToolBatch,
+  };
+  let streamResult = await runStepWithQueueRetry(
+    streamArgs,
     executionModel,
     input.shouldContinue,
   );
+  let semanticVerification = verificationPacket
+    ? (() => {
+        const text = streamResult.events
+          .filter(
+            (event): event is Extract<typeof event, { type: "content" }> =>
+              event.type === "content",
+          )
+          .map((event) => event.text)
+          .join("\n")
+          .trim();
+        try {
+          return parseAgentSemanticVerifierResult(
+            text || streamResult.fullText,
+          );
+        } catch {
+          return null;
+        }
+      })()
+    : null;
+  if (verificationPacket && !semanticVerification) {
+    const invalid = streamResult.events
+      .filter(
+        (event): event is Extract<typeof event, { type: "content" }> =>
+          event.type === "content",
+      )
+      .map((event) => event.text)
+      .join("\n")
+      .trim();
+    streamResult = await runStepWithQueueRetry(
+      {
+        ...streamArgs,
+        apiMessages: [
+          ...apiMessages,
+          { role: "assistant", content: invalid || streamResult.fullText },
+          {
+            role: "user",
+            content:
+              "Your verifier response did not match the exact JSON contract. Return one corrected agent_semantic_verifier_result_v1 object only. Do not add commentary, source facts, citation facts, Version facts, approval, or export state.",
+          },
+        ],
+      },
+      executionModel,
+      input.shouldContinue,
+    );
+    const repairedText = streamResult.events
+      .filter(
+        (event): event is Extract<typeof event, { type: "content" }> =>
+          event.type === "content",
+      )
+      .map((event) => event.text)
+      .join("\n")
+      .trim();
+    semanticVerification = parseAgentSemanticVerifierResult(
+      repairedText || streamResult.fullText,
+    );
+  }
+  const { fullText, events, citations } = streamResult;
   const persistedEvents = stripTransientAssistantEvents(events);
   const { data: assistantMessage, error: assistantError } = await db
     .from("chat_messages")
@@ -857,16 +965,28 @@ export async function executeAgentStep(input: {
     .map((event) => event.text)
     .join("\n")
     .trim();
+  const verification = verificationPacket
+    ? {
+        packet: verificationPacket,
+        result: mergeAgentVerificationResultV1({
+          packet: verificationPacket,
+          semanticResult: semanticVerification!,
+        }),
+      }
+    : null;
+  const summary = verification
+    ? verification.result.outcome === "clean_pass"
+      ? "Automated verification found no deterministic or fixed-goal gap. Lawyer review is still required before approval or export."
+      : `Automated verification preserved the current deliverables and found ${verification.result.issues.length} review gap(s): ${verification.result.issues
+          .map((issue) => issue.detail)
+          .join("; ")}`
+    : contentText || fullText || `Step ${stepIndex + 1} completed.`;
   return {
-    summary: (
-      contentText ||
-      fullText ||
-      `Step ${stepIndex + 1} completed.`
-    ).slice(0, 4000),
+    summary: summary.slice(0, 4000),
     artifacts,
     waitingForInput,
     requiredInput,
-    citationCheck: {
+    citationCheck: verifierCitationCheck ?? {
       total: citations.length,
       relocatable: citations.filter((citation) => {
         if (!citation || typeof citation !== "object") return false;
@@ -891,5 +1011,6 @@ export async function executeAgentStep(input: {
         );
       }).length,
     },
+    verification,
   };
 }

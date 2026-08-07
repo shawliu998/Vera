@@ -6,7 +6,7 @@ export type TransientAgentTaskError = {
 };
 
 export type AgentTaskProviderProtocolError = {
-  classification: "provider_protocol";
+  classification: "provider_protocol" | "provider_structured_output";
 };
 
 export const MAX_AGENT_TASK_TRANSIENT_RETRIES = 3;
@@ -188,8 +188,15 @@ export function classifyAgentTaskError(
 export function classifyAgentTaskProviderProtocolError(
   error: unknown,
 ): AgentTaskProviderProtocolError | null {
-  return REQUIRED_TOOL_CALL_PROTOCOL_ERROR.test(errorMessage(error))
-    ? { classification: "provider_protocol" }
+  if (REQUIRED_TOOL_CALL_PROTOCOL_ERROR.test(errorMessage(error))) {
+    return { classification: "provider_protocol" };
+  }
+  const name =
+    error && typeof error === "object"
+      ? (error as { name?: unknown }).name
+      : null;
+  return name === "AgentVerifierStructuredOutputError"
+    ? { classification: "provider_structured_output" }
     : null;
 }
 
