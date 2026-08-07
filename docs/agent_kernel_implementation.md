@@ -1,3 +1,8 @@
+> Historical implementation snapshot. The current P3 target contract is
+> [Vera Kernel v1](./architecture/vera-kernel-v1.md). Where this document's
+> fixed five-step plan, provider fallback, verification or failure language
+> conflicts with that contract, the v1 contract controls implementation.
+
 # Vera thin Agent kernel
 
 ## Implemented scope

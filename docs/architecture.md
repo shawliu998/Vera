@@ -1,3 +1,9 @@
+> Historical architecture inventory. Current product authority is
+> [`PRODUCT.md`](../PRODUCT.md), and the active integration target is
+> [Vera Kernel v1](./architecture/vera-kernel-v1.md). The Aletheia/workspace
+> sections below are compatibility history, not authorization for a parallel
+> product stack.
+
 # Architecture
 
 ## Current P0 Workspace architecture
