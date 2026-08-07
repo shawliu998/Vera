@@ -41,18 +41,23 @@ import {
 import {
   AgentTaskStateTransitionError,
   agentTaskInputTransitionWasApplied,
+  agentTaskPauseTransitionWasApplied,
   agentTaskReviewDecisionTransitionWasApplied,
+  agentTaskResumeTransitionWasApplied,
   agentTaskRevisionTransitionWasApplied,
   agentTaskRetryTransitionWasApplied,
   agentTaskStateTransitionWasApplied,
   agentTaskStopTransitionWasApplied,
   commitAgentTaskInputTransition,
+  commitAgentTaskPauseTransition,
   commitAgentTaskReviewDecisionTransition,
+  commitAgentTaskResumeTransition,
   commitAgentTaskRevisionTransition,
   commitAgentTaskRetryTransition,
   commitAgentTaskStateTransition,
   commitAgentTaskStopTransition,
   type AgentTaskInputTransitionInput,
+  type AgentTaskPauseTransitionInput,
   type AgentTaskReviewDecisionTransitionInput,
   type AgentTaskRevisionTransitionInput,
   type AgentTaskRetryTransitionInput,
@@ -881,11 +886,77 @@ export async function advanceAgentTask(
   }
 }
 
+async function pauseAgentTaskSnapshotAtomically(
+  db: Db,
+  taskId: string,
+  userId: string,
+  snapshot: NonNullable<Awaited<ReturnType<typeof getAgentTaskSnapshot>>>,
+  input: {
+    latestCheckpoint: unknown;
+    leaseOwner?: string | null;
+    forceRevoke?: boolean;
+  },
+) {
+  const current = snapshot.task.current_plan.find(
+    (step: { status: AgentStepStatus }) => step.status === "running",
+  );
+  const transition: AgentTaskPauseTransitionInput = {
+    taskId,
+    userId,
+    expectedTaskStatus: snapshot.task.status as
+      | "queued"
+      | "running"
+      | "verifying",
+    stepId: current?.id ?? null,
+    expectedStepAttempt: current?.attempt ?? null,
+    leaseOwner: input.leaseOwner ?? null,
+    forceRevoke: input.forceRevoke ?? false,
+    latestCheckpoint: input.latestCheckpoint,
+  };
+  let committed: Awaited<ReturnType<typeof commitAgentTaskPauseTransition>>;
+  try {
+    committed = await commitAgentTaskPauseTransition(db, transition);
+  } catch (error) {
+    if (!(error instanceof AgentTaskStateTransitionError)) throw error;
+    const recovered = await getAgentTaskSnapshot(db, taskId, userId);
+    if (agentTaskPauseTransitionWasApplied(recovered, transition)) {
+      return recovered;
+    }
+    throw error;
+  }
+  const recovered = await getAgentTaskSnapshot(db, taskId, userId);
+  if (
+    committed.outcome === "paused" ||
+    agentTaskPauseTransitionWasApplied(recovered, transition)
+  ) {
+    return recovered;
+  }
+  if (committed.outcome === "not_found") return null;
+  if (
+    committed.outcome === "lease_busy" ||
+    committed.outcome === "lease_lost"
+  ) {
+    return recovered;
+  }
+  throw new AgentTaskStateTransitionError(
+    "task_state_transition_conflict",
+    "The Agent Task state changed before it could be paused.",
+    {
+      task_id: taskId,
+      step_id: transition.stepId,
+      expected_task_status: transition.expectedTaskStatus,
+      expected_step_attempt: transition.expectedStepAttempt,
+      transition_outcome: committed.outcome,
+    },
+  );
+}
+
 export async function pauseAgentTaskForStateTransition(
   db: Db,
   taskId: string,
   userId: string,
   error: AgentTaskStateTransitionError,
+  options?: { leaseOwner?: string | null },
 ) {
   const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
   if (!snapshot) return null;
@@ -902,43 +973,29 @@ export async function pauseAgentTaskForStateTransition(
     !Array.isArray(snapshot.task.latest_checkpoint)
       ? (snapshot.task.latest_checkpoint as Record<string, unknown>)
       : {};
-  let update = db
-    .from("agent_tasks")
-    .update({
-      status: "paused",
-      latest_checkpoint: {
-        ...previous,
-        step_id: current?.id ?? snapshot.task.current_step ?? "planner",
-        iteration: current?.attempt ?? 0,
-        summary:
-          "The server could not safely commit this Step transition. Existing work was preserved; resume after checking the execution service.",
+  return pauseAgentTaskSnapshotAtomically(db, taskId, userId, snapshot, {
+    leaseOwner: options?.leaseOwner,
+    latestCheckpoint: {
+      ...previous,
+      step_id: current?.id ?? snapshot.task.current_step ?? "planner",
+      iteration: current?.attempt ?? 0,
+      summary:
+        "The server could not safely commit this Step transition. Existing work was preserved; resume after checking the execution service.",
+      created_at: updatedAt,
+      state_transition_pause: {
+        kind: "agent_task_state_transition_pause_v1",
         created_at: updatedAt,
-        state_transition_pause: {
-          kind: "agent_task_state_transition_pause_v1",
-          created_at: updatedAt,
-          issue: {
-            kind: "agent_execution_issue_v1",
-            code: error.code,
-            category: "execution",
-            recoverable: true,
-            retry_scope: "current_step",
-            facts: error.facts,
-          },
+        issue: {
+          kind: "agent_execution_issue_v1",
+          code: error.code,
+          category: "execution",
+          recoverable: true,
+          retry_scope: "current_step",
+          facts: error.facts,
         },
       },
-      updated_at: updatedAt,
-    })
-    .eq("id", taskId)
-    .eq("user_id", userId)
-    .eq("status", snapshot.task.status);
-  update = snapshot.task.current_step
-    ? update.eq("current_step", snapshot.task.current_step)
-    : update.is("current_step", null);
-  const { error: pauseError } = await update;
-  if (pauseError) {
-    throw dbError(pauseError, "Failed to pause task after a state conflict");
-  }
-  return getAgentTaskSnapshot(db, taskId, userId);
+    },
+  });
 }
 
 export async function deferAgentTaskForProvider(
@@ -946,7 +1003,10 @@ export async function deferAgentTaskForProvider(
   taskId: string,
   userId: string,
   summary: string,
-  options: { classification: AgentTaskExecutionPauseClassification },
+  options: {
+    classification: AgentTaskExecutionPauseClassification;
+    leaseOwner?: string | null;
+  },
 ) {
   const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
   if (!snapshot) return null;
@@ -969,23 +1029,10 @@ export async function deferAgentTaskForProvider(
     summary,
     createdAt: updatedAt,
   });
-  let update = db
-    .from("agent_tasks")
-    .update({
-      status: "paused",
-      latest_checkpoint: checkpoint,
-      updated_at: updatedAt,
-    })
-    .eq("id", taskId)
-    .eq("user_id", userId)
-    .eq("status", task.status);
-  update = task.current_step
-    ? update.eq("current_step", task.current_step)
-    : update.is("current_step", null);
-  const { data: deferred, error } = await update.select("id").maybeSingle();
-  if (error) throw dbError(error, "Failed to defer provider-queued task");
-  if (!deferred) return getAgentTaskSnapshot(db, taskId, userId);
-  return getAgentTaskSnapshot(db, taskId, userId);
+  return pauseAgentTaskSnapshotAtomically(db, taskId, userId, snapshot, {
+    leaseOwner: options.leaseOwner,
+    latestCheckpoint: checkpoint,
+  });
 }
 
 export async function pauseAgentTaskForContext(
@@ -993,6 +1040,7 @@ export async function pauseAgentTaskForContext(
   taskId: string,
   userId: string,
   error: MatterContextInvalidError,
+  options?: { leaseOwner?: string | null },
 ) {
   const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
   if (!snapshot) return null;
@@ -1006,35 +1054,26 @@ export async function pauseAgentTaskForContext(
     !Array.isArray(snapshot.task.latest_checkpoint)
       ? (snapshot.task.latest_checkpoint as Record<string, unknown>)
       : {};
-  const { error: updateError } = await db
-    .from("agent_tasks")
-    .update({
-      status: "paused",
-      latest_checkpoint: {
-        ...previous,
-        summary: error.message,
+  return pauseAgentTaskSnapshotAtomically(db, taskId, userId, snapshot, {
+    leaseOwner: options?.leaseOwner,
+    latestCheckpoint: {
+      ...previous,
+      summary: error.message,
+      created_at: updatedAt,
+      context_pause: {
+        kind: "agent_task_context_pause_v1",
         created_at: updatedAt,
-        context_pause: {
-          kind: "agent_task_context_pause_v1",
-          created_at: updatedAt,
-          issue: {
-            kind: "agent_execution_issue_v1",
-            code: error.code,
-            category: "context",
-            recoverable: true,
-            retry_scope: "task",
-            facts: error.facts,
-          },
+        issue: {
+          kind: "agent_execution_issue_v1",
+          code: error.code,
+          category: "context",
+          recoverable: true,
+          retry_scope: "task",
+          facts: error.facts,
         },
       },
-      updated_at: updatedAt,
-    })
-    .eq("id", taskId)
-    .eq("user_id", userId)
-    .eq("status", snapshot.task.status);
-  if (updateError)
-    throw dbError(updateError, "Failed to pause task for source review");
-  return getAgentTaskSnapshot(db, taskId, userId);
+    },
+  });
 }
 
 export async function pauseAgentTaskForStepPostcondition(
@@ -1045,6 +1084,7 @@ export async function pauseAgentTaskForStepPostcondition(
     summary: string;
     facts: Record<string, unknown>;
     artifacts?: AgentArtifactLinkInput[];
+    leaseOwner?: string | null;
   },
 ) {
   if (input.artifacts?.length) {
@@ -1065,36 +1105,28 @@ export async function pauseAgentTaskForStepPostcondition(
     !Array.isArray(snapshot.task.latest_checkpoint)
       ? (snapshot.task.latest_checkpoint as Record<string, unknown>)
       : {};
-  const { error } = await db
-    .from("agent_tasks")
-    .update({
-      status: "paused",
-      latest_checkpoint: {
-        ...previous,
-        step_id: current?.id ?? snapshot.task.current_step,
-        iteration: current?.attempt ?? 0,
-        summary: input.summary,
+  return pauseAgentTaskSnapshotAtomically(db, taskId, userId, snapshot, {
+    leaseOwner: input.leaseOwner,
+    latestCheckpoint: {
+      ...previous,
+      step_id: current?.id ?? snapshot.task.current_step,
+      iteration: current?.attempt ?? 0,
+      summary: input.summary,
+      created_at: updatedAt,
+      step_pause: {
+        kind: "agent_task_step_pause_v1",
         created_at: updatedAt,
-        step_pause: {
-          kind: "agent_task_step_pause_v1",
-          created_at: updatedAt,
-          issue: {
-            kind: "agent_execution_issue_v1",
-            code: "step_postcondition_unsatisfied",
-            category: "execution",
-            recoverable: true,
-            retry_scope: "current_step",
-            facts: input.facts,
-          },
+        issue: {
+          kind: "agent_execution_issue_v1",
+          code: "step_postcondition_unsatisfied",
+          category: "execution",
+          recoverable: true,
+          retry_scope: "current_step",
+          facts: input.facts,
         },
       },
-      updated_at: updatedAt,
-    })
-    .eq("id", taskId)
-    .eq("user_id", userId)
-    .eq("status", snapshot.task.status);
-  if (error) throw dbError(error, "Failed to pause task for Step review");
-  return getAgentTaskSnapshot(db, taskId, userId);
+    },
+  });
 }
 
 export async function recordAgentTaskCheckpoint(
@@ -1574,44 +1606,31 @@ export async function pauseAgentTask(db: Db, taskId: string, userId: string) {
   if (!["running", "verifying"].includes(snapshot.task.status)) {
     throw new Error("Only a running or verifying task can be paused");
   }
-  const { error } = await db
-    .from("agent_tasks")
-    .update({ status: "paused", updated_at: now() })
-    .eq("id", taskId)
-    .eq("user_id", userId);
-  if (error) throw dbError(error, "Failed to pause task");
-  return getAgentTaskSnapshot(db, taskId, userId);
+  return pauseAgentTaskSnapshotAtomically(db, taskId, userId, snapshot, {
+    forceRevoke: true,
+    latestCheckpoint: snapshot.task.latest_checkpoint,
+  });
 }
 
 export async function resumeAgentTask(db: Db, taskId: string, userId: string) {
-  const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
-  if (!snapshot) return null;
-  if (snapshot.task.status !== "paused") {
-    throw new Error("Only a paused task can be resumed");
+  let committed: Awaited<ReturnType<typeof commitAgentTaskResumeTransition>>;
+  try {
+    committed = await commitAgentTaskResumeTransition(db, { taskId, userId });
+  } catch (error) {
+    if (!(error instanceof AgentTaskStateTransitionError)) throw error;
+    const recovered = await getAgentTaskSnapshot(db, taskId, userId);
+    if (agentTaskResumeTransitionWasApplied(recovered)) return recovered;
+    throw error;
   }
-  const steps = snapshot.task.current_plan as Array<{
-    status: AgentStepStatus;
-  }>;
-  const activeIndex = steps.findIndex((step) => step.status === "running");
-  const status: AgentTaskStatus =
-    activeIndex < 0
-      ? "queued"
-      : activeIndex === steps.length - 1
-        ? "verifying"
-        : "running";
-  const { error } = await db
-    .from("agent_tasks")
-    .update({
-      status,
-      current_step:
-        activeIndex < 0 ? null : snapshot.task.current_plan[activeIndex].id,
-      updated_at: now(),
-    })
-    .eq("id", taskId)
-    .eq("user_id", userId)
-    .eq("status", "paused");
-  if (error) throw dbError(error, "Failed to resume task");
-  return getAgentTaskSnapshot(db, taskId, userId);
+  const recovered = await getAgentTaskSnapshot(db, taskId, userId);
+  if (
+    committed.outcome === "resumed" ||
+    agentTaskResumeTransitionWasApplied(recovered)
+  ) {
+    return recovered;
+  }
+  if (committed.outcome === "not_found") return null;
+  throw new Error("Only a paused task with a consistent Step can be resumed");
 }
 
 export async function updateAgentTaskExecutionModel(
@@ -1720,6 +1739,8 @@ export async function stopAgentTask(
     if (agentTaskStopTransitionWasApplied(recovered, transition)) {
       return recovered;
     }
-    return pauseAgentTaskForStateTransition(db, taskId, userId, error);
+    return pauseAgentTaskForStateTransition(db, taskId, userId, error, {
+      leaseOwner: input.leaseOwner,
+    });
   }
 }

@@ -77,6 +77,17 @@ export type AgentTaskRevisionTransitionInput = {
   latestCheckpoint: unknown;
 };
 
+export type AgentTaskPauseTransitionInput = {
+  taskId: string;
+  userId: string;
+  expectedTaskStatus: "queued" | "running" | "verifying";
+  stepId: string | null;
+  expectedStepAttempt: number | null;
+  leaseOwner: string | null;
+  forceRevoke: boolean;
+  latestCheckpoint: unknown;
+};
+
 export class AgentTaskStateTransitionError extends Error {
   constructor(
     readonly code:
@@ -356,6 +367,66 @@ export async function commitAgentTaskRevisionTransition(
   );
 }
 
+export async function commitAgentTaskPauseTransition(
+  db: Db,
+  input: AgentTaskPauseTransitionInput,
+) {
+  const { data, error } = await db.rpc("pause_agent_task_state_v1", {
+    p_task_id: input.taskId,
+    p_user_id: input.userId,
+    p_expected_task_status: input.expectedTaskStatus,
+    p_step_id: input.stepId,
+    p_expected_step_attempt: input.expectedStepAttempt,
+    p_lease_owner: input.leaseOwner,
+    p_force_revoke: input.forceRevoke,
+    p_latest_checkpoint: input.latestCheckpoint,
+  });
+  if (error) {
+    throw transitionError(
+      `Failed to pause the Agent Task atomically: ${error.message}`,
+      {
+        task_id: input.taskId,
+        step_id: input.stepId,
+        expected_task_status: input.expectedTaskStatus,
+        expected_step_attempt: input.expectedStepAttempt,
+      },
+    );
+  }
+  return readOutcome(
+    data,
+    [
+      "paused",
+      "conflict",
+      "invalid_input",
+      "lease_busy",
+      "lease_lost",
+      "not_found",
+    ],
+    { task_id: input.taskId, step_id: input.stepId },
+  );
+}
+
+export async function commitAgentTaskResumeTransition(
+  db: Db,
+  input: { taskId: string; userId: string },
+) {
+  const { data, error } = await db.rpc("resume_agent_task_state_v1", {
+    p_task_id: input.taskId,
+    p_user_id: input.userId,
+  });
+  if (error) {
+    throw transitionError(
+      `Failed to resume the Agent Task atomically: ${error.message}`,
+      { task_id: input.taskId },
+    );
+  }
+  return readOutcome(
+    data,
+    ["resumed", "conflict", "invalid_input", "not_found"],
+    { task_id: input.taskId },
+  );
+}
+
 export function agentTaskStateTransitionWasApplied(
   snapshot: {
     task: {
@@ -537,5 +608,40 @@ export function agentTaskRevisionTransitionWasApplied(
     revisionRow?.first_step_id === input.firstStepId &&
     revisionRow?.revision_start === input.revisionStart &&
     revisionRow?.attempt === input.expectedFirstStepAttempt + 1,
+  );
+}
+
+export function agentTaskPauseTransitionWasApplied(
+  snapshot: {
+    task: {
+      status: string;
+      current_step?: string | null;
+      current_plan: Array<{ id: string; status: string; attempt: number }>;
+    };
+  } | null,
+  input: AgentTaskPauseTransitionInput,
+) {
+  if (!snapshot || snapshot.task.status !== "paused") return false;
+  if (input.forceRevoke) return true;
+  if (snapshot.task.current_step !== input.stepId) return false;
+  if (input.stepId === null) return input.expectedStepAttempt === null;
+  const step = snapshot.task.current_plan.find(
+    (candidate) => candidate.id === input.stepId,
+  );
+  return Boolean(
+    step &&
+    step.status === "running" &&
+    step.attempt === input.expectedStepAttempt,
+  );
+}
+
+export function agentTaskResumeTransitionWasApplied(
+  snapshot: {
+    task: { status: string };
+  } | null,
+) {
+  return Boolean(
+    snapshot &&
+    ["queued", "running", "verifying"].includes(snapshot.task.status),
   );
 }

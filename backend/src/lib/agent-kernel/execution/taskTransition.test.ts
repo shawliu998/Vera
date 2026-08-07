@@ -5,18 +5,23 @@ import test from "node:test";
 import {
   AgentTaskStateTransitionError,
   agentTaskInputTransitionWasApplied,
+  agentTaskPauseTransitionWasApplied,
   agentTaskReviewDecisionTransitionWasApplied,
   agentTaskRevisionTransitionWasApplied,
   agentTaskRetryTransitionWasApplied,
+  agentTaskResumeTransitionWasApplied,
   agentTaskStateTransitionWasApplied,
   agentTaskStopTransitionWasApplied,
   commitAgentTaskInputTransition,
+  commitAgentTaskPauseTransition,
   commitAgentTaskReviewDecisionTransition,
   commitAgentTaskRevisionTransition,
   commitAgentTaskRetryTransition,
+  commitAgentTaskResumeTransition,
   commitAgentTaskStateTransition,
   commitAgentTaskStopTransition,
   type AgentTaskInputTransitionInput,
+  type AgentTaskPauseTransitionInput,
   type AgentTaskReviewDecisionTransitionInput,
   type AgentTaskRevisionTransitionInput,
   type AgentTaskRetryTransitionInput,
@@ -605,6 +610,145 @@ test("keeps atomic review/revision migrations mirrored and fenced", async () => 
     /latest_checkpoint -> 'contract'[\s\S]*is distinct from p_latest_checkpoint -> 'contract'/i,
   );
   assert.match(backend, /execution_lease_expires_at > clock_timestamp\(\)/i);
+  assert.match(backend, /from public, anon, authenticated/i);
+  assert.match(backend, /to service_role/i);
+});
+
+test("maps pause and resume to server-owned atomic transitions", async () => {
+  const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  const db = {
+    async rpc(name: string, args: Record<string, unknown>) {
+      calls.push({ name, args });
+      return {
+        data: [
+          name === "pause_agent_task_state_v1"
+            ? {
+                outcome: "paused",
+                task_status: "paused",
+                current_step: input.stepId,
+              }
+            : {
+                outcome: "resumed",
+                task_status: "running",
+                current_step: input.stepId,
+              },
+        ],
+        error: null,
+      };
+    },
+  };
+  const pause: AgentTaskPauseTransitionInput = {
+    taskId: input.taskId,
+    userId: input.userId,
+    expectedTaskStatus: "running",
+    stepId: input.stepId,
+    expectedStepAttempt: 2,
+    leaseOwner: input.leaseOwner,
+    forceRevoke: false,
+    latestCheckpoint: { step_id: input.stepId },
+  };
+  assert.equal(
+    (await commitAgentTaskPauseTransition(db as never, pause)).outcome,
+    "paused",
+  );
+  assert.equal(
+    (
+      await commitAgentTaskResumeTransition(db as never, {
+        taskId: input.taskId,
+        userId: input.userId,
+      })
+    ).outcome,
+    "resumed",
+  );
+  assert.deepEqual(
+    calls.map((call) => call.name),
+    ["pause_agent_task_state_v1", "resume_agent_task_state_v1"],
+  );
+  assert.equal(calls[0]?.args.p_expected_step_attempt, 2);
+  assert.equal(calls[0]?.args.p_lease_owner, input.leaseOwner);
+  assert.equal(calls[0]?.args.p_force_revoke, false);
+});
+
+test("recognizes pause and resume recovery without changing the Step attempt", () => {
+  const pause: AgentTaskPauseTransitionInput = {
+    taskId: input.taskId,
+    userId: input.userId,
+    expectedTaskStatus: "running",
+    stepId: input.stepId,
+    expectedStepAttempt: 2,
+    leaseOwner: null,
+    forceRevoke: true,
+    latestCheckpoint: null,
+  };
+  assert.equal(
+    agentTaskPauseTransitionWasApplied(
+      {
+        task: {
+          status: "paused",
+          current_step: input.stepId,
+          current_plan: [{ id: input.stepId, status: "running", attempt: 2 }],
+        },
+      },
+      pause,
+    ),
+    true,
+  );
+  assert.equal(
+    agentTaskPauseTransitionWasApplied(
+      {
+        task: {
+          status: "paused",
+          current_step: input.stepId,
+          current_plan: [{ id: input.stepId, status: "running", attempt: 3 }],
+        },
+      },
+      pause,
+    ),
+    true,
+    "a user-forced pause may serialize after the Task advances to a new attempt",
+  );
+  assert.equal(
+    agentTaskPauseTransitionWasApplied(
+      {
+        task: {
+          status: "paused",
+          current_step: input.stepId,
+          current_plan: [{ id: input.stepId, status: "running", attempt: 3 }],
+        },
+      },
+      { ...pause, forceRevoke: false },
+    ),
+    false,
+  );
+  assert.equal(
+    agentTaskResumeTransitionWasApplied({ task: { status: "verifying" } }),
+    true,
+  );
+  assert.equal(
+    agentTaskResumeTransitionWasApplied({ task: { status: "paused" } }),
+    false,
+  );
+});
+
+test("keeps pause/resume migrations mirrored, lease-fenced and service-only", async () => {
+  const backend = await readFile(
+    new URL(
+      "../../../../migrations/20260807_07_agent_task_atomic_pause_resume.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const supabase = await readFile(
+    new URL(
+      "../../../../../supabase/migrations/20260807000007_agent_task_atomic_pause_resume.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.equal(backend, supabase);
+  assert.match(backend, /status in \('queued', 'running', 'verifying'\)/i);
+  assert.match(backend, /execution_lease_owner = null/i);
+  assert.match(backend, /v_step\.attempt <> v_expected_step_attempt/i);
   assert.match(backend, /from public, anon, authenticated/i);
   assert.match(backend, /to service_role/i);
 });

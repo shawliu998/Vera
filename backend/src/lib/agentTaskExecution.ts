@@ -256,6 +256,7 @@ async function commitAgentTaskAdvance(input: {
         input.taskId,
         input.userId,
         error,
+        { leaseOwner: input.leaseGuard.ownerToken },
       );
     }
     throw error;
@@ -457,6 +458,7 @@ export async function advanceAgentTaskExecution(input: {
           error.message,
           error.facts,
         ),
+        { leaseOwner: input.leaseGuard.ownerToken },
       );
     }
     if (error instanceof AgentVerifierStructuredOutputError) {
@@ -465,7 +467,10 @@ export async function advanceAgentTaskExecution(input: {
         taskId,
         userId,
         "The verifier response could not be mechanically validated. Existing deliverables were preserved and this Step can be resumed.",
-        { classification: "provider_structured_output" },
+        {
+          classification: "provider_structured_output",
+          leaseOwner: input.leaseGuard.ownerToken,
+        },
       );
     }
     if (isTransientModelError(error)) throw error;
@@ -735,6 +740,7 @@ export async function advanceAgentTaskExecution(input: {
         summary: `${error.message}. Existing work was preserved for a resumable review.`,
         facts: error.facts,
         artifacts: execution.artifacts,
+        leaseOwner: input.leaseGuard.ownerToken,
       });
     }
     throw error;
