@@ -76,6 +76,10 @@ import {
     buildTabularReviewWordMemo,
     isTabularReviewWordMemoWithinUploadLimit,
 } from "./exportToWordMemo";
+import {
+    prepareTabularCellsForGeneration,
+    readTabularGenerationStream,
+} from "./tabularGenerationClient";
 
 interface Props {
     reviewId: string;
@@ -366,71 +370,28 @@ export function TRView({ reviewId, projectId }: Props) {
             }
             if (!response.body) throw new Error("No body");
 
-            // Optimistically set empty/pending/error cells to generating (skip done cells)
             setCells((prev) =>
-                documents.flatMap((doc) =>
-                    columns.map((col) => {
-                        const existing = prev.find(
-                            (c) =>
-                                c.document_id === doc.id &&
-                                c.column_index === col.index,
-                        );
-                        if (existing?.status === "done" && existing?.content) {
-                            return existing;
-                        }
-                        return existing
-                            ? {
-                                  ...existing,
-                                  status: "generating" as const,
-                                  content: null,
-                              }
-                            : {
-                                  id: `${doc.id}-${col.index}`,
-                                  review_id: reviewId,
-                                  document_id: doc.id,
-                                  column_index: col.index,
-                                  content: null,
-                                  status: "generating" as const,
-                                  created_at: new Date().toISOString(),
-                              };
-                    }),
-                ),
+                prepareTabularCellsForGeneration({
+                    cells: prev,
+                    documents,
+                    columns,
+                    reviewId,
+                }),
             );
-
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = "";
-
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split("\n");
-                buffer = lines.pop() ?? "";
-
-                for (const line of lines) {
-                    if (!line.startsWith("data:")) continue;
-                    const dataStr = line.slice(5).trim();
-                    if (dataStr === "[DONE]") break;
-                    try {
-                        const data = JSON.parse(dataStr);
-                        if (data.type === "cell_update") {
-                            setCells((prev) =>
-                                prev.map((c) =>
-                                    c.document_id === data.document_id &&
-                                    c.column_index === data.column_index
-                                        ? {
-                                              ...c,
-                                              content: data.content,
-                                              status: data.status,
-                                          }
-                                        : c,
-                                ),
-                            );
-                        }
-                    } catch {}
-                }
-            }
+            await readTabularGenerationStream(response, (update) => {
+                setCells((prev) =>
+                    prev.map((cell) =>
+                        cell.document_id === update.documentId &&
+                        cell.column_index === update.columnIndex
+                            ? {
+                                  ...cell,
+                                  content: update.content,
+                                  status: update.status,
+                              }
+                            : cell,
+                    ),
+                );
+            });
         } catch (err) {
             console.error("Generation failed", err);
         } finally {
