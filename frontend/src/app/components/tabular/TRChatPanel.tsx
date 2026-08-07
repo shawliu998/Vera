@@ -47,70 +47,21 @@ import {
     LiquidDropdownSurface,
 } from "@/app/components/ui/liquid-dropdown";
 import { cn } from "@/app/lib/utils";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface TRMessage {
-    role: "user" | "assistant";
-    content: string;
-    events?: AssistantEvent[];
-    annotations?: TRCitationAnnotation[];
-    isStreaming?: boolean;
-}
-
-function parseCourtlistenerEventCases(value: unknown) {
-    if (!Array.isArray(value)) return undefined;
-    return value
-        .map((item) => {
-            if (!item || typeof item !== "object" || Array.isArray(item)) {
-                return null;
-            }
-            const row = item as Record<string, unknown>;
-            return {
-                cluster_id:
-                    typeof row.cluster_id === "number" ? row.cluster_id : 0,
-                case_name:
-                    typeof row.case_name === "string" ? row.case_name : null,
-                citation:
-                    typeof row.citation === "string" ? row.citation : null,
-                dateFiled:
-                    typeof row.dateFiled === "string" ? row.dateFiled : null,
-                url: typeof row.url === "string" ? row.url : null,
-            };
-        })
-        .filter(
-            (item): item is NonNullable<typeof item> =>
-                !!item && item.cluster_id > 0,
-        );
-}
-
-function parseCourtlistenerCaseSearches(value: unknown) {
-    if (!Array.isArray(value)) return undefined;
-    return value
-        .map((item) => {
-            if (!item || typeof item !== "object" || Array.isArray(item)) {
-                return null;
-            }
-            const row = item as Record<string, unknown>;
-            return {
-                cluster_id:
-                    typeof row.cluster_id === "number" ? row.cluster_id : null,
-                query: typeof row.query === "string" ? row.query : "",
-                total_matches:
-                    typeof row.total_matches === "number"
-                        ? row.total_matches
-                        : 0,
-                case_name:
-                    typeof row.case_name === "string" ? row.case_name : null,
-                citation:
-                    typeof row.citation === "string" ? row.citation : null,
-                error: typeof row.error === "string" ? row.error : undefined,
-            };
-        })
-        .filter((item): item is NonNullable<typeof item> => !!item);
-}
+import {
+    appendAssistantEvent,
+    appendReasoningDelta,
+    appendThinkingPlaceholder,
+    ensureStreamingContentEvent,
+    finishReasoningBlock,
+    parseCourtlistenerCaseSearches,
+    parseCourtlistenerEventCases,
+    replaceLastAssistantEvents,
+    updateLastAssistantContent,
+    updateLastContentEvent,
+    updateLastMatchingEvent as reduceLastMatchingEvent,
+    withoutStreamingPlaceholders,
+    type TRMessage,
+} from "./tabularChatEvents";
 
 interface Props {
     reviewId: string;
@@ -637,17 +588,6 @@ function HistoryDropdown({
 }
 
 // ---------------------------------------------------------------------------
-// Drip helpers
-// ---------------------------------------------------------------------------
-
-function findLastContentIndex(events: AssistantEvent[]): number {
-    for (let i = events.length - 1; i >= 0; i--) {
-        if (events[i].type === "content") return i;
-    }
-    return -1;
-}
-
-// ---------------------------------------------------------------------------
 // Header pills (matches PageHeader action group styling)
 // ---------------------------------------------------------------------------
 
@@ -837,23 +777,9 @@ export function TRChatPanel({
         }
     }
 
-    function updateLastContentEvent(
-        prev: TRMessage[],
-        text: string,
-        isStreaming?: boolean,
-    ): TRMessage[] {
-        const updated = [...prev];
-        const last = updated[updated.length - 1];
-        if (last?.role !== "assistant") return prev;
-        const evts = last.events ?? [];
-        const idx = findLastContentIndex(evts);
-        if (idx < 0) return prev;
-        const newEvents = [...evts];
-        newEvents[idx] = isStreaming
-            ? { type: "content", text, isStreaming: true }
-            : { type: "content", text };
-        updated[updated.length - 1] = { ...last, events: newEvents };
-        return updated;
+    function publishEvents(events: AssistantEvent[]) {
+        eventsRef.current = events;
+        setMessages((prev) => replaceLastAssistantEvents(prev, events));
     }
 
     // Mirror the dripped content text onto eventsRef.current so that any
@@ -861,14 +787,11 @@ export function TRChatPanel({
     // updateMatchingEvent, reasoning_*, etc.) doesn't wipe out the content
     // by replacing it with the stale empty placeholder.
     function syncDripIntoEventsRef(text: string, isStreaming: boolean) {
-        const evts = eventsRef.current;
-        const idx = findLastContentIndex(evts);
-        if (idx < 0) return;
-        const newEvents = [...evts];
-        newEvents[idx] = isStreaming
-            ? { type: "content", text, isStreaming: true }
-            : { type: "content", text };
-        eventsRef.current = newEvents;
+        eventsRef.current = updateLastContentEvent(
+            eventsRef.current,
+            text,
+            isStreaming,
+        );
     }
 
     function flushDrip() {
@@ -876,7 +799,7 @@ export function TRChatPanel({
         const target = dripTargetRef.current;
         dripDisplayLenRef.current = target.length;
         syncDripIntoEventsRef(target, false);
-        setMessages((prev) => updateLastContentEvent(prev, target));
+        setMessages((prev) => updateLastAssistantContent(prev, target));
     }
 
     function startDrip() {
@@ -889,7 +812,9 @@ export function TRChatPanel({
             dripDisplayLenRef.current = newLen;
             const slice = target.slice(0, newLen);
             syncDripIntoEventsRef(slice, true);
-            setMessages((prev) => updateLastContentEvent(prev, slice, true));
+            setMessages((prev) =>
+                updateLastAssistantContent(prev, slice, true),
+            );
         }, 16);
     }
 
@@ -899,86 +824,33 @@ export function TRChatPanel({
     // events so the PreResponseWrapper doesn't briefly flip to "Completed"
     // when one block ends before the next starts. Anytime a real event
     // arrives (or content begins streaming), drop them first.
-    function isStreamingPlaceholder(e: AssistantEvent) {
-        return e.type === "thinking" && !!e.isStreaming;
-    }
-
     function clearStreamingPlaceholders() {
-        const before = eventsRef.current;
-        const after = before.filter((e) => !isStreamingPlaceholder(e));
-        if (after.length === before.length) return;
-        eventsRef.current = after;
-        const snapshot = [...after];
-        setMessages((prev) => {
-            const updated = [...prev];
-            const last = updated[updated.length - 1];
-            if (last?.role === "assistant") {
-                updated[updated.length - 1] = { ...last, events: snapshot };
-            }
-            return updated;
-        });
+        const next = withoutStreamingPlaceholders(eventsRef.current);
+        if (next === eventsRef.current) return;
+        publishEvents(next);
     }
 
     function pushThinkingPlaceholder() {
-        const events = eventsRef.current;
-        const last = events[events.length - 1];
-        // Don't stack placeholders back-to-back.
-        if (last && isStreamingPlaceholder(last)) return;
-        eventsRef.current = [
-            ...events,
-            { type: "thinking" as const, isStreaming: true },
-        ];
-        const snapshot = [...eventsRef.current];
-        setMessages((prev) => {
-            const updated = [...prev];
-            const last = updated[updated.length - 1];
-            if (last?.role === "assistant") {
-                updated[updated.length - 1] = { ...last, events: snapshot };
-            }
-            return updated;
-        });
+        const next = appendThinkingPlaceholder(eventsRef.current);
+        if (next === eventsRef.current) return;
+        publishEvents(next);
     }
 
     function pushEvent(event: AssistantEvent) {
-        // Drop any in-flight placeholder unless we're pushing one ourselves.
-        let next = eventsRef.current;
-        if (event.type !== "thinking") {
-            next = next.filter((e) => !isStreamingPlaceholder(e));
-        }
-        eventsRef.current = [...next, event];
-        const snapshot = [...eventsRef.current];
-        setMessages((prev) => {
-            const updated = [...prev];
-            const last = updated[updated.length - 1];
-            if (last?.role === "assistant") {
-                updated[updated.length - 1] = { ...last, events: snapshot };
-            }
-            return updated;
-        });
+        publishEvents(appendAssistantEvent(eventsRef.current, event));
     }
 
     function updateMatchingEvent(
         predicate: (e: AssistantEvent) => boolean,
         updater: (e: AssistantEvent) => AssistantEvent,
     ) {
-        const events = eventsRef.current;
-        const idx = [...events]
-            .map((_, i) => i)
-            .reverse()
-            .find((i) => predicate(events[i]));
-        if (idx === undefined) return false;
-        const newEvents = [...events];
-        newEvents[idx] = updater(events[idx]);
-        eventsRef.current = newEvents;
-        const snapshot = [...newEvents];
-        setMessages((prev) => {
-            const updated = [...prev];
-            const last = updated[updated.length - 1];
-            if (last?.role === "assistant") {
-                updated[updated.length - 1] = { ...last, events: snapshot };
-            }
-            return updated;
-        });
+        const result = reduceLastMatchingEvent(
+            eventsRef.current,
+            predicate,
+            updater,
+        );
+        if (!result.matched) return false;
+        publishEvents(result.events);
         return true;
     }
 
@@ -1149,127 +1021,35 @@ export function TRChatPanel({
                         }
 
                         if (data.type === "reasoning_delta") {
-                            const text = data.text as string;
-                            const events = eventsRef.current;
-                            const last = events[events.length - 1];
-                            if (
-                                last?.type === "reasoning" &&
-                                last.isStreaming
-                            ) {
-                                eventsRef.current = [
-                                    ...events.slice(0, -1),
-                                    {
-                                        type: "reasoning" as const,
-                                        text: last.text + text,
-                                        isStreaming: true,
-                                    },
-                                ];
-                            } else {
-                                // New reasoning block — drop any bridging
-                                // placeholder before it so the wrapper
-                                // doesn't render both.
-                                const cleaned = events.filter(
-                                    (e) => !isStreamingPlaceholder(e),
-                                );
-                                eventsRef.current = [
-                                    ...cleaned,
-                                    {
-                                        type: "reasoning" as const,
-                                        text,
-                                        isStreaming: true,
-                                    },
-                                ];
-                            }
-                            const snapshot = [...eventsRef.current];
-                            setMessages((prev) => {
-                                const updated = [...prev];
-                                const last = updated[updated.length - 1];
-                                if (last?.role === "assistant") {
-                                    updated[updated.length - 1] = {
-                                        ...last,
-                                        events: snapshot,
-                                    };
-                                }
-                                return updated;
-                            });
+                            publishEvents(
+                                appendReasoningDelta(
+                                    eventsRef.current,
+                                    typeof data.text === "string"
+                                        ? data.text
+                                        : "",
+                                ),
+                            );
                             continue;
                         }
 
                         if (data.type === "reasoning_block_end") {
-                            const events = eventsRef.current;
-                            const last = events[events.length - 1];
-                            if (
-                                last?.type === "reasoning" &&
-                                last.isStreaming
-                            ) {
-                                eventsRef.current = [
-                                    ...events.slice(0, -1),
-                                    {
-                                        type: "reasoning" as const,
-                                        text: last.text,
-                                    },
-                                ];
-                            }
-                            const snapshot = [...eventsRef.current];
-                            setMessages((prev) => {
-                                const updated = [...prev];
-                                const last = updated[updated.length - 1];
-                                if (last?.role === "assistant") {
-                                    updated[updated.length - 1] = {
-                                        ...last,
-                                        events: snapshot,
-                                    };
-                                }
-                                return updated;
-                            });
+                            publishEvents(
+                                finishReasoningBlock(eventsRef.current),
+                            );
                             pushThinkingPlaceholder();
                             continue;
                         }
 
                         if (data.type === "content_delta") {
-                            const text = data.text as string;
-                            dripTargetRef.current += text;
-                            const events = eventsRef.current;
-                            const lastEvent = events[events.length - 1];
-                            if (
-                                lastEvent?.type !== "content" ||
-                                !lastEvent.isStreaming
-                            ) {
-                                // Finalize any still-streaming reasoning
-                                // event AND drop bridging placeholders so
-                                // the wrapper transitions cleanly into
-                                // content.
-                                const finalized = events
-                                    .filter((e) => !isStreamingPlaceholder(e))
-                                    .map((e) =>
-                                        e.type === "reasoning" && e.isStreaming
-                                            ? {
-                                                  type: "reasoning" as const,
-                                                  text: e.text,
-                                              }
-                                            : e,
-                                    );
-                                eventsRef.current = [
-                                    ...finalized,
-                                    {
-                                        type: "content" as const,
-                                        text: "",
-                                        isStreaming: true,
-                                    },
-                                ];
-                                const snapshot = [...eventsRef.current];
-                                setMessages((prev) => {
-                                    const updated = [...prev];
-                                    const last = updated[updated.length - 1];
-                                    if (last?.role === "assistant") {
-                                        updated[updated.length - 1] = {
-                                            ...last,
-                                            events: snapshot,
-                                        };
-                                    }
-                                    return updated;
-                                });
+                            if (typeof data.text !== "string" || !data.text) {
+                                continue;
                             }
+                            const text = data.text;
+                            dripTargetRef.current += text;
+                            const next = ensureStreamingContentEvent(
+                                eventsRef.current,
+                            );
+                            if (next !== eventsRef.current) publishEvents(next);
                             startDrip();
                             continue;
                         }

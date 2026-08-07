@@ -7,7 +7,7 @@
         "build": "next build",
         "start": "next start",
         "lint": "eslint",
-        "test:tabular": "tsx --test src/app/components/tabular/citation-utils.test.ts src/app/components/tabular/exportToExcel.test.ts src/app/components/tabular/exportToWordMemo.test.ts src/app/components/tabular/tabularGenerationClient.test.ts",
+        "test:tabular": "tsx --test src/app/components/tabular/citation-utils.test.ts src/app/components/tabular/exportToExcel.test.ts src/app/components/tabular/exportToWordMemo.test.ts src/app/components/tabular/tabularChatEvents.test.ts src/app/components/tabular/tabularGenerationClient.test.ts",
         "test:word": "tsx --test src/app/lib/chatMessageMapping.test.ts src/app/lib/docxAcceptedView.test.ts src/app/lib/officeDialogRuntime.test.ts src/app/lib/wordLaunch.test.ts src/app/lib/wordMatterVersion.test.ts src/app/lib/wordOfficeBridge.test.ts src/app/lib/wordReviewSession.test.ts src/app/lib/wordSuggestion.test.ts src/app/lib/wordTaskArtifactBinding.test.ts",
         "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
         "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",

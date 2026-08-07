@@ -19,7 +19,21 @@ test("prepares only unfinished cells and preserves completed work", () => {
         created_at: "before",
       },
     ],
-    documents: [{ id: "doc", filename: "Agreement.docx" }],
+    documents: [
+      {
+        id: "doc",
+        project_id: "project",
+        filename: "Agreement.docx",
+        file_type: "docx",
+        storage_path: "documents/Agreement.docx",
+        pdf_storage_path: null,
+        size_bytes: 100,
+        page_count: 1,
+        structure_tree: null,
+        status: "ready",
+        created_at: "before",
+      },
+    ],
     columns: [
       { index: 0, name: "Term", prompt: "Extract term" },
       { index: 1, name: "Law", prompt: "Extract law" },
