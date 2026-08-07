@@ -222,11 +222,30 @@ export function auditAgentTaskState(
         );
       }
     } else if (task.status === "completed") {
+      const allSettled = plan.every((step) =>
+        ["completed", "skipped"].includes(step.status),
+      );
       if (
+        task.current_step !== null &&
+        current &&
+        ["completed", "skipped"].includes(current.status) &&
+        running.length === 0 &&
+        blocked.length === 0 &&
+        allSettled
+      ) {
+        issues.push(
+          issue(
+            "completed_current_step_stale",
+            task.id,
+            "mechanically_repairable",
+            { current_step: task.current_step },
+          ),
+        );
+      } else if (
         task.current_step !== null ||
         running.length > 0 ||
         blocked.length > 0 ||
-        plan.some((step) => !["completed", "skipped"].includes(step.status))
+        !allSettled
       ) {
         issues.push(
           issue("completed_shape_invalid", task.id, "review_required", {}),

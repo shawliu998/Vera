@@ -89,6 +89,24 @@ test("reports torn Task/Step shapes without proposing an automatic legal repair"
   assert.equal(report.disposition_counts.review_required, 2);
 });
 
+test("classifies only a settled completed Task pointer as mechanically repairable", () => {
+  const report = auditAgentTaskState(
+    [{ id: "done", status: "completed", current_step: "s1" }],
+    [
+      {
+        id: "s1",
+        task_id: "done",
+        position: 0,
+        status: "completed",
+        attempt: 1,
+      },
+    ],
+  );
+  assert.equal(report.issue_counts.completed_current_step_stale, 1);
+  assert.equal(report.disposition_counts.mechanically_repairable, 1);
+  assert.equal(report.disposition_counts.review_required, undefined);
+});
+
 test("fails closed for malformed effect receipts", () => {
   const malformed = auditAgentTaskState(
     [{ id: "effect", status: "verifying", current_step: "s1" }],
