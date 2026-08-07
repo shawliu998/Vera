@@ -8,6 +8,7 @@ import {
   READ_ONLY_SOURCE_CONNECTOR_PIN_VERSION,
   READ_ONLY_SOURCE_AUTHORIZATION_VERSION,
   READ_ONLY_SOURCE_COVERAGE_VERSION,
+  READ_ONLY_SOURCE_DISCOVERY_VERSION,
   READ_ONLY_SOURCE_REQUEST_VERSION,
   READ_ONLY_SOURCE_SNAPSHOT_VERSION,
   readOnlySourceConnectorPinSchema,
@@ -46,6 +47,7 @@ function pin(
     },
     allowed_hosts: ["api.fixture.invalid"],
     allowed_source_hosts: ["source.fixture.invalid"],
+    allowed_jurisdictions: ["CN"],
     allowed_operations: ["search"],
     allowed_egress_fields: [
       "query",
@@ -168,6 +170,20 @@ function normalizer(
       };
       mutate?.(snapshot);
       return {
+        discoveries: [
+          {
+            schema_version: READ_ONLY_SOURCE_DISCOVERY_VERSION,
+            discovery_ref: "discovery-1",
+            provider_id: connectorPin.provider_id,
+            external_id: "authority-1",
+            source_kind: "authority",
+            title: "合成来源",
+            canonical_url: "https://source.fixture.invalid/authority-1",
+            published_on: "2026-08-08",
+            not_citable: true,
+            metadata: { issuer: "fixture" },
+          },
+        ],
         importCandidates: [snapshot],
         coverage: {
           schema_version: READ_ONLY_SOURCE_COVERAGE_VERSION,
@@ -215,6 +231,7 @@ test("executes one server-bound read-only call and keeps bodies out of receipts"
     true,
   );
   assert.equal(result.coverage.status, "complete");
+  assert.equal(result.discoveries[0]?.not_citable, true);
   assert.equal(result.receipt.external_side_effect, "none");
   assert.equal(result.receipt.external_call_attempted, true);
   assert.match(result.receipt.idempotency_key, /^source:[a-f0-9]{64}$/);
@@ -464,6 +481,35 @@ test("rejects normalized result counts and coverage beyond the fixed pin", async
   assert.equal(result.kind, "provider_pause");
   if (result.kind !== "provider_pause") return;
   assert.equal(result.classification, "provider_structured_output");
+
+  const overDiscoveries = normalizer(boundedPin);
+  overDiscoveries.normalize = async (input) => {
+    const base = await normalizer(boundedPin).normalize(input);
+    return {
+      ...base,
+      discoveries: [
+        ...base.discoveries,
+        {
+          ...(base.discoveries[0] as Record<string, unknown>),
+          discovery_ref: "discovery-2",
+          external_id: "authority-2",
+        },
+      ],
+    };
+  };
+  const discoveryResult = await executeReadOnlySourceConnector({
+    context,
+    grant: grant([boundedPin]),
+    pin: boundedPin,
+    authorization,
+    request: { ...request, page_size: 1 },
+    normalizer: overDiscoveries,
+    invoker: boundInvoker(async () => ({}), boundedPin),
+    now: () => NOW,
+  });
+  assert.equal(discoveryResult.kind, "provider_pause");
+  if (discoveryResult.kind !== "provider_pause") return;
+  assert.equal(discoveryResult.classification, "provider_structured_output");
 
   const overCoverage = normalizer(boundedPin);
   overCoverage.normalize = async (input) => {

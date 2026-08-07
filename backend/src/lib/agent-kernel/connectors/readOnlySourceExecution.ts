@@ -6,6 +6,7 @@ import {
   READ_ONLY_SOURCE_RECEIPT_VERSION,
   readOnlySourceAuthorizationSchema,
   readOnlySourceCoverageSchema,
+  readOnlySourceDiscoverySchema,
   readOnlySourceReceiptSchema,
   readOnlySourceRequestSchema,
   readOnlySourceSnapshotSchema,
@@ -13,6 +14,7 @@ import {
   type ReadOnlySourceConnectorPinV1,
   type ReadOnlySourceAuthorizationV1,
   type ReadOnlySourceCoverageV1,
+  type ReadOnlySourceDiscoveryV1,
   type ReadOnlySourceEgressFieldV1,
   type ReadOnlySourceReceiptV1,
   type ReadOnlySourceRequestV1,
@@ -44,6 +46,7 @@ export type ReadOnlySourceNormalizerV1 = {
     raw: unknown;
     request: ReadOnlySourceRequestV1;
   }): Promise<{
+    discoveries: unknown[];
     importCandidates: unknown[];
     coverage: unknown;
   }>;
@@ -75,6 +78,8 @@ export class ReadOnlySourceInvocationError extends Error {
 export type ReadOnlySourceExecutionOutcomeV1 =
   | {
       kind: "completed";
+      /** Search-only candidates; never treat these as citations or sources. */
+      discoveries: ReadOnlySourceDiscoveryV1[];
       /** Import-only; never serialize this body-bearing channel as result_data. */
       importCandidates: ReadOnlySourceSnapshotV1[];
       coverage: ReadOnlySourceCoverageV1;
@@ -162,6 +167,7 @@ function makeReceipt(input: {
   externalCallAttempted: boolean;
   status: "ok" | "error" | "rejected";
   errorCategory: string | null;
+  discoveryRefs: string[];
   snapshotRefs: string[];
   startedAt: string;
   completedAt: string;
@@ -183,6 +189,7 @@ function makeReceipt(input: {
     external_side_effect: "none",
     status: input.status,
     error_category: input.errorCategory,
+    returned_discovery_refs: input.discoveryRefs,
     returned_snapshot_refs: input.snapshotRefs,
     started_at: input.startedAt,
     completed_at: input.completedAt,
@@ -258,6 +265,12 @@ function preflight(input: {
     return "connector_operation_not_allowed";
   }
   if (
+    !input.request.jurisdiction ||
+    !input.pin.allowed_jurisdictions.includes(input.request.jurisdiction)
+  ) {
+    return "connector_jurisdiction_not_allowed";
+  }
+  if (
     input.request.page !== null &&
     input.request.page > input.pin.limits.maximum_pages
   ) {
@@ -285,15 +298,24 @@ function preflight(input: {
 function validateNormalizedResult(input: {
   pin: ReadOnlySourceConnectorPinV1;
   request: ReadOnlySourceRequestV1;
+  discoveries: unknown[];
   importCandidates: unknown[];
   coverage: unknown;
 }) {
+  const discoveries = input.discoveries.map((discovery) =>
+    readOnlySourceDiscoverySchema.parse(discovery),
+  );
   const importCandidates = input.importCandidates.map((snapshot) =>
     readOnlySourceSnapshotSchema.parse(snapshot),
   );
   const coverage = readOnlySourceCoverageSchema.parse(input.coverage);
   const maximumSnapshots =
     input.request.operation === "search" ? input.request.page_size! : 1;
+  const maximumDiscoveries =
+    input.request.operation === "search" ? input.request.page_size! : 1;
+  if (discoveries.length > maximumDiscoveries) {
+    throw new Error("connector_discovery_count_exceeded");
+  }
   if (importCandidates.length > maximumSnapshots) {
     throw new Error("connector_snapshot_count_exceeded");
   }
@@ -315,6 +337,18 @@ function validateNormalizedResult(input: {
     throw new Error("connector_snapshot_refs_not_unique");
   }
   const allowedSourceHosts = new Set(input.pin.allowed_source_hosts);
+  const discoveryRefs = discoveries.map((discovery) => discovery.discovery_ref);
+  if (new Set(discoveryRefs).size !== discoveryRefs.length) {
+    throw new Error("connector_discovery_refs_not_unique");
+  }
+  for (const discovery of discoveries) {
+    if (discovery.provider_id !== input.pin.provider_id) {
+      throw new Error("connector_discovery_provider_mismatch");
+    }
+    if (!allowedSourceHosts.has(new URL(discovery.canonical_url).hostname)) {
+      throw new Error("connector_discovery_host_not_allowed");
+    }
+  }
   for (const snapshot of importCandidates) {
     if (snapshot.provider_id !== input.pin.provider_id) {
       throw new Error("connector_snapshot_provider_mismatch");
@@ -332,7 +366,7 @@ function validateNormalizedResult(input: {
       throw new Error("connector_snapshot_digest_mismatch");
     }
   }
-  return { importCandidates, coverage };
+  return { discoveries, importCandidates, coverage };
 }
 
 export async function executeReadOnlySourceConnector(input: {
@@ -375,6 +409,7 @@ export async function executeReadOnlySourceConnector(input: {
         externalCallAttempted: false,
         status: "rejected",
         errorCategory: rejection,
+        discoveryRefs: [],
         snapshotRefs: [],
         startedAt,
         completedAt: now(),
@@ -419,6 +454,7 @@ export async function executeReadOnlySourceConnector(input: {
         externalCallAttempted,
         status: "error",
         errorCategory: classification,
+        discoveryRefs: [],
         snapshotRefs: [],
         startedAt,
         completedAt: now(),
@@ -433,6 +469,7 @@ export async function executeReadOnlySourceConnector(input: {
     const result = validateNormalizedResult({
       pin,
       request,
+      discoveries: normalized.discoveries,
       importCandidates: normalized.importCandidates,
       coverage: normalized.coverage,
     });
@@ -448,6 +485,9 @@ export async function executeReadOnlySourceConnector(input: {
         externalCallAttempted,
         status: "ok",
         errorCategory: null,
+        discoveryRefs: result.discoveries.map(
+          (discovery) => discovery.discovery_ref,
+        ),
         snapshotRefs: result.importCandidates.map(
           (snapshot) => snapshot.snapshot_ref,
         ),
@@ -468,6 +508,7 @@ export async function executeReadOnlySourceConnector(input: {
         externalCallAttempted,
         status: "error",
         errorCategory: "provider_structured_output",
+        discoveryRefs: [],
         snapshotRefs: [],
         startedAt,
         completedAt: now(),

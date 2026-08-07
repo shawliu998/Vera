@@ -206,6 +206,7 @@ async function fetchCaseOpinionsFromCourtlistenerOpinionsEndpoint(args: {
     maxChars: number;
     includeFullText?: boolean;
     apiToken?: string | null;
+    signal?: AbortSignal;
 }) {
     const MAX_OPINION_PAGES = 10;
     const opinions: ReturnType<typeof compactOpinion>[] = [];
@@ -223,7 +224,7 @@ async function fetchCaseOpinionsFromCourtlistenerOpinionsEndpoint(args: {
         });
         const data = await courtlistenerFetch<JsonRecord>(
             nextUrl,
-            undefined,
+            { signal: args.signal },
             args.apiToken,
         );
         const results = Array.isArray(data.results) ? data.results : [];
@@ -1058,6 +1059,7 @@ export async function searchCourtlistenerCaseLaw(args: {
     filedBefore?: string;
     limit?: number;
     apiToken?: string | null;
+    signal?: AbortSignal;
 }) {
     const query = args.query?.trim();
     if (!query) return { error: "query is required." };
@@ -1074,7 +1076,7 @@ export async function searchCourtlistenerCaseLaw(args: {
 
     const data = await courtlistenerFetch<JsonRecord>(
         `/search/?${params}`,
-        undefined,
+        { signal: args.signal },
         args.apiToken,
     );
     const rawResults = Array.isArray(data.results) ? data.results : [];
@@ -1116,6 +1118,7 @@ export async function getCourtlistenerCaseOpinions(args: {
     maxChars?: number;
     db?: ServerSupabase;
     apiToken?: string | null;
+    signal?: AbortSignal;
 }) {
     if (!args.clusterId || !Number.isFinite(args.clusterId)) {
         return { error: "clusterId is required." };
@@ -1134,6 +1137,7 @@ export async function getCourtlistenerCaseOpinions(args: {
         maxChars,
         includeFullText: args.includeFullText,
         apiToken: args.apiToken,
+        signal: args.signal,
     });
 }
 
@@ -1143,6 +1147,7 @@ export async function getCourtlistenerCases(args: {
     maxChars?: number;
     db?: ServerSupabase;
     apiToken?: string | null;
+    signal?: AbortSignal;
 }) {
     const clusterIds = Array.from(
         new Set(
@@ -1164,6 +1169,7 @@ export async function getCourtlistenerCases(args: {
                     maxChars: args.maxChars,
                     db: args.db,
                     apiToken: args.apiToken,
+                    signal: args.signal,
                 });
                 return {
                     clusterId,

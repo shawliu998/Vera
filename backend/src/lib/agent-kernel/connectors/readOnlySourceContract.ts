@@ -1,17 +1,19 @@
 import { z } from "zod";
 
 export const READ_ONLY_SOURCE_CONNECTOR_PIN_VERSION =
-  "read_only_source_connector_pin_v1" as const;
+  "read_only_source_connector_pin_v2" as const;
 export const READ_ONLY_SOURCE_REQUEST_VERSION =
   "read_only_source_request_v1" as const;
 export const READ_ONLY_SOURCE_AUTHORIZATION_VERSION =
   "read_only_source_authorization_v1" as const;
+export const READ_ONLY_SOURCE_DISCOVERY_VERSION =
+  "read_only_source_discovery_v1" as const;
 export const READ_ONLY_SOURCE_SNAPSHOT_VERSION =
   "read_only_source_snapshot_v1" as const;
 export const READ_ONLY_SOURCE_COVERAGE_VERSION =
   "read_only_source_coverage_v1" as const;
 export const READ_ONLY_SOURCE_RECEIPT_VERSION =
-  "read_only_source_receipt_v1" as const;
+  "read_only_source_receipt_v2" as const;
 
 const boundedToken = z
   .string()
@@ -73,6 +75,7 @@ const readOnlySourceConnectorPinBaseSchema = z
       .strict(),
     allowed_hosts: z.array(host).max(8),
     allowed_source_hosts: z.array(host).min(1).max(16),
+    allowed_jurisdictions: z.array(boundedToken).min(1).max(32),
     allowed_operations: z.array(readOnlySourceOperationSchema).min(1).max(3),
     allowed_egress_fields: z
       .array(readOnlySourceEgressFieldSchema)
@@ -97,6 +100,7 @@ export const readOnlySourceConnectorPinSchema =
     for (const [path, values] of [
       ["allowed_hosts", pin.allowed_hosts],
       ["allowed_source_hosts", pin.allowed_source_hosts],
+      ["allowed_jurisdictions", pin.allowed_jurisdictions],
       ["allowed_operations", pin.allowed_operations],
       ["allowed_egress_fields", pin.allowed_egress_fields],
     ] as const) {
@@ -196,6 +200,80 @@ const metadataValue = z.union([
   z.array(z.string().max(1_000)).max(100),
 ]);
 
+const sourceMetadataSchema = z.record(z.string().max(120), metadataValue);
+const reservedIdentityKeys = new Set([
+  "documentid",
+  "documentversionid",
+  "matterid",
+  "projectid",
+  "artifactid",
+  "citationid",
+]);
+
+function validateSourceMetadata(
+  metadata: Record<string, unknown>,
+  context: z.RefinementCtx,
+) {
+  const keys = Object.keys(metadata);
+  if (keys.length > 40) {
+    context.addIssue({
+      code: z.ZodIssueCode.too_big,
+      path: ["metadata"],
+      type: "array",
+      maximum: 40,
+      inclusive: true,
+      exact: false,
+      message: "Source metadata is bounded to 40 fields",
+    });
+  }
+  const reserved = keys.filter((key) =>
+    reservedIdentityKeys.has(key.replace(/[_-]/g, "").toLowerCase()),
+  );
+  if (reserved.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["metadata"],
+      message: "A provider result cannot supply Vera object identities",
+    });
+  }
+}
+
+const httpsSourceUrl = z
+  .string()
+  .url()
+  .superRefine((value, context) => {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password || url.hash) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "A source URL must be credential-free HTTPS without a fragment",
+      });
+    }
+  });
+
+/** Search-only metadata. It is not a citation or an imported Matter source. */
+export const readOnlySourceDiscoverySchema = z
+  .object({
+    schema_version: z.literal(READ_ONLY_SOURCE_DISCOVERY_VERSION),
+    discovery_ref: boundedToken,
+    provider_id: boundedToken,
+    external_id: z.string().trim().min(1).max(500),
+    source_kind: boundedToken,
+    title: z.string().trim().min(1).max(1_000),
+    canonical_url: httpsSourceUrl,
+    published_on: isoDate.nullable(),
+    not_citable: z.literal(true),
+    metadata: sourceMetadataSchema,
+  })
+  .strict()
+  .superRefine((discovery, context) =>
+    validateSourceMetadata(discovery.metadata, context),
+  );
+
+export type ReadOnlySourceDiscoveryV1 = z.infer<
+  typeof readOnlySourceDiscoverySchema
+>;
+
 /**
  * Import-only immutable source material. It is deliberately separate from the
  * body-free connector receipt and must never be copied into Step result_data.
@@ -209,49 +287,17 @@ export const readOnlySourceSnapshotSchema = z
     external_id: z.string().trim().min(1).max(500),
     source_kind: boundedToken,
     title: z.string().trim().min(1).max(1_000),
-    canonical_url: z
-      .string()
-      .url()
-      .refine((value) => new URL(value).protocol === "https:"),
+    canonical_url: httpsSourceUrl,
     retrieved_at: isoDateTime,
     as_of_date: isoDate.nullable(),
     content_type: z.enum(["text/plain", "application/json", "application/xml"]),
     content_sha256: sha256,
     source_body: z.string().min(1).max(2_000_000),
-    metadata: z.record(z.string().max(120), metadataValue),
+    metadata: sourceMetadataSchema,
   })
   .strict()
   .superRefine((snapshot, context) => {
-    const keys = Object.keys(snapshot.metadata);
-    if (keys.length > 40) {
-      context.addIssue({
-        code: z.ZodIssueCode.too_big,
-        path: ["metadata"],
-        type: "array",
-        maximum: 40,
-        inclusive: true,
-        exact: false,
-        message: "Snapshot metadata is bounded to 40 fields",
-      });
-    }
-    const reservedIdentityKeys = new Set([
-      "documentid",
-      "documentversionid",
-      "matterid",
-      "projectid",
-      "artifactid",
-      "citationid",
-    ]);
-    const reserved = keys.filter((key) =>
-      reservedIdentityKeys.has(key.replace(/[_-]/g, "").toLowerCase()),
-    );
-    if (reserved.length) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["metadata"],
-        message: "A provider snapshot cannot supply Vera object identities",
-      });
-    }
+    validateSourceMetadata(snapshot.metadata, context);
   });
 
 export type ReadOnlySourceSnapshotV1 = z.infer<
@@ -325,6 +371,7 @@ export const readOnlySourceReceiptSchema = z
     external_side_effect: z.literal("none"),
     status: z.enum(["ok", "error", "rejected"]),
     error_category: z.string().trim().min(1).max(120).nullable(),
+    returned_discovery_refs: z.array(boundedToken).max(200),
     returned_snapshot_refs: z.array(boundedToken).max(200),
     started_at: isoDateTime,
     completed_at: isoDateTime,
@@ -346,6 +393,10 @@ export function validateReadOnlySourceRequest(value: unknown) {
 
 export function validateReadOnlySourceSnapshot(value: unknown) {
   return readOnlySourceSnapshotSchema.parse(value);
+}
+
+export function validateReadOnlySourceDiscovery(value: unknown) {
+  return readOnlySourceDiscoverySchema.parse(value);
 }
 
 export function validateReadOnlySourceCoverage(value: unknown) {
