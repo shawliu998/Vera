@@ -49,6 +49,7 @@ import {
 } from "../lib/agent-kernel/capability/stepCapability";
 import {
   AgentTaskWordArtifactError,
+  agentTaskWordArtifactErrorBody,
   putAgentTaskWordArtifactEdit,
 } from "../lib/agentTaskWordArtifact";
 import { singleFileUpload } from "../lib/upload";
@@ -549,13 +550,17 @@ agentTasksRouter.put(
           buffer: req.file.buffer,
         },
       );
+      wakeAgentTaskRunner({
+        taskId: req.params.taskId,
+        userId: res.locals.userId as string,
+        userEmail: res.locals.userEmail as string | undefined,
+      });
       res.json(version);
     } catch (error) {
       if (error instanceof AgentTaskWordArtifactError) {
-        return void res.status(error.status).json({
-          detail: error.message,
-          issue_code: error.code,
-        });
+        return void res
+          .status(error.status)
+          .json(agentTaskWordArtifactErrorBody(error));
       }
       routeError(res, error);
     }

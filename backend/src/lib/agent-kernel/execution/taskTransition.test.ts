@@ -12,6 +12,7 @@ import {
   agentTaskResumeTransitionWasApplied,
   agentTaskStateTransitionWasApplied,
   agentTaskStopTransitionWasApplied,
+  commitAgentTaskArtifactReverificationTransition,
   commitAgentTaskInputTransition,
   commitAgentTaskPauseTransition,
   commitAgentTaskReviewDecisionTransition,
@@ -21,6 +22,7 @@ import {
   commitAgentTaskStateTransition,
   commitAgentTaskStopTransition,
   type AgentTaskInputTransitionInput,
+  type AgentTaskArtifactReverificationTransitionInput,
   type AgentTaskPauseTransitionInput,
   type AgentTaskReviewDecisionTransitionInput,
   type AgentTaskRevisionTransitionInput,
@@ -90,6 +92,51 @@ test("wraps database failures as a recoverable state-transition error", async ()
       error instanceof AgentTaskStateTransitionError &&
       error.code === "task_state_transition_unavailable",
   );
+});
+
+test("maps Artifact re-verification to one server-owned atomic transition", async () => {
+  let call: { name: string; args: Record<string, unknown> } | null = null;
+  const db = {
+    async rpc(name: string, args: Record<string, unknown>) {
+      call = { name, args };
+      return {
+        data: [
+          {
+            outcome: "started",
+            task_status: "verifying",
+            current_step: "verifier-step",
+          },
+        ],
+        error: null,
+      };
+    },
+  };
+  const transition: AgentTaskArtifactReverificationTransitionInput = {
+    taskId: input.taskId,
+    userId: input.userId,
+    documentId: "00000000-0000-4000-8000-000000000010",
+    baseVersionId: "00000000-0000-4000-8000-000000000011",
+    versionId: "00000000-0000-4000-8000-000000000012",
+    mutationId: "artifact-edit:00000000-0000-4000-8000-000000000012",
+  };
+  const result = await commitAgentTaskArtifactReverificationTransition(
+    db as never,
+    transition,
+  );
+  assert.equal(call?.name, "start_agent_task_artifact_reverification_v1");
+  assert.deepEqual(call?.args, {
+    p_task_id: transition.taskId,
+    p_user_id: transition.userId,
+    p_document_id: transition.documentId,
+    p_base_version_id: transition.baseVersionId,
+    p_version_id: transition.versionId,
+    p_mutation_id: transition.mutationId,
+  });
+  assert.deepEqual(result, {
+    outcome: "started",
+    taskStatus: "verifying",
+    currentStep: "verifier-step",
+  });
 });
 
 test("recognizes a committed completion after an uncertain response", () => {
@@ -751,6 +798,32 @@ test("keeps pause/resume migrations mirrored, lease-fenced and service-only", as
   assert.match(backend, /status in \('queued', 'running', 'verifying'\)/i);
   assert.match(backend, /execution_lease_owner = null/i);
   assert.match(backend, /v_step\.attempt <> v_expected_step_attempt/i);
+  assert.match(backend, /from public, anon, authenticated/i);
+  assert.match(backend, /to service_role/i);
+});
+
+test("keeps Artifact re-verification migrations mirrored and narrowly scoped", async () => {
+  const backend = await readFile(
+    new URL(
+      "../../../../migrations/20260807_08_agent_task_artifact_reverification.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const supabase = await readFile(
+    new URL(
+      "../../../../../supabase/migrations/20260807000008_agent_task_artifact_reverification.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.equal(backend, supabase);
+  assert.match(backend, /artifact_type = 'draft'/i);
+  assert.match(backend, /capability is distinct from 'verify'/i);
+  assert.match(backend, /status = 'running'[\s\S]*repair_attempt = 0/i);
+  assert.match(backend, /result_summary = null[\s\S]*result_data = null/i);
+  assert.match(backend, /status = 'verifying'/i);
+  assert.match(backend, /artifact_reverification/i);
   assert.match(backend, /from public, anon, authenticated/i);
   assert.match(backend, /to service_role/i);
 });

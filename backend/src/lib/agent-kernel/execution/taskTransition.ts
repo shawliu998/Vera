@@ -88,6 +88,27 @@ export type AgentTaskPauseTransitionInput = {
   latestCheckpoint: unknown;
 };
 
+export type AgentTaskArtifactReverificationTransitionInput = {
+  taskId: string;
+  userId: string;
+  documentId: string;
+  baseVersionId: string;
+  versionId: string;
+  mutationId: string;
+};
+
+export type AgentTaskArtifactReverificationTransitionOutcome =
+  | "started"
+  | "already_started"
+  | "artifact_not_found"
+  | "conflict"
+  | "contract_invalid"
+  | "invalid_input"
+  | "lease_busy"
+  | "not_found"
+  | "verifier_invalid"
+  | "version_conflict";
+
 export class AgentTaskStateTransitionError extends Error {
   constructor(
     readonly code:
@@ -328,6 +349,60 @@ export async function commitAgentTaskReviewDecisionTransition(
     ],
     { task_id: input.taskId, decision_id: input.decisionId },
   );
+}
+
+export async function commitAgentTaskArtifactReverificationTransition(
+  db: Db,
+  input: AgentTaskArtifactReverificationTransitionInput,
+) {
+  const { data, error } = await db.rpc(
+    "start_agent_task_artifact_reverification_v1",
+    {
+      p_task_id: input.taskId,
+      p_user_id: input.userId,
+      p_document_id: input.documentId,
+      p_base_version_id: input.baseVersionId,
+      p_version_id: input.versionId,
+      p_mutation_id: input.mutationId,
+    },
+  );
+  if (error) {
+    throw transitionError(
+      `Failed to start Agent Task Artifact re-verification atomically: ${error.message}`,
+      {
+        task_id: input.taskId,
+        document_id: input.documentId,
+        base_version_id: input.baseVersionId,
+        version_id: input.versionId,
+        mutation_id: input.mutationId,
+      },
+    );
+  }
+  return readOutcome(
+    data,
+    [
+      "started",
+      "already_started",
+      "artifact_not_found",
+      "conflict",
+      "contract_invalid",
+      "invalid_input",
+      "lease_busy",
+      "not_found",
+      "verifier_invalid",
+      "version_conflict",
+    ],
+    {
+      task_id: input.taskId,
+      document_id: input.documentId,
+      version_id: input.versionId,
+      mutation_id: input.mutationId,
+    },
+  ) as {
+    outcome: AgentTaskArtifactReverificationTransitionOutcome;
+    taskStatus: string | null;
+    currentStep: string | null;
+  };
 }
 
 export async function commitAgentTaskRevisionTransition(

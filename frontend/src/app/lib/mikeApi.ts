@@ -23,6 +23,11 @@ import {
     mapChatMessages,
     type ChatMessageWire,
 } from "@/app/lib/chatMessageMapping";
+import {
+    assertAgentTaskWordArtifactVersion,
+    parseAgentTaskWordArtifactSaveError,
+    type AgentTaskWordArtifactVersion,
+} from "@/app/lib/agentTaskWordArtifactSave";
 
 // Server-side shape before mapping
 interface ServerChatDetailOut {
@@ -671,6 +676,11 @@ export interface DocumentVersion {
     page_count?: number | null;
     deleted_at?: string | null;
     deleted_by?: string | null;
+    artifact_reverification?: {
+        outcome: "started" | "already_started";
+        task_status: string | null;
+        current_step: string | null;
+    };
 }
 
 export async function listDocumentVersions(documentId: string): Promise<{
@@ -707,22 +717,50 @@ export async function saveAgentTaskWordArtifactVersion(
     baseVersionId: string,
     file: File,
     filename?: string,
-): Promise<DocumentVersion> {
+): Promise<AgentTaskWordArtifactVersion> {
     const authHeaders = await getAuthHeader();
     const form = new FormData();
     form.append("document_id", documentId);
     form.append("base_version_id", baseVersionId);
     form.append("file", file, filename ?? file.name);
-    const response = await fetch(
-        `${API_BASE}/agent-tasks/${encodeURIComponent(taskId)}/word-artifact/word-file`,
-        {
-            method: "PUT",
-            headers: { ...authHeaders },
-            body: form,
-        },
+    const path = `/agent-tasks/${encodeURIComponent(taskId)}/word-artifact/word-file`;
+    const response = await fetch(`${API_BASE}${path}`, {
+        method: "PUT",
+        headers: { ...authHeaders },
+        body: form,
+    });
+    if (!response.ok) {
+        const text = await response.text();
+        let parsed: unknown = null;
+        try {
+            parsed = JSON.parse(text);
+        } catch {
+            // The generic API error below retains a non-JSON response.
+        }
+        const partialSaveError = parseAgentTaskWordArtifactSaveError({
+            status: response.status,
+            body: parsed,
+        });
+        if (partialSaveError) throw partialSaveError;
+        const body = parsed as {
+            detail?: unknown;
+            issue_code?: unknown;
+        } | null;
+        throw new MikeApiError({
+            status: response.status,
+            code:
+                typeof body?.issue_code === "string"
+                    ? body.issue_code
+                    : null,
+            message:
+                typeof body?.detail === "string" && body.detail
+                    ? body.detail
+                    : text || `API error: ${response.status}`,
+        });
+    }
+    return assertAgentTaskWordArtifactVersion(
+        (await response.json()) as DocumentVersion,
     );
-    if (!response.ok) throw new Error(await response.text());
-    return response.json() as Promise<DocumentVersion>;
 }
 
 export async function replaceDocumentVersionFile(

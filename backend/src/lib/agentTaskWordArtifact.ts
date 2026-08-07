@@ -2,6 +2,11 @@ import {
   findDeliverableArtifact,
   requiredTaskDeliverables,
 } from "./agentTaskDeliverables";
+import {
+  AgentTaskArtifactReverificationError,
+  startAgentTaskArtifactReverification,
+} from "./agent-kernel/verification/artifactReverification";
+import { isAgentTaskStateTransitionError } from "./agent-kernel/execution/taskTransition";
 import { getAgentTaskSnapshot } from "./agentTasks";
 import {
   appendCurrentDocxVersion,
@@ -27,18 +32,31 @@ const TASK_WORD_EDIT_IDENTITY_VERSION = "agent-task-word-artifact-edit-v1";
 
 export class AgentTaskWordArtifactError extends Error {
   constructor(
-    public readonly status: 400 | 404 | 409,
+    public readonly status: 400 | 404 | 409 | 503,
     public readonly code:
       | "invalid_docx"
       | "task_not_found"
       | "artifact_not_found"
       | "identity_mismatch"
-      | "version_conflict",
+      | "version_conflict"
+      | "reverification_conflict"
+      | "reverification_unavailable",
     message: string,
+    public readonly preservedVersion: AgentTaskWordArtifactVersion | null = null,
   ) {
     super(message);
     this.name = "AgentTaskWordArtifactError";
   }
+}
+
+export function agentTaskWordArtifactErrorBody(
+  error: AgentTaskWordArtifactError,
+) {
+  return {
+    detail: error.message,
+    issue_code: error.code,
+    preserved_version: error.preservedVersion,
+  };
 }
 
 export type AgentTaskWordArtifactVersion = {
@@ -50,6 +68,11 @@ export type AgentTaskWordArtifactVersion = {
   file_type?: string | null;
   size_bytes?: number | null;
   page_count?: number | null;
+  artifact_reverification?: {
+    outcome: "started" | "already_started";
+    task_status: string | null;
+    current_step: string | null;
+  };
 };
 
 function assertTaskWordArtifact(
@@ -156,6 +179,7 @@ export async function putAgentTaskWordArtifactEdit(
       semanticDigest?: typeof semanticDocxDigest;
       appendVersion?: typeof appendCurrentDocxVersion;
       loadPersistedVersion?: typeof loadPersistedVersion;
+      startReverification?: typeof startAgentTaskArtifactReverification;
     };
   },
 ): Promise<AgentTaskWordArtifactVersion> {
@@ -329,5 +353,46 @@ export async function putAgentTaskWordArtifactEdit(
   }
   const loadVersion =
     input.dependencies?.loadPersistedVersion ?? loadPersistedVersion;
-  return loadVersion(db, input.documentId, appended.version_id);
+  const version = await loadVersion(db, input.documentId, appended.version_id);
+  const startReverification =
+    input.dependencies?.startReverification ??
+    startAgentTaskArtifactReverification;
+  try {
+    const transition = await startReverification(db, {
+      taskId: input.taskId,
+      userId: input.userId,
+      documentId: input.documentId,
+      baseVersionId: input.baseVersionId,
+      versionId: appended.version_id,
+      mutationId: `agent-task-word-artifact:${appended.version_id}`,
+    });
+    return {
+      ...version,
+      artifact_reverification: {
+        outcome: transition.outcome,
+        task_status: transition.taskStatus,
+        current_step: transition.currentStep,
+      },
+    };
+  } catch (error) {
+    if (error instanceof AgentTaskArtifactReverificationError) {
+      throw new AgentTaskWordArtifactError(
+        error.outcome === "not_found" || error.outcome === "artifact_not_found"
+          ? 404
+          : 409,
+        "reverification_conflict",
+        error.message,
+        version,
+      );
+    }
+    if (isAgentTaskStateTransitionError(error)) {
+      throw new AgentTaskWordArtifactError(
+        503,
+        "reverification_unavailable",
+        "The edited Version was preserved, but re-verification is temporarily unavailable. Retrying this save is safe.",
+        version,
+      );
+    }
+    throw error;
+  }
 }

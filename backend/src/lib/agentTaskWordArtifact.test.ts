@@ -4,8 +4,10 @@ import test from "node:test";
 
 import {
   AgentTaskWordArtifactError,
+  agentTaskWordArtifactErrorBody,
   putAgentTaskWordArtifactEdit,
 } from "./agentTaskWordArtifact";
+import { AgentTaskArtifactReverificationError } from "./agent-kernel/verification/artifactReverification";
 import { durableCurrentVersionMutationId } from "./currentDocumentVersionMutation";
 import type { TaskWordArtifactReceiptV1 } from "./taskWordArtifactReceipt";
 
@@ -91,9 +93,10 @@ test("saves one exact Task draft with a successor receipt before activation", as
         await input.beforeActivate?.();
         return {
           document_id: documentId,
-          version_id: input.buffer === advancedBytes
-            ? durableCurrentVersionMutationId(input.mutationKey)
-            : "wrong-version",
+          version_id:
+            input.buffer === advancedBytes
+              ? durableCurrentVersionMutationId(input.mutationKey)
+              : "wrong-version",
           version_number: 2,
           current_version_id: durableCurrentVersionMutationId(
             input.mutationKey,
@@ -110,6 +113,12 @@ test("saves one exact Task draft with a successor receipt before activation", as
         created_at: "2026-08-07T00:00:00.000Z",
         filename: id === documentId ? "Memo.docx" : null,
       }),
+      startReverification: async (_db, input) => ({
+        outcome: "started" as const,
+        taskStatus: "verifying",
+        currentStep: "verifier-step",
+        input,
+      }),
     },
   });
 
@@ -120,6 +129,102 @@ test("saves one exact Task draft with a successor receipt before activation", as
   assert.ok(successor);
   assert.equal(version.id, successor!.versionId);
   assert.equal(version.source, "user_upload");
+  assert.deepEqual(version.artifact_reverification, {
+    outcome: "started",
+    task_status: "verifying",
+    current_step: "verifier-step",
+  });
+});
+
+test("reports a preserved successor when verifier restart is rejected", async () => {
+  const clientBytes = Buffer.from("edited-docx");
+  const targetVersionId = durableCurrentVersionMutationId(
+    [
+      "agent-task-word-artifact-edit-v1",
+      taskId,
+      documentId,
+      baseVersionId,
+      predecessor.deliverableKey,
+      await digest(clientBytes),
+    ].join(":"),
+  );
+
+  await assert.rejects(
+    putAgentTaskWordArtifactEdit({} as never, {
+      taskId,
+      userId,
+      documentId,
+      baseVersionId,
+      filename: "Memo.docx",
+      buffer: clientBytes,
+      dependencies: {
+        loadSnapshot: async () => snapshot() as never,
+        loadBaseBytes: async () => Buffer.from("base-docx"),
+        readReceipt: async () => predecessor,
+        semanticDigest: digest,
+        advanceReceipt: async () => Buffer.from("advanced-docx"),
+        appendVersion: async (input) => {
+          await input.beforeActivate?.();
+          return {
+            document_id: documentId,
+            version_id: durableCurrentVersionMutationId(input.mutationKey),
+            version_number: 2,
+            current_version_id: durableCurrentVersionMutationId(
+              input.mutationKey,
+            ),
+            filename: "Memo.docx",
+            storage_path: "memo-v2.docx",
+            created: true,
+          };
+        },
+        loadPersistedVersion: async (_db, _documentId, versionId) => ({
+          id: versionId,
+          version_number: 2,
+          source: "user_upload",
+          created_at: "2026-08-07T00:00:00.000Z",
+          filename: "Memo.docx",
+        }),
+        startReverification: async () => {
+          throw new AgentTaskArtifactReverificationError(
+            "verifier_invalid",
+            "The edited Version was preserved, but this Task cannot safely restart its Verifier.",
+          );
+        },
+      },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof AgentTaskWordArtifactError);
+      assert.equal(error.code, "reverification_conflict");
+      assert.equal(error.status, 409);
+      assert.equal(error.preservedVersion?.id, targetVersionId);
+      return true;
+    },
+  );
+});
+
+test("serializes a preserved successor for the Word client recovery contract", () => {
+  const preservedVersion = {
+    id: "33333333-3333-4333-8333-333333333333",
+    version_number: 3,
+    source: "user_upload",
+    created_at: "2026-08-07T00:00:00.000Z",
+    filename: "Memo.docx",
+  };
+  assert.deepEqual(
+    agentTaskWordArtifactErrorBody(
+      new AgentTaskWordArtifactError(
+        503,
+        "reverification_unavailable",
+        "The Version was preserved.",
+        preservedVersion,
+      ),
+    ),
+    {
+      detail: "The Version was preserved.",
+      issue_code: "reverification_unavailable",
+      preserved_version: preservedVersion,
+    },
+  );
 });
 
 test("rejects a stale open receipt before loading or mutating bytes", async () => {
@@ -194,9 +299,11 @@ test("revalidates the Task draft immediately before Version activation", async (
       dependencies: {
         loadSnapshot: async () => {
           snapshotLoads += 1;
-          return (snapshotLoads === 1
-            ? snapshot()
-            : snapshot("99999999-9999-4999-8999-999999999999")) as never;
+          return (
+            snapshotLoads === 1
+              ? snapshot()
+              : snapshot("99999999-9999-4999-8999-999999999999")
+          ) as never;
         },
         readReceipt: async () => predecessor,
         loadBaseBytes: async () => Buffer.from("server-base"),

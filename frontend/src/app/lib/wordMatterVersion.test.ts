@@ -6,6 +6,10 @@ import type {
 } from "@/app/components/shared/types";
 import type { DocumentVersion } from "./mikeApi";
 import {
+    AgentTaskWordArtifactSaveError,
+    type AgentTaskWordArtifactVersion,
+} from "./agentTaskWordArtifactSave";
+import {
     WordContractRevisionOpenIdentityError,
     type WordContractRevisionBinding,
 } from "./wordContractRevisionBinding";
@@ -52,6 +56,20 @@ function version(
         source: "upload",
         created_at: "2026-07-22T00:00:00.000Z",
         filename: "Contract.docx",
+    };
+}
+
+function taskVersion(
+    id: string,
+    versionNumber: number,
+): AgentTaskWordArtifactVersion {
+    return {
+        ...version(id, versionNumber),
+        artifact_reverification: {
+            outcome: "started",
+            task_status: "verifying",
+            current_step: "verify-deliverables",
+        },
     };
 }
 
@@ -279,7 +297,7 @@ test("Task artifact save uses the bound server route and advances the local rece
             assert.equal(documentId, "document-1");
             assert.equal(baseVersionId, "version-2");
             assert.equal(file.name, "Contract.docx");
-            return version("version-3", 3);
+            return taskVersion("version-3", 3);
         },
         writeWordCustomProperties: async (properties) => {
             writtenProperties.push(...properties);
@@ -289,6 +307,8 @@ test("Task artifact save uses the bound server route and advances the local rece
     assert.equal(result.successorBinding.versionId, "version-3");
     assert.equal(result.receiptSynchronized, true);
     assert.equal(result.reopenRequired, false);
+    assert.equal(result.reverificationStarted, true);
+    assert.equal(result.reverificationIssueCode, null);
     assert.ok(
         writtenProperties.some((property) =>
             property.value.includes('"versionId":"version-3"'),
@@ -307,7 +327,7 @@ test("a server-saved Task artifact is preserved when the open Word receipt canno
         openBinding: taskArtifactBinding,
         loadVersions: async () => BASE_SNAPSHOT,
         readWordFile: async ({ filename }) => new File([], filename),
-        saveTaskArtifactVersion: async () => version("version-3", 3),
+        saveTaskArtifactVersion: async () => taskVersion("version-3", 3),
         writeWordCustomProperties: async () => {
             throw new Error("Office host disconnected");
         },
@@ -316,6 +336,116 @@ test("a server-saved Task artifact is preserved when the open Word receipt canno
     assert.equal(result.receiptSynchronized, false);
     assert.equal(result.reopenRequired, true);
     assert.equal(result.receiptSyncError, "Office host disconnected");
+    assert.equal(result.reverificationStarted, true);
+});
+
+test("a preserved Version remains explicit when re-verification cannot start", async () => {
+    let receiptWrites = 0;
+    const preservedVersion = version("version-3", 3);
+    const result = await saveCurrentWordDocumentAsTaskArtifactVersion({
+        taskId: taskArtifactBinding.taskId,
+        projectId: taskArtifactBinding.projectId,
+        deliverableKey: taskArtifactBinding.deliverableKey,
+        document: matterDocument(),
+        base: currentMatterDocumentVersionBase(
+            "document-1",
+            BASE_SNAPSHOT,
+        ),
+        openBinding: taskArtifactBinding,
+        loadVersions: async () => BASE_SNAPSHOT,
+        readWordFile: async ({ filename }) => new File([], filename),
+        saveTaskArtifactVersion: async () => {
+            throw new AgentTaskWordArtifactSaveError(
+                "The edited Version was preserved, but re-verification cannot start.",
+                409,
+                "reverification_conflict",
+                preservedVersion,
+            );
+        },
+        writeWordCustomProperties: async () => {
+            receiptWrites += 1;
+        },
+    });
+    assert.equal(result.version.id, "version-3");
+    assert.equal(result.successorBinding.versionId, "version-3");
+    assert.equal(result.reverificationStarted, false);
+    assert.equal(result.reverificationIssueCode, "reverification_conflict");
+    assert.equal(result.receiptSynchronized, false);
+    assert.equal(result.reopenRequired, true);
+    assert.equal(receiptWrites, 0);
+});
+
+test("a transient re-verification failure retries the same preserved Version once", async () => {
+    let saveCalls = 0;
+    let receiptWrites = 0;
+    const preservedVersion = version("version-3", 3);
+    const result = await saveCurrentWordDocumentAsTaskArtifactVersion({
+        taskId: taskArtifactBinding.taskId,
+        projectId: taskArtifactBinding.projectId,
+        deliverableKey: taskArtifactBinding.deliverableKey,
+        document: matterDocument(),
+        base: currentMatterDocumentVersionBase(
+            "document-1",
+            BASE_SNAPSHOT,
+        ),
+        openBinding: taskArtifactBinding,
+        loadVersions: async () => BASE_SNAPSHOT,
+        readWordFile: async ({ filename }) => new File([], filename),
+        saveTaskArtifactVersion: async () => {
+            saveCalls += 1;
+            if (saveCalls === 1) {
+                throw new AgentTaskWordArtifactSaveError(
+                    "Re-verification is temporarily unavailable.",
+                    503,
+                    "reverification_unavailable",
+                    preservedVersion,
+                );
+            }
+            return taskVersion("version-3", 3);
+        },
+        writeWordCustomProperties: async () => {
+            receiptWrites += 1;
+        },
+    });
+    assert.equal(saveCalls, 2);
+    assert.equal(result.version.id, "version-3");
+    assert.equal(result.reverificationStarted, true);
+    assert.equal(result.reverificationIssueCode, null);
+    assert.equal(result.receiptSynchronized, true);
+    assert.equal(receiptWrites, 1);
+});
+
+test("a re-verification retry cannot switch to another Version", async () => {
+    let saveCalls = 0;
+    await assert.rejects(
+        saveCurrentWordDocumentAsTaskArtifactVersion({
+            taskId: taskArtifactBinding.taskId,
+            projectId: taskArtifactBinding.projectId,
+            deliverableKey: taskArtifactBinding.deliverableKey,
+            document: matterDocument(),
+            base: currentMatterDocumentVersionBase(
+                "document-1",
+                BASE_SNAPSHOT,
+            ),
+            openBinding: taskArtifactBinding,
+            loadVersions: async () => BASE_SNAPSHOT,
+            readWordFile: async ({ filename }) => new File([], filename),
+            saveTaskArtifactVersion: async () => {
+                saveCalls += 1;
+                if (saveCalls === 1) {
+                    throw new AgentTaskWordArtifactSaveError(
+                        "Re-verification is temporarily unavailable.",
+                        503,
+                        "reverification_unavailable",
+                        version("version-3", 3),
+                    );
+                }
+                return taskVersion("version-4", 4);
+            },
+        }),
+        /returned a different Word Version/,
+    );
+    assert.equal(saveCalls, 2);
 });
 
 test("Task artifact save rejects the wrong open Version before Word export", async () => {

@@ -1567,7 +1567,11 @@ export function WordTaskPane() {
                     );
                 } else {
                     setTaskArtifactReopenRequired(true);
-                    setMatterVersionMessage(taskArtifactPartialSaveMessage);
+                    setMatterVersionMessage(
+                        saved.reverificationStarted
+                            ? taskArtifactPartialSaveMessage
+                            : `Saved ${selectedMatterDocument.filename}${saved.version.version_number ? ` as V${saved.version.version_number}` : " as a new version"}, but re-verification did not start. Existing work is preserved. Reopen this artifact from its Task before editing again.${saved.reverificationMessage ? ` ${saved.reverificationMessage}` : ""}`,
+                    );
                 }
                 return;
             }

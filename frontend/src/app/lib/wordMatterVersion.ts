@@ -4,6 +4,11 @@ import type {
 } from "@/app/components/shared/types";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
 import {
+    AgentTaskWordArtifactSaveError,
+    type AgentTaskWordArtifactVersion,
+    type AgentTaskWordArtifactSaveIssueCode,
+} from "@/app/lib/agentTaskWordArtifactSave";
+import {
     readCurrentWordDocumentFile,
     writeCurrentWordCustomProperties,
 } from "@/app/lib/wordOfficeBridge";
@@ -21,6 +26,7 @@ import type { WordMemoTaskBinding } from "@/app/lib/wordMemoTaskBinding";
 import {
     assertWordTaskArtifactOpenBinding,
     encodeWordTaskArtifactBinding,
+    sameWordTaskArtifactIdentity,
     successorWordTaskArtifactBinding,
     type WordTaskArtifactBinding,
 } from "@/app/lib/wordTaskArtifactBinding";
@@ -55,7 +61,7 @@ type SaveTaskArtifactVersion = (
     baseVersionId: string,
     file: File,
     filename?: string,
-) => Promise<DocumentVersion>;
+) => Promise<AgentTaskWordArtifactVersion>;
 type SaveBoundMemo = (input: {
     manifest: BoundWordMemoSourceManifest;
     baseVersionId: string;
@@ -84,6 +90,9 @@ export type TaskArtifactVersionSaveResult = {
     receiptSynchronized: boolean;
     receiptSyncError: string | null;
     reopenRequired: boolean;
+    reverificationStarted: boolean;
+    reverificationIssueCode: AgentTaskWordArtifactSaveIssueCode | null;
+    reverificationMessage: string | null;
 };
 
 async function loadVersionsFromMike(documentId: string) {
@@ -342,17 +351,79 @@ export async function saveCurrentWordDocumentAsTaskArtifactVersion(args: {
     const filename = wordVersionFilename(args.document.filename);
     const file = await readWordFile({ filename });
     assertVersionBaseMatches(args.base, await loadVersions(args.document.id));
-    const version = await saveTaskArtifactVersion(
-        openBinding.taskId,
-        args.document.id,
-        args.base.versionId,
-        file,
-        filename,
-    );
+    const saveVersion = () =>
+        saveTaskArtifactVersion(
+            openBinding.taskId,
+            args.document.id,
+            args.base.versionId,
+            file,
+            filename,
+        );
+    let version: DocumentVersion;
+    let reverificationIssueCode: AgentTaskWordArtifactSaveIssueCode | null =
+        null;
+    let reverificationMessage: string | null = null;
+    try {
+        version = await saveVersion();
+    } catch (error) {
+        if (
+            !(error instanceof AgentTaskWordArtifactSaveError) ||
+            !error.preservedVersion
+        ) {
+            throw error;
+        }
+        version = error.preservedVersion;
+        reverificationIssueCode = error.issueCode;
+        reverificationMessage = error.message;
+        if (error.issueCode === "reverification_unavailable") {
+            try {
+                const retried = await saveVersion();
+                if (!sameWordTaskArtifactIdentity(retried.id, version.id)) {
+                    throw new Error(
+                        "The re-verification retry returned a different Word Version.",
+                    );
+                }
+                version = retried;
+                reverificationIssueCode = null;
+                reverificationMessage = null;
+            } catch (retryError) {
+                if (
+                    retryError instanceof Error &&
+                    retryError.message ===
+                        "The re-verification retry returned a different Word Version."
+                ) {
+                    throw retryError;
+                }
+                if (
+                    retryError instanceof AgentTaskWordArtifactSaveError &&
+                    retryError.preservedVersion &&
+                    sameWordTaskArtifactIdentity(
+                        retryError.preservedVersion.id,
+                        version.id,
+                    )
+                ) {
+                    reverificationIssueCode = retryError.issueCode;
+                    reverificationMessage = retryError.message;
+                }
+            }
+        }
+    }
     const successorBinding = successorWordTaskArtifactBinding(
         openBinding,
         version.id,
     );
+    if (reverificationIssueCode) {
+        return {
+            version,
+            successorBinding,
+            receiptSynchronized: false,
+            receiptSyncError: null,
+            reopenRequired: true,
+            reverificationStarted: false,
+            reverificationIssueCode,
+            reverificationMessage,
+        };
+    }
     try {
         await (
             args.writeWordCustomProperties ?? writeCurrentWordCustomProperties
@@ -363,6 +434,9 @@ export async function saveCurrentWordDocumentAsTaskArtifactVersion(args: {
             receiptSynchronized: true,
             receiptSyncError: null,
             reopenRequired: false,
+            reverificationStarted: true,
+            reverificationIssueCode: null,
+            reverificationMessage: null,
         };
     } catch (error) {
         return {
@@ -374,6 +448,9 @@ export async function saveCurrentWordDocumentAsTaskArtifactVersion(args: {
                     ? error.message
                     : "The open Word receipt could not be updated.",
             reopenRequired: true,
+            reverificationStarted: true,
+            reverificationIssueCode: null,
+            reverificationMessage: null,
         };
     }
 }
