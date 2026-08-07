@@ -1,5 +1,9 @@
-insert into public.projects(id)
-values ('10000000-0000-4000-8000-000000000001');
+insert into public.projects(id, user_id, name)
+values (
+  '10000000-0000-4000-8000-000000000001',
+  'user-fixture',
+  'Atomic transition fixture Matter'
+);
 
 insert into public.agent_tasks(
   id,

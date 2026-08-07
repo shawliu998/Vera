@@ -424,8 +424,10 @@ test("keeps atomic input migrations mirrored and source/version bound", async ()
   assert.equal(backend, supabase);
   assert.match(
     backend,
-    /d\.current_version_id::text = source ->> 'version_id'/i,
+    /d\.current_version_id::text = context_sources\.item ->> 'version_id'/i,
   );
+  assert.doesNotMatch(backend, /as sources\(source\)/i);
+  assert.doesNotMatch(backend, /(?<![.\w])source ->>/i);
   assert.match(backend, /on conflict \(task_id, artifact_type, artifact_id\)/i);
   assert.match(backend, /execution_lease_expires_at > clock_timestamp\(\)/i);
   assert.match(backend, /from public, anon, authenticated/i);

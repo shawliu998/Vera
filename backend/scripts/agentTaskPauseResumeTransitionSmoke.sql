@@ -1,8 +1,20 @@
-insert into public.projects(id)
+insert into public.projects(id, user_id, name)
 values
-  ('15000000-0000-4000-8000-000000000001'),
-  ('15000000-0000-4000-8000-000000000002'),
-  ('15000000-0000-4000-8000-000000000003');
+  (
+    '15000000-0000-4000-8000-000000000001',
+    'user-pause',
+    'Pause running fixture Matter'
+  ),
+  (
+    '15000000-0000-4000-8000-000000000002',
+    'user-pause',
+    'Pause planner fixture Matter'
+  ),
+  (
+    '15000000-0000-4000-8000-000000000003',
+    'user-pause',
+    'Torn resume fixture Matter'
+  );
 
 insert into public.agent_tasks(
   id, user_id, matter_id, goal, status, current_step,
@@ -257,4 +269,9 @@ select
   s.attempt
 from public.agent_tasks t
 left join public.agent_steps s on s.id = t.current_step
+where t.id in (
+  '45000000-0000-4000-8000-000000000001',
+  '45000000-0000-4000-8000-000000000002',
+  '45000000-0000-4000-8000-000000000003'
+)
 order by t.id;

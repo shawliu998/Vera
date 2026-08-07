@@ -1,30 +1,35 @@
-insert into public.projects(id)
+insert into public.projects(id, user_id, name)
 values
-  ('12000000-0000-4000-8000-000000000001'),
-  ('12000000-0000-4000-8000-000000000002');
+  (
+    '12000000-0000-4000-8000-000000000001',
+    'user-input',
+    'Atomic input fixture Matter'
+  ),
+  (
+    '12000000-0000-4000-8000-000000000002',
+    'user-input',
+    'Cross-Matter input fixture'
+  );
 
-insert into public.documents(id, project_id, user_id, status, current_version_id)
+insert into public.documents(id, project_id, user_id, status)
 values
   (
     '22000000-0000-4000-8000-000000000001',
     '12000000-0000-4000-8000-000000000001',
     'user-input',
-    'ready',
-    '32000000-0000-4000-8000-000000000001'
+    'ready'
   ),
   (
     '22000000-0000-4000-8000-000000000002',
     '12000000-0000-4000-8000-000000000001',
     'user-input',
-    'ready',
-    '32000000-0000-4000-8000-000000000002'
+    'ready'
   ),
   (
     '22000000-0000-4000-8000-000000000003',
     '12000000-0000-4000-8000-000000000002',
     'user-input',
-    'ready',
-    '32000000-0000-4000-8000-000000000003'
+    'ready'
   );
 
 insert into public.document_versions(
@@ -55,6 +60,21 @@ values
     'other/record.pdf',
     null
   );
+
+update public.documents
+set current_version_id = case id
+  when '22000000-0000-4000-8000-000000000001' then
+    '32000000-0000-4000-8000-000000000001'::uuid
+  when '22000000-0000-4000-8000-000000000002' then
+    '32000000-0000-4000-8000-000000000002'::uuid
+  when '22000000-0000-4000-8000-000000000003' then
+    '32000000-0000-4000-8000-000000000003'::uuid
+end
+where id in (
+  '22000000-0000-4000-8000-000000000001',
+  '22000000-0000-4000-8000-000000000002',
+  '22000000-0000-4000-8000-000000000003'
+);
 
 insert into public.agent_tasks(
   id,

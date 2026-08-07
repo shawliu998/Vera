@@ -194,22 +194,23 @@ begin
 
     select
       count(*),
-      count(distinct source ->> 'document_id')
+      count(distinct context_sources.item ->> 'document_id')
     into v_source_count, v_distinct_source_count
-    from jsonb_array_elements(v_context -> 'sources') as sources(source);
+    from jsonb_array_elements(v_context -> 'sources') as context_sources(item);
     if v_source_count <> v_distinct_source_count then
       return query select 'context_invalid'::text, v_task.status, v_task.current_step;
       return;
     end if;
 
     select count(*) into v_valid_source_count
-    from jsonb_array_elements(v_context -> 'sources') as sources(source)
-    join public.documents d on d.id::text = source ->> 'document_id'
+    from jsonb_array_elements(v_context -> 'sources') as context_sources(item)
+    join public.documents d
+      on d.id::text = context_sources.item ->> 'document_id'
     join public.document_versions v on v.id = d.current_version_id
     where d.project_id = v_task.matter_id
       and d.user_id = p_user_id
       and d.status = 'ready'
-      and d.current_version_id::text = source ->> 'version_id'
+      and d.current_version_id::text = context_sources.item ->> 'version_id'
       and v.document_id = d.id
       and v.deleted_at is null
       and v.storage_path is not null;
@@ -220,8 +221,8 @@ begin
 
     select count(*) into v_input_context_count
     from unnest(p_document_ids) as supplied(document_id)
-    join jsonb_array_elements(v_context -> 'sources') as sources(source)
-      on source ->> 'document_id' = document_id::text;
+    join jsonb_array_elements(v_context -> 'sources') as context_sources(item)
+      on context_sources.item ->> 'document_id' = document_id::text;
     if v_input_context_count <> cardinality(p_document_ids) then
       return query select 'context_invalid'::text, v_task.status, v_task.current_step;
       return;

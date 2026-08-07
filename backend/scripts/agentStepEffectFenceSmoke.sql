@@ -1,5 +1,9 @@
-insert into public.projects(id)
-values ('14000000-0000-4000-8000-000000000001');
+insert into public.projects(id, user_id, name)
+values (
+  '14000000-0000-4000-8000-000000000001',
+  'user-effect',
+  'Effect fence fixture Matter'
+);
 
 insert into public.agent_tasks(
   id,
@@ -150,13 +154,12 @@ begin
   end if;
 
   insert into public.documents(
-    id, project_id, user_id, status, current_version_id
+    id, project_id, user_id, status
   ) values (
     '24000000-0000-4000-8000-000000000001',
     '14000000-0000-4000-8000-000000000001',
     'user-effect',
-    'ready',
-    '34000000-0000-4000-8000-000000000001'
+    'ready'
   );
   insert into public.document_versions(
     id, document_id, filename, file_type, storage_path, deleted_at
@@ -168,6 +171,9 @@ begin
     'matter/memo.docx',
     null
   );
+  update public.documents
+  set current_version_id = '34000000-0000-4000-8000-000000000001'
+  where id = '24000000-0000-4000-8000-000000000001';
 
   update public.agent_tasks
   set

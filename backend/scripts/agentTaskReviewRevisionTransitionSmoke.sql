@@ -1,14 +1,17 @@
-insert into public.projects(id)
-values ('13000000-0000-4000-8000-000000000001');
+insert into public.projects(id, user_id, name)
+values (
+  '13000000-0000-4000-8000-000000000001',
+  'user-review',
+  'Atomic review fixture Matter'
+);
 
 insert into public.documents(
-  id, project_id, user_id, status, current_version_id
+  id, project_id, user_id, status
 ) values (
   '23000000-0000-4000-8000-000000000001',
   '13000000-0000-4000-8000-000000000001',
   'user-review',
-  'ready',
-  '33000000-0000-4000-8000-000000000001'
+  'ready'
 );
 
 insert into public.document_versions(
@@ -30,6 +33,10 @@ insert into public.document_versions(
   4096,
   null
 );
+
+update public.documents
+set current_version_id = '33000000-0000-4000-8000-000000000001'
+where id = '23000000-0000-4000-8000-000000000001';
 
 insert into public.agent_tasks(
   id,
@@ -296,12 +303,14 @@ begin
     raise exception 'valid approval snapshot failed: %', row_to_json(v);
   end if;
 
-  perform * from public.acquire_agent_task_execution_lease_v1(
-    '43000000-0000-4000-8000-000000000001',
-    'user-review',
-    '63000000-0000-4000-8000-000000000002',
-    300
-  );
+  -- Completed Tasks cannot acquire a fresh lease after the pause/resume hardening.
+  -- Seed the defensive legacy/corruption shape directly so the revision RPC must
+  -- still fail closed if an old live lease is present.
+  update public.agent_tasks
+  set
+    execution_lease_owner = '63000000-0000-4000-8000-000000000002',
+    execution_lease_expires_at = clock_timestamp() + interval '5 minutes'
+  where id = '43000000-0000-4000-8000-000000000001';
   select * into v from public.start_agent_task_revision_v1(
     '43000000-0000-4000-8000-000000000001',
     'user-review',
