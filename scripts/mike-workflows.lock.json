@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
   "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
   "license": "MIT",
@@ -33,11 +33,1308 @@
       "supply-agreement-tabular-review"
     ]
   },
+  "firstParty": {
+    "selection": [
+      "citation-research",
+      "contract-playbook-review",
+      "litigation-case-map",
+      "litigation-hearing-preparation",
+      "litigation-judgment-appeal-assessment",
+      "matter-timeline",
+      "patent-claim-comparison",
+      "patent-fto-screening",
+      "patent-infringement-analysis",
+      "patent-invalidity-search",
+      "patentability-assessment",
+      "uspto-office-action-response"
+    ],
+    "workflows": {
+      "citation-research": {
+        "id": "builtin-citation-research-memo",
+        "workflowType": "assistant",
+        "sourcePath": "scripts/vera-workflows/citation-research/SKILL.md",
+        "contentSha256": "88be38e4b3d88180687e95ccd987212231234c88144789f4db20e5bf0b6036b4",
+        "version": "1.0.0",
+        "license": "AGPL-3.0-only",
+        "minimumDocuments": 1,
+        "provenance": {
+          "source": "Vera first-party repository source",
+          "revision": "sha256:88be38e4b3d88180687e95ccd987212231234c88144789f4db20e5bf0b6036b4"
+        },
+        "taskFamily": "research",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_draft",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": true
+        },
+        "artifactContracts": [
+          {
+            "key": "cited-research-memo",
+            "artifactType": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+          }
+        ],
+        "sourceStandard": {
+          "pinnedDocumentVersionsRequired": true,
+          "materialClaimsRequireCitations": true,
+          "authorityRequired": true,
+          "authorityAsOfRequired": true
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_authority_citation_v1",
+        "fixtures": [
+          "scripts/vera-workflows/citation-research/references/synthetic-citation-research-v1.json"
+        ],
+        "fixtureSha256": {
+          "scripts/vera-workflows/citation-research/references/synthetic-citation-research-v1.json": "e71cce1e61d74b480d430597885b4f02fffae9ba1abc4728209957e85c570b18"
+        },
+        "dependencies": []
+      },
+      "contract-playbook-review": {
+        "id": "builtin-contract-playbook-review",
+        "workflowType": "assistant",
+        "sourcePath": "scripts/vera-workflows/contract-playbook-review/SKILL.md",
+        "contentSha256": "5112bc037cd04b05eadaa9e3b34f8eef3466b0b10dbacbf27ca8aa3e88b3f8c3",
+        "version": "1.3.1",
+        "license": "AGPL-3.0-only",
+        "minimumDocuments": 1,
+        "provenance": {
+          "source": "Vera first-party repository source",
+          "revision": "sha256:5112bc037cd04b05eadaa9e3b34f8eef3466b0b10dbacbf27ca8aa3e88b3f8c3"
+        },
+        "taskFamily": "contract_review",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_draft",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": true
+        },
+        "artifactContracts": [
+          {
+            "key": "contract-revision",
+            "artifactType": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+          },
+          {
+            "key": "contract-clean",
+            "artifactType": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+          },
+          {
+            "key": "review-opinion",
+            "artifactType": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+          }
+        ],
+        "sourceStandard": {
+          "pinnedDocumentVersionsRequired": true,
+          "materialClaimsRequireCitations": true,
+          "authorityRequired": false,
+          "authorityAsOfRequired": false
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_contract_docx_v1",
+        "fixtures": ["backend/scripts/fixtures/docx-review-markup"],
+        "fixtureSha256": {
+          "backend/scripts/fixtures/docx-review-markup": "2b4de8fe22bbc643fae3be72af9de2f54fdb9950b9526249e2502de1ade0cc7a"
+        },
+        "dependencies": []
+      },
+      "litigation-case-map": {
+        "id": "builtin-litigation-case-map",
+        "workflowType": "assistant",
+        "sourcePath": "scripts/vera-workflows/litigation-case-map/SKILL.md",
+        "contentSha256": "0dac588f44193e25d930f30cba11dcb4ea08dca5ba57c6ab11819dc6e06a516c",
+        "version": "1.2.0",
+        "license": "AGPL-3.0-only",
+        "minimumDocuments": 1,
+        "provenance": {
+          "source": "Vera first-party repository source",
+          "revision": "sha256:0dac588f44193e25d930f30cba11dcb4ea08dca5ba57c6ab11819dc6e06a516c"
+        },
+        "taskFamily": "generic",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_tabular",
+          "create_draft",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": true
+        },
+        "artifactContracts": [
+          {
+            "key": "evidence-inventory",
+            "artifactType": "tabular_review",
+            "kind": "document",
+            "format": "xlsx",
+            "operation": "create",
+            "required": true
+          },
+          {
+            "key": "first-instance-case-map",
+            "artifactType": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+          }
+        ],
+        "sourceStandard": {
+          "pinnedDocumentVersionsRequired": true,
+          "materialClaimsRequireCitations": true,
+          "authorityRequired": false,
+          "authorityAsOfRequired": false
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_authority_citation_v1",
+        "fixtures": [
+          "docs/fixtures/competitor-audit/synthetic-major-commercial-case.docx"
+        ],
+        "fixtureSha256": {
+          "docs/fixtures/competitor-audit/synthetic-major-commercial-case.docx": "1535b12adb501a5897a614249b6d47d2cd9e31e11f47b6612c1d1915e2c8498b"
+        },
+        "dependencies": []
+      },
+      "litigation-hearing-preparation": {
+        "id": "builtin-litigation-hearing-preparation",
+        "workflowType": "assistant",
+        "sourcePath": "scripts/vera-workflows/litigation-hearing-preparation/SKILL.md",
+        "contentSha256": "6ae280e190c22879253205f65246fac90d27e5f873e23da27a4f1f27c6ce482b",
+        "version": "1.0.0",
+        "license": "AGPL-3.0-only",
+        "minimumDocuments": 1,
+        "provenance": {
+          "source": "Vera first-party repository source",
+          "revision": "sha256:6ae280e190c22879253205f65246fac90d27e5f873e23da27a4f1f27c6ce482b"
+        },
+        "taskFamily": "generic",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_tabular",
+          "create_draft",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": true
+        },
+        "artifactContracts": [
+          {
+            "key": "evidence-inventory",
+            "artifactType": "tabular_review",
+            "kind": "document",
+            "format": "xlsx",
+            "operation": "create",
+            "required": true
+          },
+          {
+            "key": "evidence-objection-opinion",
+            "artifactType": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+          },
+          {
+            "key": "hearing-outline",
+            "artifactType": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+          }
+        ],
+        "sourceStandard": {
+          "pinnedDocumentVersionsRequired": true,
+          "materialClaimsRequireCitations": true,
+          "authorityRequired": false,
+          "authorityAsOfRequired": false
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1",
+        "fixtures": [
+          "docs/fixtures/competitor-audit/synthetic-major-commercial-case.docx"
+        ],
+        "fixtureSha256": {
+          "docs/fixtures/competitor-audit/synthetic-major-commercial-case.docx": "1535b12adb501a5897a614249b6d47d2cd9e31e11f47b6612c1d1915e2c8498b"
+        },
+        "dependencies": []
+      },
+      "litigation-judgment-appeal-assessment": {
+        "id": "builtin-litigation-judgment-appeal-assessment",
+        "workflowType": "assistant",
+        "sourcePath": "scripts/vera-workflows/litigation-judgment-appeal-assessment/SKILL.md",
+        "contentSha256": "24890b73b66b9240ae79563eabe337bf4b8844cd0d877f9697e4caf179c7c718",
+        "version": "1.0.0",
+        "license": "AGPL-3.0-only",
+        "minimumDocuments": 1,
+        "provenance": {
+          "source": "Vera first-party repository source",
+          "revision": "sha256:24890b73b66b9240ae79563eabe337bf4b8844cd0d877f9697e4caf179c7c718"
+        },
+        "taskFamily": "generic",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_draft",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": true
+        },
+        "artifactContracts": [
+          {
+            "key": "judgment-appeal-assessment",
+            "artifactType": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+          }
+        ],
+        "sourceStandard": {
+          "pinnedDocumentVersionsRequired": true,
+          "materialClaimsRequireCitations": true,
+          "authorityRequired": true,
+          "authorityAsOfRequired": true
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_authority_citation_v1",
+        "fixtures": [
+          "docs/fixtures/competitor-audit/synthetic-major-commercial-case.docx"
+        ],
+        "fixtureSha256": {
+          "docs/fixtures/competitor-audit/synthetic-major-commercial-case.docx": "1535b12adb501a5897a614249b6d47d2cd9e31e11f47b6612c1d1915e2c8498b"
+        },
+        "dependencies": []
+      },
+      "matter-timeline": {
+        "id": "builtin-matter-timeline",
+        "workflowType": "assistant",
+        "sourcePath": "scripts/vera-workflows/matter-timeline/SKILL.md",
+        "contentSha256": "3d58745047a782db94e51c11ca4d8985df88c1ade3a4e4273a14ea0e17ec26e6",
+        "version": "1.0.0",
+        "license": "AGPL-3.0-only",
+        "minimumDocuments": 1,
+        "provenance": {
+          "source": "Vera first-party repository source",
+          "revision": "sha256:3d58745047a782db94e51c11ca4d8985df88c1ade3a4e4273a14ea0e17ec26e6"
+        },
+        "taskFamily": "generic",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_tabular",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "tabular_review",
+          "kind": "document",
+          "format": "xlsx",
+          "operation": "create",
+          "required": true
+        },
+        "artifactContracts": [
+          {
+            "key": "matter-timeline",
+            "artifactType": "tabular_review",
+            "kind": "document",
+            "format": "xlsx",
+            "operation": "create",
+            "required": true
+          }
+        ],
+        "sourceStandard": {
+          "pinnedDocumentVersionsRequired": true,
+          "materialClaimsRequireCitations": true,
+          "authorityRequired": false,
+          "authorityAsOfRequired": false
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_timeline_citation_v1",
+        "fixtures": [
+          "docs/fixtures/competitor-audit/synthetic-major-commercial-case.docx"
+        ],
+        "fixtureSha256": {
+          "docs/fixtures/competitor-audit/synthetic-major-commercial-case.docx": "1535b12adb501a5897a614249b6d47d2cd9e31e11f47b6612c1d1915e2c8498b"
+        },
+        "dependencies": []
+      },
+      "patent-claim-comparison": {
+        "id": "builtin-patent-claim-comparison",
+        "workflowType": "assistant",
+        "sourcePath": "scripts/vera-workflows/patent-claim-comparison/SKILL.md",
+        "contentSha256": "533baf66b4f492768ae6b61f61ee946141b77bb2cd0714154b1cc5c67f393f80",
+        "version": "1.1.2",
+        "license": "AGPL-3.0-only",
+        "minimumDocuments": 2,
+        "provenance": {
+          "source": "Vera first-party repository source",
+          "revision": "sha256:533baf66b4f492768ae6b61f61ee946141b77bb2cd0714154b1cc5c67f393f80"
+        },
+        "taskFamily": "compare",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_draft",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": true
+        },
+        "artifactContracts": [
+          {
+            "key": "claim-comparison-chart",
+            "artifactType": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+          }
+        ],
+        "sourceStandard": {
+          "pinnedDocumentVersionsRequired": true,
+          "materialClaimsRequireCitations": true,
+          "authorityRequired": false,
+          "authorityAsOfRequired": false
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1",
+        "fixtures": [
+          "scripts/vera-workflows/patent-claim-comparison/references/synthetic-claim-comparison-v1.json"
+        ],
+        "fixtureSha256": {
+          "scripts/vera-workflows/patent-claim-comparison/references/synthetic-claim-comparison-v1.json": "1565f01487158cd6f9ff1ce4001e2e124aabb99ae7b4099ee9180c554953f0c7"
+        },
+        "dependencies": []
+      },
+      "patent-fto-screening": {
+        "id": "builtin-patent-fto-screening",
+        "workflowType": "assistant",
+        "sourcePath": "scripts/vera-workflows/patent-fto-screening/SKILL.md",
+        "contentSha256": "791549e7422d33be7551328296553a1db8d2655ea778b5a22b168a95b7477497",
+        "version": "1.0.0",
+        "license": "AGPL-3.0-only",
+        "minimumDocuments": 2,
+        "provenance": {
+          "source": "Vera first-party repository source",
+          "revision": "sha256:791549e7422d33be7551328296553a1db8d2655ea778b5a22b168a95b7477497"
+        },
+        "taskFamily": "compare",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_draft",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": true
+        },
+        "artifactContracts": [
+          {
+            "key": "fto-screening-report",
+            "artifactType": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+          }
+        ],
+        "sourceStandard": {
+          "pinnedDocumentVersionsRequired": true,
+          "materialClaimsRequireCitations": true,
+          "authorityRequired": false,
+          "authorityAsOfRequired": false
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "fixtureSha256": {},
+        "dependencies": []
+      },
+      "patent-infringement-analysis": {
+        "id": "builtin-patent-infringement-analysis",
+        "workflowType": "assistant",
+        "sourcePath": "scripts/vera-workflows/patent-infringement-analysis/SKILL.md",
+        "contentSha256": "8d6a9c2d8e816fdd45ed9572c6669b581e4bff37b81eedf9969fc1a56381ffa5",
+        "version": "1.0.0",
+        "license": "AGPL-3.0-only",
+        "minimumDocuments": 2,
+        "provenance": {
+          "source": "Vera first-party repository source",
+          "revision": "sha256:8d6a9c2d8e816fdd45ed9572c6669b581e4bff37b81eedf9969fc1a56381ffa5"
+        },
+        "taskFamily": "compare",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_draft",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": true
+        },
+        "artifactContracts": [
+          {
+            "key": "infringement-analysis-report",
+            "artifactType": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+          }
+        ],
+        "sourceStandard": {
+          "pinnedDocumentVersionsRequired": true,
+          "materialClaimsRequireCitations": true,
+          "authorityRequired": false,
+          "authorityAsOfRequired": false
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "fixtureSha256": {},
+        "dependencies": []
+      },
+      "patent-invalidity-search": {
+        "id": "builtin-patent-invalidity-search",
+        "workflowType": "assistant",
+        "sourcePath": "scripts/vera-workflows/patent-invalidity-search/SKILL.md",
+        "contentSha256": "68cbb1f64cc826845706d58ec03be8a0526717541b1d06dbd4d91d6e9044dc15",
+        "version": "1.0.0",
+        "license": "AGPL-3.0-only",
+        "minimumDocuments": 2,
+        "provenance": {
+          "source": "Vera first-party repository source",
+          "revision": "sha256:68cbb1f64cc826845706d58ec03be8a0526717541b1d06dbd4d91d6e9044dc15"
+        },
+        "taskFamily": "compare",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_tabular",
+          "create_draft",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": true
+        },
+        "artifactContracts": [
+          {
+            "key": "invalidity-claim-chart",
+            "artifactType": "tabular_review",
+            "kind": "document",
+            "format": "xlsx",
+            "operation": "create",
+            "required": true
+          },
+          {
+            "key": "invalidity-screening-memo",
+            "artifactType": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+          }
+        ],
+        "sourceStandard": {
+          "pinnedDocumentVersionsRequired": true,
+          "materialClaimsRequireCitations": true,
+          "authorityRequired": false,
+          "authorityAsOfRequired": false
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "fixtureSha256": {},
+        "dependencies": []
+      },
+      "patentability-assessment": {
+        "id": "builtin-patentability-assessment",
+        "workflowType": "assistant",
+        "sourcePath": "scripts/vera-workflows/patentability-assessment/SKILL.md",
+        "contentSha256": "ef12569aaf5f668d83f5a6397814b00cff48711a594084b6e480391116af79f7",
+        "version": "1.0.0",
+        "license": "AGPL-3.0-only",
+        "minimumDocuments": 2,
+        "provenance": {
+          "source": "Vera first-party repository source",
+          "revision": "sha256:ef12569aaf5f668d83f5a6397814b00cff48711a594084b6e480391116af79f7"
+        },
+        "taskFamily": "generic",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_tabular",
+          "create_draft",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": true
+        },
+        "artifactContracts": [
+          {
+            "key": "patentability-feature-chart",
+            "artifactType": "tabular_review",
+            "kind": "document",
+            "format": "xlsx",
+            "operation": "create",
+            "required": true
+          },
+          {
+            "key": "patentability-memo",
+            "artifactType": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+          }
+        ],
+        "sourceStandard": {
+          "pinnedDocumentVersionsRequired": true,
+          "materialClaimsRequireCitations": true,
+          "authorityRequired": false,
+          "authorityAsOfRequired": false
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "fixtureSha256": {},
+        "dependencies": []
+      },
+      "uspto-office-action-response": {
+        "id": "builtin-uspto-office-action-response",
+        "workflowType": "assistant",
+        "sourcePath": "scripts/vera-workflows/uspto-office-action-response/SKILL.md",
+        "contentSha256": "f9ec48e2092960d9e9a4ea76c4818934a6b3018bded2c63cf9b3432061f2b68a",
+        "version": "1.0.0",
+        "license": "AGPL-3.0-only",
+        "minimumDocuments": 3,
+        "provenance": {
+          "source": "Vera first-party repository source",
+          "revision": "sha256:f9ec48e2092960d9e9a4ea76c4818934a6b3018bded2c63cf9b3432061f2b68a"
+        },
+        "taskFamily": "draft",
+        "requiredCapabilities": ["read_sources", "analyze", "create_draft", "verify"],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": true
+        },
+        "artifactContracts": [{
+          "key": "office-action-response",
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": true
+        }],
+        "sourceStandard": {
+          "pinnedDocumentVersionsRequired": true,
+          "materialClaimsRequireCitations": true,
+          "authorityRequired": false,
+          "authorityAsOfRequired": false
+        },
+        "completionChecks": ["deliverables_present", "goal_covered", "source_supported", "citations_relocatable", "steps_complete"],
+        "verifierProfile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "fixtureSha256": {},
+        "dependencies": []
+      }
+    }
+  },
+  "skillManifest": {
+    "schemaVersion": 1,
+    "allowedCapabilities": [
+      "analyze",
+      "create_draft",
+      "create_tabular",
+      "read_sources",
+      "verify"
+    ],
+    "workflows": {
+      "commercial-lease-review": {
+        "workflowType": "assistant",
+        "taskFamily": "contract_review",
+        "requiredCapabilities": ["read_sources", "analyze", "verify"],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": false
+        },
+        "completionChecks": [
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "compare-documents": {
+        "workflowType": "assistant",
+        "taskFamily": "compare",
+        "requiredCapabilities": ["read_sources", "analyze", "verify"],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": false
+        },
+        "completionChecks": [
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "corporate-approvals-review": {
+        "workflowType": "assistant",
+        "taskFamily": "generic",
+        "requiredCapabilities": ["read_sources", "analyze", "verify"],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": false
+        },
+        "completionChecks": [
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "credit-agreement-review": {
+        "workflowType": "assistant",
+        "taskFamily": "contract_review",
+        "requiredCapabilities": ["read_sources", "analyze", "verify"],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": false
+        },
+        "completionChecks": [
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "draft-cp-checklist": {
+        "workflowType": "assistant",
+        "taskFamily": "draft",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_draft",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": true
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "draft-from-template": {
+        "workflowType": "assistant",
+        "taskFamily": "draft",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_draft",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": true
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "draft-issues-list": {
+        "workflowType": "assistant",
+        "taskFamily": "draft",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_draft",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": true
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "employment-agreement-review": {
+        "workflowType": "assistant",
+        "taskFamily": "contract_review",
+        "requiredCapabilities": ["read_sources", "analyze", "verify"],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": false
+        },
+        "completionChecks": [
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "extract-key-terms": {
+        "workflowType": "assistant",
+        "taskFamily": "extract",
+        "requiredCapabilities": ["read_sources", "analyze", "verify"],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": false
+        },
+        "completionChecks": [
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "guarantee-agreement-review": {
+        "workflowType": "assistant",
+        "taskFamily": "contract_review",
+        "requiredCapabilities": ["read_sources", "analyze", "verify"],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": false
+        },
+        "completionChecks": [
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "nda-review": {
+        "workflowType": "assistant",
+        "taskFamily": "contract_review",
+        "requiredCapabilities": ["read_sources", "analyze", "verify"],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": false
+        },
+        "completionChecks": [
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "proofread": {
+        "workflowType": "assistant",
+        "taskFamily": "proofread",
+        "requiredCapabilities": ["read_sources", "analyze", "verify"],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": false
+        },
+        "completionChecks": [
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "shareholder-agreement-review": {
+        "workflowType": "assistant",
+        "taskFamily": "contract_review",
+        "requiredCapabilities": ["read_sources", "analyze", "verify"],
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": false
+        },
+        "completionChecks": [
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "change-of-control-tabular-review": {
+        "workflowType": "tabular",
+        "taskFamily": "extract",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_tabular",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "tabular_review",
+          "kind": "document",
+          "format": "xlsx",
+          "operation": "create",
+          "required": true
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "commercial-agreement-tabular-review": {
+        "workflowType": "tabular",
+        "taskFamily": "extract",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_tabular",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "tabular_review",
+          "kind": "document",
+          "format": "xlsx",
+          "operation": "create",
+          "required": true
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "commercial-lease-tabular-review": {
+        "workflowType": "tabular",
+        "taskFamily": "extract",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_tabular",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "tabular_review",
+          "kind": "document",
+          "format": "xlsx",
+          "operation": "create",
+          "required": true
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "credit-agreement-tabular-review": {
+        "workflowType": "tabular",
+        "taskFamily": "extract",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_tabular",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "tabular_review",
+          "kind": "document",
+          "format": "xlsx",
+          "operation": "create",
+          "required": true
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "e-discovery-tabular-review": {
+        "workflowType": "tabular",
+        "taskFamily": "extract",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_tabular",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "tabular_review",
+          "kind": "document",
+          "format": "xlsx",
+          "operation": "create",
+          "required": true
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "employment-agreement-tabular-review": {
+        "workflowType": "tabular",
+        "taskFamily": "extract",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_tabular",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "tabular_review",
+          "kind": "document",
+          "format": "xlsx",
+          "operation": "create",
+          "required": true
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "limited-partnership-agreement-tabular-review": {
+        "workflowType": "tabular",
+        "taskFamily": "extract",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_tabular",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "tabular_review",
+          "kind": "document",
+          "format": "xlsx",
+          "operation": "create",
+          "required": true
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "nda-tabular-review": {
+        "workflowType": "tabular",
+        "taskFamily": "extract",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_tabular",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "tabular_review",
+          "kind": "document",
+          "format": "xlsx",
+          "operation": "create",
+          "required": true
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "shareholder-agreement-tabular-review": {
+        "workflowType": "tabular",
+        "taskFamily": "extract",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_tabular",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "tabular_review",
+          "kind": "document",
+          "format": "xlsx",
+          "operation": "create",
+          "required": true
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "spa-tabular-review": {
+        "workflowType": "tabular",
+        "taskFamily": "extract",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_tabular",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "tabular_review",
+          "kind": "document",
+          "format": "xlsx",
+          "operation": "create",
+          "required": true
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      },
+      "supply-agreement-tabular-review": {
+        "workflowType": "tabular",
+        "taskFamily": "extract",
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_tabular",
+          "verify"
+        ],
+        "artifactContract": {
+          "artifactType": "tabular_review",
+          "kind": "document",
+          "format": "xlsx",
+          "operation": "create",
+          "required": true
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1"
+      }
+    }
+  },
   "expected": {
-    "workflowCount": 24,
-    "assistantCount": 13,
+    "activeWorkflowCount": 24,
+    "activeAssistantCount": 13,
+    "activeTabularCount": 11,
+    "workflowCount": 36,
+    "assistantCount": 25,
     "tabularCount": 11,
     "semanticSha256": "b9bfb16f3633c20c01991826a9aaf9904d64d985d0047c5e6c6d86d27d18366f",
-    "generatedFileSha256": "5b8acab9e781985098dc3c6a72367ef2172430829bbb622f8817612b363a883b"
+    "systemSemanticSha256": "b9bfb16f3633c20c01991826a9aaf9904d64d985d0047c5e6c6d86d27d18366f",
+    "mikeSkillManifestSemanticSha256": "48a5db161907efa194d962823e8af5dd5d11f06006aa4860606eb4fcbf285394",
+    "skillManifestSemanticSha256": "584be98dd19abfe85ef74e7a74d5916a6a9a9c98ab472238d53be35df417a088",
+    "generatedFileSha256": "52466f6fd4f4873b4a1ef51335132799ace8f289cb0e5abc1b170b088a1af19c"
   }
 }

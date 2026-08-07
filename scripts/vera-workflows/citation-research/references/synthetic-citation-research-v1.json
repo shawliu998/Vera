@@ -1,0 +1,111 @@
+{
+  "schema_version": "citation_research_fixture_v1",
+  "classification": "Synthetic test vector; no real client, Matter, or case material.",
+  "derived_from": {
+    "repository_path": "backend/src/lib/legalSourcesTools/citationResearchFixture.ts",
+    "raw_sha256": "f52df55b063957276c1e40c4e1b4bb9f0b9862033fd9e64917f4f3092b55aaa0"
+  },
+  "request": {
+    "jurisdiction": "中国大陆",
+    "as_of_date": "2026-07-24",
+    "material_document_version_ids": [
+      "synthetic-matter-doc-version-contract-001"
+    ],
+    "claims": [
+      {
+        "id": "claim-deadline",
+        "text": "承包人行使建设工程价款优先受偿权的最长期间为十八个月。",
+        "material": true,
+        "query": "建设工程价款优先受偿权 十八个月"
+      },
+      {
+        "id": "claim-scope",
+        "text": "优先受偿范围不包括利息、违约金和损害赔偿金。",
+        "material": true,
+        "query": "建设工程价款优先受偿范围 利息 违约金 损害赔偿金"
+      }
+    ]
+  },
+  "authorities": [
+    {
+      "id": "spc-construction-interpretation-1",
+      "type": "judicial_interpretation",
+      "title": "最高人民法院关于审理建设工程施工合同纠纷案件适用法律问题的解释（一）",
+      "jurisdiction": "中国大陆",
+      "status": "current",
+      "published_at": "2020-12-29",
+      "effective_from": "2021-01-01",
+      "effective_to": null,
+      "body": "最高人民法院关于审理建设工程施工合同纠纷案件适用法律问题的解释（一）\n第四十条 承包人建设工程价款优先受偿的范围依照国务院有关行政主管部门关于建设工程价款范围的规定确定。\n承包人就逾期支付建设工程价款的利息、违约金、损害赔偿金等主张优先受偿的，人民法院不予支持。\n第四十一条 承包人应当在合理期限内行使建设工程价款优先受偿权，但最长不得超过十八个月，自发包人应当给付建设工程价款之日起算。"
+    },
+    {
+      "id": "spc-guiding-case-adverse-1",
+      "type": "synthetic_test_authority",
+      "title": "最高人民法院指导案例（合成冲突权威）",
+      "jurisdiction": "中国大陆",
+      "status": "synthetic",
+      "published_at": "2026-07-24",
+      "effective_from": "2026-07-24",
+      "effective_to": null,
+      "body": "裁判理由摘录：\n指导案例认为，在当事人明确排除优先受偿权且不损害第三人利益的特定情形下，不适用十八个月的一般行使期间。\n以上为合成测试材料。"
+    }
+  ],
+  "hits": [
+    {
+      "id": "hit-deadline-supporting",
+      "claim_id": "claim-deadline",
+      "authority_id": "spc-construction-interpretation-1",
+      "relationship": "supporting",
+      "locator": {
+        "section": "第四十一条"
+      },
+      "quote": "承包人应当在合理期限内行使建设工程价款优先受偿权，但最长不得超过十八个月，自发包人应当给付建设工程价款之日起算。"
+    },
+    {
+      "id": "hit-deadline-adverse",
+      "claim_id": "claim-deadline",
+      "authority_id": "spc-guiding-case-adverse-1",
+      "relationship": "adverse",
+      "locator": {
+        "section": "裁判要点第一项"
+      },
+      "quote": "指导案例认为，在当事人明确排除优先受偿权且不损害第三人利益的特定情形下，不适用十八个月的一般行使期间。"
+    },
+    {
+      "id": "hit-scope-supporting",
+      "claim_id": "claim-scope",
+      "authority_id": "spc-construction-interpretation-1",
+      "relationship": "supporting",
+      "locator": {
+        "section": "第四十条",
+        "paragraph": "第二款"
+      },
+      "quote": "承包人就逾期支付建设工程价款的利息、违约金、损害赔偿金等主张优先受偿的，人民法院不予支持。"
+    }
+  ],
+  "contrary_authority_checks": [
+    {
+      "claim_id": "claim-deadline",
+      "checked": true,
+      "outcome": "adverse_hit",
+      "authority_id": "spc-guiding-case-adverse-1",
+      "hit_id": "hit-deadline-adverse"
+    },
+    {
+      "claim_id": "claim-scope",
+      "checked": true,
+      "outcome": "no_eligible_hit_in_fixture"
+    }
+  ],
+  "expected_invariants": {
+    "claim_ids_unique": true,
+    "authority_ids_unique": true,
+    "hit_ids_unique": true,
+    "hit_references_closed": true,
+    "quotes_are_contiguous_authority_substrings": true,
+    "each_material_claim_has_supporting_evidence": true,
+    "each_material_claim_has_an_explicit_contrary_authority_check": true,
+    "adverse_hit_outcomes_reference_closed_claim_relevant_adverse_hits": true,
+    "no_eligible_hit_outcomes_do_not_invent_adverse_hits": true
+  }
+}

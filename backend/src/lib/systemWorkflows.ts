@@ -28,6 +28,61 @@ export type SystemWorkflow = {
     columns_config: { index: number; name: string; format?: string; prompt: string; tags?: string[] }[] | null;
 };
 
+export type SkillManifestCapability = "analyze" | "create_draft" | "create_tabular" | "read_sources" | "verify";
+export type SkillManifestGoalProfile = "contract_review" | "compare" | "extract" | "draft" | "proofread" | "generic" | "research";
+export type SkillManifestCompletionCheck = "deliverables_present" | "goal_covered" | "source_supported" | "citations_relocatable" | "steps_complete";
+export type SkillManifestMustAskReason = "missing_source" | "missing_fact" | "evidence_conflict" | "legal_judgment" | "source_version_changed" | "material_scope_change" | "consequential_action";
+
+export type SkillManifestV1 = {
+    schema_version: "skill_manifest_v1";
+    id: string;
+    version: string;
+    title: string;
+    license: "MIT" | "AGPL-3.0-only";
+    provenance:
+        | { repository: string; commit: string; path: string }
+        | { source: string; revision: string; path: string };
+    content_digest: `sha256:${string}`;
+    task_families: SkillManifestGoalProfile[];
+    jurisdictions: string[];
+    input_contract: {
+        matter_scoped: true;
+        minimum_documents: number;
+        pinned_document_versions_required: true;
+        accepted_document_roles: ("source" | "template" | "precedent" | "authority")[];
+        unfixed_client_content_allowed: false;
+    };
+    required_capabilities: SkillManifestCapability[];
+    capability_effect: "requirements_only";
+    artifact_contract: {
+        artifact_type: "draft" | "tabular_review";
+        kind: "document";
+        format: "docx" | "xlsx";
+        operation: "create";
+        required: boolean;
+    };
+    artifact_contracts?: {
+        key: string;
+        artifact_type: "draft" | "tabular_review";
+        kind: "document";
+        format: "docx" | "xlsx";
+        operation: "create";
+        required: boolean;
+    }[];
+    source_standard: {
+        pinned_document_versions_required: true;
+        material_claims_require_citations: true;
+        authority_required: boolean;
+        authority_as_of_required: boolean;
+    };
+    must_ask_when: SkillManifestMustAskReason[];
+    completion_checks: SkillManifestCompletionCheck[];
+    verifier_profile: string;
+    fixtures: string[];
+    dependencies: string[];
+    deprecation: { deprecated: boolean; replacement_id: string | null };
+};
+
 export const SYSTEM_WORKFLOWS: SystemWorkflow[] = [
     {
         "user_id": null,
@@ -1755,3 +1810,2851 @@ export const SYSTEM_ASSISTANT_WORKFLOWS: { id: string; title: string; skill_md: 
         "skill_md": "# Shareholder Agreement Review\n\n## Instructions\n\nReview the uploaded shareholder agreement and produce a comprehensive table-based legal review from the perspective of the party represented by the user/client. If the user has not already identified which party they represent, ask them to clarify that party before producing the review.\n\nOnce the represented party is clear, provide exactly one Markdown result table. Use one row for each material issue found in the agreement, guided by the review checklist below, and add a final row called **Overall Risk Rating**. The result table must have exactly these columns:\n\n- Issue\n- Summary\n- Recommended Change\n\nUse these risk ratings inside the **Summary** column: Low means standard or minimal concern; Medium means a manageable negotiation concern; High means a material legal, commercial, operational, or enforceability concern requiring negotiation; Critical means a severe issue that may block signing unless resolved. Start each summary with the risk rating, e.g. \"High — drag threshold is too low\".\n\nThe **Summary** column should include only the relevant points from the **General** checklist column and the party-specific checklist column for the represented party, together with clause references where available. Do not include issues that are adverse only to the other party unless they also create risk for the represented party. The **Recommended Change** column must be drafted from the represented party's perspective. Also flag general drafting errors that may affect the represented party, including inconsistent defined terms, inconsistent entity names, cross-reference errors, numbering issues, duplicated provisions, missing schedules, and internal inconsistencies. Keep the response concise and avoid long prose outside the table.\n\n## Result Table Format\n\nUse this result table structure. Cite the relevant clause, section, schedule, or page directly in the **Summary** and **Recommended Change** columns. The example rows are illustrative only; tailor the actual rows to the uploaded agreement and represented party.\n\n| Issue | Summary | Recommended Change |\n| --- | --- | --- |\n| Drag-Along Rights | High — Clause [x] sets the drag threshold at [x]% and does not include a minimum price protection. The minority-specific checklist point indicates the minority can be forced to sell at an unfavorable price. | For the minority, raise the drag threshold, add a minimum price equal to fair market value, and limit warranties to proceeds received. |\n| Drafting Consistency | Medium — Clauses [x] and [y] use inconsistent defined terms for the share classes. The general drafting point indicates ambiguity that may affect the represented party's rights. | For the represented party, align defined terms, share class definitions, and cross-references before signing. |\n\n## Review Checklist\n\nUse this checklist as guidance for what to review and flag. It is not the result-table template and should not be reproduced verbatim. For each checklist issue, consider both the **General** column and the party-specific column for the represented party (Majority or Minority).\n\n| Issue | General | Majority | Minority |\n| --- | --- | --- | --- |\n| Parties and Shareholdings | Identify each shareholder, role, share class, percentage holding, and fully diluted position. Flag inconsistent cap table information, missing parties, or unclear beneficial ownership. | | |\n| Share Classes and Rights | Summarize voting rights, dividend rights, liquidation preferences, conversion rights, redemption rights, and class consents. | Flag class consents or voting requirements that effectively give minority approval rights over ordinary decisions. | Flag hidden preference rights, disproportionate majority voting rights, or unfavorable class economics. |\n| Board Composition and Governance | Identify board size, appointment rights, observer rights, quorum, chair, and casting vote. | Flag quorum or deadlock provisions giving minority an effective veto over governance. | Flag entrenched majority appointment rights, casting vote held by a majority nominee, or no observer rights for minority. |\n| Reserved Matters | List matters requiring special majority, unanimity, investor consent, or board consent. | Flag reserved matters requiring minority consent that constrain ordinary business decisions. | Flag absence of meaningful minority veto rights or low-dollar thresholds allowing majority to structure around them. |\n| Pre-emption on New Shares | Summarize pre-emption rights, offer process, timing, exclusions, and carve-outs. | Flag mechanics slowing fundraising or requiring minority consent to issue new shares. | Flag broad carve-outs, short exercise periods, or mechanics permitting dilution without proper notice. |\n| Transfer Restrictions | Summarize lock-ups, prohibited transfers, permitted transfers, and consent requirements. | Flag restrictions preventing majority exit or group reorganisation without minority consent. | Flag absence of lock-up on majority transfers or mechanics allowing majority to exit leaving minority trapped. |\n| Right of First Refusal / Pre-emption on Transfer | Identify trigger, process, pricing, matching rights, and exceptions. | Flag long ROFR processes or pricing mechanics delaying majority exit. | Flag unclear matching rights, long processes excluding minority participation, or exceptions removing minority protections. |\n| Drag-Along Rights | Identify drag threshold, sale conditions, minority protections, and power of attorney. | Flag high drag threshold or conditions preventing majority from executing a sale. | Flag low drag threshold, no minimum price protection, forced warranties beyond proceeds received, or broad power of attorney. |\n| Tag-Along Rights | Identify triggering transfers, eligible holders, and sale terms. | Flag broad tag triggers complicating majority exit. | Flag missing or narrow tag rights, or mechanics allowing majority to exclude minority from exit proceeds. |\n| Anti-Dilution Protections | Identify anti-dilution mechanics, carve-outs, and adjustment triggers. | Flag mechanics punishing founders or majority holders on down-rounds. | Flag absence of anti-dilution protection, full ratchet terms, or unclear carve-outs from adjustment. |\n| Dividend Policy | Summarize dividend rights, preferential dividends, restrictions, and discretion. | Flag mandatory dividend obligations impairing business cash flow or restricting majority discretion. | Flag unclear preferential dividend rights or majority discretion over dividends without minority consent. |\n| Exit and Liquidity | Identify IPO, trade sale, redemption, put/call rights, timelines, and liquidation preferences. | Flag forced exit timelines or investor put rights constraining majority exit strategy. | Flag unclear waterfall on exit, exit rights not applying equally, or no minority participation in liquidity events. |\n| Deadlock | Summarize deadlock definition, escalation, expert determination, shoot-out, and liquidation mechanics. | Flag deadlock provisions giving minority disproportionate leverage or effective veto. | Flag shoot-out rights triggered at low thresholds or mechanics structurally favoring majority. |\n| Non-Compete and Non-Solicitation | Identify who is bound, restricted activities, geography, duration, and carve-outs. | Flag restraints binding the majority entity or overly broad scope applied to the majority group. | Flag broad non-competes restricting the minority's ability to operate independently after exit. |\n| Information Rights | Identify reporting, inspection, management accounts, and confidentiality obligations. | Flag extensive information rights giving minority commercially sensitive operational visibility. | Flag absence of reporting or inspection rights, or inadequate confidentiality obligations on recipients. |\n| Related Party Transactions | Identify approval requirements, disclosure duties, and arm's-length standards. | Flag overly strict conflict controls restricting legitimate majority-group transactions. | Flag weak conflict controls, broad permitted related-party dealings, or no arm's-length enforcement. |\n| Governing Law and Dispute Resolution | State governing law, forum, arbitration, escalation, and interim relief rights. Flag unclear or ambiguous forum or dispute mechanics. | | |\n\nDeliver the review inline in your chat response. Do not generate a downloadable Word document unless the user explicitly asks for one."
     }
 ];
+
+// Declarative requirements only. A Task-scoped resolver must intersect these with Kernel, Pack,
+// Provider, Connector, Matter/version, and consequential-action policy; this export grants nothing.
+export const SYSTEM_SKILL_MANIFESTS: SkillManifestV1[] = [
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-change-of-control-tabular-review",
+        "version": "1.0.0",
+        "title": "Change of Control Tabular Review",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "tabular-review-workflows/change-of-control-tabular-review/SKILL.md"
+        },
+        "content_digest": "sha256:71f0970b525dae7f6119e9359c64fcdfcc42ed8a7053ecf577d03e87971d2aa0",
+        "task_families": [
+            "extract"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_tabular",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "tabular_review",
+            "kind": "document",
+            "format": "xlsx",
+            "operation": "create",
+            "required": true
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-citation-research-memo",
+        "version": "1.0.0",
+        "title": "Citation Research Memo",
+        "license": "AGPL-3.0-only",
+        "provenance": {
+            "source": "Vera first-party repository source",
+            "revision": "sha256:88be38e4b3d88180687e95ccd987212231234c88144789f4db20e5bf0b6036b4",
+            "path": "scripts/vera-workflows/citation-research/SKILL.md"
+        },
+        "content_digest": "sha256:a7af79ead1e4250fc13afad890bf98dbda4c79328409bd4c543fad1ace73cfd6",
+        "task_families": [
+            "research"
+        ],
+        "jurisdictions": [
+            "Matter-specified"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_draft",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+        },
+        "artifact_contracts": [
+            {
+                "key": "cited-research-memo",
+                "artifact_type": "draft",
+                "kind": "document",
+                "format": "docx",
+                "operation": "create",
+                "required": true
+            }
+        ],
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": true,
+            "authority_as_of_required": true
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_authority_citation_v1",
+        "fixtures": [
+            "scripts/vera-workflows/citation-research/references/synthetic-citation-research-v1.json"
+        ],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-commercial-agreement-tabular-review",
+        "version": "1.0.0",
+        "title": "Commercial Agreement Tabular Review",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "tabular-review-workflows/commercial-agreement-tabular-review/SKILL.md"
+        },
+        "content_digest": "sha256:a0c85cd7ac50dd0ccf19ae3b6c3f67c3094de002d395368b020eedb17b51047b",
+        "task_families": [
+            "extract"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_tabular",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "tabular_review",
+            "kind": "document",
+            "format": "xlsx",
+            "operation": "create",
+            "required": true
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-commercial-lease-review",
+        "version": "1.0.0",
+        "title": "Commercial Lease Review",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "assistant-workflows/commercial-lease-review/SKILL.md"
+        },
+        "content_digest": "sha256:e8c2174a52fc44d438eefabcc33f2e156020dab6df284cd16eff087e0e25788f",
+        "task_families": [
+            "contract_review"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": false
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-commercial-lease-tabular-review",
+        "version": "1.0.0",
+        "title": "Commercial Lease Tabular Review",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "tabular-review-workflows/commercial-lease-tabular-review/SKILL.md"
+        },
+        "content_digest": "sha256:b797f0d9dd92d20b07672045d732262efa5c0f642c3540900752b6027886760d",
+        "task_families": [
+            "extract"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_tabular",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "tabular_review",
+            "kind": "document",
+            "format": "xlsx",
+            "operation": "create",
+            "required": true
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-compare-documents",
+        "version": "1.0.0",
+        "title": "Compare Documents",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "assistant-workflows/compare-documents/SKILL.md"
+        },
+        "content_digest": "sha256:1e6ed8b5daadbf17c64011aecd56c7adc577f836dc396aa5c02a6e654090a6ae",
+        "task_families": [
+            "compare"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": false
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-contract-playbook-review",
+        "version": "1.3.1",
+        "title": "Contract Playbook Review",
+        "license": "AGPL-3.0-only",
+        "provenance": {
+            "source": "Vera first-party repository source",
+            "revision": "sha256:5112bc037cd04b05eadaa9e3b34f8eef3466b0b10dbacbf27ca8aa3e88b3f8c3",
+            "path": "scripts/vera-workflows/contract-playbook-review/SKILL.md"
+        },
+        "content_digest": "sha256:45d4cacbf784cbb8b0675fedf6e95eb81c100f41704aee42a6bbf057d7c130ae",
+        "task_families": [
+            "contract_review"
+        ],
+        "jurisdictions": [
+            "Matter-specified",
+            "China (PRC pilot)"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_draft",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+        },
+        "artifact_contracts": [
+            {
+                "key": "contract-revision",
+                "artifact_type": "draft",
+                "kind": "document",
+                "format": "docx",
+                "operation": "create",
+                "required": true
+            },
+            {
+                "key": "contract-clean",
+                "artifact_type": "draft",
+                "kind": "document",
+                "format": "docx",
+                "operation": "create",
+                "required": true
+            },
+            {
+                "key": "review-opinion",
+                "artifact_type": "draft",
+                "kind": "document",
+                "format": "docx",
+                "operation": "create",
+                "required": true
+            }
+        ],
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_contract_docx_v1",
+        "fixtures": [
+            "backend/scripts/fixtures/docx-review-markup"
+        ],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-corporate-approvals-review",
+        "version": "1.0.0",
+        "title": "Corporate Approvals Review",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "assistant-workflows/corporate-approvals-review/SKILL.md"
+        },
+        "content_digest": "sha256:9e86421289fd49391eec013125cfd7f0385f0ca26889c8b03f62808b7b5ded8f",
+        "task_families": [
+            "generic"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": false
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-credit-agreement-review",
+        "version": "1.0.0",
+        "title": "Credit Agreement Review",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "assistant-workflows/credit-agreement-review/SKILL.md"
+        },
+        "content_digest": "sha256:0af4cf83ce464350e9a5cc3962ce2014ceebd2ffd36efb2fb82fd270c4eccd6b",
+        "task_families": [
+            "contract_review"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": false
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-credit-agreement-tabular-review",
+        "version": "1.0.0",
+        "title": "Credit Agreement Tabular Review",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "tabular-review-workflows/credit-agreement-tabular-review/SKILL.md"
+        },
+        "content_digest": "sha256:6ed8d19f8daa4df25ba3cfa7a1a04eb2adea42d0a9ea97b348be8a5e04d291cc",
+        "task_families": [
+            "extract"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_tabular",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "tabular_review",
+            "kind": "document",
+            "format": "xlsx",
+            "operation": "create",
+            "required": true
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-draft-cp-checklist",
+        "version": "1.0.0",
+        "title": "Draft CP Checklist",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "assistant-workflows/draft-cp-checklist/SKILL.md"
+        },
+        "content_digest": "sha256:648e9c8e79c3578ce8039f87e9f115b391ee1909e7e8cbed15c6f9350a01339a",
+        "task_families": [
+            "draft"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_draft",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-draft-from-template",
+        "version": "1.0.0",
+        "title": "Draft from Template",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "assistant-workflows/draft-from-template/SKILL.md"
+        },
+        "content_digest": "sha256:544bcc3b855290952ba1bb32cd93e41340331443b0f1b058b83e07003b606aa8",
+        "task_families": [
+            "draft"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_draft",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-draft-issues-list",
+        "version": "1.0.0",
+        "title": "Draft Issues List",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "assistant-workflows/draft-issues-list/SKILL.md"
+        },
+        "content_digest": "sha256:2b2152bc600b320f8eb815ce12af5c589a1633bff2949346c7086634c9130c93",
+        "task_families": [
+            "draft"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_draft",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-e-discovery-tabular-review",
+        "version": "1.0.0",
+        "title": "E-Discovery Tabular Review",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "tabular-review-workflows/e-discovery-tabular-review/SKILL.md"
+        },
+        "content_digest": "sha256:4705c4dda2c4bdf1c4c8181e9a7dab4a4445e654e9a2977cc4600b968ff2955e",
+        "task_families": [
+            "extract"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_tabular",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "tabular_review",
+            "kind": "document",
+            "format": "xlsx",
+            "operation": "create",
+            "required": true
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-employment-agreement-review",
+        "version": "1.0.0",
+        "title": "Employment Agreement Review",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "assistant-workflows/employment-agreement-review/SKILL.md"
+        },
+        "content_digest": "sha256:28918c65ff229ea3f265f543e3cc9fe555d42e73ca23e86b46208935f6d1da51",
+        "task_families": [
+            "contract_review"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": false
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-employment-agreement-tabular-review",
+        "version": "1.0.0",
+        "title": "Employment Agreement Tabular Review",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "tabular-review-workflows/employment-agreement-tabular-review/SKILL.md"
+        },
+        "content_digest": "sha256:6015581150a940d62c39c590a203e9dbee8d95826d7c0d57ffc6882cd2d81556",
+        "task_families": [
+            "extract"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_tabular",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "tabular_review",
+            "kind": "document",
+            "format": "xlsx",
+            "operation": "create",
+            "required": true
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-extract-key-terms",
+        "version": "1.0.0",
+        "title": "Extract Key Terms",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "assistant-workflows/extract-key-terms/SKILL.md"
+        },
+        "content_digest": "sha256:48e53c07a8d9e49bb50020d2fa299bf03404928dd6e323d0f23e01007849c856",
+        "task_families": [
+            "extract"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": false
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-guarantee-agreement-review",
+        "version": "1.0.0",
+        "title": "Guarantee Agreement Review",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "assistant-workflows/guarantee-agreement-review/SKILL.md"
+        },
+        "content_digest": "sha256:a370251722bfa2521ad465d7b3efdf3274d0ca59fa06004c3a023e063dd06a08",
+        "task_families": [
+            "contract_review"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": false
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-limited-partnership-agreement-tabular-review",
+        "version": "1.0.0",
+        "title": "Limited Partnership Agreement Tabular Review",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "tabular-review-workflows/limited-partnership-agreement-tabular-review/SKILL.md"
+        },
+        "content_digest": "sha256:92cdd4f9094040a08e26888c2b783daa79954c33df1d10b0d97bb5805f062f3e",
+        "task_families": [
+            "extract"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_tabular",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "tabular_review",
+            "kind": "document",
+            "format": "xlsx",
+            "operation": "create",
+            "required": true
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-litigation-case-map",
+        "version": "1.2.0",
+        "title": "Litigation Case Analysis",
+        "license": "AGPL-3.0-only",
+        "provenance": {
+            "source": "Vera first-party repository source",
+            "revision": "sha256:0dac588f44193e25d930f30cba11dcb4ea08dca5ba57c6ab11819dc6e06a516c",
+            "path": "scripts/vera-workflows/litigation-case-map/SKILL.md"
+        },
+        "content_digest": "sha256:179e14e71633a17807c7ce095759a937669125f0f33b7d9d63793b653ced3cde",
+        "task_families": [
+            "generic"
+        ],
+        "jurisdictions": [
+            "Matter-specified"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_tabular",
+            "create_draft",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+        },
+        "artifact_contracts": [
+            {
+                "key": "evidence-inventory",
+                "artifact_type": "tabular_review",
+                "kind": "document",
+                "format": "xlsx",
+                "operation": "create",
+                "required": true
+            },
+            {
+                "key": "first-instance-case-map",
+                "artifact_type": "draft",
+                "kind": "document",
+                "format": "docx",
+                "operation": "create",
+                "required": true
+            }
+        ],
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_authority_citation_v1",
+        "fixtures": [
+            "docs/fixtures/competitor-audit/synthetic-major-commercial-case.docx"
+        ],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-litigation-hearing-preparation",
+        "version": "1.0.0",
+        "title": "Litigation Hearing Preparation",
+        "license": "AGPL-3.0-only",
+        "provenance": {
+            "source": "Vera first-party repository source",
+            "revision": "sha256:6ae280e190c22879253205f65246fac90d27e5f873e23da27a4f1f27c6ce482b",
+            "path": "scripts/vera-workflows/litigation-hearing-preparation/SKILL.md"
+        },
+        "content_digest": "sha256:cb4f1d10c319b05289070c6ba862d632a0c7a8fc1cfbd9cd9aa2793d5811ca6c",
+        "task_families": [
+            "generic"
+        ],
+        "jurisdictions": [
+            "Matter-specified"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_tabular",
+            "create_draft",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+        },
+        "artifact_contracts": [
+            {
+                "key": "evidence-inventory",
+                "artifact_type": "tabular_review",
+                "kind": "document",
+                "format": "xlsx",
+                "operation": "create",
+                "required": true
+            },
+            {
+                "key": "evidence-objection-opinion",
+                "artifact_type": "draft",
+                "kind": "document",
+                "format": "docx",
+                "operation": "create",
+                "required": true
+            },
+            {
+                "key": "hearing-outline",
+                "artifact_type": "draft",
+                "kind": "document",
+                "format": "docx",
+                "operation": "create",
+                "required": true
+            }
+        ],
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [
+            "docs/fixtures/competitor-audit/synthetic-major-commercial-case.docx"
+        ],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-litigation-judgment-appeal-assessment",
+        "version": "1.0.0",
+        "title": "Judgment and Appeal Assessment",
+        "license": "AGPL-3.0-only",
+        "provenance": {
+            "source": "Vera first-party repository source",
+            "revision": "sha256:24890b73b66b9240ae79563eabe337bf4b8844cd0d877f9697e4caf179c7c718",
+            "path": "scripts/vera-workflows/litigation-judgment-appeal-assessment/SKILL.md"
+        },
+        "content_digest": "sha256:29a26dc52b13fcdfe225297f0609cb60a14b489df3623870928fb4de5eee1ef3",
+        "task_families": [
+            "generic"
+        ],
+        "jurisdictions": [
+            "Matter-specified"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_draft",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+        },
+        "artifact_contracts": [
+            {
+                "key": "judgment-appeal-assessment",
+                "artifact_type": "draft",
+                "kind": "document",
+                "format": "docx",
+                "operation": "create",
+                "required": true
+            }
+        ],
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": true,
+            "authority_as_of_required": true
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_authority_citation_v1",
+        "fixtures": [
+            "docs/fixtures/competitor-audit/synthetic-major-commercial-case.docx"
+        ],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-matter-timeline",
+        "version": "1.0.0",
+        "title": "Matter Event Timeline",
+        "license": "AGPL-3.0-only",
+        "provenance": {
+            "source": "Vera first-party repository source",
+            "revision": "sha256:3d58745047a782db94e51c11ca4d8985df88c1ade3a4e4273a14ea0e17ec26e6",
+            "path": "scripts/vera-workflows/matter-timeline/SKILL.md"
+        },
+        "content_digest": "sha256:19120fdbf90c428ea12156cbd379a1feba10869e27e4981cb500380713e7723f",
+        "task_families": [
+            "generic"
+        ],
+        "jurisdictions": [
+            "Matter-specified"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_tabular",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "tabular_review",
+            "kind": "document",
+            "format": "xlsx",
+            "operation": "create",
+            "required": true
+        },
+        "artifact_contracts": [
+            {
+                "key": "matter-timeline",
+                "artifact_type": "tabular_review",
+                "kind": "document",
+                "format": "xlsx",
+                "operation": "create",
+                "required": true
+            }
+        ],
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_timeline_citation_v1",
+        "fixtures": [
+            "docs/fixtures/competitor-audit/synthetic-major-commercial-case.docx"
+        ],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-nda-review",
+        "version": "1.0.0",
+        "title": "NDA Review",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "assistant-workflows/nda-review/SKILL.md"
+        },
+        "content_digest": "sha256:0bd6d758907310a1d41e1f0730693f804084ced07c3a22a1092aab4a0b26c6b7",
+        "task_families": [
+            "contract_review"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": false
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-nda-tabular-review",
+        "version": "1.0.0",
+        "title": "NDA Tabular Review",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "tabular-review-workflows/nda-tabular-review/SKILL.md"
+        },
+        "content_digest": "sha256:0606f5835c1b4da8cfc031aaed11fa80b411d68fe7cb21de2c7314ad05656a97",
+        "task_families": [
+            "extract"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_tabular",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "tabular_review",
+            "kind": "document",
+            "format": "xlsx",
+            "operation": "create",
+            "required": true
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-patent-claim-comparison",
+        "version": "1.1.2",
+        "title": "Patent Claim Comparison",
+        "license": "AGPL-3.0-only",
+        "provenance": {
+            "source": "Vera first-party repository source",
+            "revision": "sha256:533baf66b4f492768ae6b61f61ee946141b77bb2cd0714154b1cc5c67f393f80",
+            "path": "scripts/vera-workflows/patent-claim-comparison/SKILL.md"
+        },
+        "content_digest": "sha256:0a637525f6f7edf5319a87027f6d83669b44f0e3958aea69a169ea338bb0ae94",
+        "task_families": [
+            "compare"
+        ],
+        "jurisdictions": [
+            "Matter-specified"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 2,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_draft",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+        },
+        "artifact_contracts": [
+            {
+                "key": "claim-comparison-chart",
+                "artifact_type": "draft",
+                "kind": "document",
+                "format": "docx",
+                "operation": "create",
+                "required": true
+            }
+        ],
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [
+            "scripts/vera-workflows/patent-claim-comparison/references/synthetic-claim-comparison-v1.json"
+        ],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-patent-fto-screening",
+        "version": "1.0.0",
+        "title": "Patent FTO Screening",
+        "license": "AGPL-3.0-only",
+        "provenance": {
+            "source": "Vera first-party repository source",
+            "revision": "sha256:791549e7422d33be7551328296553a1db8d2655ea778b5a22b168a95b7477497",
+            "path": "scripts/vera-workflows/patent-fto-screening/SKILL.md"
+        },
+        "content_digest": "sha256:382c9e54a1018c3b1b1c6b4a677f5bd1709e534ae7ac076c0361511991670167",
+        "task_families": [
+            "compare"
+        ],
+        "jurisdictions": [
+            "Matter-specified"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 2,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_draft",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+        },
+        "artifact_contracts": [
+            {
+                "key": "fto-screening-report",
+                "artifact_type": "draft",
+                "kind": "document",
+                "format": "docx",
+                "operation": "create",
+                "required": true
+            }
+        ],
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-patent-infringement-analysis",
+        "version": "1.0.0",
+        "title": "Patent Infringement Analysis",
+        "license": "AGPL-3.0-only",
+        "provenance": {
+            "source": "Vera first-party repository source",
+            "revision": "sha256:8d6a9c2d8e816fdd45ed9572c6669b581e4bff37b81eedf9969fc1a56381ffa5",
+            "path": "scripts/vera-workflows/patent-infringement-analysis/SKILL.md"
+        },
+        "content_digest": "sha256:39c7a997549733d119a00c25e3a94bc594844366058be482dba6a2fe23113b45",
+        "task_families": [
+            "compare"
+        ],
+        "jurisdictions": [
+            "Matter-specified"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 2,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_draft",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+        },
+        "artifact_contracts": [
+            {
+                "key": "infringement-analysis-report",
+                "artifact_type": "draft",
+                "kind": "document",
+                "format": "docx",
+                "operation": "create",
+                "required": true
+            }
+        ],
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-patent-invalidity-search",
+        "version": "1.0.0",
+        "title": "Patent Invalidity Search",
+        "license": "AGPL-3.0-only",
+        "provenance": {
+            "source": "Vera first-party repository source",
+            "revision": "sha256:68cbb1f64cc826845706d58ec03be8a0526717541b1d06dbd4d91d6e9044dc15",
+            "path": "scripts/vera-workflows/patent-invalidity-search/SKILL.md"
+        },
+        "content_digest": "sha256:3eb10320c4f5bc54bb00bdfc0eeff728d01d4ac482e33bc8f0506b9032d04638",
+        "task_families": [
+            "compare"
+        ],
+        "jurisdictions": [
+            "Matter-specified"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 2,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_tabular",
+            "create_draft",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+        },
+        "artifact_contracts": [
+            {
+                "key": "invalidity-claim-chart",
+                "artifact_type": "tabular_review",
+                "kind": "document",
+                "format": "xlsx",
+                "operation": "create",
+                "required": true
+            },
+            {
+                "key": "invalidity-screening-memo",
+                "artifact_type": "draft",
+                "kind": "document",
+                "format": "docx",
+                "operation": "create",
+                "required": true
+            }
+        ],
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-patentability-assessment",
+        "version": "1.0.0",
+        "title": "Patentability Assessment",
+        "license": "AGPL-3.0-only",
+        "provenance": {
+            "source": "Vera first-party repository source",
+            "revision": "sha256:ef12569aaf5f668d83f5a6397814b00cff48711a594084b6e480391116af79f7",
+            "path": "scripts/vera-workflows/patentability-assessment/SKILL.md"
+        },
+        "content_digest": "sha256:80e0bbf69116d347e563886871c5e9e4e5ab1e2eec2e98d01717c448da6b72e9",
+        "task_families": [
+            "generic"
+        ],
+        "jurisdictions": [
+            "Matter-specified"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 2,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_tabular",
+            "create_draft",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+        },
+        "artifact_contracts": [
+            {
+                "key": "patentability-feature-chart",
+                "artifact_type": "tabular_review",
+                "kind": "document",
+                "format": "xlsx",
+                "operation": "create",
+                "required": true
+            },
+            {
+                "key": "patentability-memo",
+                "artifact_type": "draft",
+                "kind": "document",
+                "format": "docx",
+                "operation": "create",
+                "required": true
+            }
+        ],
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-proofread",
+        "version": "1.0.0",
+        "title": "Proofread",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "assistant-workflows/proofread/SKILL.md"
+        },
+        "content_digest": "sha256:c2e6c940c3359ec9ab14cabb5b4003a10b61947eecdb8a8339ac06c7a5b4234d",
+        "task_families": [
+            "proofread"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": false
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-shareholder-agreement-review",
+        "version": "1.0.0",
+        "title": "Shareholder Agreement Review",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "assistant-workflows/shareholder-agreement-review/SKILL.md"
+        },
+        "content_digest": "sha256:91302554cdf870b138e7066ab3fa6628414d32089415311b2d4631e9ca4b2bb5",
+        "task_families": [
+            "contract_review"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": false
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-shareholder-agreement-tabular-review",
+        "version": "1.0.0",
+        "title": "Shareholder Agreement Tabular Review",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "tabular-review-workflows/shareholder-agreement-tabular-review/SKILL.md"
+        },
+        "content_digest": "sha256:0e1be037f3ad52daa0bf478dfc0f7fcb9942be9656f539406a46cf86798b025a",
+        "task_families": [
+            "extract"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_tabular",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "tabular_review",
+            "kind": "document",
+            "format": "xlsx",
+            "operation": "create",
+            "required": true
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-spa-tabular-review",
+        "version": "1.0.0",
+        "title": "SPA Tabular Review",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "tabular-review-workflows/spa-tabular-review/SKILL.md"
+        },
+        "content_digest": "sha256:7492a5fce2312527bfeece9ce82853ec532be5f432706430ee6b5ac15735b2f2",
+        "task_families": [
+            "extract"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_tabular",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "tabular_review",
+            "kind": "document",
+            "format": "xlsx",
+            "operation": "create",
+            "required": true
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-supply-agreement-tabular-review",
+        "version": "1.0.0",
+        "title": "Supply Agreement Tabular Review",
+        "license": "MIT",
+        "provenance": {
+            "repository": "https://github.com/Open-Legal-Products/mike-workflows.git",
+            "commit": "d27064ae8085d3e8ebca99d5a491c9804376cbc7",
+            "path": "tabular-review-workflows/supply-agreement-tabular-review/SKILL.md"
+        },
+        "content_digest": "sha256:14987661499aac3195f2bbe911a8fe00060e49157eddbe27276e7851ada68403",
+        "task_families": [
+            "extract"
+        ],
+        "jurisdictions": [
+            "General"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_tabular",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "tabular_review",
+            "kind": "document",
+            "format": "xlsx",
+            "operation": "create",
+            "required": true
+        },
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-uspto-office-action-response",
+        "version": "1.0.0",
+        "title": "USPTO Office Action Response",
+        "license": "AGPL-3.0-only",
+        "provenance": {
+            "source": "Vera first-party repository source",
+            "revision": "sha256:f9ec48e2092960d9e9a4ea76c4818934a6b3018bded2c63cf9b3432061f2b68a",
+            "path": "scripts/vera-workflows/uspto-office-action-response/SKILL.md"
+        },
+        "content_digest": "sha256:00004e88b3fa3e4cef49f6479c0ecf03f708fe6447f17ac065993e6e0f6b0cc3",
+        "task_families": [
+            "draft"
+        ],
+        "jurisdictions": [
+            "United States"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 3,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "analyze",
+            "create_draft",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+        },
+        "artifact_contracts": [
+            {
+                "key": "office-action-response",
+                "artifact_type": "draft",
+                "kind": "document",
+                "format": "docx",
+                "operation": "create",
+                "required": true
+            }
+        ],
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    }
+];
+
+export const SYSTEM_SKILL_MANIFEST_BY_WORKFLOW_ID = new Map(
+    SYSTEM_SKILL_MANIFESTS.map((manifest) => [manifest.id, manifest] as const),
+);

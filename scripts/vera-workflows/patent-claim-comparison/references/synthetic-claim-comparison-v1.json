@@ -1,0 +1,76 @@
+{
+  "id": "PAT-DEMO-CMP-03",
+  "classification": "Synthetic QA fixture; internal lawyer review only; not for filing.",
+  "sources": {
+    "A": {
+      "filename": "PAT-DEMO-CMP-03-01-阿尔法越野救援车辆双通路扭矩分配权利要求摘录A-合成测试.docx",
+      "selected_claim": "Claim 1"
+    },
+    "B": {
+      "filename": "PAT-DEMO-CMP-03-02-贝塔牵引与绞盘协调系统权利要求摘录B-待核对定位缺口.docx",
+      "selected_claim": "Claim 5",
+      "supplemental_requested_claim": "Claim 7"
+    }
+  },
+  "comparison_question": "For internal lawyer review, compare Source A Claim 1 with Source B Claim 5 as text only. Also determine whether the supplemental reference to Source B Claim 7 can be located. Preserve source locators and do not make a legal conclusion.",
+  "permitted_relationships": [
+    "Same",
+    "Overlapping",
+    "Different",
+    "Not stated",
+    "Needs lawyer review"
+  ],
+  "comparison_units": [
+    {
+      "id": "U1",
+      "topic": "Recovery vehicle system preamble",
+      "relationship": "Same",
+      "left_locator": "Claim 1, opening phrase",
+      "right_locator": "Claim 5, opening phrase"
+    },
+    {
+      "id": "U2",
+      "topic": "Wheel and cable-drum torque paths",
+      "relationship": "Overlapping",
+      "left_locator": "Claim 1, first and second torque paths",
+      "right_locator": "Claim 5, wheel drive path and cable-drum drive path"
+    },
+    {
+      "id": "U3",
+      "topic": "Transfer arrangement timing",
+      "relationship": "Different",
+      "left_locator": "Claim 1, concurrently deliver torque",
+      "right_locator": "Claim 5, one drive path at a time"
+    },
+    {
+      "id": "U4",
+      "topic": "Cable-tension and wheel-slip allocation inputs",
+      "relationship": "Not stated",
+      "left_locator": "Claim 1, cable tension and wheel slip",
+      "right_locator": "Claim 5, controller coordinates torque"
+    },
+    {
+      "id": "U5",
+      "topic": "Supplemental Source B Claim 7 reference",
+      "relationship": "Needs lawyer review",
+      "locator_gap": {
+        "source": "B",
+        "requested_claim": "Claim 7",
+        "kind": "missing_claim_boundary",
+        "reason": "The pinned Source B fixture contains Claims 5 and 6 only; no Claim 7 heading or selected claim text can be located.",
+        "required_action": "Provide a pinned Matter source containing the selected Claim 7 text."
+      }
+    }
+  ],
+  "prohibited_conclusions": [
+    "infringement",
+    "freedom to operate",
+    "FTO",
+    "validity",
+    "invalidity",
+    "patentability",
+    "enforceability",
+    "claim construction",
+    "equivalence"
+  ]
+}
