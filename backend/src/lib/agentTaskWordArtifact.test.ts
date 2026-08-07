@@ -202,6 +202,77 @@ test("reports a preserved successor when verifier restart is rejected", async ()
   );
 });
 
+test("preserves the edited Version and does not restart an invalid legacy Task", async () => {
+  const clientBytes = Buffer.from("edited-docx");
+  let appendCount = 0;
+  let restartCount = 0;
+
+  await assert.rejects(
+    putAgentTaskWordArtifactEdit({} as never, {
+      taskId,
+      userId,
+      documentId,
+      baseVersionId,
+      filename: "Memo.docx",
+      buffer: clientBytes,
+      dependencies: {
+        loadSnapshot: async () => snapshot() as never,
+        loadBaseBytes: async () => Buffer.from("base-docx"),
+        readReceipt: async () => predecessor,
+        semanticDigest: digest,
+        advanceReceipt: async () => Buffer.from("advanced-docx"),
+        appendVersion: async (input) => {
+          appendCount += 1;
+          await input.beforeActivate?.();
+          const versionId = durableCurrentVersionMutationId(input.mutationKey);
+          return {
+            document_id: documentId,
+            version_id: versionId,
+            version_number: 2,
+            current_version_id: versionId,
+            filename: "Memo.docx",
+            storage_path: "memo-v2.docx",
+            created: true,
+          };
+        },
+        loadPersistedVersion: async (_db, _documentId, versionId) => ({
+          id: versionId,
+          version_number: 2,
+          source: "user_upload",
+          created_at: "2026-08-07T00:00:00.000Z",
+          filename: "Memo.docx",
+        }),
+        evaluateExecutionRecovery: () => ({
+          allowed: false,
+          issue_code: "capability_grant_invalid",
+          detail:
+            "Existing work is preserved. Start a new Work Task from the same Matter and sources.",
+        }),
+        startReverification: async () => {
+          restartCount += 1;
+          throw new Error("unreachable");
+        },
+      },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof AgentTaskWordArtifactError);
+      assert.equal(error.status, 409);
+      assert.equal(error.code, "reverification_conflict");
+      assert.equal(error.preservedVersion?.version_number, 2);
+      assert.deepEqual(error.reverificationIssue, {
+        issue_code: "capability_grant_invalid",
+        recovery_action: "start_new_task",
+        detail:
+          "Existing work is preserved. Start a new Work Task from the same Matter and sources.",
+      });
+      return true;
+    },
+  );
+
+  assert.equal(appendCount, 1);
+  assert.equal(restartCount, 0);
+});
+
 test("serializes a preserved successor for the Word client recovery contract", () => {
   const preservedVersion = {
     id: "33333333-3333-4333-8333-333333333333",
@@ -223,6 +294,41 @@ test("serializes a preserved successor for the Word client recovery contract", (
       detail: "The Version was preserved.",
       issue_code: "reverification_unavailable",
       preserved_version: preservedVersion,
+    },
+  );
+});
+
+test("serializes a structured legacy Task recovery action", () => {
+  const preservedVersion = {
+    id: "33333333-3333-4333-8333-333333333333",
+    version_number: 3,
+    source: "user_upload",
+    created_at: "2026-08-07T00:00:00.000Z",
+    filename: "Memo.docx",
+  };
+  assert.deepEqual(
+    agentTaskWordArtifactErrorBody(
+      new AgentTaskWordArtifactError(
+        409,
+        "reverification_conflict",
+        "Start a new Work Task.",
+        preservedVersion,
+        {
+          issue_code: "capability_grant_invalid",
+          recovery_action: "start_new_task",
+          detail: "Start a new Work Task.",
+        },
+      ),
+    ),
+    {
+      detail: "Start a new Work Task.",
+      issue_code: "reverification_conflict",
+      preserved_version: preservedVersion,
+      reverification_issue: {
+        issue_code: "capability_grant_invalid",
+        recovery_action: "start_new_task",
+        detail: "Start a new Work Task.",
+      },
     },
   );
 });

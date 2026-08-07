@@ -13,12 +13,24 @@ export type AgentTaskWordArtifactVersion = DocumentVersion & {
 export type AgentTaskWordArtifactSaveIssueCode =
     "reverification_conflict" | "reverification_unavailable";
 
+export type AgentTaskWordArtifactRecoveryIssueCode =
+    | "assignment_contract_invalid"
+    | "step_contract_invalid"
+    | "capability_grant_invalid";
+
+export type AgentTaskWordArtifactRecoveryIssue = {
+    issueCode: AgentTaskWordArtifactRecoveryIssueCode;
+    recoveryAction: "start_new_task";
+    detail: string;
+};
+
 export class AgentTaskWordArtifactSaveError extends Error {
     constructor(
         message: string,
         public readonly status: number,
         public readonly issueCode: AgentTaskWordArtifactSaveIssueCode,
         public readonly preservedVersion: DocumentVersion | null,
+        public readonly reverificationIssue: AgentTaskWordArtifactRecoveryIssue | null = null,
     ) {
         super(message);
         this.name = "AgentTaskWordArtifactSaveError";
@@ -61,6 +73,7 @@ export function parseAgentTaskWordArtifactSaveError(args: {
         detail?: unknown;
         issue_code?: unknown;
         preserved_version?: unknown;
+        reverification_issue?: unknown;
     };
     if (
         typeof body.detail !== "string" ||
@@ -70,11 +83,37 @@ export function parseAgentTaskWordArtifactSaveError(args: {
     ) {
         return null;
     }
+    let reverificationIssue: AgentTaskWordArtifactRecoveryIssue | null = null;
+    if (Object.prototype.hasOwnProperty.call(body, "reverification_issue")) {
+        const candidate = body.reverification_issue;
+        if (!candidate || typeof candidate !== "object") return null;
+        const structured = candidate as {
+            issue_code?: unknown;
+            recovery_action?: unknown;
+            detail?: unknown;
+        };
+        if (
+            (structured.issue_code !== "assignment_contract_invalid" &&
+                structured.issue_code !== "step_contract_invalid" &&
+                structured.issue_code !== "capability_grant_invalid") ||
+            structured.recovery_action !== "start_new_task" ||
+            typeof structured.detail !== "string" ||
+            !structured.detail.trim()
+        ) {
+            return null;
+        }
+        reverificationIssue = {
+            issueCode: structured.issue_code,
+            recoveryAction: structured.recovery_action,
+            detail: structured.detail,
+        };
+    }
     return new AgentTaskWordArtifactSaveError(
         body.detail,
         args.status,
         body.issue_code,
         parsePreservedVersion(body.preserved_version),
+        reverificationIssue,
     );
 }
 

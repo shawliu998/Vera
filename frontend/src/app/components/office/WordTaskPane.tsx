@@ -1570,6 +1570,9 @@ export function WordTaskPane() {
                     setMatterVersionMessage(
                         saved.reverificationStarted
                             ? taskArtifactPartialSaveMessage
+                            : saved.reverificationRecoveryAction ===
+                                "start_new_task"
+                              ? `Saved ${selectedMatterDocument.filename}${saved.version.version_number ? ` as V${saved.version.version_number}` : " as a new version"}. Existing work is preserved, but this legacy Task cannot safely re-verify the edit. Start a new Work Task from the same Matter and sources. Do not continue editing this copy.`
                             : `Saved ${selectedMatterDocument.filename}${saved.version.version_number ? ` as V${saved.version.version_number}` : " as a new version"}, but re-verification did not start. Existing work is preserved. Reopen this artifact from its Task before editing again.${saved.reverificationMessage ? ` ${saved.reverificationMessage}` : ""}`,
                     );
                 }

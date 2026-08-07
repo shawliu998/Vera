@@ -28,6 +28,63 @@ test("parses only a structured re-verification partial save", () => {
     assert.equal(error.status, 503);
     assert.equal(error.issueCode, "reverification_unavailable");
     assert.equal(error.preservedVersion?.id, "version-3");
+    assert.equal(error.reverificationIssue, null);
+});
+
+test("parses a server-owned legacy Task recovery action", () => {
+    const error = parseAgentTaskWordArtifactSaveError({
+        status: 409,
+        body: {
+            detail: "The Version was preserved.",
+            issue_code: "reverification_conflict",
+            preserved_version: version,
+            reverification_issue: {
+                issue_code: "capability_grant_invalid",
+                recovery_action: "start_new_task",
+                detail: "Start a new Work Task from the same Matter and sources.",
+            },
+        },
+    });
+    assert.ok(error instanceof AgentTaskWordArtifactSaveError);
+    assert.deepEqual(error.reverificationIssue, {
+        issueCode: "capability_grant_invalid",
+        recoveryAction: "start_new_task",
+        detail: "Start a new Work Task from the same Matter and sources.",
+    });
+});
+
+test("a present malformed recovery issue cannot authorize a preserved save", () => {
+    for (const reverificationIssue of [
+        {},
+        {
+            issue_code: "capability_grant_invalid",
+            recovery_action: "start_new_task",
+            detail: "",
+        },
+        {
+            issue_code: "unknown_issue",
+            recovery_action: "start_new_task",
+            detail: "Start a new Work Task.",
+        },
+        {
+            issue_code: "capability_grant_invalid",
+            recovery_action: "retry",
+            detail: "Start a new Work Task.",
+        },
+    ]) {
+        assert.equal(
+            parseAgentTaskWordArtifactSaveError({
+                status: 409,
+                body: {
+                    detail: "The Version was preserved.",
+                    issue_code: "reverification_conflict",
+                    preserved_version: version,
+                    reverification_issue: reverificationIssue,
+                },
+            }),
+            null,
+        );
+    }
 });
 
 test("malformed or unrelated errors cannot authorize a preserved save", () => {

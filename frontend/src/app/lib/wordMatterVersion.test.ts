@@ -309,6 +309,8 @@ test("Task artifact save uses the bound server route and advances the local rece
     assert.equal(result.reopenRequired, false);
     assert.equal(result.reverificationStarted, true);
     assert.equal(result.reverificationIssueCode, null);
+    assert.equal(result.reverificationRecoveryIssueCode, null);
+    assert.equal(result.reverificationRecoveryAction, null);
     assert.ok(
         writtenProperties.some((property) =>
             property.value.includes('"versionId":"version-3"'),
@@ -370,7 +372,55 @@ test("a preserved Version remains explicit when re-verification cannot start", a
     assert.equal(result.successorBinding.versionId, "version-3");
     assert.equal(result.reverificationStarted, false);
     assert.equal(result.reverificationIssueCode, "reverification_conflict");
+    assert.equal(result.reverificationRecoveryIssueCode, null);
+    assert.equal(result.reverificationRecoveryAction, null);
     assert.equal(result.receiptSynchronized, false);
+    assert.equal(result.reopenRequired, true);
+    assert.equal(receiptWrites, 0);
+});
+
+test("an invalid legacy Task preserves the Version and requires a new Work Task", async () => {
+    let saveCalls = 0;
+    let receiptWrites = 0;
+    const preservedVersion = version("version-3", 3);
+    const result = await saveCurrentWordDocumentAsTaskArtifactVersion({
+        taskId: taskArtifactBinding.taskId,
+        projectId: taskArtifactBinding.projectId,
+        deliverableKey: taskArtifactBinding.deliverableKey,
+        document: matterDocument(),
+        base: currentMatterDocumentVersionBase(
+            "document-1",
+            BASE_SNAPSHOT,
+        ),
+        openBinding: taskArtifactBinding,
+        loadVersions: async () => BASE_SNAPSHOT,
+        readWordFile: async ({ filename }) => new File([], filename),
+        saveTaskArtifactVersion: async () => {
+            saveCalls += 1;
+            throw new AgentTaskWordArtifactSaveError(
+                "Existing work is preserved. Start a new Work Task.",
+                409,
+                "reverification_conflict",
+                preservedVersion,
+                {
+                    issueCode: "capability_grant_invalid",
+                    recoveryAction: "start_new_task",
+                    detail: "Start a new Work Task.",
+                },
+            );
+        },
+        writeWordCustomProperties: async () => {
+            receiptWrites += 1;
+        },
+    });
+    assert.equal(saveCalls, 1);
+    assert.equal(result.version.id, "version-3");
+    assert.equal(result.reverificationStarted, false);
+    assert.equal(
+        result.reverificationRecoveryIssueCode,
+        "capability_grant_invalid",
+    );
+    assert.equal(result.reverificationRecoveryAction, "start_new_task");
     assert.equal(result.reopenRequired, true);
     assert.equal(receiptWrites, 0);
 });
@@ -411,6 +461,8 @@ test("a transient re-verification failure retries the same preserved Version onc
     assert.equal(result.version.id, "version-3");
     assert.equal(result.reverificationStarted, true);
     assert.equal(result.reverificationIssueCode, null);
+    assert.equal(result.reverificationRecoveryIssueCode, null);
+    assert.equal(result.reverificationRecoveryAction, null);
     assert.equal(result.receiptSynchronized, true);
     assert.equal(receiptWrites, 1);
 });

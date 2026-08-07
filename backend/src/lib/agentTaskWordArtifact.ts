@@ -24,11 +24,21 @@ import {
 } from "./taskWordArtifactReceipt";
 import { downloadFile } from "./storage";
 import { canonicalUuidIdentity, sameUuidIdentity } from "./uuidIdentity";
+import {
+  evaluateAgentTaskExecutionRecovery,
+  type AgentTaskExecutionRecovery,
+} from "./agent-kernel/recovery/executionRecovery";
 
 type Db = ReturnType<typeof createServerSupabase>;
 type Snapshot = NonNullable<Awaited<ReturnType<typeof getAgentTaskSnapshot>>>;
 
 const TASK_WORD_EDIT_IDENTITY_VERSION = "agent-task-word-artifact-edit-v1";
+
+export type AgentTaskWordArtifactReverificationIssue = {
+  issue_code: Exclude<AgentTaskExecutionRecovery["issue_code"], null>;
+  recovery_action: "start_new_task";
+  detail: string;
+};
 
 export class AgentTaskWordArtifactError extends Error {
   constructor(
@@ -43,6 +53,7 @@ export class AgentTaskWordArtifactError extends Error {
       | "reverification_unavailable",
     message: string,
     public readonly preservedVersion: AgentTaskWordArtifactVersion | null = null,
+    public readonly reverificationIssue: AgentTaskWordArtifactReverificationIssue | null = null,
   ) {
     super(message);
     this.name = "AgentTaskWordArtifactError";
@@ -56,6 +67,9 @@ export function agentTaskWordArtifactErrorBody(
     detail: error.message,
     issue_code: error.code,
     preserved_version: error.preservedVersion,
+    ...(error.reverificationIssue
+      ? { reverification_issue: error.reverificationIssue }
+      : {}),
   };
 }
 
@@ -180,6 +194,7 @@ export async function putAgentTaskWordArtifactEdit(
       appendVersion?: typeof appendCurrentDocxVersion;
       loadPersistedVersion?: typeof loadPersistedVersion;
       startReverification?: typeof startAgentTaskArtifactReverification;
+      evaluateExecutionRecovery?: typeof evaluateAgentTaskExecutionRecovery;
     };
   },
 ): Promise<AgentTaskWordArtifactVersion> {
@@ -202,6 +217,10 @@ export async function putAgentTaskWordArtifactEdit(
       "Agent task not found.",
     );
   }
+  const executionRecovery = (
+    input.dependencies?.evaluateExecutionRecovery ??
+    evaluateAgentTaskExecutionRecovery
+  )(snapshot.task);
   const readReceipt =
     input.dependencies?.readReceipt ?? readTaskWordArtifactReceipt;
   let predecessor: TaskWordArtifactReceiptV1 | null;
@@ -354,6 +373,19 @@ export async function putAgentTaskWordArtifactEdit(
   const loadVersion =
     input.dependencies?.loadPersistedVersion ?? loadPersistedVersion;
   const version = await loadVersion(db, input.documentId, appended.version_id);
+  if (!executionRecovery.allowed) {
+    throw new AgentTaskWordArtifactError(
+      409,
+      "reverification_conflict",
+      executionRecovery.detail,
+      version,
+      {
+        issue_code: executionRecovery.issue_code,
+        recovery_action: "start_new_task",
+        detail: executionRecovery.detail,
+      },
+    );
+  }
   const startReverification =
     input.dependencies?.startReverification ??
     startAgentTaskArtifactReverification;

@@ -5,6 +5,7 @@ import type {
 import type { DocumentVersion } from "@/app/lib/mikeApi";
 import {
     AgentTaskWordArtifactSaveError,
+    type AgentTaskWordArtifactRecoveryIssueCode,
     type AgentTaskWordArtifactVersion,
     type AgentTaskWordArtifactSaveIssueCode,
 } from "@/app/lib/agentTaskWordArtifactSave";
@@ -92,6 +93,8 @@ export type TaskArtifactVersionSaveResult = {
     reopenRequired: boolean;
     reverificationStarted: boolean;
     reverificationIssueCode: AgentTaskWordArtifactSaveIssueCode | null;
+    reverificationRecoveryIssueCode: AgentTaskWordArtifactRecoveryIssueCode | null;
+    reverificationRecoveryAction: "start_new_task" | null;
     reverificationMessage: string | null;
 };
 
@@ -362,6 +365,9 @@ export async function saveCurrentWordDocumentAsTaskArtifactVersion(args: {
     let version: DocumentVersion;
     let reverificationIssueCode: AgentTaskWordArtifactSaveIssueCode | null =
         null;
+    let reverificationRecoveryIssueCode: AgentTaskWordArtifactRecoveryIssueCode | null =
+        null;
+    let reverificationRecoveryAction: "start_new_task" | null = null;
     let reverificationMessage: string | null = null;
     try {
         version = await saveVersion();
@@ -374,6 +380,10 @@ export async function saveCurrentWordDocumentAsTaskArtifactVersion(args: {
         }
         version = error.preservedVersion;
         reverificationIssueCode = error.issueCode;
+        reverificationRecoveryIssueCode =
+            error.reverificationIssue?.issueCode ?? null;
+        reverificationRecoveryAction =
+            error.reverificationIssue?.recoveryAction ?? null;
         reverificationMessage = error.message;
         if (error.issueCode === "reverification_unavailable") {
             try {
@@ -385,6 +395,8 @@ export async function saveCurrentWordDocumentAsTaskArtifactVersion(args: {
                 }
                 version = retried;
                 reverificationIssueCode = null;
+                reverificationRecoveryIssueCode = null;
+                reverificationRecoveryAction = null;
                 reverificationMessage = null;
             } catch (retryError) {
                 if (
@@ -403,6 +415,10 @@ export async function saveCurrentWordDocumentAsTaskArtifactVersion(args: {
                     )
                 ) {
                     reverificationIssueCode = retryError.issueCode;
+                    reverificationRecoveryIssueCode =
+                        retryError.reverificationIssue?.issueCode ?? null;
+                    reverificationRecoveryAction =
+                        retryError.reverificationIssue?.recoveryAction ?? null;
                     reverificationMessage = retryError.message;
                 }
             }
@@ -421,6 +437,8 @@ export async function saveCurrentWordDocumentAsTaskArtifactVersion(args: {
             reopenRequired: true,
             reverificationStarted: false,
             reverificationIssueCode,
+            reverificationRecoveryIssueCode,
+            reverificationRecoveryAction,
             reverificationMessage,
         };
     }
@@ -436,6 +454,8 @@ export async function saveCurrentWordDocumentAsTaskArtifactVersion(args: {
             reopenRequired: false,
             reverificationStarted: true,
             reverificationIssueCode: null,
+            reverificationRecoveryIssueCode: null,
+            reverificationRecoveryAction: null,
             reverificationMessage: null,
         };
     } catch (error) {
@@ -450,6 +470,8 @@ export async function saveCurrentWordDocumentAsTaskArtifactVersion(args: {
             reopenRequired: true,
             reverificationStarted: true,
             reverificationIssueCode: null,
+            reverificationRecoveryIssueCode: null,
+            reverificationRecoveryAction: null,
             reverificationMessage: null,
         };
     }
