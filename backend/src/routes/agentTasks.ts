@@ -21,7 +21,7 @@ import { createServerSupabase } from "../lib/supabase";
 import { requireAuth } from "../middleware/auth";
 import { DEFAULT_MAIN_MODEL, isSupportedModel } from "../lib/llm";
 import {
-  buildGoalAwareFallbackPlan,
+  buildServerOwnedTaskPlan,
   resolveAgentWorkflowConstraint,
 } from "../lib/agentTaskPlanner";
 import {
@@ -35,6 +35,16 @@ import { contentTypeForDocumentType } from "../lib/documentTypes";
 import { getAgentTaskEvidence } from "../lib/agentTaskEvidence";
 import { MatterContextInvalidError } from "../lib/agent-kernel/context/matterContext";
 import { compileFixedMatterContext } from "../lib/agent-kernel/context/matterContextRepository";
+import {
+  buildAgentTaskContractCheckpoint,
+  compileAgentGoalSpec,
+  normalizeAgentTaskArtifactContracts,
+} from "../lib/agent-kernel/contracts/taskContract";
+import { compileAgentStepContracts } from "../lib/agent-kernel/contracts/stepContract";
+import {
+  resolveAgentStepCapabilityGrant,
+  WORK_TASK_HOST_TOOL_NAMES,
+} from "../lib/agent-kernel/capability/stepCapability";
 
 export const agentTasksRouter = Router();
 
@@ -137,24 +147,61 @@ agentTasksRouter.post("/", requireAuth, async (req, res) => {
       documentIds,
       workflow,
     });
-    const provisionalPlan = buildGoalAwareFallbackPlan({
+    const serverPlan = buildServerOwnedTaskPlan({
       goal,
       hasSources: documentIds.length > 0,
       workflowId: workflowId || undefined,
       workflowType: workflow?.type,
+    });
+    const artifactContracts = normalizeAgentTaskArtifactContracts(
+      serverPlan.plan.deliverables,
+    );
+    const goalSpec = compileAgentGoalSpec({
+      objective: goal,
+      taskFamily: serverPlan.taskFamily,
+      artifactContracts,
+      hasSources: documentIds.length > 0,
+      jurisdictions: serverPlan.manifest?.jurisdictions ?? [],
+      sourceStandard: serverPlan.manifest
+        ? {
+            material_claims_require_citations:
+              serverPlan.manifest.source_standard
+                .material_claims_require_citations,
+            authority_required:
+              serverPlan.manifest.source_standard.authority_required,
+            authority_as_of_required:
+              serverPlan.manifest.source_standard.authority_as_of_required,
+          }
+        : undefined,
+      mustAskWhen: serverPlan.manifest?.must_ask_when,
+      completionChecks: serverPlan.manifest?.completion_checks,
+    });
+    const stepContracts = compileAgentStepContracts({
+      steps: serverPlan.plan.steps,
+      goalSpec,
+      artifactContracts,
+      contextManifest: fixedMatterContext,
+    });
+    const capabilityGrants = stepContracts.steps.map((contract) =>
+      resolveAgentStepCapabilityGrant({
+        contract,
+        availableToolNames: WORK_TASK_HOST_TOOL_NAMES,
+      }),
+    );
+    const initialCheckpoint = buildAgentTaskContractCheckpoint({
+      goalSpec,
+      contextManifest: fixedMatterContext,
+      stepContracts,
+      capabilityGrants,
     });
     const snapshot = await createAgentTask(db, {
       userId,
       matterId,
       goal,
       executionModel: model,
-      plan: provisionalPlan.steps,
-      deliverables: provisionalPlan.deliverables,
-      planningRequest: {
-        document_ids: documentIds,
-        ...(workflowId ? { workflow_id: workflowId } : {}),
-      },
-      fixedMatterContext,
+      plan: serverPlan.plan.steps,
+      deliverables: artifactContracts,
+      initialCheckpoint,
       initialArtifacts: [
         ...documentIds.map((documentId) => ({
           artifact_type: "document" as const,

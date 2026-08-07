@@ -1,22 +1,22 @@
 import { z } from "zod";
 import { completeText } from "./llm";
 import { createServerSupabase } from "./supabase";
-import { SYSTEM_WORKFLOWS } from "./systemWorkflows";
+import {
+  SYSTEM_SKILL_MANIFEST_BY_WORKFLOW_ID,
+  SYSTEM_WORKFLOWS,
+  type SkillManifestV1,
+} from "./systemWorkflows";
 import { getUserModelSettings } from "./userSettings";
 import {
   MatterContextInvalidError,
   type MatterContextManifestV1,
 } from "./agent-kernel/context/matterContext";
 import { assertFixedMatterContextCurrent } from "./agent-kernel/context/matterContextRepository";
+import type { AgentStepCapability } from "./agent-kernel/contracts/stepContract";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
-export type AgentTaskStepCapability =
-  | "read_sources"
-  | "analyze"
-  | "create_tabular"
-  | "create_draft"
-  | "verify";
+export type AgentTaskStepCapability = AgentStepCapability;
 
 export type AgentTaskPlanStep = {
   capability: AgentTaskStepCapability;
@@ -431,6 +431,124 @@ export function buildGoalAwareFallbackPlan(input: {
             "Work product draft",
           ),
     ],
+  };
+}
+
+function artifactTitle(key: string) {
+  return key
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function manifestArtifactContracts(manifest: SkillManifestV1) {
+  if (manifest.artifact_contracts?.length) return manifest.artifact_contracts;
+  return [
+    {
+      key:
+        manifest.artifact_contract.artifact_type === "draft"
+          ? "work-product"
+          : "work-product-table",
+      ...manifest.artifact_contract,
+    },
+  ];
+}
+
+function manifestStep(
+  capability: AgentTaskStepCapability,
+  artifact?: { key: string; artifact_type: "draft" | "tabular_review" },
+): AgentTaskPlanStep {
+  if (capability === "read_sources") {
+    return step(
+      capability,
+      "Read fixed source versions",
+      "Read the fixed Matter source Versions and preserve source references.",
+    );
+  }
+  if (capability === "analyze") {
+    return step(
+      capability,
+      "Analyze bounded work scope",
+      "Analyze only the fixed goal, sources, Workflow instructions, and open questions.",
+    );
+  }
+  if (capability === "verify") {
+    return step(
+      capability,
+      "Verify deliverables",
+      "Check goal coverage, required files, source support, citations, and incomplete steps.",
+    );
+  }
+  if (!artifact)
+    throw new Error("Manifest creation capability has no Artifact");
+  const title = artifactTitle(artifact.key);
+  return step(
+    capability,
+    artifact.artifact_type === "draft" ? `Create ${title}` : `Create ${title}`,
+    artifact.artifact_type === "draft"
+      ? `Create the fixed ${title} Word deliverable.`
+      : `Create the fixed ${title} Excel deliverable.`,
+  );
+}
+
+/** New Tasks use this deterministic server-owned plan; the model cannot replan it. */
+export function buildServerOwnedTaskPlan(input: {
+  goal: string;
+  hasSources: boolean;
+  workflowId?: string;
+  workflowType?: "assistant" | "tabular";
+}) {
+  const manifest = input.workflowId
+    ? (SYSTEM_SKILL_MANIFEST_BY_WORKFLOW_ID.get(input.workflowId) ?? null)
+    : null;
+  if (!manifest) {
+    return {
+      plan: buildGoalAwareFallbackPlan(input),
+      manifest: null,
+      taskFamily: inferGoalProfile(input.goal, input.workflowId),
+    };
+  }
+  const profiles = manifestArtifactContracts(manifest);
+  const deliverables = profiles.map((profile) => {
+    const title = artifactTitle(profile.key);
+    return deliverable(
+      profile.key,
+      title,
+      `${title} required by the fixed Workflow Manifest.`,
+      profile.artifact_type,
+      title,
+    );
+  });
+  const remaining = [...profiles];
+  const steps = manifest.required_capabilities.flatMap((capability) => {
+    if (capability !== "create_draft" && capability !== "create_tabular") {
+      return [manifestStep(capability)];
+    }
+    const artifactType =
+      capability === "create_draft" ? "draft" : "tabular_review";
+    const matches = remaining.filter(
+      (profile) => profile.artifact_type === artifactType,
+    );
+    for (const match of matches) {
+      remaining.splice(remaining.indexOf(match), 1);
+    }
+    return matches.map((profile) => manifestStep(capability, profile));
+  });
+  if (remaining.length) {
+    throw new Error("Workflow Manifest Artifacts have no required capability");
+  }
+  const plan = planSchema.parse({ steps, deliverables }) as GoalAwareTaskPlan;
+  if (
+    plan.steps.at(-1)?.capability !== "verify" ||
+    plan.steps.at(-1)?.title !== "Verify deliverables"
+  ) {
+    throw new Error("Workflow Manifest must finish with verification");
+  }
+  return {
+    plan,
+    manifest,
+    taskFamily: manifest.task_families[0] ?? "generic",
   };
 }
 

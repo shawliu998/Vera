@@ -29,6 +29,21 @@ import {
   MatterContextInvalidError,
   readFixedMatterContext,
 } from "./agent-kernel/context/matterContext";
+import {
+  readAgentStepContracts,
+  type AgentStepContractV1,
+} from "./agent-kernel/contracts/stepContract";
+import {
+  readAgentStepCapabilityGrants,
+  resolveBoundedRepairToolNames,
+  WORK_TASK_HOST_TOOL_NAMES,
+} from "./agent-kernel/capability/stepCapability";
+import {
+  readResolvedRequiredInputIds,
+  requiredInputFromAssistantEvents,
+  createDocumentsRequiredInput,
+  type AgentRequiredInputV1,
+} from "./agent-kernel/contracts/requiredInput";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -162,6 +177,7 @@ export type AgentStepExecutionResult = {
   summary: string;
   artifacts: AgentArtifactLinkInput[];
   waitingForInput: boolean;
+  requiredInput?: AgentRequiredInputV1 | null;
   citationCheck: { total: number; relocatable: number; missing: number };
 };
 
@@ -325,6 +341,7 @@ function artifactFromCreatedEvent(
   event: Extract<AssistantEvent, { type: "doc_created" }>,
   snapshot: NonNullable<TaskSnapshot>,
   allowReplacement: boolean,
+  stepContract?: AgentStepContractV1 | null,
 ): AgentArtifactLinkInput | null {
   if (!event.document_id) return null;
   const filename = event.filename.toLowerCase();
@@ -334,6 +351,26 @@ function artifactFromCreatedEvent(
       : filename.endsWith(".docx")
         ? "draft"
         : "document";
+  if (stepContract) {
+    const expectation = stepContract.output_expectation;
+    if (expectation.kind !== "artifact") {
+      throw new Error("A non-artifact Step created an undeclared document");
+    }
+    if (artifactType !== expectation.artifact_type) {
+      throw new Error("Created document type does not match the Step Contract");
+    }
+    const deliverable = requiredTaskDeliverables(snapshot.task).find(
+      (candidate) => candidate.key === expectation.deliverable_key,
+    );
+    if (!deliverable) {
+      throw new Error("Step Contract deliverable is not declared by the Task");
+    }
+    return {
+      artifact_type: artifactType,
+      artifact_id: event.document_id,
+      purpose: taskDeliverablePurpose(deliverable),
+    };
+  }
   const typedDeliverables = requiredTaskDeliverables(snapshot.task).filter(
     (candidate) => candidate.artifact_type === artifactType,
   );
@@ -366,6 +403,7 @@ export async function executeAgentStep(input: {
   userId: string;
   userEmail?: string;
   instructionOverride?: string;
+  repairArtifactPurpose?: string;
   shouldContinue?: () => Promise<boolean>;
 }): Promise<AgentStepExecutionResult> {
   const { db, snapshot, userId, userEmail } = input;
@@ -373,6 +411,32 @@ export async function executeAgentStep(input: {
     (step: { status: string }) => step.status === "running",
   );
   if (stepIndex < 0) throw new Error("Running task has no executable step");
+  const stepContractRead = readAgentStepContracts(snapshot.task);
+  if (stepContractRead.state === "invalid") {
+    throw new Error(`Step Contract is invalid: ${stepContractRead.reason}`);
+  }
+  const stepContract =
+    stepContractRead.state === "valid"
+      ? (stepContractRead.contracts[stepIndex] ?? null)
+      : null;
+  if (stepContractRead.state === "valid" && !stepContract) {
+    throw new Error("Running Step has no fixed Step Contract");
+  }
+  const grantRead = readAgentStepCapabilityGrants(snapshot.task);
+  if (grantRead.state === "invalid") {
+    throw new Error(`Capability Grant is invalid: ${grantRead.reason}`);
+  }
+  const capabilityGrant =
+    grantRead.state === "valid" ? (grantRead.grants[stepIndex] ?? null) : null;
+  if (
+    stepContract &&
+    (!capabilityGrant ||
+      capabilityGrant.step_position !== stepContract.position ||
+      capabilityGrant.capability !== stepContract.capability ||
+      capabilityGrant.operation !== stepContract.operation)
+  ) {
+    throw new Error("Capability Grant does not match the fixed Step Contract");
+  }
 
   const sourceIds = snapshot.artifacts
     .filter(
@@ -420,6 +484,9 @@ export async function executeAgentStep(input: {
       summary: "Source documents are required before this step can run.",
       artifacts: [],
       waitingForInput: true,
+      requiredInput: createDocumentsRequiredInput({
+        stepId: currentStep.id,
+      }),
       citationCheck: { total: 0, relocatable: 0, missing: 0 },
     };
   }
@@ -480,11 +547,26 @@ export async function executeAgentStep(input: {
         ),
         workflowInstruction,
       );
-  const verifierOnly =
-    snapshot.task.status === "verifying" &&
-    !input.instructionOverride?.startsWith(
+  const repairPass = Boolean(
+    input.instructionOverride?.startsWith(
       "This is the single permitted repair pass",
+    ),
+  );
+  const repairDeliverable = repairPass
+    ? requiredTaskDeliverables(snapshot.task).find(
+        (deliverable) =>
+          taskDeliverablePurpose(deliverable) === input.repairArtifactPurpose,
+      )
+    : null;
+  if (repairPass && !repairDeliverable) {
+    throw new Error(
+      "A verifier repair requires one uniquely bound declared deliverable",
     );
+  }
+  const verifierOnly =
+    (stepContract?.capability === "verify" ||
+      snapshot.task.status === "verifying") &&
+    !repairPass;
   const activeSourceFiles = verifierOnly ? [] : sourceFiles;
   const userMessage: ChatMessage = {
     role: "user",
@@ -545,7 +627,23 @@ export async function executeAgentStep(input: {
       write: () => {},
       workflowStore,
       includeResearchTools: false,
+      includeMcpTools: stepContract ? false : true,
       disableTools: verifierOnly,
+      ...(repairPass && repairDeliverable
+        ? {
+            allowedToolNames: resolveBoundedRepairToolNames({
+              artifactType:
+                repairDeliverable.artifact_type === "tabular_review"
+                  ? "tabular_review"
+                  : "draft",
+              availableToolNames: WORK_TASK_HOST_TOOL_NAMES,
+            }),
+          }
+        : stepContract
+          ? {
+              allowedToolNames: capabilityGrant?.allowed_tool_names ?? [],
+            }
+          : {}),
       apiKeys,
       projectId: snapshot.task.matter_id,
       beforeToolBatch: input.shouldContinue
@@ -582,11 +680,43 @@ export async function executeAgentStep(input: {
       const artifact = artifactFromCreatedEvent(
         event,
         snapshot,
-        Boolean(input.instructionOverride),
+        repairPass,
+        repairPass ? null : stepContract,
       );
-      return artifact ? [artifact] : [];
+      if (!artifact) return [];
+      if (repairPass) {
+        const expectedArtifactType =
+          repairDeliverable!.artifact_type === "tabular_review"
+            ? "tabular_review"
+            : "draft";
+        if (artifact.artifact_type !== expectedArtifactType) {
+          throw new Error(
+            "A bounded verifier repair created the wrong document type",
+          );
+        }
+      }
+      if (
+        repairPass &&
+        artifact.purpose !== taskDeliverablePurpose(repairDeliverable!)
+      ) {
+        return [
+          {
+            ...artifact,
+            purpose: taskDeliverablePurpose(repairDeliverable!),
+          },
+        ];
+      }
+      return [artifact];
     },
   );
+  if (
+    repairPass &&
+    artifacts.filter((artifact) =>
+      ["draft", "tabular_review", "document"].includes(artifact.artifact_type),
+    ).length > 1
+  ) {
+    throw new Error("A bounded verifier repair created more than one document");
+  }
   if (citations.length) {
     artifacts.push({
       artifact_type: "citation_snapshot",
@@ -594,9 +724,13 @@ export async function executeAgentStep(input: {
       purpose: `Step ${stepIndex + 1} evidence citations`,
     });
   }
-  const waitingForInput = persistedEvents.some(
-    (event) => event.type === "ask_inputs",
-  );
+  const requiredInput = requiredInputFromAssistantEvents(persistedEvents, {
+    stepId: currentStep.id,
+    resolvedRequestIds: readResolvedRequiredInputIds(
+      snapshot.task.latest_checkpoint,
+    ),
+  });
+  const waitingForInput = Boolean(requiredInput);
   const contentText = persistedEvents
     .filter(
       (event): event is Extract<typeof event, { type: "content" }> =>
@@ -613,6 +747,7 @@ export async function executeAgentStep(input: {
     ).slice(0, 4000),
     artifacts,
     waitingForInput,
+    requiredInput,
     citationCheck: {
       total: citations.length,
       relocatable: citations.filter((citation) => {

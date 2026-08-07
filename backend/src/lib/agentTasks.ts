@@ -23,6 +23,18 @@ import {
   type MatterContextManifestV1,
 } from "./agent-kernel/context/matterContext";
 import { extendFixedMatterContext } from "./agent-kernel/context/matterContextRepository";
+import type { AgentTaskArtifactContractV1 } from "./agent-kernel/contracts/taskContract";
+import { extendAgentTaskContractContext } from "./agent-kernel/contracts/taskContract";
+import {
+  readAgentRequiredInput,
+  readResolvedRequiredInputIds,
+  validateRequiredInputSubmission,
+  type AgentRequiredInputV1,
+} from "./agent-kernel/contracts/requiredInput";
+import {
+  readAgentStepReceipts,
+  type AgentStepReceiptV1,
+} from "./agent-kernel/contracts/stepContract";
 
 export type {
   AgentTaskExecutionPauseClassification,
@@ -225,9 +237,23 @@ export function prepareAgentTaskInputTransition(
     typeof snapshot.task.latest_checkpoint === "object"
       ? { ...(snapshot.task.latest_checkpoint as Record<string, unknown>) }
       : {};
+  const requiredInput = readAgentRequiredInput(checkpoint.required_input);
+  const resolvedRequiredInput = requiredInput
+    ? validateRequiredInputSubmission(requiredInput, {
+        message,
+        documentIds,
+      })
+    : null;
   delete checkpoint.runner_retry;
   delete checkpoint.planner_request;
   delete checkpoint.user_input;
+  delete checkpoint.required_input;
+  const resolvedRequiredInputIds = Array.from(
+    new Set([
+      ...readResolvedRequiredInputIds(checkpoint),
+      ...(resolvedRequiredInput ? [resolvedRequiredInput.requestId] : []),
+    ]),
+  ).slice(-100);
   const userInput = {
     step_id: current.id,
     attempt: nextAttempt,
@@ -239,11 +265,15 @@ export function prepareAgentTaskInputTransition(
     current,
     nextAttempt,
     documentIds,
+    resolvedRequiredInputId: resolvedRequiredInput?.requestId ?? null,
     status: (activeIndex === snapshot.task.current_plan.length - 1
       ? "verifying"
       : "running") as AgentTaskStatus,
     checkpoint: {
       ...checkpoint,
+      ...(resolvedRequiredInputIds.length
+        ? { resolved_required_input_ids: resolvedRequiredInputIds }
+        : {}),
       step_id: current.id,
       iteration: nextAttempt,
       summary:
@@ -303,9 +333,12 @@ export async function createAgentTask(
     goal: string;
     executionModel: string;
     plan?: StepDefinition[];
-    deliverables?: AgentTaskDeliverableDefinition[];
+    deliverables?:
+      | AgentTaskDeliverableDefinition[]
+      | AgentTaskArtifactContractV1[];
     planningRequest?: AgentTaskPlanningRequest;
     fixedMatterContext?: MatterContextManifestV1;
+    initialCheckpoint?: Record<string, unknown>;
     initialArtifacts?: AgentArtifactLinkInput[];
   },
 ) {
@@ -320,8 +353,9 @@ export async function createAgentTask(
       status: "queued",
       execution_model: input.executionModel,
       deliverables: input.deliverables ?? DEFAULT_DELIVERABLES,
-      latest_checkpoint:
-        input.planningRequest || input.fixedMatterContext
+      latest_checkpoint: input.initialCheckpoint
+        ? input.initialCheckpoint
+        : input.planningRequest || input.fixedMatterContext
           ? {
               step_id: "planner",
               iteration: 0,
@@ -698,7 +732,11 @@ export async function advanceAgentTask(
   db: Db,
   taskId: string,
   userId: string,
-  result?: { summary?: string; artifacts?: AgentArtifactLinkInput[] },
+  result?: {
+    summary?: string;
+    artifacts?: AgentArtifactLinkInput[];
+    stepReceipt?: AgentStepReceiptV1;
+  },
 ) {
   const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
   if (!snapshot) return null;
@@ -772,6 +810,19 @@ export async function advanceAgentTask(
   const activeStep = isComplete ? null : steps[currentIndex];
   const completedStep =
     task.status === "queued" ? null : steps[currentIndex - 1];
+  const priorReceipts = readAgentStepReceipts(snapshot.task.latest_checkpoint);
+  const nextReceipts = result?.stepReceipt
+    ? [
+        ...priorReceipts.filter(
+          (receipt) =>
+            !(
+              receipt.position === result.stepReceipt!.position &&
+              receipt.attempt === result.stepReceipt!.attempt
+            ),
+        ),
+        result.stepReceipt,
+      ].slice(-60)
+    : priorReceipts;
   const { error: taskUpdateError } = await db
     .from("agent_tasks")
     .update({
@@ -783,6 +834,7 @@ export async function advanceAgentTask(
             iteration: completedStep.attempt,
             summary: result?.summary?.trim() || "Step completed.",
             created_at: updatedAt,
+            ...(result?.stepReceipt ? { step_receipts: nextReceipts } : {}),
           })
         : snapshot.task.latest_checkpoint,
       updated_at: updatedAt,
@@ -797,7 +849,10 @@ export async function advanceAgentTask(
       .insert({
         task_id: taskId,
         status: "review_required",
-        note: "Execution and automated verification completed. Lawyer review is required before final export.",
+        note:
+          result?.stepReceipt?.outcome === "review_required"
+            ? "Automated verification preserved the current deliverables and identified a gap requiring lawyer review before final export."
+            : "Execution and automated verification completed. Lawyer review is required before final export.",
         artifact_snapshot: [],
       });
     if (reviewError) throw dbError(reviewError, "Failed to open lawyer review");
@@ -898,6 +953,66 @@ export async function pauseAgentTaskForContext(
     .eq("status", snapshot.task.status);
   if (updateError)
     throw dbError(updateError, "Failed to pause task for source review");
+  return getAgentTaskSnapshot(db, taskId, userId);
+}
+
+export async function pauseAgentTaskForStepPostcondition(
+  db: Db,
+  taskId: string,
+  userId: string,
+  input: {
+    summary: string;
+    facts: Record<string, unknown>;
+    artifacts?: AgentArtifactLinkInput[];
+  },
+) {
+  if (input.artifacts?.length) {
+    await linkAgentTaskArtifacts(db, taskId, userId, input.artifacts);
+  }
+  const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
+  if (!snapshot) return null;
+  if (!["running", "verifying"].includes(snapshot.task.status)) {
+    return snapshot;
+  }
+  const current = snapshot.task.current_plan.find(
+    (step: { status: AgentStepStatus }) => step.status === "running",
+  );
+  const updatedAt = now();
+  const previous =
+    snapshot.task.latest_checkpoint &&
+    typeof snapshot.task.latest_checkpoint === "object" &&
+    !Array.isArray(snapshot.task.latest_checkpoint)
+      ? (snapshot.task.latest_checkpoint as Record<string, unknown>)
+      : {};
+  const { error } = await db
+    .from("agent_tasks")
+    .update({
+      status: "paused",
+      latest_checkpoint: {
+        ...previous,
+        step_id: current?.id ?? snapshot.task.current_step,
+        iteration: current?.attempt ?? 0,
+        summary: input.summary,
+        created_at: updatedAt,
+        step_pause: {
+          kind: "agent_task_step_pause_v1",
+          created_at: updatedAt,
+          issue: {
+            kind: "agent_execution_issue_v1",
+            code: "step_postcondition_unsatisfied",
+            category: "execution",
+            recoverable: true,
+            retry_scope: "current_step",
+            facts: input.facts,
+          },
+        },
+      },
+      updated_at: updatedAt,
+    })
+    .eq("id", taskId)
+    .eq("user_id", userId)
+    .eq("status", snapshot.task.status);
+  if (error) throw dbError(error, "Failed to pause task for Step review");
   return getAgentTaskSnapshot(db, taskId, userId);
 }
 
@@ -1174,12 +1289,22 @@ export async function submitAgentTaskInput(
           updatedAt,
         )
       : fixedMatterContext;
+  const revisedCheckpoint =
+    fixedMatterContext && extendedMatterContext && documentIds.length
+      ? extendAgentTaskContractContext({
+          checkpoint: transition.checkpoint,
+          previousContext: fixedMatterContext,
+          nextContext: extendedMatterContext,
+          requestId: transition.resolvedRequiredInputId,
+          createdAt: updatedAt,
+        })
+      : transition.checkpoint;
   const checkpoint = extendedMatterContext
     ? {
-        ...transition.checkpoint,
+        ...revisedCheckpoint,
         [FIXED_MATTER_CONTEXT_CHECKPOINT_KEY]: extendedMatterContext,
       }
-    : transition.checkpoint;
+    : revisedCheckpoint;
   const reserved = await reserveAgentTaskInputStep(db, {
     taskId,
     stepId: current.id,
@@ -1310,7 +1435,11 @@ export async function stopAgentTask(
   db: Db,
   taskId: string,
   userId: string,
-  input: { status: "waiting_input" | "failed"; summary: string },
+  input: {
+    status: "waiting_input" | "failed";
+    summary: string;
+    requiredInput?: AgentRequiredInputV1 | null;
+  },
 ) {
   const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
   if (!snapshot) return null;
@@ -1341,6 +1470,9 @@ export async function stopAgentTask(
             iteration: current.attempt,
             summary: input.summary,
             created_at: updatedAt,
+            ...(input.requiredInput
+              ? { required_input: input.requiredInput }
+              : {}),
           })
         : snapshot.task.latest_checkpoint,
       updated_at: updatedAt,

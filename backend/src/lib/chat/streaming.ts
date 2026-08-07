@@ -7,10 +7,7 @@ import {
 } from "../llm";
 import { safeErrorMessage } from "../safeError";
 import { createServerSupabase } from "../supabase";
-import {
-  buildUserMcpTools,
-  type McpToolEvent,
-} from "../mcpConnectors";
+import { buildUserMcpTools, type McpToolEvent } from "../mcpConnectors";
 import {
   COURTLISTENER_TOOLS,
   type CaseCitationEvent,
@@ -37,11 +34,7 @@ import {
   runToolCalls,
   type CourtlistenerTurnState,
 } from "./tools/toolDispatcher";
-import {
-  type TurnEditState,
-  type TurnReadState,
-} from "./tools/documentOps";
-
+import { type TurnEditState, type TurnReadState } from "./tools/documentOps";
 
 export type AssistantEvent =
   | { type: "reasoning"; text: string }
@@ -131,9 +124,7 @@ class AssistantStreamAskInputsPause extends Error {
 export function isAbortError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const record = error as { name?: unknown; message?: unknown };
-  return (
-    record.name === "AbortError" || record.message === "Stream aborted."
-  );
+  return record.name === "AbortError" || record.message === "Stream aborted.";
 }
 
 function throwIfAborted(signal?: AbortSignal) {
@@ -148,11 +139,38 @@ export function selectActiveTools(input: {
   baseTools: unknown[];
   mcpTools: unknown[];
   extraTools?: unknown[];
+  allowedToolNames?: readonly string[];
 }) {
   if (input.disableTools) return [];
-  return input.extraTools?.length
+  const tools = input.extraTools?.length
     ? [...input.baseTools, ...input.mcpTools, ...input.extraTools]
     : [...input.baseTools, ...input.mcpTools];
+  if (!input.allowedToolNames) return tools;
+  const allowed = new Set(input.allowedToolNames);
+  const selected = tools.filter((tool) => {
+    if (!tool || typeof tool !== "object" || Array.isArray(tool)) return false;
+    const fn = (tool as { function?: unknown }).function;
+    return Boolean(
+      fn &&
+      typeof fn === "object" &&
+      !Array.isArray(fn) &&
+      typeof (fn as { name?: unknown }).name === "string" &&
+      allowed.has((fn as { name: string }).name),
+    );
+  });
+  const names = selected.map(
+    (tool) => (tool as { function: { name: string } }).function.name,
+  );
+  if (new Set(names).size !== names.length) {
+    throw new Error("Allowed Work Task tool names must be unambiguous");
+  }
+  const missing = [...allowed].filter((name) => !names.includes(name));
+  if (missing.length) {
+    throw new Error(
+      `Work Task tool schema is unavailable: ${missing.join(", ")}`,
+    );
+  }
+  return selected;
 }
 
 export async function runLLMStream(params: {
@@ -165,6 +183,8 @@ export async function runLLMStream(params: {
   extraTools?: unknown[];
   disableTools?: boolean;
   includeResearchTools?: boolean;
+  includeMcpTools?: boolean;
+  allowedToolNames?: readonly string[];
   workflowStore?: WorkflowStore;
   tabularStore?: TabularCellStore;
   buildCitations?: (fullText: string) => unknown[];
@@ -193,6 +213,8 @@ export async function runLLMStream(params: {
     extraTools,
     disableTools = false,
     includeResearchTools = true,
+    includeMcpTools = true,
+    allowedToolNames,
     workflowStore,
     tabularStore,
     buildCitations,
@@ -203,13 +225,15 @@ export async function runLLMStream(params: {
     projectId,
   } = params;
   const researchTools = includeResearchTools ? COURTLISTENER_TOOLS : [];
-  const mcpTools = disableTools ? [] : await buildUserMcpTools(userId, db);
+  const mcpTools =
+    disableTools || !includeMcpTools ? [] : await buildUserMcpTools(userId, db);
   const baseTools = [...TOOLS, ...researchTools, ...WORKFLOW_TOOLS];
   const activeTools = selectActiveTools({
     disableTools,
     baseTools,
     mcpTools,
     extraTools,
+    allowedToolNames,
   });
 
   // Extract system prompt; pass remaining turns to the adapter as
@@ -236,8 +260,8 @@ export async function runLLMStream(params: {
   // changes that document so a post-edit verification read can still happen.
   const turnReadState: TurnReadState = new Map();
   const courtlistenerTurnState: CourtlistenerTurnState = {
-      casesByClusterId: new Map(),
-    };
+    casesByClusterId: new Map(),
+  };
   let fullText = "";
   let iterText = "";
   let iterVisibleText = "";
@@ -252,7 +276,9 @@ export async function runLLMStream(params: {
     citations: unknown[],
   ) => {
     if (buildCitations) return;
-    write(`data: ${JSON.stringify({ type: "citations", status, citations })}\n\n`);
+    write(
+      `data: ${JSON.stringify({ type: "citations", status, citations })}\n\n`,
+    );
   };
 
   const streamHiddenCitationContent = (delta: string) => {
@@ -262,11 +288,7 @@ export async function runLLMStream(params: {
     if (partial.length <= streamedCitationCount) return;
     streamedCitationCount = partial.length;
     const citations = partial.map((c) =>
-      createCitation(
-        c,
-        docIndex,
-        courtlistenerTurnState.casesByClusterId,
-      ),
+      createCitation(c, docIndex, courtlistenerTurnState.casesByClusterId),
     );
     emitCitationStreamSnapshot("partial", citations);
   };
@@ -551,11 +573,7 @@ export async function runLLMStream(params: {
   const citations = buildCitations
     ? buildCitations(fullText)
     : parsedCitations.map((c) =>
-        createCitation(
-          c,
-          docIndex,
-          courtlistenerTurnState.casesByClusterId,
-        ),
+        createCitation(c, docIndex, courtlistenerTurnState.casesByClusterId),
       );
   devLog("[chat/stream] final citations", {
     hasCitationsBlock: citationDiagnostics.hasBlock,

@@ -111,7 +111,7 @@ test("preflight rejects cross-Matter, changed, deleted and mismatched Versions",
   }
 });
 
-test("progress checkpoint replacement retains immutable context and assignment contract only", () => {
+test("progress checkpoint replacement retains assignment and durable execution receipts", () => {
   const fixed = manifest();
   assert.deepEqual(
     mergeImmutableAgentTaskCheckpoint(
@@ -119,6 +119,11 @@ test("progress checkpoint replacement retains immutable context and assignment c
         fixed_matter_context: fixed,
         schema_version: "agent_task_checkpoint_v1",
         contract: { goal_spec: { kind: "agent_goal_v1" } },
+        assignment_revisions: [
+          { kind: "agent_assignment_context_revision_v1" },
+        ],
+        resolved_required_input_ids: ["required-input-1"],
+        step_receipts: [{ kind: "agent_step_receipt_v1" }],
         runner_retry: { attempt: 2 },
         user_input: { message: "transient" },
       },
@@ -128,6 +133,9 @@ test("progress checkpoint replacement retains immutable context and assignment c
       fixed_matter_context: fixed,
       schema_version: "agent_task_checkpoint_v1",
       contract: { goal_spec: { kind: "agent_goal_v1" } },
+      assignment_revisions: [{ kind: "agent_assignment_context_revision_v1" }],
+      resolved_required_input_ids: ["required-input-1"],
+      step_receipts: [{ kind: "agent_step_receipt_v1" }],
       step_id: "step-2",
       iteration: 1,
       summary: "Done",

@@ -180,6 +180,151 @@ export function validateAgentGoalSpec(value: unknown) {
   return goalSpecSchema.parse(value);
 }
 
+export function compileAgentGoalSpec(input: {
+  objective: string;
+  taskFamily: string;
+  artifactContracts: AgentTaskArtifactContractV1[];
+  hasSources: boolean;
+  jurisdictions?: string[];
+  asOfDate?: string | null;
+  sourceStandard?: AgentGoalSpecV1["source_standard"];
+  mustAskWhen?: AgentGoalSpecV1["must_ask_when"];
+  completionChecks?: AgentGoalSpecV1["completion_checks"];
+}) {
+  return validateAgentGoalSpec({
+    kind: AGENT_GOAL_SPEC_KIND,
+    objective: input.objective.trim(),
+    task_family: input.taskFamily,
+    jurisdictions: input.jurisdictions ?? [],
+    as_of_date: input.asOfDate ?? null,
+    deliverable_keys: input.artifactContracts.map((artifact) => artifact.key),
+    completion_checks: input.completionChecks ?? [
+      "deliverables_present",
+      "goal_covered",
+      "source_supported",
+      "citations_relocatable",
+      "steps_complete",
+    ],
+    source_standard: input.sourceStandard ?? {
+      material_claims_require_citations: input.hasSources,
+      authority_required: false,
+      authority_as_of_required: false,
+    },
+    must_ask_when: input.mustAskWhen ?? [
+      "missing_source",
+      "missing_fact",
+      "evidence_conflict",
+      "legal_judgment",
+      "source_version_changed",
+      "material_scope_change",
+      "consequential_action",
+    ],
+  });
+}
+
+export function buildAgentTaskContractCheckpoint(input: {
+  previous?: unknown;
+  goalSpec: AgentGoalSpecV1;
+  contextManifest: MatterContextManifestV1;
+  stepContracts: unknown;
+  capabilityGrants: unknown;
+  createdAt?: string;
+}) {
+  const previous =
+    input.previous &&
+    typeof input.previous === "object" &&
+    !Array.isArray(input.previous)
+      ? (input.previous as Record<string, unknown>)
+      : {};
+  return {
+    ...previous,
+    schema_version: AGENT_TASK_CHECKPOINT_VERSION,
+    step_id: "planner",
+    iteration: 0,
+    summary: "Server-owned task contract compiled.",
+    created_at: input.createdAt ?? new Date().toISOString(),
+    contract: {
+      goal_spec: validateAgentGoalSpec(input.goalSpec),
+      context_manifest: validateMatterContextManifest(input.contextManifest),
+      step_contracts: input.stepContracts,
+      capability_grants: input.capabilityGrants,
+    },
+  };
+}
+
+export function extendAgentTaskContractContext(input: {
+  checkpoint: Record<string, unknown>;
+  previousContext: MatterContextManifestV1;
+  nextContext: MatterContextManifestV1;
+  requestId?: string | null;
+  createdAt?: string;
+}) {
+  if (input.checkpoint.schema_version !== AGENT_TASK_CHECKPOINT_VERSION) {
+    return input.checkpoint;
+  }
+  const contract = input.checkpoint.contract;
+  if (!contract || typeof contract !== "object" || Array.isArray(contract)) {
+    throw new Error("Versioned Task has no Assignment Contract to extend");
+  }
+  const previous = validateMatterContextManifest(input.previousContext);
+  const next = validateMatterContextManifest(input.nextContext);
+  const fixed = validateMatterContextManifest(
+    (contract as Record<string, unknown>).context_manifest,
+  );
+  if (JSON.stringify(fixed) !== JSON.stringify(previous)) {
+    throw new Error("Assignment Context changed before the input revision");
+  }
+  if (next.matter_id !== previous.matter_id) {
+    throw new Error("An input revision cannot change the Task Matter");
+  }
+  const nextByDocument = new Map(
+    next.sources.map((source) => [source.document_id, source]),
+  );
+  if (
+    previous.sources.some((source) => {
+      const retained = nextByDocument.get(source.document_id);
+      return !retained || JSON.stringify(retained) !== JSON.stringify(source);
+    })
+  ) {
+    throw new Error(
+      "An input revision cannot replace or drift a fixed source Version",
+    );
+  }
+  if (JSON.stringify(previous.workflow) !== JSON.stringify(next.workflow)) {
+    throw new Error("An input revision cannot change the fixed Workflow");
+  }
+  const createdAt = input.createdAt ?? new Date().toISOString();
+  const priorRevisions = Array.isArray(input.checkpoint.assignment_revisions)
+    ? input.checkpoint.assignment_revisions
+    : [];
+  return {
+    ...input.checkpoint,
+    contract: {
+      ...(contract as Record<string, unknown>),
+      context_manifest: next,
+    },
+    assignment_revisions: [
+      ...priorRevisions,
+      {
+        kind: "agent_assignment_context_revision_v1",
+        reason: "required_input",
+        request_id: input.requestId ?? null,
+        previous_compiled_at: previous.compiled_at,
+        next_compiled_at: next.compiled_at,
+        added_document_ids: next.sources
+          .filter(
+            (source) =>
+              !previous.sources.some(
+                (prior) => prior.document_id === source.document_id,
+              ),
+          )
+          .map((source) => source.document_id),
+        created_at: createdAt,
+      },
+    ].slice(-20),
+  };
+}
+
 export function assertAgentTaskContractConsistency(input: {
   goal: string;
   matterId: string;

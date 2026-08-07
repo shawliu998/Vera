@@ -4,6 +4,7 @@ import {
   getAgentTaskSnapshot,
   linkAgentTaskArtifacts,
   pauseAgentTaskForContext,
+  pauseAgentTaskForStepPostcondition,
   recordAgentTaskCheckpoint,
   stopAgentTask,
   verifierRepairAlreadyAttempted,
@@ -12,7 +13,11 @@ import {
   planAgentTask,
   readAgentTaskPlanningRequest,
 } from "./agentTaskPlanner";
-import { evaluateTaskDeliverables } from "./agentTaskDeliverables";
+import {
+  evaluateTaskDeliverables,
+  requiredTaskDeliverables,
+  taskDeliverablePurpose,
+} from "./agentTaskDeliverables";
 import {
   executeAgentStep,
   isAgentTaskExecutionInterrupted,
@@ -26,8 +31,196 @@ import {
   readFixedMatterContext,
 } from "./agent-kernel/context/matterContext";
 import { assertFixedMatterContextCurrent } from "./agent-kernel/context/matterContextRepository";
+import {
+  assertAgentStepContracts,
+  buildAgentStepReceipt,
+  buildAgentStepReviewReceipt,
+  readAgentStepContracts,
+  type AgentStepPostcondition,
+} from "./agent-kernel/contracts/stepContract";
+import { assertAgentStepCapabilityGrants } from "./agent-kernel/capability/stepCapability";
 
 type Db = ReturnType<typeof createServerSupabase>;
+type Snapshot = NonNullable<Awaited<ReturnType<typeof getAgentTaskSnapshot>>>;
+
+class AgentStepPostconditionError extends Error {
+  constructor(
+    readonly missing: string[],
+    readonly facts: Record<string, unknown>,
+  ) {
+    super(`Step postconditions are not satisfied: ${missing.join(", ")}`);
+    this.name = "AgentStepPostconditionError";
+  }
+}
+
+async function buildCurrentStepReceipt(
+  db: Db,
+  snapshot: Snapshot,
+  execution: Awaited<ReturnType<typeof executeAgentStep>>,
+) {
+  const contractRead = readAgentStepContracts(snapshot.task);
+  if (contractRead.state === "legacy") return undefined;
+  if (contractRead.state === "invalid") {
+    throw new AgentStepPostconditionError(["step_contract_valid"], {
+      reason: contractRead.reason,
+    });
+  }
+  const stepIndex = snapshot.task.current_plan.findIndex(
+    (step: { status: string }) => step.status === "running",
+  );
+  const step = snapshot.task.current_plan[stepIndex];
+  const contract = contractRead.contracts[stepIndex];
+  if (!step || !contract) {
+    throw new AgentStepPostconditionError(["running_step_bound"], {
+      step_index: stepIndex,
+    });
+  }
+
+  const satisfied = new Set<AgentStepPostcondition>();
+  if (execution.summary.trim()) satisfied.add("summary_present");
+
+  const fixedContext = readFixedMatterContext(snapshot.task);
+  const sourceVersionIds =
+    fixedContext?.sources.map((source) => source.version_id) ?? [];
+  if (
+    contract.source_requirement.mode === "none" ||
+    sourceVersionIds.length > 0
+  ) {
+    satisfied.add("source_versions_recorded");
+  }
+
+  const allArtifacts = [...snapshot.artifacts, ...execution.artifacts];
+  const artifactIds: string[] = [];
+  if (contract.output_expectation.kind === "artifact") {
+    const expectation = contract.output_expectation;
+    const deliverable = requiredTaskDeliverables(snapshot.task).find(
+      (candidate) => candidate.key === expectation.deliverable_key,
+    );
+    const purpose = deliverable ? taskDeliverablePurpose(deliverable) : null;
+    const artifact = purpose
+      ? [...execution.artifacts]
+          .reverse()
+          .find(
+            (candidate) =>
+              candidate.purpose === purpose &&
+              candidate.artifact_type === expectation.artifact_type,
+          )
+      : null;
+    if (artifact) {
+      artifactIds.push(artifact.artifact_id);
+      satisfied.add("artifact_created");
+      const { data: document, error } = await db
+        .from("documents")
+        .select("id,project_id,current_version_id")
+        .eq("id", artifact.artifact_id)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      if (
+        document &&
+        document.project_id === snapshot.task.matter_id &&
+        typeof document.current_version_id === "string" &&
+        document.current_version_id
+      ) {
+        satisfied.add("artifact_current_version");
+      }
+    }
+  }
+
+  const hasFixedSources = Boolean(fixedContext?.sources.length);
+  const authoritySatisfied = Boolean(
+    fixedContext?.sources.some((source) => source.role === "authority"),
+  );
+  const citationsSatisfied =
+    !contract.source_requirement.citations_required ||
+    (execution.citationCheck.total > 0 &&
+      execution.citationCheck.missing === 0);
+  const sourceRequirementSatisfied =
+    contract.source_requirement.mode === "none" ||
+    (hasFixedSources &&
+      (contract.source_requirement.mode !== "authority" ||
+        authoritySatisfied) &&
+      citationsSatisfied);
+  if (sourceRequirementSatisfied) {
+    satisfied.add("source_requirement_satisfied");
+  }
+
+  if (contract.capability === "verify") {
+    const deliverables = await evaluateTaskDeliverables(db, {
+      ...snapshot,
+      artifacts: allArtifacts,
+    });
+    if (!deliverables.missing.length && !deliverables.outsideMatter.length) {
+      satisfied.add("required_deliverables_current");
+    }
+    const priorStepsComplete = snapshot.task.current_plan
+      .slice(0, stepIndex)
+      .every(
+        (candidate: { status: string }) => candidate.status === "completed",
+      );
+    if (
+      priorStepsComplete &&
+      !/\bGAP\b/i.test(execution.summary) &&
+      !deliverables.missing.length &&
+      !deliverables.outsideMatter.length &&
+      sourceRequirementSatisfied
+    ) {
+      satisfied.add("verifier_passed");
+    }
+  }
+
+  const missing = contract.deterministic_postconditions.filter(
+    (postcondition) => !satisfied.has(postcondition),
+  );
+  if (missing.length) {
+    if (contract.capability === "verify") {
+      return buildAgentStepReviewReceipt({
+        contract,
+        attempt: step.attempt,
+        summary: execution.summary,
+        sourceVersionIds,
+        artifactIds,
+        satisfiedPostconditions: [...satisfied],
+      });
+    }
+    throw new AgentStepPostconditionError(missing, {
+      step_id: step.id,
+      step_position: stepIndex,
+      attempt: step.attempt,
+      capability: contract.capability,
+      operation: contract.operation,
+      artifact_ids: artifactIds,
+      source_version_ids: sourceVersionIds,
+    });
+  }
+  return buildAgentStepReceipt({
+    contract,
+    attempt: step.attempt,
+    summary: execution.summary,
+    sourceVersionIds,
+    artifactIds,
+    satisfiedPostconditions: [...satisfied],
+  });
+}
+
+async function completeVerifierForLawyerReview(input: {
+  db: Db;
+  taskId: string;
+  userId: string;
+  snapshot: Snapshot;
+  execution: Awaited<ReturnType<typeof executeAgentStep>>;
+  summary: string;
+}) {
+  const result = { ...input.execution, summary: input.summary };
+  const stepReceipt = await buildCurrentStepReceipt(
+    input.db,
+    input.snapshot,
+    result,
+  );
+  return advanceAgentTask(input.db, input.taskId, input.userId, {
+    ...result,
+    stepReceipt,
+  });
+}
 
 export function agentTaskExecutionErrorMessage(error: unknown) {
   const message =
@@ -72,6 +265,8 @@ export async function advanceAgentTaskExecution(input: {
   const current = await getAgentTaskSnapshot(db, taskId, userId);
   if (!current) return null;
   assertAgentTaskAssignmentContract(current.task);
+  assertAgentStepContracts(current.task);
+  assertAgentStepCapabilityGrants(current.task);
   let fixedMatterContext;
   try {
     fixedMatterContext = readFixedMatterContext(current.task);
@@ -179,6 +374,7 @@ export async function advanceAgentTaskExecution(input: {
     return stopAgentTask(db, taskId, userId, {
       status: "waiting_input",
       summary: execution.summary,
+      requiredInput: execution.requiredInput,
     });
   }
 
@@ -227,9 +423,13 @@ export async function advanceAgentTaskExecution(input: {
         .filter(Boolean)
         .join("; ");
       if (verifierRepairAlreadyAttempted(current.task)) {
-        return stopAgentTask(db, taskId, userId, {
-          status: "failed",
-          summary: `Verification blocked after one repair pass: ${reasons}.`,
+        return completeVerifierForLawyerReview({
+          db,
+          taskId,
+          userId,
+          snapshot: current,
+          execution,
+          summary: `Automated verification still requires lawyer review after one bounded repair: ${reasons}. Existing deliverables were preserved.`,
         });
       }
 
@@ -239,6 +439,34 @@ export async function advanceAgentTaskExecution(input: {
         userId,
         `Verifier repair 1/1 started: ${reasons}.`,
       );
+      const explicitRepairTargets = initialDeliverables.resolved.filter(
+        ({ deliverable }) => {
+          const label =
+            deliverable.title || taskDeliverablePurpose(deliverable);
+          return (
+            initialDeliverables.missing.includes(label) ||
+            initialDeliverables.outsideMatter.includes(label)
+          );
+        },
+      );
+      const repairTarget =
+        explicitRepairTargets.length === 1
+          ? explicitRepairTargets[0].deliverable
+          : explicitRepairTargets.length === 0 &&
+              initialDeliverables.required.length === 1
+            ? initialDeliverables.required[0]
+            : null;
+      if (!repairTarget) {
+        return completeVerifierForLawyerReview({
+          db,
+          taskId,
+          userId,
+          snapshot: current,
+          execution,
+          summary:
+            "Verification preserved the existing deliverables but could not prove one unique document target for automatic repair. Lawyer review is required.",
+        });
+      }
       let repair;
       let recheck;
       try {
@@ -249,6 +477,7 @@ export async function advanceAgentTaskExecution(input: {
           userEmail,
           shouldContinue,
           instructionOverride: `This is the single permitted repair pass. Repair: ${reasons}. Re-read the sources, update or recreate only the affected deliverables, and preserve lawyer-review status.`,
+          repairArtifactPurpose: taskDeliverablePurpose(repairTarget),
         });
         const afterRepair = await taskCanContinue(db, taskId, userId);
         if (!afterRepair.active) return afterRepair.snapshot;
@@ -317,9 +546,20 @@ export async function advanceAgentTaskExecution(input: {
         const missing = remaining.length
           ? remaining.join(" and ")
           : "one or more verifier checks";
-        return stopAgentTask(db, taskId, userId, {
-          status: "failed",
-          summary: `Verification blocked after one repair pass: ${missing}.`,
+        return completeVerifierForLawyerReview({
+          db,
+          taskId,
+          userId,
+          snapshot: current,
+          execution: {
+            ...recheck,
+            artifacts: [
+              ...execution.artifacts,
+              ...repair.artifacts,
+              ...recheck.artifacts,
+            ],
+          },
+          summary: `Automated verification still requires lawyer review after one bounded repair: ${missing}. Existing deliverables were preserved.`,
         });
       }
       execution = {
@@ -332,15 +572,34 @@ export async function advanceAgentTaskExecution(input: {
         ],
       };
     } else if (hasSources && execution.citationCheck.total === 0) {
-      return stopAgentTask(db, taskId, userId, {
-        status: "failed",
+      return completeVerifierForLawyerReview({
+        db,
+        taskId,
+        userId,
+        snapshot: current,
+        execution,
         summary:
-          "Verification blocked: no source citations were available for deterministic relocation checks.",
+          "Deterministic citation relocation could not be completed. Existing deliverables were preserved for lawyer review.",
       });
     }
   }
 
   const beforeCommit = await taskCanContinue(db, taskId, userId);
   if (!beforeCommit.active) return beforeCommit.snapshot;
-  return advanceAgentTask(db, taskId, userId, execution);
+  try {
+    const stepReceipt = await buildCurrentStepReceipt(db, current, execution);
+    return advanceAgentTask(db, taskId, userId, {
+      ...execution,
+      stepReceipt,
+    });
+  } catch (error) {
+    if (error instanceof AgentStepPostconditionError) {
+      return pauseAgentTaskForStepPostcondition(db, taskId, userId, {
+        summary: `${error.message}. Existing work was preserved for a resumable review.`,
+        facts: error.facts,
+        artifacts: execution.artifacts,
+      });
+    }
+    throw error;
+  }
 }

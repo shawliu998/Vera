@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { advanceAgentTaskExecution } from "../../agentTaskExecution";
 import {
+  extendAgentTaskContractContext,
   normalizeAgentTaskArtifactContracts,
   readAgentTaskAssignmentContract,
 } from "./taskContract";
@@ -130,6 +131,60 @@ test("normalizes legacy deliverables into fixed document ArtifactContracts", () 
   );
 });
 
+test("required input may append fixed sources but cannot replace them", () => {
+  const task = markedTask();
+  const previous = task.latest_checkpoint.contract.context_manifest;
+  const next = {
+    ...structuredClone(previous),
+    sources: [
+      ...previous.sources,
+      {
+        document_id: "document-supplement",
+        version_id: "version-supplement",
+        filename: "supplement.pdf",
+        file_type: "pdf",
+        role: "source" as const,
+      },
+    ],
+    compiled_at: "2026-08-07T01:00:00.000Z",
+  };
+  const revised = extendAgentTaskContractContext({
+    checkpoint: task.latest_checkpoint,
+    previousContext: previous,
+    nextContext: next,
+    requestId: "ri_fixture",
+    createdAt: "2026-08-07T01:00:00.000Z",
+  });
+  assert.deepEqual(
+    (revised.contract as typeof task.latest_checkpoint.contract)
+      .context_manifest,
+    next,
+  );
+  assert.deepEqual(revised.assignment_revisions, [
+    {
+      kind: "agent_assignment_context_revision_v1",
+      reason: "required_input",
+      request_id: "ri_fixture",
+      previous_compiled_at: "2026-08-07T00:00:00.000Z",
+      next_compiled_at: "2026-08-07T01:00:00.000Z",
+      added_document_ids: ["document-supplement"],
+      created_at: "2026-08-07T01:00:00.000Z",
+    },
+  ]);
+
+  const replaced = structuredClone(next);
+  replaced.sources[0]!.version_id = "version-drifted";
+  assert.throws(
+    () =>
+      extendAgentTaskContractContext({
+        checkpoint: task.latest_checkpoint,
+        previousContext: previous,
+        nextContext: replaced,
+      }),
+    /cannot replace or drift/,
+  );
+});
+
 test("distinguishes legacy, valid and marked invalid assignment contracts", () => {
   assert.deepEqual(readAgentTaskAssignmentContract({ deliverables: [] }), {
     state: "legacy",
@@ -139,10 +194,7 @@ test("distinguishes legacy, valid and marked invalid assignment contracts", () =
   const invalidSource = structuredClone(markedTask());
   invalidSource.latest_checkpoint.contract.context_manifest.sources[0]!.version_id =
     "";
-  assert.equal(
-    readAgentTaskAssignmentContract(invalidSource).state,
-    "invalid",
-  );
+  assert.equal(readAgentTaskAssignmentContract(invalidSource).state, "invalid");
 
   const invalidArtifact = structuredClone(markedTask());
   invalidArtifact.deliverables[0]!.format = "xlsx";
@@ -200,7 +252,10 @@ test("invalid marked contracts stop before model planning or writes", async () =
         },
         maybeSingle: () =>
           Promise.resolve({ data: selected()[0] ?? null, error: null }),
-        then(resolve: (value: unknown) => unknown, reject?: (error: unknown) => unknown) {
+        then(
+          resolve: (value: unknown) => unknown,
+          reject?: (error: unknown) => unknown,
+        ) {
           return Promise.resolve({ data: selected(), error: null }).then(
             resolve,
             reject,
