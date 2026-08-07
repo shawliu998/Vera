@@ -2,7 +2,39 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { AssistantEvent } from "../shared/types";
-import { reduceTabularToolEvent } from "./tabularChatProtocol";
+import {
+    parseTabularCitationAnnotations,
+    reduceTabularToolEvent,
+} from "./tabularChatProtocol";
+
+test("accepts only complete Tabular citation annotations", () => {
+    assert.deepEqual(
+        parseTabularCitationAnnotations([
+            {
+                type: "tabular_citation",
+                ref: 1,
+                col_index: 2,
+                row_index: 3,
+                col_name: "适用法律",
+                doc_name: "合同.docx",
+                quote: "适用中华人民共和国法律",
+            },
+            { type: "tabular_citation", ref: "bad" },
+            null,
+        ]),
+        [
+            {
+                type: "tabular_citation",
+                ref: 1,
+                col_index: 2,
+                row_index: 3,
+                col_name: "适用法律",
+                doc_name: "合同.docx",
+                quote: "适用中华人民共和国法律",
+            },
+        ],
+    );
+});
 
 test("transitions a matching CourtListener search from streaming to complete", () => {
     const start = reduceTabularToolEvent([], {

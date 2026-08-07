@@ -26,7 +26,7 @@ import {
     type TRChat,
     type TRCitationAnnotation,
 } from "@/app/lib/mikeApi";
-import type { AssistantEvent, ColumnConfig, Document } from "../shared/types";
+import type { ColumnConfig, Document } from "../shared/types";
 import { ModelToggle } from "../assistant/ModelToggle";
 import { ApiKeyMissingPopup } from "../popups/ApiKeyMissingPopup";
 import { hasAssistantWorkInProgress } from "../assistant/message/eventUtils";
@@ -48,18 +48,19 @@ import {
 } from "@/app/components/ui/liquid-dropdown";
 import { cn } from "@/app/lib/utils";
 import {
-    appendReasoningDelta,
     appendThinkingPlaceholder,
+    appendReasoningDelta,
     ensureStreamingContentEvent,
     finishReasoningBlock,
-    replaceLastAssistantEvents,
-    updateLastAssistantContent,
-    updateLastContentEvent,
     withoutStreamingPlaceholders,
     type TRMessage,
 } from "./tabularChatEvents";
-import { reduceTabularToolEvent } from "./tabularChatProtocol";
+import {
+    parseTabularCitationAnnotations,
+    reduceTabularToolEvent,
+} from "./tabularChatProtocol";
 import { iterateTabularChatEvents } from "./tabularChatStream";
+import { useTabularChatSession } from "./useTabularChatSession";
 
 interface Props {
     reviewId: string;
@@ -620,9 +621,7 @@ export function TRChatPanel({
     const [currentChatTitle, setCurrentChatTitle] = useState<string | null>(
         null,
     );
-    const [messages, setMessages] = useState<TRMessage[]>([]);
     const [historyOpen, setHistoryOpen] = useState(false);
-    const [isLoading, setIsLoading] = useState(false);
     const [isLoadingMessages, setIsLoadingMessages] = useState(false);
     const [minHeight, setMinHeight] = useState("0px");
     const [messagesVisible, setMessagesVisible] = useState(false);
@@ -662,16 +661,10 @@ export function TRChatPanel({
 
     const messagesContainerRef = useRef<HTMLDivElement>(null);
     const latestUserMessageRef = useRef<HTMLDivElement>(null);
-    const abortRef = useRef<AbortController | null>(null);
     const historyRef = useRef<HTMLDivElement>(null);
     const hasScrolledRef = useRef(false);
-
-    // Drip animation refs
-    const dripIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-    const dripTargetRef = useRef<string>("");
-    const dripDisplayLenRef = useRef<number>(0);
-    const eventsRef = useRef<AssistantEvent[]>([]);
-    const DRIP_CHARS = 8;
+    const chatSession = useTabularChatSession();
+    const { messages, isLoading } = chatSession;
 
     // Load existing chats from DB on mount
     useEffect(() => {
@@ -685,7 +678,11 @@ export function TRChatPanel({
         if (!initialChatId) return;
         setIsLoadingMessages(true);
         getTabularChatMessages(reviewId, initialChatId)
-            .then((raw) => setMessages(mapTRMessages(raw) as TRMessage[]))
+            .then((raw) =>
+                chatSession.replaceMessages(
+                    mapTRMessages(raw) as TRMessage[],
+                ),
+            )
             .catch(() => {})
             .finally(() => setIsLoadingMessages(false));
     }, [reviewId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -766,80 +763,12 @@ export function TRChatPanel({
         return () => document.removeEventListener("mousedown", handleClick);
     }, [historyOpen]);
 
-    // ---- drip ----
-
-    function stopDrip() {
-        if (dripIntervalRef.current !== null) {
-            clearInterval(dripIntervalRef.current);
-            dripIntervalRef.current = null;
-        }
-    }
-
-    function publishEvents(events: AssistantEvent[]) {
-        eventsRef.current = events;
-        setMessages((prev) => replaceLastAssistantEvents(prev, events));
-    }
-
-    // Mirror the dripped content text onto eventsRef.current so that any
-    // subsequent setMessages built from a refsnapshot (pushEvent,
-    // updateMatchingEvent, reasoning_*, etc.) doesn't wipe out the content
-    // by replacing it with the stale empty placeholder.
-    function syncDripIntoEventsRef(text: string, isStreaming: boolean) {
-        eventsRef.current = updateLastContentEvent(
-            eventsRef.current,
-            text,
-            isStreaming,
-        );
-    }
-
-    function flushDrip() {
-        stopDrip();
-        const target = dripTargetRef.current;
-        dripDisplayLenRef.current = target.length;
-        syncDripIntoEventsRef(target, false);
-        setMessages((prev) => updateLastAssistantContent(prev, target));
-    }
-
-    function startDrip() {
-        if (dripIntervalRef.current !== null) return;
-        dripIntervalRef.current = setInterval(() => {
-            const target = dripTargetRef.current;
-            const displayLen = dripDisplayLenRef.current;
-            if (displayLen >= target.length) return;
-            const newLen = Math.min(displayLen + DRIP_CHARS, target.length);
-            dripDisplayLenRef.current = newLen;
-            const slice = target.slice(0, newLen);
-            syncDripIntoEventsRef(slice, true);
-            setMessages((prev) =>
-                updateLastAssistantContent(prev, slice, true),
-            );
-        }, 16);
-    }
-
-    // ---- event helpers ----
-
-    // Transient placeholder events that bridge the gap between real SSE
-    // events so the PreResponseWrapper doesn't briefly flip to "Completed"
-    // when one block ends before the next starts. Anytime a real event
-    // arrives (or content begins streaming), drop them first.
-    function clearStreamingPlaceholders() {
-        const next = withoutStreamingPlaceholders(eventsRef.current);
-        if (next === eventsRef.current) return;
-        publishEvents(next);
-    }
-
-    function pushThinkingPlaceholder() {
-        const next = appendThinkingPlaceholder(eventsRef.current);
-        if (next === eventsRef.current) return;
-        publishEvents(next);
-    }
-
     // ---- chat actions ----
 
     function handleNewChat() {
         setCurrentChatId(null);
         setCurrentChatTitle(null);
-        setMessages([]);
+        chatSession.replaceMessages([]);
         setHistoryOpen(false);
     }
 
@@ -848,7 +777,7 @@ export function TRChatPanel({
         if (chatId === currentChatId) {
             setCurrentChatId(null);
             setCurrentChatTitle(null);
-            setMessages([]);
+            chatSession.replaceMessages([]);
         }
         try {
             await deleteTabularChat(reviewId, chatId);
@@ -873,12 +802,12 @@ export function TRChatPanel({
         const chat = chats.find((c) => c.id === chatId);
         setCurrentChatId(chatId);
         setCurrentChatTitle(chat?.title ?? null);
-        setMessages([]);
+        chatSession.replaceMessages([]);
         setHistoryOpen(false);
         setIsLoadingMessages(true);
         try {
             const raw = await getTabularChatMessages(reviewId, chatId);
-            setMessages(mapTRMessages(raw) as TRMessage[]);
+            chatSession.replaceMessages(mapTRMessages(raw) as TRMessage[]);
         } catch {
             /* ignore */
         } finally {
@@ -887,7 +816,7 @@ export function TRChatPanel({
     }
 
     function handleCancel() {
-        abortRef.current?.abort();
+        chatSession.cancel();
     }
 
     async function handleSubmit(trimmed: string) {
@@ -897,25 +826,8 @@ export function TRChatPanel({
             return;
         }
 
-        // Build messages array for backend (plain text history)
-        const history: { role: string; content: string }[] = messages.map(
-            (m) => ({
-                role: m.role,
-                content: m.content,
-            }),
-        );
-        const allMessages = [...history, { role: "user", content: trimmed }];
-
-        const userMsg: TRMessage = { role: "user", content: trimmed };
-        const assistantMsg: TRMessage = {
-            role: "assistant",
-            content: "",
-            events: [],
-            isStreaming: true,
-        };
-
-        setMessages((prev) => [...prev, userMsg, assistantMsg]);
-        setIsLoading(true);
+        const session = chatSession.start(trimmed);
+        if (!session) return;
 
         setTimeout(() => {
             const container = messagesContainerRef.current;
@@ -928,23 +840,17 @@ export function TRChatPanel({
             }
         }, 50);
 
-        stopDrip();
-        dripTargetRef.current = "";
-        dripDisplayLenRef.current = 0;
-        eventsRef.current = [];
-
-        const controller = new AbortController();
-        abortRef.current = controller;
-
         try {
             const response = await streamTabularChat(
                 reviewId,
-                allMessages,
+                session.requestMessages,
                 currentChatId,
-                controller.signal,
+                session.controller.signal,
                 { reviewTitle, projectName },
             );
             for await (const data of iterateTabularChatEvents(response)) {
+                const currentEvents = chatSession.getEvents(session.id);
+                if (!currentEvents) break;
                 try {
                     if (data.type === "chat_id") {
                         if (typeof data.chatId !== "string") continue;
@@ -986,9 +892,10 @@ export function TRChatPanel({
                     }
 
                     if (data.type === "reasoning_delta") {
-                        publishEvents(
+                        chatSession.publishEvents(
+                            session.id,
                             appendReasoningDelta(
-                                eventsRef.current,
+                                currentEvents,
                                 typeof data.text === "string"
                                     ? data.text
                                     : "",
@@ -998,10 +905,12 @@ export function TRChatPanel({
                     }
 
                     if (data.type === "reasoning_block_end") {
-                        publishEvents(
-                            finishReasoningBlock(eventsRef.current),
+                        chatSession.publishEvents(
+                            session.id,
+                            appendThinkingPlaceholder(
+                                finishReasoningBlock(currentEvents),
+                            ),
                         );
-                        pushThinkingPlaceholder();
                         continue;
                     }
 
@@ -1010,22 +919,26 @@ export function TRChatPanel({
                             continue;
                         }
                         const text = data.text;
-                        dripTargetRef.current += text;
                         const next = ensureStreamingContentEvent(
-                            eventsRef.current,
+                            currentEvents,
                         );
-                        if (next !== eventsRef.current) publishEvents(next);
-                        startDrip();
+                        if (next !== currentEvents) {
+                            chatSession.publishEvents(session.id, next);
+                        }
+                        chatSession.appendContent(session.id, text);
                         continue;
                     }
 
                     const toolTransition = reduceTabularToolEvent(
-                        eventsRef.current,
+                        currentEvents,
                         data,
                     );
                     if (toolTransition.handled) {
-                        if (toolTransition.events !== eventsRef.current) {
-                            publishEvents(toolTransition.events);
+                        if (toolTransition.events !== currentEvents) {
+                            chatSession.publishEvents(
+                                session.id,
+                                toolTransition.events,
+                            );
                         }
                         continue;
                     }
@@ -1034,10 +947,19 @@ export function TRChatPanel({
                         // End-of-stream signal — scrub any lingering
                         // placeholders so they don't persist into the
                         // finalised message.
-                        clearStreamingPlaceholders();
-                        const incoming = (data.citations ??
-                            []) as TRCitationAnnotation[];
-                        setMessages((prev) => {
+                        const cleanEvents = withoutStreamingPlaceholders(
+                            currentEvents,
+                        );
+                        if (cleanEvents !== currentEvents) {
+                            chatSession.publishEvents(
+                                session.id,
+                                cleanEvents,
+                            );
+                        }
+                        const incoming = parseTabularCitationAnnotations(
+                            data.citations,
+                        );
+                        chatSession.updateMessages(session.id, (prev) => {
                             const updated = [...prev];
                             const last = updated[updated.length - 1];
                             if (last?.role === "assistant") {
@@ -1055,58 +977,13 @@ export function TRChatPanel({
                 }
             }
 
-            flushDrip();
-            clearStreamingPlaceholders();
-            setMessages((prev) => {
-                const updated = [...prev];
-                const last = updated[updated.length - 1];
-                if (last?.role === "assistant") {
-                    updated[updated.length - 1] = {
-                        ...last,
-                        isStreaming: false,
-                    };
-                }
-                return updated;
-            });
+            chatSession.finish(session.id, "complete");
         } catch (err: unknown) {
             const isAbort = err instanceof Error && err.name === "AbortError";
-            stopDrip();
-            clearStreamingPlaceholders();
-            setMessages((prev) => {
-                const updated = [...prev];
-                const last = updated[updated.length - 1];
-                if (last?.role === "assistant") {
-                    const hasContent = (last.events ?? []).some(
-                        (e) =>
-                            e.type === "content" &&
-                            (e as { type: "content"; text: string }).text,
-                    );
-                    if (!hasContent) {
-                        updated[updated.length - 1] = {
-                            ...last,
-                            isStreaming: false,
-                            events: [
-                                ...(last.events ?? []),
-                                {
-                                    type: "content" as const,
-                                    text: isAbort
-                                        ? ""
-                                        : "An error occurred. Please try again.",
-                                },
-                            ],
-                        };
-                    } else {
-                        updated[updated.length - 1] = {
-                            ...last,
-                            isStreaming: false,
-                        };
-                    }
-                }
-                return updated;
-            });
-        } finally {
-            setIsLoading(false);
-            abortRef.current = null;
+            chatSession.finish(
+                session.id,
+                isAbort ? "aborted" : "failed",
+            );
         }
     }
 

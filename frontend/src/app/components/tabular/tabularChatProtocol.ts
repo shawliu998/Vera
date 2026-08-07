@@ -1,4 +1,5 @@
 import type { AssistantEvent } from "../shared/types";
+import type { TRCitationAnnotation } from "@/app/lib/mikeApi";
 import {
     appendAssistantEvent,
     appendThinkingPlaceholder,
@@ -11,6 +12,38 @@ import type { TabularChatStreamEvent } from "./tabularChatStream";
 export interface TabularToolTransition {
     handled: boolean;
     events: AssistantEvent[];
+}
+
+export function parseTabularCitationAnnotations(
+    value: unknown,
+): TRCitationAnnotation[] {
+    if (!Array.isArray(value)) return [];
+    return value.flatMap((item) => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+        const row = item as Record<string, unknown>;
+        if (
+            row.type !== "tabular_citation" ||
+            typeof row.ref !== "number" ||
+            typeof row.col_index !== "number" ||
+            typeof row.row_index !== "number" ||
+            typeof row.col_name !== "string" ||
+            typeof row.doc_name !== "string" ||
+            typeof row.quote !== "string"
+        ) {
+            return [];
+        }
+        return [
+            {
+                type: "tabular_citation" as const,
+                ref: row.ref,
+                col_index: row.col_index,
+                row_index: row.row_index,
+                col_name: row.col_name,
+                doc_name: row.doc_name,
+                quote: row.quote,
+            },
+        ];
+    });
 }
 
 function numbers(value: unknown): number[] {
