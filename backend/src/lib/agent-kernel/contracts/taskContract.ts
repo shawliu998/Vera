@@ -1,9 +1,20 @@
 import { z } from "zod";
+import {
+  MATTER_CONTEXT_KIND,
+  type MatterContextManifestV1,
+  validateMatterContextManifest,
+} from "../context/matterContext";
 
-export const AGENT_TASK_CHECKPOINT_VERSION = "agent_task_checkpoint_v1" as const;
+export {
+  MATTER_CONTEXT_KIND,
+  type MatterContextManifestV1,
+  validateMatterContextManifest,
+} from "../context/matterContext";
+
+export const AGENT_TASK_CHECKPOINT_VERSION =
+  "agent_task_checkpoint_v1" as const;
 export const AGENT_GOAL_SPEC_KIND = "agent_goal_v1" as const;
 export const ARTIFACT_CONTRACT_VERSION = "artifact_contract_v1" as const;
-export const MATTER_CONTEXT_KIND = "matter_context_v1" as const;
 
 const boundedId = z.string().trim().min(1).max(200);
 const artifactKeySchema = z
@@ -32,8 +43,7 @@ const artifactContractSchema = z
   })
   .strict()
   .superRefine((value, context) => {
-    const expectedFormat =
-      value.artifact_type === "draft" ? "docx" : "xlsx";
+    const expectedFormat = value.artifact_type === "draft" ? "docx" : "xlsx";
     if (value.format !== expectedFormat) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
@@ -131,50 +141,10 @@ const goalSpecSchema = z
   })
   .strict();
 
-const contextSourceSchema = z
-  .object({
-    document_id: boundedId,
-    version_id: boundedId,
-    filename: z.string().trim().min(1).max(500),
-    file_type: z.string().trim().min(1).max(80).nullable(),
-    role: z.enum(["source", "template", "precedent", "authority"]),
-  })
-  .strict();
-const workflowSnapshotSchema = z
-  .object({
-    id: boundedId,
-    title: z.string().trim().min(1).max(500),
-    description: z.string().max(4000),
-    type: z.enum(["assistant", "tabular"]),
-    instructions: z.string().max(100_000),
-    columns: z.array(z.string().trim().min(1).max(500)).max(100),
-  })
-  .strict();
-const matterContextSchema = z
-  .object({
-    kind: z.literal(MATTER_CONTEXT_KIND),
-    matter_id: boundedId,
-    sources: z.array(contextSourceSchema).max(100),
-    workflow: workflowSnapshotSchema.nullable(),
-    compiled_at: z.string().datetime(),
-  })
-  .strict()
-  .superRefine((value, context) => {
-    const documentIds = value.sources.map((source) => source.document_id);
-    if (new Set(documentIds).size !== documentIds.length) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["sources"],
-        message: "Task context document ids must be unique",
-      });
-    }
-  });
-
 export type AgentTaskArtifactContractV1 = z.infer<
   typeof artifactContractSchema
 >;
 export type AgentGoalSpecV1 = z.infer<typeof goalSpecSchema>;
-export type MatterContextManifestV1 = z.infer<typeof matterContextSchema>;
 
 export function normalizeAgentTaskArtifactContracts(
   value: unknown,
@@ -208,10 +178,6 @@ export function validateVersionedAgentTaskArtifactContracts(value: unknown) {
 
 export function validateAgentGoalSpec(value: unknown) {
   return goalSpecSchema.parse(value);
-}
-
-export function validateMatterContextManifest(value: unknown) {
-  return matterContextSchema.parse(value);
 }
 
 export function assertAgentTaskContractConsistency(input: {
@@ -268,13 +234,13 @@ export function readAgentTaskAssignmentContract(task: {
     (checkpoint &&
       (Object.hasOwn(checkpoint, "contract") ||
         Object.hasOwn(checkpoint, "schema_version"))) ||
-      deliverables.some(
-        (item) =>
-          item &&
-          typeof item === "object" &&
-          !Array.isArray(item) &&
-          Object.hasOwn(item, "schema_version"),
-      ),
+    deliverables.some(
+      (item) =>
+        item &&
+        typeof item === "object" &&
+        !Array.isArray(item) &&
+        Object.hasOwn(item, "schema_version"),
+    ),
   );
   if (!marked) return { state: "legacy" };
 
@@ -293,8 +259,9 @@ export function readAgentTaskAssignmentContract(task: {
     }
     const contract = checkpoint.contract as Record<string, unknown>;
     const goalSpec = validateAgentGoalSpec(contract.goal_spec);
-    const artifactContracts =
-      validateVersionedAgentTaskArtifactContracts(task.deliverables);
+    const artifactContracts = validateVersionedAgentTaskArtifactContracts(
+      task.deliverables,
+    );
     const contextManifest = validateMatterContextManifest(
       contract.context_manifest,
     );
@@ -310,7 +277,9 @@ export function readAgentTaskAssignmentContract(task: {
     return {
       state: "invalid",
       reason:
-        error instanceof Error ? error.message : "Assignment Contract is invalid",
+        error instanceof Error
+          ? error.message
+          : "Assignment Contract is invalid",
     };
   }
 }

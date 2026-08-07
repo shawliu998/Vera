@@ -1090,8 +1090,9 @@ export async function generatePpt(
 export async function loadCurrentVersionBytes(
   documentId: string,
   db: ReturnType<typeof createServerSupabase>,
+  versionId?: string | null,
 ): Promise<{ bytes: Buffer; storage_path: string } | null> {
-  const active = await loadActiveVersion(documentId, db);
+  const active = await loadActiveVersion(documentId, db, versionId);
   if (!active) return null;
   const raw = await downloadFile(active.storage_path);
   if (!raw) return null;
@@ -1348,7 +1349,10 @@ export async function getTurnReadIdentity(params: {
 
   const documentId = docIndex?.[docLabel]?.document_id;
   if (documentId && db) {
-    const active = await loadActiveVersion(documentId, db);
+    const fixedVersionId = docIndex?.[docLabel]?.fixed_version
+      ? docIndex[docLabel]?.version_id
+      : null;
+    const active = await loadActiveVersion(documentId, db, fixedVersionId);
     if (active?.storage_path) {
       return {
         key: `${documentId}:${active.id}`,
@@ -1443,12 +1447,19 @@ export async function readDocumentContent(
       })}\n\n`,
     );
   try {
-    // Prefer the current tracked-changes version (if any) so read_document
-    // reflects accepted/pending edits rather than the original upload.
+    // Ordinary Assistant reads prefer the current tracked-changes version.
+    // Work Tasks pass a fixed Version so retries and resume read identical bytes.
     let raw: ArrayBuffer | null = null;
     let sourcePath = docInfo.storage_path;
     if (documentId && db) {
-      const current = await loadCurrentVersionBytes(documentId, db);
+      const fixedVersionId = docIndex?.[docLabel]?.fixed_version
+        ? docIndex[docLabel]?.version_id
+        : null;
+      const current = await loadCurrentVersionBytes(
+        documentId,
+        db,
+        fixedVersionId,
+      );
       if (current) {
         raw = current.bytes.buffer.slice(
           current.bytes.byteOffset,

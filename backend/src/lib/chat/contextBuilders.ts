@@ -355,9 +355,21 @@ export async function buildDocContext(
   const docStore: DocStore = new Map();
 
   const documentIds = new Set<string>();
+  const fixedVersionByDocumentId = new Map<string, string>();
   for (const m of messages) {
     for (const f of m.files ?? []) {
-      if (f.document_id) documentIds.add(f.document_id);
+      if (f.document_id) {
+        documentIds.add(f.document_id);
+        if (f.version_id) {
+          const existing = fixedVersionByDocumentId.get(f.document_id);
+          if (existing && existing !== f.version_id) {
+            throw new Error(
+              `Conflicting fixed Versions were supplied for document ${f.document_id}`,
+            );
+          }
+          fixedVersionByDocumentId.set(f.document_id, f.version_id);
+        }
+      }
     }
   }
 
@@ -396,14 +408,20 @@ export async function buildDocContext(
       .eq("user_id", userId)
       .eq("status", "ready");
 
-    const docList = (docs ?? []) as unknown as {
-      id: string;
-      filename?: string | null;
-      file_type?: string | null;
-      current_version_id?: string | null;
-      active_version_number?: number | null;
-      storage_path?: string | null;
-    }[];
+    const docList = (
+      (docs ?? []) as unknown as {
+        id: string;
+        filename?: string | null;
+        file_type?: string | null;
+        current_version_id?: string | null;
+        active_version_number?: number | null;
+        storage_path?: string | null;
+      }[]
+    ).map((doc) => ({ ...doc }));
+    for (const doc of docList) {
+      const fixedVersionId = fixedVersionByDocumentId.get(doc.id);
+      if (fixedVersionId) doc.current_version_id = fixedVersionId;
+    }
     await attachActiveVersionPaths(db, docList);
     for (let i = 0; i < docList.length; i++) {
       const doc = docList[i];
@@ -415,6 +433,7 @@ export async function buildDocContext(
         filename,
         version_id: doc.current_version_id ?? null,
         version_number: doc.active_version_number ?? null,
+        fixed_version: fixedVersionByDocumentId.has(doc.id),
       };
       docStore.set(docLabel, {
         storage_path: doc.storage_path,

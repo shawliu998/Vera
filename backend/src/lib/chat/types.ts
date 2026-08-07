@@ -32,6 +32,7 @@ export type DocIndex = Record<
     filename: string;
     version_id?: string | null;
     version_number?: number | null;
+    fixed_version?: boolean;
   }
 >;
 
@@ -53,7 +54,12 @@ export type ToolCall = {
 export type ChatMessage = {
   role: string;
   content: string | null;
-  files?: { filename: string; document_id?: string }[];
+  files?: {
+    filename: string;
+    document_id?: string;
+    /** Work Tasks may pin an immutable source Version for deterministic resume. */
+    version_id?: string;
+  }[];
   workflow?: { id: string; title: string };
 };
 

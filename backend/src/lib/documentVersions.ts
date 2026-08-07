@@ -110,13 +110,14 @@ export async function attachActiveVersionPaths<T extends VersionPathRow>(
     const { data: rows } = await db
         .from("document_versions")
         .select(
-            "id, storage_path, pdf_storage_path, version_number, filename, file_type, size_bytes, page_count",
+            "id, document_id, storage_path, pdf_storage_path, version_number, filename, file_type, size_bytes, page_count",
         )
         .in("id", versionIds)
         .is("deleted_at", null);
     const byId = new Map<
         string,
         {
+            document_id: string;
             storage_path: string | null;
             pdf_storage_path: string | null;
             version_number: number | null;
@@ -128,6 +129,7 @@ export async function attachActiveVersionPaths<T extends VersionPathRow>(
     >();
     for (const r of (rows ?? []) as {
         id: string;
+        document_id: string;
         storage_path: string | null;
         pdf_storage_path: string | null;
         version_number: number | null;
@@ -137,6 +139,7 @@ export async function attachActiveVersionPaths<T extends VersionPathRow>(
         page_count: number | null;
     }[]) {
         byId.set(r.id, {
+            document_id: r.document_id,
             storage_path: r.storage_path ?? null,
             pdf_storage_path: r.pdf_storage_path ?? null,
             version_number: r.version_number ?? null,
@@ -147,7 +150,10 @@ export async function attachActiveVersionPaths<T extends VersionPathRow>(
         });
     }
     for (const d of docs) {
-        const v = d.current_version_id ? byId.get(d.current_version_id) : null;
+        const candidate = d.current_version_id
+            ? byId.get(d.current_version_id)
+            : null;
+        const v = candidate?.document_id === d.id ? candidate : null;
         d.storage_path = v?.storage_path ?? null;
         d.pdf_storage_path = v?.pdf_storage_path ?? null;
         d.active_version_number = v?.version_number ?? null;

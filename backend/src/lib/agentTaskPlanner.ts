@@ -3,6 +3,11 @@ import { completeText } from "./llm";
 import { createServerSupabase } from "./supabase";
 import { SYSTEM_WORKFLOWS } from "./systemWorkflows";
 import { getUserModelSettings } from "./userSettings";
+import {
+  MatterContextInvalidError,
+  type MatterContextManifestV1,
+} from "./agent-kernel/context/matterContext";
+import { assertFixedMatterContextCurrent } from "./agent-kernel/context/matterContextRepository";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -687,37 +692,85 @@ export async function planAgentTask(input: {
   goal: string;
   model: string;
   request: AgentTaskPlanningRequest;
+  contextManifest?: MatterContextManifestV1 | null;
   complete?: typeof completeText;
 }) {
-  const workflow = await resolveAgentWorkflowConstraint({
-    db: input.db,
-    workflowId: input.request.workflow_id,
-    userId: input.userId,
-    userEmail: input.userEmail,
-  });
+  const fixedContext = input.contextManifest ?? null;
+  if (fixedContext) {
+    if (fixedContext.matter_id !== input.matterId) {
+      throw new MatterContextInvalidError(
+        "matter_context_scope_mismatch",
+        "Fixed Matter context does not belong to this task Matter.",
+      );
+    }
+    const requestedIds = input.request.document_ids;
+    const fixedIds = fixedContext.sources.map((source) => source.document_id);
+    if (
+      requestedIds.length !== fixedIds.length ||
+      requestedIds.some((documentId, index) => documentId !== fixedIds[index])
+    ) {
+      throw new MatterContextInvalidError(
+        "matter_context_scope_mismatch",
+        "Planner sources do not match the task's fixed source receipt.",
+      );
+    }
+    if (
+      (input.request.workflow_id ?? null) !==
+      (fixedContext.workflow?.id ?? null)
+    ) {
+      throw new MatterContextInvalidError(
+        "matter_context_workflow_mismatch",
+        "Planner Workflow does not match the task's fixed Workflow snapshot.",
+      );
+    }
+    await assertFixedMatterContextCurrent(input.db, fixedContext);
+  }
+  const workflow = fixedContext
+    ? fixedContext.workflow
+    : await resolveAgentWorkflowConstraint({
+        db: input.db,
+        workflowId: input.request.workflow_id,
+        userId: input.userId,
+        userEmail: input.userEmail,
+      });
   if (input.request.workflow_id && !workflow) {
     throw new Error("Selected Workflow is not available");
   }
-  const { data: documents, error: documentsError } = input.request.document_ids
-    .length
-    ? await input.db
-        .from("documents")
-        .select("id,current_version_id")
-        .eq("project_id", input.matterId)
-        .in("id", input.request.document_ids)
-    : { data: [], error: null };
+  const { data: documents, error: documentsError } = fixedContext
+    ? {
+        data: fixedContext.sources.map((source) => ({
+          id: source.document_id,
+          current_version_id: source.version_id,
+        })),
+        error: null,
+      }
+    : input.request.document_ids.length
+      ? await input.db
+          .from("documents")
+          .select("id,current_version_id")
+          .eq("project_id", input.matterId)
+          .in("id", input.request.document_ids)
+      : { data: [], error: null };
   if (documentsError) throw new Error(documentsError.message);
   const versionIds = (documents ?? []).flatMap((document) =>
     typeof document.current_version_id === "string"
       ? [document.current_version_id]
       : [],
   );
-  const { data: versions, error: versionsError } = versionIds.length
-    ? await input.db
-        .from("document_versions")
-        .select("id,filename")
-        .in("id", versionIds)
-    : { data: [], error: null };
+  const { data: versions, error: versionsError } = fixedContext
+    ? {
+        data: fixedContext.sources.map((source) => ({
+          id: source.version_id,
+          filename: source.filename,
+        })),
+        error: null,
+      }
+    : versionIds.length
+      ? await input.db
+          .from("document_versions")
+          .select("id,filename")
+          .in("id", versionIds)
+      : { data: [], error: null };
   if (versionsError) throw new Error(versionsError.message);
   const filenames = new Map(
     (versions ?? []).map((version) => [

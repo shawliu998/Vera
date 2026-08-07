@@ -15,6 +15,14 @@ import {
   type AgentTaskExecutionPauseClassification,
   type AgentTaskRetryCheckpoint,
 } from "./agent-kernel/outcomes/executionOutcome";
+import {
+  FIXED_MATTER_CONTEXT_CHECKPOINT_KEY,
+  mergeImmutableAgentTaskCheckpoint,
+  MatterContextInvalidError,
+  readFixedMatterContext,
+  type MatterContextManifestV1,
+} from "./agent-kernel/context/matterContext";
+import { extendFixedMatterContext } from "./agent-kernel/context/matterContextRepository";
 
 export type {
   AgentTaskExecutionPauseClassification,
@@ -297,6 +305,7 @@ export async function createAgentTask(
     plan?: StepDefinition[];
     deliverables?: AgentTaskDeliverableDefinition[];
     planningRequest?: AgentTaskPlanningRequest;
+    fixedMatterContext?: MatterContextManifestV1;
     initialArtifacts?: AgentArtifactLinkInput[];
   },
 ) {
@@ -311,15 +320,24 @@ export async function createAgentTask(
       status: "queued",
       execution_model: input.executionModel,
       deliverables: input.deliverables ?? DEFAULT_DELIVERABLES,
-      latest_checkpoint: input.planningRequest
-        ? {
-            step_id: "planner",
-            iteration: 0,
-            summary: "Preparing a goal-aligned work plan.",
-            created_at: now(),
-            planner_request: input.planningRequest,
-          }
-        : null,
+      latest_checkpoint:
+        input.planningRequest || input.fixedMatterContext
+          ? {
+              step_id: "planner",
+              iteration: 0,
+              summary: "Preparing a goal-aligned work plan.",
+              created_at: now(),
+              ...(input.planningRequest
+                ? { planner_request: input.planningRequest }
+                : {}),
+              ...(input.fixedMatterContext
+                ? {
+                    [FIXED_MATTER_CONTEXT_CHECKPOINT_KEY]:
+                      input.fixedMatterContext,
+                  }
+                : {}),
+            }
+          : null,
     })
     .select("*")
     .single();
@@ -405,7 +423,10 @@ export async function applyAgentTaskPlan(
     .from("agent_tasks")
     .update({
       deliverables: plan.deliverables,
-      latest_checkpoint: null,
+      latest_checkpoint: mergeImmutableAgentTaskCheckpoint(
+        snapshot.task.latest_checkpoint,
+        null,
+      ),
       updated_at: now(),
     })
     .eq("id", taskId)
@@ -757,12 +778,12 @@ export async function advanceAgentTask(
       status: isComplete ? "completed" : isVerifying ? "verifying" : "running",
       current_step: activeStep?.id ?? null,
       latest_checkpoint: completedStep
-        ? {
+        ? mergeImmutableAgentTaskCheckpoint(snapshot.task.latest_checkpoint, {
             step_id: completedStep.id,
             iteration: completedStep.attempt,
             summary: result?.summary?.trim() || "Step completed.",
             created_at: updatedAt,
-          }
+          })
         : snapshot.task.latest_checkpoint,
       updated_at: updatedAt,
     })
@@ -831,6 +852,55 @@ export async function deferAgentTaskForProvider(
   return getAgentTaskSnapshot(db, taskId, userId);
 }
 
+export async function pauseAgentTaskForContext(
+  db: Db,
+  taskId: string,
+  userId: string,
+  error: MatterContextInvalidError,
+) {
+  const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
+  if (!snapshot) return null;
+  if (!["queued", "running", "verifying"].includes(snapshot.task.status)) {
+    return snapshot;
+  }
+  const updatedAt = now();
+  const previous =
+    snapshot.task.latest_checkpoint &&
+    typeof snapshot.task.latest_checkpoint === "object" &&
+    !Array.isArray(snapshot.task.latest_checkpoint)
+      ? (snapshot.task.latest_checkpoint as Record<string, unknown>)
+      : {};
+  const { error: updateError } = await db
+    .from("agent_tasks")
+    .update({
+      status: "paused",
+      latest_checkpoint: {
+        ...previous,
+        summary: error.message,
+        created_at: updatedAt,
+        context_pause: {
+          kind: "agent_task_context_pause_v1",
+          created_at: updatedAt,
+          issue: {
+            kind: "agent_execution_issue_v1",
+            code: error.code,
+            category: "context",
+            recoverable: true,
+            retry_scope: "task",
+            facts: error.facts,
+          },
+        },
+      },
+      updated_at: updatedAt,
+    })
+    .eq("id", taskId)
+    .eq("user_id", userId)
+    .eq("status", snapshot.task.status);
+  if (updateError)
+    throw dbError(updateError, "Failed to pause task for source review");
+  return getAgentTaskSnapshot(db, taskId, userId);
+}
+
 export async function recordAgentTaskCheckpoint(
   db: Db,
   taskId: string,
@@ -847,12 +917,12 @@ export async function recordAgentTaskCheckpoint(
     .from("agent_tasks")
     .update({
       latest_checkpoint: current
-        ? {
+        ? mergeImmutableAgentTaskCheckpoint(snapshot.task.latest_checkpoint, {
             step_id: current.id,
             iteration: current.attempt,
             summary,
             created_at: updatedAt,
-          }
+          })
         : snapshot.task.latest_checkpoint,
       updated_at: updatedAt,
     })
@@ -1051,12 +1121,15 @@ export async function reviseAgentTask(db: Db, taskId: string, userId: string) {
     .update({
       status: "running",
       current_step: first.id,
-      latest_checkpoint: {
-        step_id: first.id,
-        iteration: ((first.attempt as number | null) ?? 0) + 1,
-        summary: `Revision requested: ${note}`.slice(0, 4000),
-        created_at: updatedAt,
-      },
+      latest_checkpoint: mergeImmutableAgentTaskCheckpoint(
+        snapshot.task.latest_checkpoint,
+        {
+          step_id: first.id,
+          iteration: ((first.attempt as number | null) ?? 0) + 1,
+          summary: `Revision requested: ${note}`.slice(0, 4000),
+          created_at: updatedAt,
+        },
+      ),
       updated_at: updatedAt,
     })
     .eq("id", taskId)
@@ -1091,6 +1164,22 @@ export async function submitAgentTaskInput(
     updatedAt,
   );
   const { current, nextAttempt, documentIds } = transition;
+  const fixedMatterContext = readFixedMatterContext(snapshot.task);
+  const extendedMatterContext =
+    fixedMatterContext && documentIds.length
+      ? await extendFixedMatterContext(
+          db,
+          fixedMatterContext,
+          documentIds,
+          updatedAt,
+        )
+      : fixedMatterContext;
+  const checkpoint = extendedMatterContext
+    ? {
+        ...transition.checkpoint,
+        [FIXED_MATTER_CONTEXT_CHECKPOINT_KEY]: extendedMatterContext,
+      }
+    : transition.checkpoint;
   const reserved = await reserveAgentTaskInputStep(db, {
     taskId,
     stepId: current.id,
@@ -1118,7 +1207,7 @@ export async function submitAgentTaskInput(
       .update({
         status: transition.status,
         current_step: current.id,
-        latest_checkpoint: transition.checkpoint,
+        latest_checkpoint: checkpoint,
         updated_at: updatedAt,
       })
       .eq("id", taskId)
@@ -1175,7 +1264,11 @@ export async function resumeAgentTask(db: Db, taskId: string, userId: string) {
   }>;
   const activeIndex = steps.findIndex((step) => step.status === "running");
   const status: AgentTaskStatus =
-    activeIndex === steps.length - 1 ? "verifying" : "running";
+    activeIndex < 0
+      ? "queued"
+      : activeIndex === steps.length - 1
+        ? "verifying"
+        : "running";
   const { error } = await db
     .from("agent_tasks")
     .update({ status, updated_at: now() })
@@ -1243,12 +1336,12 @@ export async function stopAgentTask(
       status: input.status,
       current_step: current?.id ?? snapshot.task.current_step,
       latest_checkpoint: current
-        ? {
+        ? mergeImmutableAgentTaskCheckpoint(snapshot.task.latest_checkpoint, {
             step_id: current.id,
             iteration: current.attempt,
             summary: input.summary,
             created_at: updatedAt,
-          }
+          })
         : snapshot.task.latest_checkpoint,
       updated_at: updatedAt,
     })

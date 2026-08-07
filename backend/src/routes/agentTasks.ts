@@ -33,6 +33,8 @@ import {
 import { buildContentDisposition } from "../lib/storage";
 import { contentTypeForDocumentType } from "../lib/documentTypes";
 import { getAgentTaskEvidence } from "../lib/agentTaskEvidence";
+import { MatterContextInvalidError } from "../lib/agent-kernel/context/matterContext";
+import { compileFixedMatterContext } from "../lib/agent-kernel/context/matterContextRepository";
 
 export const agentTasksRouter = Router();
 
@@ -42,7 +44,12 @@ function routeError(
 ) {
   const detail =
     error instanceof Error ? error.message : "Agent task request failed";
-  const status = detail.startsWith("Only a") ? 409 : 500;
+  const status =
+    error instanceof MatterContextInvalidError
+      ? 400
+      : detail.startsWith("Only a")
+        ? 409
+        : 500;
   res.status(status).json({ detail });
 }
 
@@ -125,6 +132,11 @@ agentTasksRouter.post("/", requireAuth, async (req, res) => {
     if (workflowId && !workflow) {
       return void res.status(404).json({ detail: "Workflow not found" });
     }
+    const fixedMatterContext = await compileFixedMatterContext(db, {
+      matterId,
+      documentIds,
+      workflow,
+    });
     const provisionalPlan = buildGoalAwareFallbackPlan({
       goal,
       hasSources: documentIds.length > 0,
@@ -142,6 +154,7 @@ agentTasksRouter.post("/", requireAuth, async (req, res) => {
         document_ids: documentIds,
         ...(workflowId ? { workflow_id: workflowId } : {}),
       },
+      fixedMatterContext,
       initialArtifacts: [
         ...documentIds.map((documentId) => ({
           artifact_type: "document" as const,

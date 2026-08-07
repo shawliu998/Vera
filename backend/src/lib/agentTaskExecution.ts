@@ -3,6 +3,7 @@ import {
   applyAgentTaskPlan,
   getAgentTaskSnapshot,
   linkAgentTaskArtifacts,
+  pauseAgentTaskForContext,
   recordAgentTaskCheckpoint,
   stopAgentTask,
   verifierRepairAlreadyAttempted,
@@ -20,6 +21,11 @@ import {
 } from "./agentStepExecutor";
 import { createServerSupabase } from "./supabase";
 import { assertAgentTaskAssignmentContract } from "./agent-kernel/contracts/taskContract";
+import {
+  MatterContextInvalidError,
+  readFixedMatterContext,
+} from "./agent-kernel/context/matterContext";
+import { assertFixedMatterContextCurrent } from "./agent-kernel/context/matterContextRepository";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -66,6 +72,60 @@ export async function advanceAgentTaskExecution(input: {
   const current = await getAgentTaskSnapshot(db, taskId, userId);
   if (!current) return null;
   assertAgentTaskAssignmentContract(current.task);
+  let fixedMatterContext;
+  try {
+    fixedMatterContext = readFixedMatterContext(current.task);
+    if (fixedMatterContext) {
+      await assertFixedMatterContextCurrent(db, fixedMatterContext);
+      const linkedSourceIds = current.artifacts
+        .filter(
+          (artifact) =>
+            artifact.artifact_type === "document" &&
+            artifact.purpose === "Source document",
+        )
+        .map((artifact) => artifact.artifact_id);
+      const fixedSourceIds = fixedMatterContext.sources.map(
+        (source) => source.document_id,
+      );
+      if (
+        linkedSourceIds.length !== fixedSourceIds.length ||
+        fixedSourceIds.some(
+          (documentId) => !linkedSourceIds.includes(documentId),
+        )
+      ) {
+        throw new MatterContextInvalidError(
+          "matter_context_scope_mismatch",
+          "Linked task sources do not match the fixed Matter context.",
+          {
+            fixed_document_ids: fixedSourceIds,
+            linked_document_ids: linkedSourceIds,
+          },
+        );
+      }
+      const linkedWorkflowId = current.artifacts.find(
+        (artifact) =>
+          artifact.artifact_type === "workflow_run" &&
+          artifact.purpose.startsWith("Selected workflow:"),
+      )?.artifact_id;
+      if (
+        (linkedWorkflowId ?? null) !== (fixedMatterContext.workflow?.id ?? null)
+      ) {
+        throw new MatterContextInvalidError(
+          "matter_context_workflow_mismatch",
+          "Linked Workflow does not match the fixed Workflow snapshot.",
+          {
+            fixed_workflow_id: fixedMatterContext.workflow?.id ?? null,
+            linked_workflow_id: linkedWorkflowId ?? null,
+          },
+        );
+      }
+    }
+  } catch (error) {
+    if (error instanceof MatterContextInvalidError) {
+      return pauseAgentTaskForContext(db, taskId, userId, error);
+    }
+    throw error;
+  }
   if (current.task.status === "queued") {
     const planningRequest = readAgentTaskPlanningRequest(current.task);
     if (planningRequest) {
@@ -77,6 +137,7 @@ export async function advanceAgentTaskExecution(input: {
         goal: current.task.goal,
         model: current.task.execution_model,
         request: planningRequest,
+        contextManifest: fixedMatterContext,
       });
       const updated = await applyAgentTaskPlan(
         db,

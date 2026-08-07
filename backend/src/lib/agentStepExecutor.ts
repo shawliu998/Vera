@@ -25,6 +25,10 @@ import {
   resolveAgentWorkflowConstraint,
 } from "./agentTaskPlanner";
 import { getAgentTaskEvidence } from "./agentTaskEvidence";
+import {
+  MatterContextInvalidError,
+  readFixedMatterContext,
+} from "./agent-kernel/context/matterContext";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -182,8 +186,7 @@ export function summarizeTaskCitationRelocation(
       sourceIds.includes(citation.document_id),
   ).length;
   const total = citations.length + unavailableSnapshots;
-  const missing =
-    total === 0 ? 0 : sourceBacked ? total - relocatable : total;
+  const missing = total === 0 ? 0 : sourceBacked ? total - relocatable : total;
   return {
     total,
     relocatable,
@@ -378,6 +381,22 @@ export async function executeAgentStep(input: {
         artifact.purpose === "Source document",
     )
     .map((artifact) => artifact.artifact_id);
+  const fixedMatterContext = readFixedMatterContext(snapshot.task);
+  if (fixedMatterContext) {
+    const fixedIds = fixedMatterContext.sources.map(
+      (source) => source.document_id,
+    );
+    if (
+      fixedIds.length !== sourceIds.length ||
+      fixedIds.some((documentId) => !sourceIds.includes(documentId))
+    ) {
+      throw new MatterContextInvalidError(
+        "matter_context_scope_mismatch",
+        "Linked task sources do not match the fixed Matter context.",
+        { fixed_document_ids: fixedIds, linked_document_ids: sourceIds },
+      );
+    }
+  }
   const currentStep = snapshot.task.current_plan[stepIndex];
   const selectedWorkflow = snapshot.artifacts.find(
     (artifact) =>
@@ -405,24 +424,35 @@ export async function executeAgentStep(input: {
     };
   }
 
-  const { data: sourceRows, error: sourceError } = sourceIds.length
-    ? await db.from("documents").select("id").in("id", sourceIds)
-    : { data: [], error: null };
+  const { data: sourceRows, error: sourceError } =
+    fixedMatterContext || !sourceIds.length
+      ? { data: [], error: null }
+      : sourceIds.length
+        ? await db.from("documents").select("id").in("id", sourceIds)
+        : { data: [], error: null };
   if (sourceError) throw new Error(sourceError.message);
-  const sourceFiles = (sourceRows ?? []).map((row) => ({
-    filename: `Matter document ${row.id}`,
-    document_id: row.id as string,
-  }));
+  const sourceFiles = fixedMatterContext
+    ? fixedMatterContext.sources.map((source) => ({
+        filename: source.filename,
+        document_id: source.document_id,
+        version_id: source.version_id,
+      }))
+    : (sourceRows ?? []).map((row) => ({
+        filename: `Matter document ${row.id}`,
+        document_id: row.id as string,
+      }));
 
   const chatId = await getOrCreateTaskChat(db, snapshot, userId);
-  const workflowConstraint = selectedWorkflow
-    ? await resolveAgentWorkflowConstraint({
-        db,
-        workflowId: selectedWorkflow.artifact_id,
-        userId,
-        userEmail,
-      })
-    : null;
+  const workflowConstraint = fixedMatterContext
+    ? fixedMatterContext.workflow
+    : selectedWorkflow
+      ? await resolveAgentWorkflowConstraint({
+          db,
+          workflowId: selectedWorkflow.artifact_id,
+          userId,
+          userEmail,
+        })
+      : null;
   const workflowInstruction = workflowConstraint
     ? [
         `${workflowConstraint.title}: ${workflowConstraint.description}`,
