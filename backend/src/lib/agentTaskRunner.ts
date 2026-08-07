@@ -26,7 +26,10 @@ import {
   type TransientAgentTaskError,
 } from "./agentTaskRetryPolicy";
 import { createServerSupabase } from "./supabase";
-import { isAgentTaskLeaseBusyError } from "./agent-kernel/execution/taskLease";
+import {
+  isAgentTaskLeaseBusyError,
+  withAgentTaskLease,
+} from "./agent-kernel/execution/taskLease";
 
 const ACTIVE_STATUSES = ["queued", "running", "verifying"] as const;
 
@@ -262,10 +265,22 @@ export const agentTaskRunner = new AgentTaskRunner({
       retry,
     ),
   failTask: async (job, summary) => {
-    await stopAgentTask(createServerSupabase(), job.taskId, job.userId, {
-      status: "failed",
-      summary,
-    });
+    const db = createServerSupabase();
+    await withAgentTaskLease(
+      {
+        db,
+        taskId: job.taskId,
+        userId: job.userId,
+        getSnapshot: () => getAgentTaskSnapshot(db, job.taskId, job.userId),
+      },
+      {},
+      (leaseGuard) =>
+        stopAgentTask(db, job.taskId, job.userId, {
+          status: "failed",
+          summary,
+          leaseOwner: leaseGuard.ownerToken,
+        }),
+    );
   },
   deferTask: (job, summary, classification) =>
     deferAgentTaskForProvider(

@@ -37,9 +37,15 @@ import {
 } from "./agent-kernel/contracts/stepContract";
 import {
   AgentTaskStateTransitionError,
+  agentTaskRetryTransitionWasApplied,
   agentTaskStateTransitionWasApplied,
+  agentTaskStopTransitionWasApplied,
+  commitAgentTaskRetryTransition,
   commitAgentTaskStateTransition,
+  commitAgentTaskStopTransition,
+  type AgentTaskRetryTransitionInput,
   type AgentTaskStateTransitionInput,
+  type AgentTaskStopTransitionInput,
 } from "./agent-kernel/execution/taskTransition";
 
 export type {
@@ -1221,39 +1227,65 @@ export async function retryAgentTask(db: Db, taskId: string, userId: string) {
   const current = snapshot.task.current_plan.find(
     (step: { status: AgentStepStatus }) => step.status === "blocked",
   );
-  if (!current) throw new Error("Blocked task has no recoverable step");
-  const activeIndex = snapshot.task.current_plan.findIndex(
-    (step: { id: string }) => step.id === current.id,
-  );
-  const updatedAt = now();
-  const { error: stepError } = await db
-    .from("agent_steps")
-    .update({
-      status: "running",
-      attempt: current.attempt + 1,
-      updated_at: updatedAt,
-    })
-    .eq("id", current.id)
-    .eq("task_id", taskId);
-  if (stepError) throw dbError(stepError, "Failed to retry task step");
-  const status: AgentTaskStatus =
-    activeIndex === snapshot.task.current_plan.length - 1
-      ? "verifying"
-      : "running";
-  const { error } = await db
-    .from("agent_tasks")
-    .update({
-      status,
-      current_step: current.id,
-      latest_checkpoint: clearAgentTaskRunnerRetryCheckpoint(
-        snapshot.task.latest_checkpoint,
-      ),
-      updated_at: updatedAt,
-    })
-    .eq("id", taskId)
-    .eq("user_id", userId);
-  if (error) throw dbError(error, "Failed to retry task");
-  return getAgentTaskSnapshot(db, taskId, userId);
+  if (
+    !current &&
+    (snapshot.task.status !== "failed" || snapshot.task.current_step != null)
+  ) {
+    throw new Error("Blocked task has no recoverable step");
+  }
+  const activeIndex = current
+    ? snapshot.task.current_plan.findIndex(
+        (step: { id: string }) => step.id === current.id,
+      )
+    : -1;
+  const transition: AgentTaskRetryTransitionInput = {
+    taskId,
+    userId,
+    expectedTaskStatus: snapshot.task.status as "failed" | "waiting_input",
+    stepId: current?.id ?? null,
+    expectedStepAttempt: current?.attempt ?? null,
+    latestCheckpoint: clearAgentTaskRunnerRetryCheckpoint(
+      snapshot.task.latest_checkpoint,
+    ),
+  };
+  const expectedStatus: AgentTaskStatus = current
+    ? snapshot.task.current_plan.some(
+        (step: { status: AgentStepStatus }, position: number) =>
+          position > activeIndex && step.status === "pending",
+      )
+      ? "running"
+      : "verifying"
+    : "queued";
+  let committed: Awaited<ReturnType<typeof commitAgentTaskRetryTransition>>;
+  try {
+    committed = await commitAgentTaskRetryTransition(db, transition);
+  } catch (error) {
+    if (!(error instanceof AgentTaskStateTransitionError)) throw error;
+    const recovered = await getAgentTaskSnapshot(db, taskId, userId);
+    if (agentTaskRetryTransitionWasApplied(recovered, transition)) {
+      return recovered;
+    }
+    throw error;
+  }
+  const recovered = await getAgentTaskSnapshot(db, taskId, userId);
+  if (
+    committed.outcome === "retried" ||
+    agentTaskRetryTransitionWasApplied(recovered, transition)
+  ) {
+    if (recovered?.task.status !== expectedStatus) {
+      throw new Error(
+        "The retried Step does not match the expected Task phase",
+      );
+    }
+    return recovered;
+  }
+  if (committed.outcome === "lease_busy") {
+    throw new Error(
+      "The previous execution is still closing. Retry again in a moment.",
+    );
+  }
+  if (!recovered) return null;
+  throw new Error("Only one request can retry this task stage");
 }
 
 export async function reviseAgentTask(db: Db, taskId: string, userId: string) {
@@ -1526,6 +1558,7 @@ export async function stopAgentTask(
     status: "waiting_input" | "failed";
     summary: string;
     requiredInput?: AgentRequiredInputV1 | null;
+    leaseOwner: string;
   },
 ) {
   const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
@@ -1534,38 +1567,67 @@ export async function stopAgentTask(
     (step: { status: AgentStepStatus }) => step.status === "running",
   );
   const updatedAt = now();
-  if (current) {
-    const { error: stepError } = await db
-      .from("agent_steps")
-      .update({
-        status: "blocked",
-        result_summary: input.summary,
-        updated_at: updatedAt,
-      })
-      .eq("id", current.id)
-      .eq("task_id", taskId);
-    if (stepError) throw dbError(stepError, "Failed to block task step");
+  if (!["queued", "running", "verifying"].includes(snapshot.task.status)) {
+    return snapshot;
   }
-  const { error } = await db
-    .from("agent_tasks")
-    .update({
-      status: input.status,
-      current_step: current?.id ?? snapshot.task.current_step,
-      latest_checkpoint: current
-        ? mergeImmutableAgentTaskCheckpoint(snapshot.task.latest_checkpoint, {
-            step_id: current.id,
-            iteration: current.attempt,
-            summary: input.summary,
-            created_at: updatedAt,
-            ...(input.requiredInput
-              ? { required_input: input.requiredInput }
-              : {}),
-          })
-        : snapshot.task.latest_checkpoint,
-      updated_at: updatedAt,
-    })
-    .eq("id", taskId)
-    .eq("user_id", userId);
-  if (error) throw dbError(error, "Failed to stop task");
-  return getAgentTaskSnapshot(db, taskId, userId);
+  const checkpoint = mergeImmutableAgentTaskCheckpoint(
+    snapshot.task.latest_checkpoint,
+    {
+      step_id: current?.id ?? "planner",
+      iteration: current?.attempt ?? 0,
+      summary: input.summary,
+      created_at: updatedAt,
+      ...(input.requiredInput ? { required_input: input.requiredInput } : {}),
+    },
+  );
+  const transition: AgentTaskStopTransitionInput = {
+    taskId,
+    userId,
+    leaseOwner: input.leaseOwner,
+    expectedTaskStatus: snapshot.task.status as
+      | "queued"
+      | "running"
+      | "verifying",
+    stepId: current?.id ?? null,
+    expectedStepAttempt: current?.attempt ?? null,
+    targetStatus: input.status,
+    resultSummary: input.summary.trim() || "Task stopped.",
+    latestCheckpoint: checkpoint ?? {},
+  };
+  try {
+    const committed = await commitAgentTaskStopTransition(db, transition);
+    const recovered = await getAgentTaskSnapshot(db, taskId, userId);
+    if (
+      committed.outcome === "stopped" ||
+      agentTaskStopTransitionWasApplied(recovered, transition)
+    ) {
+      return recovered;
+    }
+    if (committed.outcome === "lease_lost") return recovered;
+    if (
+      !recovered ||
+      !["queued", "running", "verifying"].includes(recovered.task.status)
+    ) {
+      return recovered;
+    }
+    throw new AgentTaskStateTransitionError(
+      "task_state_transition_conflict",
+      "The Agent Task state changed before it could be stopped.",
+      {
+        task_id: taskId,
+        step_id: current?.id ?? null,
+        expected_task_status: snapshot.task.status,
+        expected_step_attempt: current?.attempt ?? null,
+        target_status: input.status,
+        transition_outcome: committed.outcome,
+      },
+    );
+  } catch (error) {
+    if (!(error instanceof AgentTaskStateTransitionError)) throw error;
+    const recovered = await getAgentTaskSnapshot(db, taskId, userId);
+    if (agentTaskStopTransitionWasApplied(recovered, transition)) {
+      return recovered;
+    }
+    return pauseAgentTaskForStateTransition(db, taskId, userId, error);
+  }
 }

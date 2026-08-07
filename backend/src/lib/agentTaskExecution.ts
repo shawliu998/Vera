@@ -452,6 +452,7 @@ export async function advanceAgentTaskExecution(input: {
     return stopAgentTask(db, taskId, userId, {
       status: "failed",
       summary: agentTaskExecutionErrorMessage(error),
+      leaseOwner: input.leaseGuard.ownerToken,
     });
   }
 
@@ -462,6 +463,7 @@ export async function advanceAgentTaskExecution(input: {
       status: "waiting_input",
       summary: execution.summary,
       requiredInput: execution.requiredInput,
+      leaseOwner: input.leaseGuard.ownerToken,
     });
   }
 
@@ -632,6 +634,7 @@ export async function advanceAgentTaskExecution(input: {
         return stopAgentTask(db, taskId, userId, {
           status: "failed",
           summary: agentTaskExecutionErrorMessage(error),
+          leaseOwner: input.leaseGuard.ownerToken,
         });
       }
 

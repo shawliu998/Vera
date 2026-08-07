@@ -21,6 +21,27 @@ export type AgentTaskStateTransitionOutcome =
   | "lease_lost"
   | "not_found";
 
+export type AgentTaskStopTransitionInput = {
+  taskId: string;
+  userId: string;
+  leaseOwner: string;
+  expectedTaskStatus: "queued" | "running" | "verifying";
+  stepId: string | null;
+  expectedStepAttempt: number | null;
+  targetStatus: "waiting_input" | "failed";
+  resultSummary: string;
+  latestCheckpoint: unknown;
+};
+
+export type AgentTaskRetryTransitionInput = {
+  taskId: string;
+  userId: string;
+  expectedTaskStatus: "waiting_input" | "failed";
+  stepId: string | null;
+  expectedStepAttempt: number | null;
+  latestCheckpoint: unknown;
+};
+
 export class AgentTaskStateTransitionError extends Error {
   constructor(
     readonly code:
@@ -51,6 +72,35 @@ function firstRow(value: unknown) {
   return Array.isArray(value) ? value[0] : value;
 }
 
+function transitionError(message: string, facts: Record<string, unknown>) {
+  return new AgentTaskStateTransitionError(
+    "task_state_transition_unavailable",
+    message,
+    facts,
+  );
+}
+
+function readOutcome<const TAllowed extends readonly string[]>(
+  data: unknown,
+  allowed: TAllowed,
+  facts: Record<string, unknown>,
+) {
+  const row = firstRow(data) as Record<string, unknown> | null;
+  const outcome = row?.outcome;
+  if (typeof outcome !== "string" || !allowed.includes(outcome)) {
+    throw transitionError(
+      "The Agent Task state transition returned an invalid result.",
+      { ...facts, outcome: outcome ?? null },
+    );
+  }
+  return {
+    outcome: outcome as TAllowed[number],
+    taskStatus: typeof row?.task_status === "string" ? row.task_status : null,
+    currentStep:
+      typeof row?.current_step === "string" ? row.current_step : null,
+  };
+}
+
 export async function commitAgentTaskStateTransition(
   db: Db,
   input: AgentTaskStateTransitionInput,
@@ -67,8 +117,7 @@ export async function commitAgentTaskStateTransition(
     p_review_note: input.reviewNote,
   });
   if (error) {
-    throw new AgentTaskStateTransitionError(
-      "task_state_transition_unavailable",
+    throw transitionError(
       `Failed to commit the Agent Task state transition: ${error.message}`,
       {
         task_id: input.taskId,
@@ -78,31 +127,79 @@ export async function commitAgentTaskStateTransition(
       },
     );
   }
-  const row = firstRow(data) as Record<string, unknown> | null;
-  const outcome = row?.outcome;
-  if (
-    outcome !== "advanced" &&
-    outcome !== "conflict" &&
-    outcome !== "invalid_input" &&
-    outcome !== "lease_lost" &&
-    outcome !== "not_found"
-  ) {
-    throw new AgentTaskStateTransitionError(
-      "task_state_transition_unavailable",
-      "The Agent Task state transition returned an invalid result.",
+  return readOutcome(
+    data,
+    ["advanced", "conflict", "invalid_input", "lease_lost", "not_found"],
+    { task_id: input.taskId, step_id: input.stepId },
+  ) as {
+    outcome: AgentTaskStateTransitionOutcome;
+    taskStatus: string | null;
+    currentStep: string | null;
+  };
+}
+
+export async function commitAgentTaskStopTransition(
+  db: Db,
+  input: AgentTaskStopTransitionInput,
+) {
+  const { data, error } = await db.rpc("stop_agent_task_state_v1", {
+    p_task_id: input.taskId,
+    p_user_id: input.userId,
+    p_lease_owner: input.leaseOwner,
+    p_expected_task_status: input.expectedTaskStatus,
+    p_step_id: input.stepId,
+    p_expected_step_attempt: input.expectedStepAttempt,
+    p_target_status: input.targetStatus,
+    p_result_summary: input.resultSummary,
+    p_latest_checkpoint: input.latestCheckpoint,
+  });
+  if (error) {
+    throw transitionError(
+      `Failed to stop the Agent Task atomically: ${error.message}`,
       {
         task_id: input.taskId,
         step_id: input.stepId,
-        outcome: outcome ?? null,
+        expected_task_status: input.expectedTaskStatus,
+        expected_step_attempt: input.expectedStepAttempt,
+        target_status: input.targetStatus,
       },
     );
   }
-  return {
-    outcome: outcome as AgentTaskStateTransitionOutcome,
-    taskStatus: typeof row?.task_status === "string" ? row.task_status : null,
-    currentStep:
-      typeof row?.current_step === "string" ? row.current_step : null,
-  };
+  return readOutcome(
+    data,
+    ["stopped", "conflict", "invalid_input", "lease_lost", "not_found"],
+    { task_id: input.taskId, step_id: input.stepId },
+  );
+}
+
+export async function commitAgentTaskRetryTransition(
+  db: Db,
+  input: AgentTaskRetryTransitionInput,
+) {
+  const { data, error } = await db.rpc("retry_agent_task_state_v1", {
+    p_task_id: input.taskId,
+    p_user_id: input.userId,
+    p_expected_task_status: input.expectedTaskStatus,
+    p_step_id: input.stepId,
+    p_expected_step_attempt: input.expectedStepAttempt,
+    p_latest_checkpoint: input.latestCheckpoint,
+  });
+  if (error) {
+    throw transitionError(
+      `Failed to retry the Agent Task atomically: ${error.message}`,
+      {
+        task_id: input.taskId,
+        step_id: input.stepId,
+        expected_task_status: input.expectedTaskStatus,
+        expected_step_attempt: input.expectedStepAttempt,
+      },
+    );
+  }
+  return readOutcome(
+    data,
+    ["retried", "conflict", "invalid_input", "lease_busy", "not_found"],
+    { task_id: input.taskId, step_id: input.stepId },
+  );
 }
 
 export function agentTaskStateTransitionWasApplied(
@@ -133,5 +230,58 @@ export function agentTaskStateTransitionWasApplied(
     step.attempt === input.expectedStepAttempt &&
     snapshot.task.current_step !== input.stepId &&
     ["running", "verifying", "completed"].includes(snapshot.task.status)
+  );
+}
+
+export function agentTaskStopTransitionWasApplied(
+  snapshot: {
+    task: {
+      status: string;
+      current_step?: string | null;
+      current_plan: Array<{ id: string; status: string; attempt: number }>;
+    };
+  } | null,
+  input: AgentTaskStopTransitionInput,
+) {
+  if (!snapshot || snapshot.task.status !== input.targetStatus) return false;
+  if (!input.stepId) return input.expectedTaskStatus === "queued";
+  const step = snapshot.task.current_plan.find(
+    (candidate) => candidate.id === input.stepId,
+  );
+  return Boolean(
+    step &&
+    step.status === "blocked" &&
+    step.attempt === input.expectedStepAttempt &&
+    snapshot.task.current_step === input.stepId,
+  );
+}
+
+export function agentTaskRetryTransitionWasApplied(
+  snapshot: {
+    task: {
+      status: string;
+      current_step?: string | null;
+      current_plan: Array<{ id: string; status: string; attempt: number }>;
+    };
+  } | null,
+  input: AgentTaskRetryTransitionInput,
+) {
+  if (!snapshot || !["running", "verifying"].includes(snapshot.task.status)) {
+    return Boolean(
+      snapshot &&
+      input.stepId === null &&
+      snapshot.task.status === "queued" &&
+      snapshot.task.current_step == null,
+    );
+  }
+  if (!input.stepId || input.expectedStepAttempt == null) return false;
+  const step = snapshot.task.current_plan.find(
+    (candidate) => candidate.id === input.stepId,
+  );
+  return Boolean(
+    step &&
+    step.status === "running" &&
+    step.attempt === input.expectedStepAttempt + 1 &&
+    snapshot.task.current_step === input.stepId,
   );
 }
