@@ -6,6 +6,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.build.json",
     "build:all": "tsc",
+    "audit:agent-task-state": "tsx scripts/auditAgentTaskState.ts",
     "test:deepseek": "tsx scripts/deepseekAdapterSmoke.ts",
     "test:kimi": "tsx scripts/kimiAdapterSmoke.ts",
     "test:agent-task-model": "tsx scripts/agentTaskModelSmoke.ts",
