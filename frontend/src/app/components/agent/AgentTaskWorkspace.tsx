@@ -3,8 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import {
   AlertCircle,
   ArrowUpRight,
@@ -64,6 +62,8 @@ import {
   latestApprovedArtifact,
   latestApprovedReviewDecision,
 } from "./agentTaskPresentation";
+import { AgentTaskEvidenceCitationList } from "./AgentTaskEvidenceCitationList";
+import { AgentTaskResult } from "./AgentTaskResult";
 import { useAgentTaskSnapshot } from "./useAgentTaskSnapshot";
 
 const STATUS_LABELS: Record<AgentTaskStatus, string> = {
@@ -105,16 +105,6 @@ const STEP_ICONS: Record<AgentStepStatus, typeof Circle> = {
   blocked: AlertCircle,
   skipped: Circle,
 };
-
-const EVIDENCE_STATUS_META = {
-  exact: { label: "Located", className: "text-emerald-700" },
-  version_mismatch: {
-    label: "Cited version",
-    className: "text-amber-800",
-  },
-  drifted: { label: "Anchor drifted", className: "text-red-700" },
-  missing: { label: "Citation missing", className: "text-red-700" },
-} as const;
 
 export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
   const router = useRouter();
@@ -1322,7 +1312,7 @@ function WorkRecord({
                 </summary>
                 <div className="pb-4 pl-12 pr-3">
                   {step.result_summary ? (
-                    <TaskResult>{step.result_summary}</TaskResult>
+                    <AgentTaskResult>{step.result_summary}</AgentTaskResult>
                   ) : (
                     <p className="text-xs leading-5 text-gray-500">
                       Expected: {step.expected_output}
@@ -1384,7 +1374,7 @@ function WorkRecord({
                               )}
                             </button>
                             {isEvidence && expanded && (
-                              <EvidenceCitationList
+                              <AgentTaskEvidenceCitationList
                                 evidence={
                                   evidenceByArtifact[artifact.artifact_id]
                                 }
@@ -1408,7 +1398,9 @@ function WorkRecord({
           <summary className="cursor-pointer list-none rounded text-xs text-gray-500 outline-none hover:text-gray-900 focus-visible:ring-2 focus-visible:ring-blue-500/70">
             Latest checkpoint
           </summary>
-          <TaskResult compact>{task.latest_checkpoint.summary}</TaskResult>
+          <AgentTaskResult compact>
+            {task.latest_checkpoint.summary}
+          </AgentTaskResult>
         </details>
       )}
 
@@ -1433,82 +1425,5 @@ function WorkRecord({
         </details>
       )}
     </section>
-  );
-}
-function TaskResult({
-  children,
-  compact = false,
-}: {
-  children: string;
-  compact?: boolean;
-}) {
-  return (
-    <div
-      className={cn(
-        "mt-1 overflow-auto pr-2 text-gray-500 [&_a]:underline [&_a]:underline-offset-2 [&_code]:rounded [&_code]:bg-gray-100 [&_code]:px-1 [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold [&_li]:ml-4 [&_li]:list-disc [&_ol_li]:list-decimal [&_p+p]:mt-1.5 [&_table]:my-2 [&_table]:w-full [&_td]:border-b [&_td]:border-gray-100 [&_td]:px-2 [&_td]:py-1 [&_th]:border-b [&_th]:border-gray-200 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left",
-        compact
-          ? "max-h-24 text-[11px] leading-4"
-          : "max-h-40 text-xs leading-5",
-      )}
-    >
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{children}</ReactMarkdown>
-    </div>
-  );
-}
-
-function EvidenceCitationList({
-  evidence,
-  onOpenCitation,
-}: {
-  evidence: AgentEvidenceSnapshot | undefined;
-  onOpenCitation: (citation: AgentEvidenceCitation) => void;
-}) {
-  if (!evidence) {
-    return (
-      <p className="pb-3 pl-5 text-xs text-gray-500">
-        Loading source locations…
-      </p>
-    );
-  }
-  if (evidence.citations.length === 0) {
-    return (
-      <p className="pb-3 pl-5 text-xs leading-5 text-red-700">
-        Citation missing — no source anchor was recorded.
-      </p>
-    );
-  }
-  return (
-    <div className="space-y-1 pb-3 pl-5">
-      {evidence.citations.map((citation) => {
-        const status = EVIDENCE_STATUS_META[citation.status];
-        const locator = citation.cell
-          ? [citation.sheet, citation.cell].filter(Boolean).join("!")
-          : citation.page != null
-            ? "Page " + citation.page
-            : "Source";
-        return (
-          <button
-            key={citation.id}
-            type="button"
-            disabled={!citation.openable}
-            onClick={() => onOpenCitation(citation)}
-            title={citation.quote || citation.detail}
-            className="block min-h-10 w-full rounded-md px-2 py-1.5 text-left outline-none hover:bg-gray-900/[0.035] focus-visible:ring-2 focus-visible:ring-blue-500/70 disabled:cursor-default disabled:opacity-65"
-          >
-            <span className="flex min-w-0 items-center justify-between gap-2 text-xs">
-              <span className="min-w-0 truncate font-medium text-gray-700">
-                {citation.filename} · {locator}
-              </span>
-              <span className={cn("shrink-0 font-medium", status.className)}>
-                {status.label}
-              </span>
-            </span>
-            <span className="mt-0.5 line-clamp-2 break-words text-xs leading-5 text-gray-500 [overflow-wrap:anywhere]">
-              {citation.quote || citation.detail}
-            </span>
-          </button>
-        );
-      })}
-    </div>
   );
 }
