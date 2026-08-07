@@ -62,6 +62,7 @@ import {
     withoutStreamingPlaceholders,
     type TRMessage,
 } from "./tabularChatEvents";
+import { iterateTabularChatEvents } from "./tabularChatStream";
 
 interface Props {
     reviewId: string;
@@ -964,190 +965,207 @@ export function TRChatPanel({
                 controller.signal,
                 { reviewTitle, projectName },
             );
-            if (!response.body) throw new Error("No response body");
+            for await (const data of iterateTabularChatEvents(response)) {
+                try {
+                    if (data.type === "chat_id") {
+                        if (typeof data.chatId !== "string") continue;
+                        const newId = data.chatId;
+                        setCurrentChatId(newId);
+                        setChats((prev) =>
+                            prev.some((c) => c.id === newId)
+                                ? prev
+                                : [
+                                      {
+                                          id: newId,
+                                          title: null,
+                                          created_at:
+                                              new Date().toISOString(),
+                                          updated_at:
+                                              new Date().toISOString(),
+                                      },
+                                      ...prev,
+                                  ],
+                        );
+                        continue;
+                    }
 
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = "";
-
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split("\n");
-                buffer = lines.pop() ?? "";
-
-                for (const line of lines) {
-                    if (!line.startsWith("data:")) continue;
-                    const dataStr = line.slice(5).trim();
-                    if (dataStr === "[DONE]") continue;
-
-                    try {
-                        const data = JSON.parse(dataStr);
-
-                        if (data.type === "chat_id") {
-                            const newId = data.chatId as string;
-                            setCurrentChatId(newId);
-                            setChats((prev) =>
-                                prev.some((c) => c.id === newId)
-                                    ? prev
-                                    : [
-                                          {
-                                              id: newId,
-                                              title: null,
-                                              created_at:
-                                                  new Date().toISOString(),
-                                              updated_at:
-                                                  new Date().toISOString(),
-                                          },
-                                          ...prev,
-                                      ],
-                            );
-                            continue;
-                        }
-
-                        if (data.type === "chat_title") {
-                            const { chatId, title } = data as {
-                                chatId: string;
-                                title: string;
-                            };
-                            setChats((prev) =>
-                                prev.map((c) =>
-                                    c.id === chatId ? { ...c, title } : c,
-                                ),
-                            );
-                            setCurrentChatTitle(title);
-                            continue;
-                        }
-
-                        if (data.type === "reasoning_delta") {
-                            publishEvents(
-                                appendReasoningDelta(
-                                    eventsRef.current,
-                                    typeof data.text === "string"
-                                        ? data.text
-                                        : "",
-                                ),
-                            );
-                            continue;
-                        }
-
-                        if (data.type === "reasoning_block_end") {
-                            publishEvents(
-                                finishReasoningBlock(eventsRef.current),
-                            );
-                            pushThinkingPlaceholder();
-                            continue;
-                        }
-
-                        if (data.type === "content_delta") {
-                            if (typeof data.text !== "string" || !data.text) {
-                                continue;
-                            }
-                            const text = data.text;
-                            dripTargetRef.current += text;
-                            const next = ensureStreamingContentEvent(
-                                eventsRef.current,
-                            );
-                            if (next !== eventsRef.current) publishEvents(next);
-                            startDrip();
-                            continue;
-                        }
-
+                    if (data.type === "chat_title") {
                         if (
-                            data.type === "courtlistener_search_case_law_start"
+                            typeof data.chatId !== "string" ||
+                            typeof data.title !== "string"
                         ) {
-                            pushEvent({
+                            continue;
+                        }
+                        const { chatId, title } = data;
+                        setChats((prev) =>
+                            prev.map((c) =>
+                                c.id === chatId ? { ...c, title } : c,
+                            ),
+                        );
+                        setCurrentChatTitle(title);
+                        continue;
+                    }
+
+                    if (data.type === "reasoning_delta") {
+                        publishEvents(
+                            appendReasoningDelta(
+                                eventsRef.current,
+                                typeof data.text === "string"
+                                    ? data.text
+                                    : "",
+                            ),
+                        );
+                        continue;
+                    }
+
+                    if (data.type === "reasoning_block_end") {
+                        publishEvents(
+                            finishReasoningBlock(eventsRef.current),
+                        );
+                        pushThinkingPlaceholder();
+                        continue;
+                    }
+
+                    if (data.type === "content_delta") {
+                        if (typeof data.text !== "string" || !data.text) {
+                            continue;
+                        }
+                        const text = data.text;
+                        dripTargetRef.current += text;
+                        const next = ensureStreamingContentEvent(
+                            eventsRef.current,
+                        );
+                        if (next !== eventsRef.current) publishEvents(next);
+                        startDrip();
+                        continue;
+                    }
+
+                    if (
+                        data.type === "courtlistener_search_case_law_start"
+                    ) {
+                        pushEvent({
+                            type: "courtlistener_search_case_law",
+                            query: (data.query as string) ?? "",
+                            isStreaming: true,
+                        });
+                        continue;
+                    }
+
+                    if (data.type === "courtlistener_search_case_law") {
+                        updateMatchingEvent(
+                            (e) =>
+                                e.type ===
+                                    "courtlistener_search_case_law" &&
+                                e.query === (data.query as string) &&
+                                !!e.isStreaming,
+                            () => ({
                                 type: "courtlistener_search_case_law",
                                 query: (data.query as string) ?? "",
-                                isStreaming: true,
-                            });
-                            continue;
-                        }
+                                result_count:
+                                    typeof data.result_count === "number"
+                                        ? (data.result_count as number)
+                                        : 0,
+                                error:
+                                    typeof data.error === "string"
+                                        ? (data.error as string)
+                                        : undefined,
+                                isStreaming: false,
+                            }),
+                        );
+                        pushThinkingPlaceholder();
+                        continue;
+                    }
 
-                        if (data.type === "courtlistener_search_case_law") {
-                            updateMatchingEvent(
-                                (e) =>
-                                    e.type ===
-                                        "courtlistener_search_case_law" &&
-                                    e.query === (data.query as string) &&
-                                    !!e.isStreaming,
-                                () => ({
-                                    type: "courtlistener_search_case_law",
-                                    query: (data.query as string) ?? "",
-                                    result_count:
-                                        typeof data.result_count === "number"
-                                            ? (data.result_count as number)
-                                            : 0,
-                                    error:
-                                        typeof data.error === "string"
-                                            ? (data.error as string)
-                                            : undefined,
-                                    isStreaming: false,
-                                }),
-                            );
-                            pushThinkingPlaceholder();
-                            continue;
-                        }
+                    if (data.type === "courtlistener_get_cases_start") {
+                        pushEvent({
+                            type: "courtlistener_get_cases",
+                            cluster_ids: Array.isArray(data.cluster_ids)
+                                ? (data.cluster_ids as unknown[]).filter(
+                                      (value: unknown): value is number =>
+                                          typeof value === "number",
+                                  )
+                                : [],
+                            isStreaming: true,
+                        });
+                        continue;
+                    }
 
-                        if (data.type === "courtlistener_get_cases_start") {
-                            pushEvent({
+                    if (data.type === "courtlistener_get_cases") {
+                        updateMatchingEvent(
+                            (e) =>
+                                e.type === "courtlistener_get_cases" &&
+                                !!e.isStreaming,
+                            () => ({
                                 type: "courtlistener_get_cases",
                                 cluster_ids: Array.isArray(data.cluster_ids)
-                                    ? (data.cluster_ids as unknown[]).filter(
-                                          (value: unknown): value is number =>
+                                    ? (
+                                          data.cluster_ids as unknown[]
+                                      ).filter(
+                                          (
+                                              value: unknown,
+                                          ): value is number =>
                                               typeof value === "number",
                                       )
                                     : [],
-                                isStreaming: true,
-                            });
-                            continue;
-                        }
+                                case_count:
+                                    typeof data.case_count === "number"
+                                        ? (data.case_count as number)
+                                        : 0,
+                                opinion_count:
+                                    typeof data.opinion_count === "number"
+                                        ? (data.opinion_count as number)
+                                        : 0,
+                                cases: parseCourtlistenerEventCases(
+                                    data.cases,
+                                ),
+                                error:
+                                    typeof data.error === "string"
+                                        ? (data.error as string)
+                                        : undefined,
+                                isStreaming: false,
+                            }),
+                        );
+                        pushThinkingPlaceholder();
+                        continue;
+                    }
 
-                        if (data.type === "courtlistener_get_cases") {
-                            updateMatchingEvent(
-                                (e) =>
-                                    e.type === "courtlistener_get_cases" &&
-                                    !!e.isStreaming,
-                                () => ({
-                                    type: "courtlistener_get_cases",
-                                    cluster_ids: Array.isArray(data.cluster_ids)
-                                        ? (
-                                              data.cluster_ids as unknown[]
-                                          ).filter(
-                                              (
-                                                  value: unknown,
-                                              ): value is number =>
-                                                  typeof value === "number",
-                                          )
-                                        : [],
-                                    case_count:
-                                        typeof data.case_count === "number"
-                                            ? (data.case_count as number)
-                                            : 0,
-                                    opinion_count:
-                                        typeof data.opinion_count === "number"
-                                            ? (data.opinion_count as number)
-                                            : 0,
-                                    cases: parseCourtlistenerEventCases(
-                                        data.cases,
-                                    ),
-                                    error:
-                                        typeof data.error === "string"
-                                            ? (data.error as string)
-                                            : undefined,
-                                    isStreaming: false,
-                                }),
-                            );
-                            pushThinkingPlaceholder();
-                            continue;
-                        }
+                    if (data.type === "courtlistener_find_in_case_start") {
+                        const searches = parseCourtlistenerCaseSearches(
+                            data.searches,
+                        );
+                        pushEvent({
+                            type: "courtlistener_find_in_case",
+                            cluster_id: searches?.length
+                                ? null
+                                : typeof data.cluster_id === "number"
+                                  ? (data.cluster_id as number)
+                                  : null,
+                            query: searches?.length
+                                ? ""
+                                : ((data.query as string) ?? ""),
+                            searches,
+                            isStreaming: true,
+                        });
+                        continue;
+                    }
 
-                        if (data.type === "courtlistener_find_in_case_start") {
-                            const searches = parseCourtlistenerCaseSearches(
-                                data.searches,
-                            );
-                            pushEvent({
+                    if (data.type === "courtlistener_find_in_case") {
+                        const searches = parseCourtlistenerCaseSearches(
+                            data.searches,
+                        );
+                        updateMatchingEvent(
+                            (e) =>
+                                e.type === "courtlistener_find_in_case" &&
+                                (searches?.length
+                                    ? Array.isArray(e.searches)
+                                    : e.cluster_id ===
+                                          (typeof data.cluster_id ===
+                                          "number"
+                                              ? (data.cluster_id as number)
+                                              : null) &&
+                                      e.query === (data.query as string)) &&
+                                !!e.isStreaming,
+                            () => ({
                                 type: "courtlistener_find_in_case",
                                 cluster_id: searches?.length
                                     ? null
@@ -1157,156 +1175,53 @@ export function TRChatPanel({
                                 query: searches?.length
                                     ? ""
                                     : ((data.query as string) ?? ""),
-                                searches,
-                                isStreaming: true,
-                            });
-                            continue;
-                        }
-
-                        if (data.type === "courtlistener_find_in_case") {
-                            const searches = parseCourtlistenerCaseSearches(
-                                data.searches,
-                            );
-                            updateMatchingEvent(
-                                (e) =>
-                                    e.type === "courtlistener_find_in_case" &&
-                                    (searches?.length
-                                        ? Array.isArray(e.searches)
-                                        : e.cluster_id ===
-                                              (typeof data.cluster_id ===
-                                              "number"
-                                                  ? (data.cluster_id as number)
-                                                  : null) &&
-                                          e.query === (data.query as string)) &&
-                                    !!e.isStreaming,
-                                () => ({
-                                    type: "courtlistener_find_in_case",
-                                    cluster_id: searches?.length
-                                        ? null
-                                        : typeof data.cluster_id === "number"
-                                          ? (data.cluster_id as number)
-                                          : null,
-                                    query: searches?.length
-                                        ? ""
-                                        : ((data.query as string) ?? ""),
-                                    total_matches:
-                                        typeof data.total_matches === "number"
-                                            ? (data.total_matches as number)
-                                            : 0,
-                                    searches,
-                                    case_name:
-                                        typeof data.case_name === "string"
-                                            ? (data.case_name as string)
-                                            : null,
-                                    citation:
-                                        typeof data.citation === "string"
-                                            ? (data.citation as string)
-                                            : null,
-                                    error:
-                                        typeof data.error === "string"
-                                            ? (data.error as string)
-                                            : undefined,
-                                    isStreaming: false,
-                                }),
-                            );
-                            pushThinkingPlaceholder();
-                            continue;
-                        }
-
-                        if (data.type === "courtlistener_read_case_start") {
-                            pushEvent({
-                                type: "courtlistener_read_case",
-                                cluster_id:
-                                    typeof data.cluster_id === "number"
-                                        ? (data.cluster_id as number)
-                                        : null,
-                                isStreaming: true,
-                            });
-                            continue;
-                        }
-
-                        if (data.type === "courtlistener_read_case") {
-                            updateMatchingEvent(
-                                (e) =>
-                                    e.type === "courtlistener_read_case" &&
-                                    e.cluster_id ===
-                                        (typeof data.cluster_id === "number"
-                                            ? (data.cluster_id as number)
-                                            : null) &&
-                                    !!e.isStreaming,
-                                () => ({
-                                    type: "courtlistener_read_case",
-                                    cluster_id:
-                                        typeof data.cluster_id === "number"
-                                            ? (data.cluster_id as number)
-                                            : null,
-                                    case_name:
-                                        typeof data.case_name === "string"
-                                            ? (data.case_name as string)
-                                            : null,
-                                    citation:
-                                        typeof data.citation === "string"
-                                            ? (data.citation as string)
-                                            : null,
-                                    opinion_count:
-                                        typeof data.opinion_count === "number"
-                                            ? (data.opinion_count as number)
-                                            : 0,
-                                    error:
-                                        typeof data.error === "string"
-                                            ? (data.error as string)
-                                            : undefined,
-                                    isStreaming: false,
-                                }),
-                            );
-                            pushThinkingPlaceholder();
-                            continue;
-                        }
-
-                        if (
-                            data.type === "courtlistener_verify_citations_start"
-                        ) {
-                            pushEvent({
-                                type: "courtlistener_verify_citations",
-                                citation_count:
-                                    typeof data.citation_count === "number"
-                                        ? (data.citation_count as number)
+                                total_matches:
+                                    typeof data.total_matches === "number"
+                                        ? (data.total_matches as number)
                                         : 0,
-                                isStreaming: true,
-                            });
-                            continue;
-                        }
+                                searches,
+                                case_name:
+                                    typeof data.case_name === "string"
+                                        ? (data.case_name as string)
+                                        : null,
+                                citation:
+                                    typeof data.citation === "string"
+                                        ? (data.citation as string)
+                                        : null,
+                                error:
+                                    typeof data.error === "string"
+                                        ? (data.error as string)
+                                        : undefined,
+                                isStreaming: false,
+                            }),
+                        );
+                        pushThinkingPlaceholder();
+                        continue;
+                    }
 
-                        if (data.type === "courtlistener_verify_citations") {
-                            updateMatchingEvent(
-                                (e) =>
-                                    e.type ===
-                                        "courtlistener_verify_citations" &&
-                                    !!e.isStreaming,
-                                () => ({
-                                    type: "courtlistener_verify_citations",
-                                    citation_count:
-                                        typeof data.citation_count === "number"
-                                            ? (data.citation_count as number)
-                                            : 0,
-                                    match_count:
-                                        typeof data.match_count === "number"
-                                            ? (data.match_count as number)
-                                            : 0,
-                                    error:
-                                        typeof data.error === "string"
-                                            ? (data.error as string)
-                                            : undefined,
-                                    isStreaming: false,
-                                }),
-                            );
-                            pushThinkingPlaceholder();
-                            continue;
-                        }
+                    if (data.type === "courtlistener_read_case_start") {
+                        pushEvent({
+                            type: "courtlistener_read_case",
+                            cluster_id:
+                                typeof data.cluster_id === "number"
+                                    ? (data.cluster_id as number)
+                                    : null,
+                            isStreaming: true,
+                        });
+                        continue;
+                    }
 
-                        if (data.type === "case_citation") {
-                            pushEvent({
-                                type: "case_citation",
+                    if (data.type === "courtlistener_read_case") {
+                        updateMatchingEvent(
+                            (e) =>
+                                e.type === "courtlistener_read_case" &&
+                                e.cluster_id ===
+                                    (typeof data.cluster_id === "number"
+                                        ? (data.cluster_id as number)
+                                        : null) &&
+                                !!e.isStreaming,
+                            () => ({
+                                type: "courtlistener_read_case",
                                 cluster_id:
                                     typeof data.cluster_id === "number"
                                         ? (data.cluster_id as number)
@@ -1319,70 +1234,140 @@ export function TRChatPanel({
                                     typeof data.citation === "string"
                                         ? (data.citation as string)
                                         : null,
-                                url: data.url as string,
-                            });
-                            continue;
-                        }
-
-                        if (data.type === "case_opinions") {
-                            pushEvent({
-                                type: "case_opinions",
-                                cluster_id:
-                                    typeof data.cluster_id === "number"
-                                        ? (data.cluster_id as number)
+                                opinion_count:
+                                    typeof data.opinion_count === "number"
+                                        ? (data.opinion_count as number)
                                         : 0,
-                                case: data.case as Extract<
-                                    AssistantEvent,
-                                    { type: "case_opinions" }
-                                >["case"],
-                            });
-                            continue;
-                        }
-
-                        if (data.type === "doc_read_start") {
-                            pushEvent({
-                                type: "doc_read",
-                                filename: data.filename as string,
-                                isStreaming: true,
-                            });
-                            continue;
-                        }
-
-                        if (data.type === "doc_read") {
-                            updateMatchingEvent(
-                                (e) =>
-                                    e.type === "doc_read" &&
-                                    e.filename === data.filename &&
-                                    !!e.isStreaming,
-                                (e) => ({ ...e, isStreaming: false }),
-                            );
-                            pushThinkingPlaceholder();
-                            continue;
-                        }
-
-                        if (data.type === "citations") {
-                            // End-of-stream signal — scrub any lingering
-                            // placeholders so they don't persist into the
-                            // finalised message.
-                            clearStreamingPlaceholders();
-                            const incoming = (data.citations ??
-                                []) as TRCitationAnnotation[];
-                            setMessages((prev) => {
-                                const updated = [...prev];
-                                const last = updated[updated.length - 1];
-                                if (last?.role === "assistant") {
-                                    updated[updated.length - 1] = {
-                                        ...last,
-                                        annotations: incoming,
-                                    };
-                                }
-                                return updated;
-                            });
-                            continue;
-                        }
-                    } catch {
-                        /* skip malformed */
+                                error:
+                                    typeof data.error === "string"
+                                        ? (data.error as string)
+                                        : undefined,
+                                isStreaming: false,
+                            }),
+                        );
+                        pushThinkingPlaceholder();
+                        continue;
                     }
+
+                    if (
+                        data.type === "courtlistener_verify_citations_start"
+                    ) {
+                        pushEvent({
+                            type: "courtlistener_verify_citations",
+                            citation_count:
+                                typeof data.citation_count === "number"
+                                    ? (data.citation_count as number)
+                                    : 0,
+                            isStreaming: true,
+                        });
+                        continue;
+                    }
+
+                    if (data.type === "courtlistener_verify_citations") {
+                        updateMatchingEvent(
+                            (e) =>
+                                e.type ===
+                                    "courtlistener_verify_citations" &&
+                                !!e.isStreaming,
+                            () => ({
+                                type: "courtlistener_verify_citations",
+                                citation_count:
+                                    typeof data.citation_count === "number"
+                                        ? (data.citation_count as number)
+                                        : 0,
+                                match_count:
+                                    typeof data.match_count === "number"
+                                        ? (data.match_count as number)
+                                        : 0,
+                                error:
+                                    typeof data.error === "string"
+                                        ? (data.error as string)
+                                        : undefined,
+                                isStreaming: false,
+                            }),
+                        );
+                        pushThinkingPlaceholder();
+                        continue;
+                    }
+
+                    if (data.type === "case_citation") {
+                        pushEvent({
+                            type: "case_citation",
+                            cluster_id:
+                                typeof data.cluster_id === "number"
+                                    ? (data.cluster_id as number)
+                                    : null,
+                            case_name:
+                                typeof data.case_name === "string"
+                                    ? (data.case_name as string)
+                                    : null,
+                            citation:
+                                typeof data.citation === "string"
+                                    ? (data.citation as string)
+                                    : null,
+                            url: data.url as string,
+                        });
+                        continue;
+                    }
+
+                    if (data.type === "case_opinions") {
+                        pushEvent({
+                            type: "case_opinions",
+                            cluster_id:
+                                typeof data.cluster_id === "number"
+                                    ? (data.cluster_id as number)
+                                    : 0,
+                            case: data.case as Extract<
+                                AssistantEvent,
+                                { type: "case_opinions" }
+                            >["case"],
+                        });
+                        continue;
+                    }
+
+                    if (data.type === "doc_read_start") {
+                        pushEvent({
+                            type: "doc_read",
+                            filename: data.filename as string,
+                            isStreaming: true,
+                        });
+                        continue;
+                    }
+
+                    if (data.type === "doc_read") {
+                        updateMatchingEvent(
+                            (e) =>
+                                e.type === "doc_read" &&
+                                e.filename === data.filename &&
+                                !!e.isStreaming,
+                            (e) => ({ ...e, isStreaming: false }),
+                        );
+                        pushThinkingPlaceholder();
+                        continue;
+                    }
+
+                    if (data.type === "citations") {
+                        // End-of-stream signal — scrub any lingering
+                        // placeholders so they don't persist into the
+                        // finalised message.
+                        clearStreamingPlaceholders();
+                        const incoming = (data.citations ??
+                            []) as TRCitationAnnotation[];
+                        setMessages((prev) => {
+                            const updated = [...prev];
+                            const last = updated[updated.length - 1];
+                            if (last?.role === "assistant") {
+                                updated[updated.length - 1] = {
+                                    ...last,
+                                    annotations: incoming,
+                                };
+                            }
+                            return updated;
+                        });
+                        continue;
+                    }
+                } catch {
+                    /* skip malformed protocol event */
                 }
             }
 
