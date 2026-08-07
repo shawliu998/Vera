@@ -78,6 +78,11 @@ approval, export, or a second source database.
   both values are present; and save/delete remain MFA-protected. No provider
   credentials enter a connector pin, Task checkpoint, receipt, discovery, or
   imported source provenance.
+- One server-owned runtime registry resolves the exact audited CourtListener or
+  EPO OPS pin into a fresh current-user authorization, bound invoker, and
+  normalizer. Missing current-user credentials produce `disconnected`; the
+  runtime never borrows another user's credential, accepts a model-selected
+  connector identifier, or serializes key, secret, or token material.
 - The current EPO OPS endpoint and CQL semantics were checked against the EPO
   OPS 3.2 reference guide and official service page on 2026-08-08:
   <https://www.epo.org/en/searching-for-patents/data/web-services/ops> and
@@ -85,11 +90,11 @@ approval, export, or a second source database.
 
 ## Remaining gates
 
-1. Compile an explicit server-owned EPO OPS connector grant only for a source
-   acquisition Step, resolve its fresh authorization from the current user's
-   encrypted pair, and run a real credential acceptance. Credential storage is
-   implemented; ordinary patent analysis Tasks still correctly receive no
-   connector pin.
+1. Add a server-owned source-acquisition execution path before compiling an
+   EPO OPS grant. The current `read_sources` executor only reads fixed Matter
+   Versions, so adding a pin there now would be a false capability claim.
+   Credential storage and fresh current-user runtime resolution are
+   implemented; ordinary patent analysis Tasks still correctly receive no pin.
 2. Decide whether PatSnap provides a material, licensed coverage increment over
    EPO OPS before adapting it; do not copy the old parallel patent subsystem.
 3. Run real credential, database, and product-level patent research acceptance;
