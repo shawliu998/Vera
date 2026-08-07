@@ -31,7 +31,6 @@ import { getProject } from "@/app/lib/mikeApi";
 import {
   createAgentReviewDecision,
   downloadApprovedAgentArtifact,
-  getAgentTask,
   getAgentTaskEvidence,
   pauseAgentTask,
   resumeAgentTask,
@@ -57,6 +56,7 @@ import type {
   ApprovedArtifactSnapshot,
 } from "@/app/types/agent";
 import type { Document, Project } from "@/app/components/shared/types";
+import { useAgentTaskSnapshot } from "./useAgentTaskSnapshot";
 
 const STATUS_LABELS: Record<AgentTaskStatus, string> = {
   queued: "Ready",
@@ -111,9 +111,8 @@ const EVIDENCE_STATUS_META = {
 export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
   const router = useRouter();
   const { profile } = useUserProfile();
-  const [snapshot, setSnapshot] = useState<AgentTaskSnapshot | null>(null);
-  const [loaded, setLoaded] = useState(false);
-  const [matter, setMatter] = useState<Project | null>(null);
+  const { snapshot, loaded, commitSnapshot } = useAgentTaskSnapshot(taskId);
+  const [loadedMatter, setLoadedMatter] = useState<Project | null>(null);
   const [executionError, setExecutionError] = useState<string | null>(null);
   const [missingKeyProvider, setMissingKeyProvider] =
     useState<ModelProvider | null>(null);
@@ -140,16 +139,24 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
   const [taskInputSubmitting, setTaskInputSubmitting] = useState(false);
   const [taskInputError, setTaskInputError] = useState<string | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const taskActionRef = useRef<"resume" | "pause" | "retry" | null>(null);
 
+  const matterId = snapshot?.task.matter_id;
+  const matter = loadedMatter?.id === matterId ? loadedMatter : null;
   useEffect(() => {
-    void getAgentTask(taskId)
-      .then(async (value) => {
-        setSnapshot(value);
-        setMatter(await getProject(value.task.matter_id));
+    if (!matterId) return;
+    let cancelled = false;
+    void getProject(matterId)
+      .then((project) => {
+        if (!cancelled) setLoadedMatter(project);
       })
-      .catch(() => setSnapshot(null))
-      .finally(() => setLoaded(true));
-  }, [taskId]);
+      .catch(() => {
+        if (!cancelled) setLoadedMatter(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [matterId]);
 
   useEffect(() => {
     if (!loaded || !scrollContainerRef.current) return;
@@ -165,29 +172,6 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
     });
   }, [loaded, taskId]);
 
-  const taskStatus = snapshot?.task.status;
-
-  useEffect(() => {
-    if (
-      !taskStatus ||
-      !["queued", "running", "verifying"].includes(taskStatus)
-    ) {
-      return;
-    }
-    let cancelled = false;
-    const timer = window.setInterval(() => {
-      void getAgentTask(taskId)
-        .then((next) => {
-          if (!cancelled) setSnapshot(next);
-        })
-        .catch(() => undefined);
-    }, 4_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [taskId, taskStatus]);
-
   const completedSteps = useMemo(
     () =>
       snapshot?.task.current_plan.filter((step) => step.status === "completed")
@@ -195,18 +179,36 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
     [snapshot],
   );
 
-  async function resumeTask() {
+  async function runTaskAction(
+    action: "resume" | "pause" | "retry",
+    request: () => Promise<AgentTaskSnapshot>,
+  ) {
+    if (taskActionRef.current) return;
+    taskActionRef.current = action;
     setExecutionError(null);
-    setSnapshot(await resumeAgentTask(taskId));
+    try {
+      commitSnapshot(await request());
+    } catch (error) {
+      setExecutionError(
+        error instanceof Error
+          ? error.message
+          : `The task could not ${action}.`,
+      );
+    } finally {
+      taskActionRef.current = null;
+    }
+  }
+
+  async function resumeTask() {
+    await runTaskAction("resume", () => resumeAgentTask(taskId));
   }
 
   async function pauseTask() {
-    setSnapshot(await pauseAgentTask(taskId));
+    await runTaskAction("pause", () => pauseAgentTask(taskId));
   }
 
   async function retryTask() {
-    setExecutionError(null);
-    setSnapshot(await retryAgentTask(taskId));
+    await runTaskAction("retry", () => retryAgentTask(taskId));
   }
 
   async function startRevision() {
@@ -214,7 +216,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
     setRevisionStarting(true);
     setReviewError(null);
     try {
-      setSnapshot(await reviseAgentTask(taskId));
+      commitSnapshot(await reviseAgentTask(taskId));
     } catch (error) {
       setReviewError(
         error instanceof Error
@@ -259,7 +261,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
     setTaskInputSubmitting(true);
     setTaskInputError(null);
     try {
-      setSnapshot(
+      commitSnapshot(
         await submitAgentTaskInput(taskId, {
           message: taskInput,
           documentIds: taskInputDocuments.map((document) => document.id),
@@ -290,7 +292,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
     setExecutionError(null);
     try {
       const updated = await updateAgentTaskModel(taskId, modelId);
-      setSnapshot(updated);
+      commitSnapshot(updated);
     } catch (error) {
       setExecutionError(
         error instanceof Error ? error.message : "Failed to switch task model",
@@ -315,7 +317,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
         status,
         note: reviewNote.trim(),
       });
-      setSnapshot(updated);
+      commitSnapshot(updated);
       setReviewNote("");
       return true;
     } catch (error) {
