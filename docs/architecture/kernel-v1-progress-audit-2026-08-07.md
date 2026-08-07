@@ -35,7 +35,7 @@ repository interfaces batch by batch, not to rewrite the execution system.
 | Domain | Gold workflow | Canonical outputs | Current evidence | Missing acceptance evidence |
 | --- | --- | --- | --- | --- |
 | Contract | `builtin-contract-playbook-review` | revision DOCX, clean DOCX, review opinion DOCX | Pinned first-party manifest, fixed fixture digest, contract verifier profile, Word revision/clean/opinion regressions | Fresh ordinary-user Task through UI; lawyer dispositions; browser review/optional Word handoff; final verification and download without database or OOXML repair. |
-| Patent | `builtin-patentability-assessment` | feature-chart Tabular Review/XLSX and cited memo DOCX | Pinned first-party manifest and fixed two-artifact contract | No workflow-specific acceptance fixture is pinned. Add a coherent synthetic invention/claim plus prior-art fixture with locator gaps before running the Task. Then prove both outputs, source navigation and unresolved-gap preservation. |
+| Patent | `builtin-patentability-assessment` | feature-chart Tabular Review/XLSX and cited memo DOCX | Pinned first-party manifest and fixed two-artifact contract; deterministic synthetic target-claim and prior-art DOCX sources with continuous-quote expectations and explicit coverage gaps | Run the fixture as a fresh Task, then prove both outputs, source navigation and unresolved-gap preservation. |
 | Litigation | `builtin-litigation-hearing-preparation` | evidence inventory, objection opinion, hearing outline | Pinned first-party manifest, locked synthetic litigation DOCX, partial-cell recovery regression | Fresh first-instance, represented-side fixture import; all three outputs in one Task; direct source/page checks; exhausted-cell recovery; lawyer review and download. |
 
 All three must execute through the same Matter, AgentTask/Step, ArtifactLink,
@@ -64,7 +64,6 @@ preserved release capabilities.
 ## Next execution order
 
 1. When Word is closed, complete Batch 7 Host activation and visual acceptance.
-2. Pin a workflow-specific patentability fixture and extend manifest validation.
-3. Run fresh contract, patentability and litigation Tasks through the product UI.
-4. Extract the Batch 8 connector boundary and reconcile patent source import.
-5. Use the gold-flow evidence to remove legacy Aletheia slices incrementally.
+2. Run fresh contract, patentability and litigation Tasks through the product UI.
+3. Extract the Batch 8 connector boundary and reconcile patent source import.
+4. Use the gold-flow evidence to remove legacy Aletheia slices incrementally.

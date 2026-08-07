@@ -4121,7 +4121,7 @@ export const SYSTEM_SKILL_MANIFESTS: SkillManifestV1[] = [
             "revision": "sha256:ef12569aaf5f668d83f5a6397814b00cff48711a594084b6e480391116af79f7",
             "path": "scripts/vera-workflows/patentability-assessment/SKILL.md"
         },
-        "content_digest": "sha256:80e0bbf69116d347e563886871c5e9e4e5ab1e2eec2e98d01717c448da6b72e9",
+        "content_digest": "sha256:44a42133a71df92afd374e6484b1638de5eedd03af36d23d63e757a2cd0c33af",
         "task_families": [
             "generic"
         ],
@@ -4196,7 +4196,9 @@ export const SYSTEM_SKILL_MANIFESTS: SkillManifestV1[] = [
             "steps_complete"
         ],
         "verifier_profile": "work_task_source_citation_v1",
-        "fixtures": [],
+        "fixtures": [
+            "scripts/vera-workflows/patentability-assessment/references/synthetic-patentability-v1"
+        ],
         "dependencies": [],
         "deprecation": {
             "deprecated": false,

@@ -220,6 +220,9 @@ test("lock pins 24 active Mike workflows plus twelve Vera-only manifests", () =>
       ["patentability-memo", "draft", "docx"],
     ],
   );
+  assert.deepEqual(patentability.fixtures, [
+    "scripts/vera-workflows/patentability-assessment/references/synthetic-patentability-v1",
+  ]);
   const claimComparison =
     lock.firstParty.workflows["patent-claim-comparison"];
   assert.equal(claimComparison.id, "builtin-patent-claim-comparison");
@@ -402,6 +405,12 @@ test("synthetic fixtures are closed, classified, locked, and safe to inspect", (
     "scripts/vera-workflows/citation-research/references/synthetic-citation-research-v1.json";
   const patentPath =
     "scripts/vera-workflows/patent-claim-comparison/references/synthetic-claim-comparison-v1.json";
+  const patentabilityPath =
+    "scripts/vera-workflows/patentability-assessment/references/synthetic-patentability-v1";
+  const patentabilityManifestPath = path.join(
+    patentabilityPath,
+    "fixture.json",
+  );
   const docxPath =
     "docs/fixtures/competitor-audit/synthetic-major-commercial-case.docx";
   const citation = JSON.parse(
@@ -409,6 +418,12 @@ test("synthetic fixtures are closed, classified, locked, and safe to inspect", (
   );
   const patent = JSON.parse(
     fs.readFileSync(path.join(REPOSITORY_ROOT, patentPath), "utf8"),
+  );
+  const patentability = JSON.parse(
+    fs.readFileSync(
+      path.join(REPOSITORY_ROOT, patentabilityManifestPath),
+      "utf8",
+    ),
   );
 
   assert.equal(citation.schema_version, "citation_research_fixture_v1");
@@ -531,6 +546,104 @@ test("synthetic fixtures are closed, classified, locked, and safe to inspect", (
     /(^|\/)artifacts\//,
   );
 
+  assert.equal(
+    patentability.schema_version,
+    "patentability_acceptance_fixture_v1",
+  );
+  assert.match(patentability.classification, /synthetic/i);
+  assert.match(patentability.classification, /not for filing/i);
+  assert.deepEqual(
+    lock.firstParty.workflows["patentability-assessment"].fixtures,
+    [patentabilityPath],
+  );
+  const patentabilitySourceText = new Map(
+    patentability.sources.map((source) => {
+      const sourcePath = path.join(
+        REPOSITORY_ROOT,
+        patentabilityPath,
+        source.filename,
+      );
+      assert.equal(fs.statSync(sourcePath).isFile(), true);
+      const archive = spawnSync(
+        "/usr/bin/unzip",
+        ["-p", sourcePath, "word/document.xml"],
+        { encoding: "utf8" },
+      );
+      assert.equal(archive.status, 0, archive.stderr);
+      const listing = spawnSync("/usr/bin/unzip", ["-Z1", sourcePath], {
+        encoding: "utf8",
+      });
+      assert.equal(listing.status, 0, listing.stderr);
+      const entries = listing.stdout.trim().split("\n").filter(Boolean);
+      assert.ok(entries.includes("[Content_Types].xml"));
+      assert.ok(entries.includes("word/document.xml"));
+      assert.ok(entries.every((entry) => !/vbaProject|macro/i.test(entry)));
+      for (const relationship of entries.filter((entry) =>
+        /(?:^|\/)\.rels$/.test(entry),
+      )) {
+        const relationXml = spawnSync(
+          "/usr/bin/unzip",
+          ["-p", sourcePath, relationship],
+          { encoding: "utf8" },
+        );
+        assert.equal(relationXml.status, 0, relationXml.stderr);
+        assert.doesNotMatch(relationXml.stdout, /TargetMode="External"/i);
+      }
+      const coreXml = spawnSync(
+        "/usr/bin/unzip",
+        ["-p", sourcePath, "docProps/core.xml"],
+        { encoding: "utf8" },
+      );
+      assert.equal(coreXml.status, 0, coreXml.stderr);
+      assert.match(coreXml.stdout, /<dc:creator>Vera QA<\/dc:creator>/);
+      assert.doesNotMatch(coreXml.stdout, /(?:a1-6|\/Users\/|Documents)/i);
+      const text = archive.stdout
+        .replace(/<\/w:p>/g, "\n")
+        .replace(/<[^>]+>/g, "")
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'");
+      return [source.key, text];
+    }),
+  );
+  assert.match(
+    patentabilitySourceText.get("target"),
+    new RegExp(
+      patentability.target_claim.text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+    ),
+  );
+  assert.equal(
+    new Set(patentability.target_claim.features.map((feature) => feature.id))
+      .size,
+    patentability.target_claim.features.length,
+  );
+  for (const observation of patentability.expected_feature_observations) {
+    assert.ok(
+      patentabilitySourceText
+        .get(observation.source)
+        .includes(observation.quote),
+    );
+    assert.ok(
+      patentability.target_claim.features.some(
+        (feature) => feature.id === observation.feature_id,
+      ),
+    );
+  }
+  assert.deepEqual(
+    patentability.required_outputs,
+    lock.firstParty.workflows["patentability-assessment"].artifactContracts.map(
+      (contract) => contract.key,
+    ),
+  );
+  assert.equal(
+    patentability.expected_invariants.quotes_are_contiguous_source_substrings,
+    true,
+  );
+  assert.ok(patentability.required_unresolved_gaps.length >= 4);
+  assert.ok(patentability.prohibited_conclusions.includes("validity"));
+
   const docx = path.join(REPOSITORY_ROOT, docxPath);
   const list = spawnSync("/usr/bin/unzip", ["-Z1", docx], { encoding: "utf8" });
   assert.equal(list.status, 0, list.stderr);
@@ -567,6 +680,10 @@ test("synthetic fixtures are closed, classified, locked, and safe to inspect", (
   assert.equal(
     fixtureSha256(patentPath, "patent fixture"),
     "1565f01487158cd6f9ff1ce4001e2e124aabb99ae7b4099ee9180c554953f0c7",
+  );
+  assert.equal(
+    fixtureSha256(patentabilityPath, "patentability fixture"),
+    "224a8d39f5873217a9504b9e0502e86a8930c00d4734bfed28c096265b2efc7d",
   );
   assert.equal(
     fixtureSha256("backend/scripts/fixtures/docx-review-markup", "contract fixture"),

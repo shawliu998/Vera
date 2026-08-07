@@ -725,8 +725,12 @@
           "steps_complete"
         ],
         "verifierProfile": "work_task_source_citation_v1",
-        "fixtures": [],
-        "fixtureSha256": {},
+        "fixtures": [
+          "scripts/vera-workflows/patentability-assessment/references/synthetic-patentability-v1"
+        ],
+        "fixtureSha256": {
+          "scripts/vera-workflows/patentability-assessment/references/synthetic-patentability-v1": "224a8d39f5873217a9504b9e0502e86a8930c00d4734bfed28c096265b2efc7d"
+        },
         "dependencies": []
       },
       "uspto-office-action-response": {
@@ -1334,7 +1338,7 @@
     "semanticSha256": "b9bfb16f3633c20c01991826a9aaf9904d64d985d0047c5e6c6d86d27d18366f",
     "systemSemanticSha256": "b9bfb16f3633c20c01991826a9aaf9904d64d985d0047c5e6c6d86d27d18366f",
     "mikeSkillManifestSemanticSha256": "48a5db161907efa194d962823e8af5dd5d11f06006aa4860606eb4fcbf285394",
-    "skillManifestSemanticSha256": "584be98dd19abfe85ef74e7a74d5916a6a9a9c98ab472238d53be35df417a088",
-    "generatedFileSha256": "52466f6fd4f4873b4a1ef51335132799ace8f289cb0e5abc1b170b088a1af19c"
+    "skillManifestSemanticSha256": "3e057b19c294b2fb2c3c95f83f9035ac1ce507d43e57c80702a2f4d241991067",
+    "generatedFileSha256": "1099536dc31a1ac26f38e081de2ea8f2dab96428b7ebebd7b562a3dce06e22f4"
   }
 }

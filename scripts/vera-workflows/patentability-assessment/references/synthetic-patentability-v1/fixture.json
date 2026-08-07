@@ -1,0 +1,107 @@
+{
+  "schema_version": "patentability_acceptance_fixture_v1",
+  "id": "PAT-DEMO-PAT-01",
+  "classification": "Entirely synthetic QA fixture; no real client, inventor, applicant, assignee, product, patent publication, or legal authority; internal lawyer review only; not for filing.",
+  "workflow_id": "builtin-patentability-assessment",
+  "matter": {
+    "practice": "Patents",
+    "jurisdiction": "Matter-specified (PRC pilot metadata)",
+    "represented_side": "Applicant-side internal assessment",
+    "priority_cutoff": null,
+    "priority_cutoff_status": "unresolved_required_input"
+  },
+  "sources": [
+    {
+      "key": "target",
+      "filename": "PAT-DEMO-PAT-01-target-claim.docx",
+      "role": "target_claim_and_invention_disclosure",
+      "selected_claim": "Claim 1 / TC-C1",
+      "immutable_source": true
+    },
+    {
+      "key": "pa1",
+      "filename": "PAT-DEMO-PAT-01-synthetic-prior-art.docx",
+      "role": "prior_art_source",
+      "synthetic_identifier": "VERA-SYNTHETIC-PA-001",
+      "official_publication_number": null,
+      "complete_fixture_scope": "PA-P1 through PA-P3 plus PA-G1",
+      "immutable_source": true
+    }
+  ],
+  "target_claim": {
+    "locator": "TC-C1",
+    "text": "Claim 1. A winch-assisted drive system for a mountain rescue vehicle, comprising: a vehicle power source; a first torque output coupled to a wheel drive path; a second torque output coupled to a winch drum; a sensor assembly configured to detect cable tension and wheel slip; and a controller configured, when detected wheel slip exceeds a threshold and cable tension is below a safety limit, to allocate torque concurrently to the first torque output and the second torque output.",
+    "features": [
+      {
+        "id": "F1",
+        "text": "a winch-assisted drive system for a mountain rescue vehicle"
+      },
+      {
+        "id": "F2",
+        "text": "two torque outputs coupled to a wheel drive path and a winch drum"
+      },
+      { "id": "F3", "text": "detect cable tension and wheel slip" },
+      {
+        "id": "F4",
+        "text": "allocate torque concurrently when slip exceeds a threshold and tension is below a safety limit"
+      }
+    ]
+  },
+  "expected_feature_observations": [
+    {
+      "source": "pa1",
+      "feature_id": "F1",
+      "assessment": "Disclosed",
+      "locator": "PA-P1",
+      "quote": "A rescue vehicle drive apparatus includes a vehicle power source, a wheel drive path, and a cable drive path coupled to a winch drum."
+    },
+    {
+      "source": "pa1",
+      "feature_id": "F2",
+      "assessment": "Disclosed",
+      "locator": "PA-P1",
+      "quote": "a vehicle power source, a wheel drive path, and a cable drive path coupled to a winch drum"
+    },
+    {
+      "source": "pa1",
+      "feature_id": "F3",
+      "assessment": "Partial",
+      "locator": "PA-P3",
+      "quote": "The system monitors cable tension and stops the winch when the tension exceeds a preset safety value.",
+      "gap": "The complete fixture text does not state wheel-slip detection."
+    },
+    {
+      "source": "pa1",
+      "feature_id": "F4",
+      "assessment": "Not shown",
+      "locator": "PA-P2",
+      "quote": "switches power between the wheel drive path and the cable drive path according to an operator selection and drives only one path at a time.",
+      "gap": "The cited passage describes mutually exclusive operation rather than simultaneous allocation under the combined condition."
+    }
+  ],
+  "required_unresolved_gaps": [
+    "priority cutoff is not supplied",
+    "the prior-art source is synthetic and has no official publication PDF",
+    "search coverage is not exhaustive",
+    "claim-construction questions remain lawyer-controlled",
+    "threshold values and implementation details are absent from the target disclosure"
+  ],
+  "required_outputs": ["patentability-feature-chart", "patentability-memo"],
+  "prohibited_conclusions": [
+    "final patentability conclusion",
+    "validity",
+    "infringement",
+    "freedom to operate",
+    "search completeness",
+    "external filing readiness"
+  ],
+  "expected_invariants": {
+    "source_files_exist": true,
+    "source_files_are_immutable_inputs": true,
+    "feature_ids_unique": true,
+    "quotes_are_contiguous_source_substrings": true,
+    "not_shown_requires_complete_fixture_review": true,
+    "unresolved_gaps_are_preserved": true,
+    "generated_outputs_are_not_sources": true
+  }
+}
