@@ -214,7 +214,7 @@ function safeFilename(snapshot: ReadOnlySourceSnapshotV1) {
 }
 
 function createRepository(db: Db): ProviderSourceImportRepository {
-  return providerSourceImportReceiptSchema.parse({
+  return {
     async loadDocument(documentId) {
       const { data, error } = await db
         .from("documents")
@@ -319,7 +319,7 @@ function createRepository(db: Db): ProviderSourceImportRepository {
         currentVersionId: row.current_version_id,
       };
     },
-  });
+  };
 }
 
 function buildProvenance(
@@ -625,14 +625,18 @@ export async function importProviderSourceSnapshot(input: {
       updatedAt: now(),
     });
     document = await repository.loadDocument(documentId);
-    if (!activated && !sameUuidIdentity(document?.current_version_id, versionId)) {
+    if (
+      !activated &&
+      !sameUuidIdentity(document?.current_version_id, versionId)
+    ) {
       throw new ProviderSourceImportError("version_conflict");
     }
   }
-  document = assertDocument(
-    await repository.loadDocument(documentId),
-    { documentId, userId: input.userId, matterId: input.matterId },
-  );
+  document = assertDocument(await repository.loadDocument(documentId), {
+    documentId,
+    userId: input.userId,
+    matterId: input.matterId,
+  });
   if (
     !sameUuidIdentity(document.current_version_id, versionId) ||
     document.status !== "ready"
