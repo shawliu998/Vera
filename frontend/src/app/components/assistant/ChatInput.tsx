@@ -532,6 +532,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                 externalUploadedDocuments={droppedDocuments}
                 initialTab={docSelectorInitialTab}
                 projectId={projectId}
+                includeCurrentProject={mode === "work"}
                 breadcrumb={
                     selectedWorkflow
                         ? ["Assistant", selectedWorkflow.title, "Add Documents"]

@@ -16,6 +16,7 @@ import {
     formatUnsupportedDocumentWarning,
     partitionSupportedDocumentFiles,
 } from "@/app/lib/documentUploadValidation";
+import { documentSelectorExcludedProjectId } from "./documentSelectorScope";
 
 interface Props {
     open: boolean;
@@ -24,6 +25,8 @@ interface Props {
     breadcrumb: string[];
     initialTab?: DirectoryTab;
     projectId?: string;
+    /** Work Tasks may select existing sources already owned by this Matter. */
+    includeCurrentProject?: boolean;
     initialSelectedDocuments?: Document[];
     /** Documents uploaded outside the modal while it is mounted. */
     externalUploadedDocuments?: Document[];
@@ -39,6 +42,7 @@ export function AddDocumentsModal({
     breadcrumb,
     initialTab = "files",
     projectId,
+    includeCurrentProject = false,
     initialSelectedDocuments,
     externalUploadedDocuments,
     keepMounted = false,
@@ -245,7 +249,12 @@ export function AddDocumentsModal({
                     uploadingFilenames={uploadingFilenames}
                     showTabs
                     initialTab={initialTab}
-                    excludeProjectId={projectId}
+                    excludeProjectId={
+                        documentSelectorExcludedProjectId(
+                            projectId,
+                            includeCurrentProject,
+                        )
+                    }
                 />
             </div>
         </Modal>
