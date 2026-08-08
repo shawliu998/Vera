@@ -202,6 +202,7 @@ export type AgentStepExecutionResult = {
     packet: AgentVerificationPacketV1;
     result: AgentVerificationResultV1;
   } | null;
+  checkpointValues?: { source_acquisition?: unknown };
 };
 
 type RelocatedCitation = {

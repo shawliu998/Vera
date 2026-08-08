@@ -54,6 +54,16 @@ export type AgentTaskInputTransitionInput = {
   submissionId: string;
 };
 
+export type AgentTaskCheckpointTransitionInput = {
+  taskId: string;
+  userId: string;
+  leaseOwner: string;
+  expectedTaskStatus: "running" | "verifying";
+  stepId: string;
+  expectedStepAttempt: number;
+  latestCheckpoint: unknown;
+};
+
 export type AgentTaskReviewDecisionTransitionInput = {
   decisionId: string;
   taskId: string;
@@ -308,6 +318,36 @@ export async function commitAgentTaskInputTransition(
       step_id: input.stepId,
       submission_id: input.submissionId,
     },
+  );
+}
+
+export async function commitAgentTaskCheckpointTransition(
+  db: Db,
+  input: AgentTaskCheckpointTransitionInput,
+) {
+  const { data, error } = await db.rpc("commit_agent_task_checkpoint_v1", {
+    p_task_id: input.taskId,
+    p_user_id: input.userId,
+    p_lease_owner: input.leaseOwner,
+    p_expected_task_status: input.expectedTaskStatus,
+    p_step_id: input.stepId,
+    p_expected_step_attempt: input.expectedStepAttempt,
+    p_latest_checkpoint: input.latestCheckpoint,
+  });
+  if (error) {
+    throw transitionError(
+      `Failed to persist Agent Task checkpoint atomically: ${error.message}`,
+      {
+        task_id: input.taskId,
+        step_id: input.stepId,
+        expected_step_attempt: input.expectedStepAttempt,
+      },
+    );
+  }
+  return readOutcome(
+    data,
+    ["recorded", "conflict", "invalid_input", "lease_lost", "not_found"],
+    { task_id: input.taskId, step_id: input.stepId },
   );
 }
 

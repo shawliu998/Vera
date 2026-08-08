@@ -753,6 +753,7 @@ export async function advanceAgentTask(
         summary?: string;
         artifacts?: AgentArtifactLinkInput[];
         stepReceipt?: AgentStepReceiptV1;
+        checkpointValues?: { source_acquisition?: unknown };
       }
     | undefined,
   options: { leaseOwner: string },
@@ -843,6 +844,7 @@ export async function advanceAgentTask(
           iteration: completedStep.attempt,
           summary: summary ?? "Step completed.",
           created_at: updatedAt,
+          ...(result?.checkpointValues ?? {}),
           ...(result?.stepReceipt ? { step_receipts: nextReceipts } : {}),
         })
       : snapshot.task.latest_checkpoint,
@@ -1011,6 +1013,7 @@ export async function deferAgentTaskForProvider(
   options: {
     classification: AgentTaskExecutionPauseClassification;
     leaseOwner?: string | null;
+    checkpointValues?: { source_acquisition?: unknown };
   },
 ) {
   const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
@@ -1027,13 +1030,19 @@ export async function deferAgentTaskForProvider(
     (step: { status: AgentStepStatus }) => step.status === "running",
   );
   const updatedAt = now();
-  const checkpoint = mergeAgentTaskProviderPauseCheckpoint({
+  const providerCheckpoint = mergeAgentTaskProviderPauseCheckpoint({
     previous: task.latest_checkpoint,
     currentStep: current ? { id: current.id, attempt: current.attempt } : null,
     classification: options.classification,
     summary,
     createdAt: updatedAt,
   });
+  const checkpoint = options.checkpointValues
+    ? mergeImmutableAgentTaskCheckpoint(providerCheckpoint, {
+        ...providerCheckpoint,
+        ...options.checkpointValues,
+      })
+    : providerCheckpoint;
   return pauseAgentTaskSnapshotAtomically(db, taskId, userId, snapshot, {
     leaseOwner: options.leaseOwner,
     latestCheckpoint: checkpoint,
@@ -1725,6 +1734,7 @@ export async function stopAgentTask(
     status: "waiting_input" | "failed";
     summary: string;
     requiredInput?: AgentRequiredInputV1 | null;
+    checkpointValues?: { source_acquisition?: unknown };
     leaseOwner: string;
   },
 ) {
@@ -1744,6 +1754,7 @@ export async function stopAgentTask(
       iteration: current?.attempt ?? 0,
       summary: input.summary,
       created_at: updatedAt,
+      ...(input.checkpointValues ?? {}),
       ...(input.requiredInput ? { required_input: input.requiredInput } : {}),
     },
   );

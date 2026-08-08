@@ -24,7 +24,7 @@ repeated on the current branch.
 | 5. Effect boundary/lease/transitions | Implemented | effect, lease and atomic transition modules; SQL smoke and real Task recovery | Direct database coupling remains frozen migration debt in five adapter files. |
 | 6. Verifier/repair | Implemented | verifier core, marker repair, repair eligibility, Artifact re-verification | Gold-workflow semantic verifier acceptance remains pending. |
 | 7. Shared Word/Tabular | Partially implemented | exact Task Artifact Version binding; external-edit preservation; partial Tabular cell recovery; Word and Tabular tests | Mac Word manifest is parsed but absent from AppCommands. Clear the complete cache only after Word closes, then perform real Host and Mike/Vera acceptance. |
-| 8. Research connector | Legal and first patent adapter implemented | provider-neutral connector contract/execution; distinct server-only `source.acquire` Step operation; pin-bound acquisition specification and request compilers; Task-checkpoint search pagination, deduplicated discoveries, coverage/issues, exact selection, ordered selected reads, validated import receipts and idempotent replay; non-citable discovery versus import-only snapshot separation; CourtListener and EPO OPS Pack adapters; body-consuming central pipeline; idempotent Matter `Document`/`DocumentVersion` importer; generic provenance migration and service-only atomic commit; encrypted current-user EPO OPS credential pair; exact runtime registry with current-user authorization and credential-free receipts; Task-aware current-user acquisition bridge; disconnected-provider resumable pause; unit and local database/storage smokes | Wire the acquisition state machine into one explicit Workflow and atomic Task transitions, run a current-user EPO OPS product gate, decide whether PatSnap adds material licensed coverage, and then run the legal-research product gate before claiming completion. |
+| 8. Research connector | Legal and first patent adapter implemented; Task execution seam implemented | provider-neutral connector contract/execution; distinct server-only `source.acquire` Step operation; pin-bound acquisition specification and request compilers; Task-checkpoint search pagination, deduplicated discoveries, coverage/issues, exact selection, ordered selected reads, validated import receipts and idempotent replay; server-owned Step dispatch with no LLM tool sequence; lease- and attempt-fenced atomic progress checkpoints; bounded source-selection endpoint reusing the existing atomic input transition; non-citable discovery versus import-only snapshot separation; CourtListener and EPO OPS Pack adapters; body-consuming central pipeline; idempotent Matter `Document`/`DocumentVersion` importer; generic provenance migration and service-only atomic commit; encrypted current-user EPO OPS credential pair; exact runtime registry with current-user authorization and credential-free receipts; Task-aware current-user acquisition bridge; disconnected-provider resumable pause; unit and local database/storage smokes | Define one explicit Workflow and Task-creation compiler for its pin/spec/initial state, present selection in the existing Work Task surface, run a current-user EPO OPS product gate, decide whether PatSnap adds material licensed coverage, and then run the legal-research product gate before claiming completion. |
 
 The new `dependencyBoundary.test.ts` prevents Kernel production code from
 importing routes, frontend code, or domain Packs. It also freezes the five
@@ -65,8 +65,13 @@ preserved release capabilities.
 
 ## Next execution order
 
-1. When Word is closed, complete Batch 7 Host activation and visual acceptance.
-2. Run fresh contract, patentability and litigation Tasks through the product UI.
-3. Adapt the Batch 8 legal-research and patent-source Packs to the extracted
-   read-only connector boundary and reconcile patent source import.
-4. Use the gold-flow evidence to remove legacy Aletheia slices incrementally.
+1. Compile one explicit patent source-acquisition Workflow into a fixed
+   connector pin, acquisition spec and initial Task checkpoint; keep ordinary
+   patent analysis Tasks offline and fixed-source-only.
+2. Run the acquisition flow with the current user's EPO OPS credentials and
+   database, then add its bounded selection state to the existing Work Task UI
+   using the Mike acceptance process.
+3. When Word is closed, complete Batch 7 Host activation and visual acceptance.
+4. Run fresh contract, patentability and litigation Tasks through the product
+   UI, then use that gold-flow evidence to remove legacy Aletheia slices
+   incrementally.

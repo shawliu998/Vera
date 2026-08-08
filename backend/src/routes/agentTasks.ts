@@ -14,6 +14,7 @@ import {
   submitAgentTaskInput,
   updateAgentTaskExecutionModel,
 } from "../lib/agentTasks";
+import { submitAgentTaskSourceSelection } from "../lib/agentTaskSourceSelection";
 import {
   cancelAgentTaskRunner,
   wakeAgentTaskRunner,
@@ -629,6 +630,51 @@ agentTasksRouter.post("/:taskId/input", requireAuth, async (req, res) => {
     routeError(res, error);
   }
 });
+
+agentTasksRouter.post(
+  "/:taskId/source-selection",
+  requireAuth,
+  async (req, res) => {
+    const rawRefs: unknown[] = Array.isArray(req.body?.discovery_refs)
+      ? (req.body.discovery_refs as unknown[])
+      : [];
+    const discoveryRefs = Array.from(
+      new Set(
+        rawRefs
+          .filter(
+            (value: unknown): value is string => typeof value === "string",
+          )
+          .map((value) => value.trim())
+          .filter(Boolean),
+      ),
+    );
+    if (!discoveryRefs.length || discoveryRefs.length > 20) {
+      return void res.status(400).json({
+        detail: "discovery_refs must contain between 1 and 20 references",
+      });
+    }
+    try {
+      const userId = res.locals.userId as string;
+      const updated = await submitAgentTaskSourceSelection(
+        createServerSupabase(),
+        req.params.taskId,
+        userId,
+        discoveryRefs,
+      );
+      if (!updated) {
+        return void res.status(404).json({ detail: "Agent task not found" });
+      }
+      wakeAgentTaskRunner({
+        taskId: req.params.taskId,
+        userId,
+        userEmail: res.locals.userEmail as string | undefined,
+      });
+      res.json(updated);
+    } catch (error) {
+      routeError(res, error);
+    }
+  },
+);
 
 agentTasksRouter.post("/:taskId/pause", requireAuth, async (req, res) => {
   try {

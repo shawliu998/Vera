@@ -11,6 +11,7 @@ import {
   stopAgentTask,
   verifierRepairAlreadyAttempted,
 } from "./agentTasks";
+import { recordAgentTaskExecutionCheckpoint } from "./agentTaskExecutionCheckpoint";
 import {
   planAgentTask,
   readAgentTaskPlanningRequest,
@@ -24,8 +25,10 @@ import {
   executeAgentStep,
   isAgentTaskExecutionInterrupted,
   isTransientModelError,
+  type AgentStepExecutionResult,
   verifyTaskCitationLinks,
 } from "./agentStepExecutor";
+import { executeAgentSourceAcquisitionStep } from "./agentSourceAcquisitionExecutor";
 import { createServerSupabase } from "./supabase";
 import { assertAgentTaskAssignmentContract } from "./agent-kernel/contracts/taskContract";
 import {
@@ -40,7 +43,11 @@ import {
   readAgentStepContracts,
   type AgentStepPostcondition,
 } from "./agent-kernel/contracts/stepContract";
-import { assertAgentStepCapabilityGrants } from "./agent-kernel/capability/stepCapability";
+import {
+  assertAgentStepCapabilityGrants,
+  readAgentStepCapabilityGrants,
+} from "./agent-kernel/capability/stepCapability";
+import { providerSourceAcquisitionStateSchema } from "./providerSourceAcquisitionState";
 import {
   isAgentStepEffectTransitionError,
   readAgentStepEffectReceipts,
@@ -98,6 +105,17 @@ async function buildCurrentStepReceipt(
   const fixedContext = readFixedMatterContext(snapshot.task);
   const sourceVersionIds =
     fixedContext?.sources.map((source) => source.version_id) ?? [];
+  if (
+    contract.operation === "source.acquire" &&
+    execution.checkpointValues?.source_acquisition
+  ) {
+    const acquisitionState = providerSourceAcquisitionStateSchema.parse(
+      execution.checkpointValues.source_acquisition,
+    );
+    sourceVersionIds.push(
+      ...acquisitionState.import_receipts.map((receipt) => receipt.version_id),
+    );
+  }
   if (
     contract.source_requirement.mode === "none" ||
     sourceVersionIds.length > 0
@@ -592,19 +610,90 @@ export async function advanceAgentTaskExecution(input: {
     });
   }
 
-  let execution;
+  let execution: AgentStepExecutionResult;
   try {
-    execution = await executeAgentStep({
-      db,
-      snapshot: current,
-      userId,
-      userEmail,
-      leaseOwner: input.leaseGuard.ownerToken,
-      shouldContinue,
-    });
+    const stepIndex = current.task.current_plan.findIndex(
+      (step: { status: string }) => step.status === "running",
+    );
+    const contractRead = readAgentStepContracts(current.task);
+    const grantRead = readAgentStepCapabilityGrants(current.task);
+    const contract =
+      contractRead.state === "valid"
+        ? contractRead.contracts[stepIndex]
+        : undefined;
+    const grant =
+      grantRead.state === "valid" ? grantRead.grants[stepIndex] : undefined;
+    if (contract?.operation === "source.acquire") {
+      if (!runningStep || !grant) {
+        throw new Error(
+          "Source acquisition Step is missing its fixed execution grant",
+        );
+      }
+      const acquisition = await executeAgentSourceAcquisitionStep({
+        db,
+        snapshot: current,
+        userId,
+        step: runningStep,
+        contract,
+        grant,
+        shouldContinue,
+        dependencies: {
+          recordProgress: (state) =>
+            recordAgentTaskExecutionCheckpoint(db, {
+              taskId,
+              userId,
+              leaseOwner: input.leaseGuard!.ownerToken,
+              expectedTaskStatus: current.task.status as
+                | "running"
+                | "verifying",
+              step: runningStep,
+              previousCheckpoint: current.task.latest_checkpoint,
+              summary:
+                state.phase === "search_pending"
+                  ? `Source search page committed; continuing page ${state.next_page}.`
+                  : state.phase === "selection_required"
+                    ? `Source search completed with ${state.discoveries.length} bounded result${state.discoveries.length === 1 ? "" : "s"}; waiting for lawyer selection.`
+                    : state.phase === "read_pending"
+                      ? `Imported ${state.import_receipts.length} of ${state.selected_discovery_refs.length} selected provider sources.`
+                      : state.phase === "completed"
+                        ? `Imported all ${state.import_receipts.length} selected provider sources.`
+                        : "Source acquisition preserved for lawyer review.",
+              checkpointValues: { source_acquisition: state },
+            }),
+        },
+      });
+      if (acquisition.kind === "provider_pause") {
+        return deferAgentTaskForProvider(
+          db,
+          taskId,
+          userId,
+          "The source provider is temporarily unavailable or needs configuration. Completed discovery and import progress was preserved; resume this Step after the provider is available.",
+          {
+            classification: acquisition.classification,
+            leaseOwner: input.leaseGuard.ownerToken,
+            checkpointValues: acquisition.checkpointValues,
+          },
+        );
+      }
+      execution = acquisition.result;
+    } else {
+      execution = await executeAgentStep({
+        db,
+        snapshot: current,
+        userId,
+        userEmail,
+        leaseOwner: input.leaseGuard.ownerToken,
+        shouldContinue,
+      });
+    }
   } catch (error) {
     if (isAgentTaskExecutionInterrupted(error)) {
       return getAgentTaskSnapshot(db, taskId, userId);
+    }
+    if (isAgentTaskStateTransitionError(error)) {
+      return pauseAgentTaskForStateTransition(db, taskId, userId, error, {
+        leaseOwner: input.leaseGuard.ownerToken,
+      });
     }
     if (isAgentStepEffectTransitionError(error)) {
       if (error.outcome === "lease_lost") {
@@ -671,6 +760,7 @@ export async function advanceAgentTaskExecution(input: {
       status: "waiting_input",
       summary: execution.summary,
       requiredInput: execution.requiredInput,
+      checkpointValues: execution.checkpointValues,
       leaseOwner: input.leaseGuard.ownerToken,
     });
   }

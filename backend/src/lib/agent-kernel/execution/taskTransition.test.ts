@@ -13,6 +13,7 @@ import {
   agentTaskStateTransitionWasApplied,
   agentTaskStopTransitionWasApplied,
   commitAgentTaskArtifactReverificationTransition,
+  commitAgentTaskCheckpointTransition,
   commitAgentTaskInputTransition,
   commitAgentTaskPauseTransition,
   commitAgentTaskReviewDecisionTransition,
@@ -22,6 +23,7 @@ import {
   commitAgentTaskStateTransition,
   commitAgentTaskStopTransition,
   type AgentTaskInputTransitionInput,
+  type AgentTaskCheckpointTransitionInput,
   type AgentTaskArtifactReverificationTransitionInput,
   type AgentTaskPauseTransitionInput,
   type AgentTaskReviewDecisionTransitionInput,
@@ -403,6 +405,76 @@ test("maps supplemental input to one atomic activation RPC", async () => {
   assert.equal(call?.name, "submit_agent_task_input_v1");
   assert.deepEqual(call?.args.p_document_ids, supplemental.documentIds);
   assert.equal(call?.args.p_expected_step_attempt, 2);
+});
+
+test("maps in-flight Step progress to one lease-fenced checkpoint RPC", async () => {
+  let call: { name: string; args: Record<string, unknown> } | null = null;
+  const db = {
+    async rpc(name: string, args: Record<string, unknown>) {
+      call = { name, args };
+      return {
+        data: [
+          {
+            outcome: "recorded",
+            task_status: "running",
+            current_step: input.stepId,
+          },
+        ],
+        error: null,
+      };
+    },
+  };
+  const checkpoint: AgentTaskCheckpointTransitionInput = {
+    taskId: input.taskId,
+    userId: input.userId,
+    leaseOwner: input.leaseOwner,
+    expectedTaskStatus: "running",
+    stepId: input.stepId,
+    expectedStepAttempt: 2,
+    latestCheckpoint: { source_acquisition: { phase: "read_pending" } },
+  };
+  assert.equal(
+    (await commitAgentTaskCheckpointTransition(db as never, checkpoint))
+      .outcome,
+    "recorded",
+  );
+  assert.equal(call?.name, "commit_agent_task_checkpoint_v1");
+  assert.deepEqual(call?.args, {
+    p_task_id: checkpoint.taskId,
+    p_user_id: checkpoint.userId,
+    p_lease_owner: checkpoint.leaseOwner,
+    p_expected_task_status: checkpoint.expectedTaskStatus,
+    p_step_id: checkpoint.stepId,
+    p_expected_step_attempt: checkpoint.expectedStepAttempt,
+    p_latest_checkpoint: checkpoint.latestCheckpoint,
+  });
+});
+
+test("keeps atomic checkpoint migrations mirrored and fenced to one live Step lease", async () => {
+  const backend = await readFile(
+    new URL(
+      "../../../../migrations/20260808_06_agent_task_atomic_checkpoint.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const supabase = await readFile(
+    new URL(
+      "../../../../../supabase/migrations/20260808000006_agent_task_atomic_checkpoint.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.equal(backend, supabase);
+  assert.match(
+    backend,
+    /execution_lease_owner is distinct from p_lease_owner/i,
+  );
+  assert.match(backend, /v_step\.attempt <> p_expected_step_attempt/i);
+  assert.match(backend, /v_running_count <> 1/i);
+  assert.match(backend, /latest_checkpoint = p_latest_checkpoint/i);
+  assert.match(backend, /from public, anon, authenticated/i);
+  assert.match(backend, /to service_role/i);
 });
 
 test("accepts an uncertain input commit only for its exact submission id", () => {

@@ -108,6 +108,18 @@ approval, export, or a second source database.
   `DocumentVersion` import per selected discovery. Missing snapshots preserve
   all discoveries and completed imports and enter review; exact search/import
   replay returns the committed state, while same-identity drift fails closed.
+- The AgentTask runner now dispatches a fixed `source.acquire` Step to a
+  server-owned executor instead of the model tool loop. Each completed search
+  page and selected-source import is checkpointed by a service-only atomic RPC
+  that verifies the current user, Task status, live execution lease, running
+  Step, and exact attempt before accepting progress. Lease loss stops the
+  executor instead of advancing uncheckpointed state.
+- Search completion enters the existing `waiting_input` Task state without a
+  fabricated legal failure. A dedicated Task endpoint accepts only returned
+  discovery refs, validates the fixed Step contract/grant and acquisition
+  limit, and reuses the existing atomic input transition to resume exactly one
+  blocked Step. Provider pauses and final Step advances preserve the same
+  acquisition checkpoint and already imported Matter Versions.
 - The current EPO OPS endpoint and CQL semantics were checked against the EPO
   OPS 3.2 reference guide and official service page on 2026-08-08:
   <https://www.epo.org/en/searching-for-patents/data/web-services/ops> and
@@ -115,10 +127,14 @@ approval, export, or a second source database.
 
 ## Remaining gates
 
-1. Wire this completed acquisition state machine into one explicit
-   `source.acquire` Workflow and its atomic Task transitions. Ordinary patent
-   analysis Tasks still correctly receive no pin.
-2. Decide whether PatSnap provides a material, licensed coverage increment over
+1. Define one explicit `source.acquire` Workflow and initialize its connector
+   pin, fixed acquisition spec and initial state at Task creation. The runner,
+   atomic progress, selection and resume transitions are implemented; ordinary
+   patent analysis Tasks still correctly receive no pin.
+2. Present bounded discovery selection inside the existing Work Task surface
+   after a Mike/Vera visual preflight; do not create a provider-specific route
+   family or research dashboard.
+3. Decide whether PatSnap provides a material, licensed coverage increment over
    EPO OPS before adapting it; do not copy the old parallel patent subsystem.
-3. Run real credential, database, and product-level patent research acceptance;
+4. Run real credential, database, and product-level patent research acceptance;
    then connect the same source seam to litigation authority research.
