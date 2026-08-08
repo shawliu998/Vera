@@ -42,6 +42,12 @@ import {
     APP_SURFACE_PRESSED_CLASS,
     LIQUID_PANEL_SURFACE_CLASS,
 } from "@/app/components/ui/liquid-surface";
+import {
+    canRequestSourceBoundCorrection,
+    DEFAULT_SOURCE_BOUND_CORRECTION_REASON,
+    SOURCE_BOUND_CORRECTION_REASONS,
+    type SourceBoundCorrectionReasonCode,
+} from "./litigationEvidenceInventoryUi";
 
 function isDocxDocument(d: {
     file_type?: string | null;
@@ -86,6 +92,9 @@ interface Props {
         saving: boolean;
         error: string | null;
         onReview: (decision: "verified" | "unresolved") => Promise<void>;
+        onRequestSourceBoundCorrection: (
+            reasonCode: SourceBoundCorrectionReasonCode,
+        ) => Promise<void>;
     };
 }
 
@@ -152,6 +161,10 @@ export function TRSidePanel({
             ? documents[currentDocumentPos + 1]
             : null;
     const [regenerating, setRegenerating] = useState(false);
+    const [sourceBoundCorrectionReason, setSourceBoundCorrectionReason] =
+        useState<SourceBoundCorrectionReasonCode>(
+            DEFAULT_SOURCE_BOUND_CORRECTION_REASON,
+        );
     const [documentPaneOpen, setDocumentPaneOpen] = useState(displayDocument);
     const [documentPaneWidth, setDocumentPaneWidth] = useState(
         DEFAULT_DOCUMENT_PANE_WIDTH,
@@ -178,6 +191,21 @@ export function TRSidePanel({
               (candidate) => candidate.id === docCitation.documentId,
           )
         : doc;
+
+    useEffect(() => {
+        setSourceBoundCorrectionReason(
+            DEFAULT_SOURCE_BOUND_CORRECTION_REASON,
+        );
+    }, [cell.id]);
+
+    const canRequestCorrection =
+        litigationEvidence &&
+        canRequestSourceBoundCorrection({
+            taskWaitingForReview: litigationEvidence.reviewActive,
+            cellStatus: cell.status,
+            reviewStatus: litigationEvidence.reviewStatus,
+            reviewRevision: cell.review_revision,
+        });
 
     // Re-sync when the panel opens for a different cell or citation
     useEffect(() => {
@@ -675,6 +703,69 @@ export function TRSidePanel({
                                             Keep unresolved
                                         </button>
                                     </div>
+                                    {canRequestCorrection && (
+                                        <div className="mt-3 border-t border-gray-900/[0.07] pt-3">
+                                            <p className="text-[11px] font-medium text-gray-900">
+                                                Need a new source-bound draft?
+                                            </p>
+                                            <p className="mt-1 text-[11px] leading-4 text-gray-600">
+                                                Only this finding will be
+                                                regenerated from its fixed
+                                                source. The Work Task will
+                                                resume and return here for
+                                                review.
+                                            </p>
+                                            <label
+                                                className="mt-2 block text-[11px] font-medium text-gray-700"
+                                                htmlFor={`source-bound-correction-reason-${cell.id}`}
+                                            >
+                                                Source issue
+                                            </label>
+                                            <select
+                                                id={`source-bound-correction-reason-${cell.id}`}
+                                                value={
+                                                    sourceBoundCorrectionReason
+                                                }
+                                                onChange={(event) =>
+                                                    setSourceBoundCorrectionReason(
+                                                        event.target
+                                                            .value as SourceBoundCorrectionReasonCode,
+                                                    )
+                                                }
+                                                disabled={
+                                                    litigationEvidence.saving
+                                                }
+                                                className="mt-1 h-8 w-full rounded-md border border-gray-900/[0.12] bg-white px-2 text-[11px] text-gray-800 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/70 disabled:cursor-default disabled:opacity-50"
+                                            >
+                                                {SOURCE_BOUND_CORRECTION_REASONS.map(
+                                                    (reason) => (
+                                                        <option
+                                                            key={reason.code}
+                                                            value={reason.code}
+                                                        >
+                                                            {reason.label}
+                                                        </option>
+                                                    ),
+                                                )}
+                                            </select>
+                                            <button
+                                                type="button"
+                                                onClick={() =>
+                                                    void litigationEvidence.onRequestSourceBoundCorrection(
+                                                        sourceBoundCorrectionReason,
+                                                    )
+                                                }
+                                                disabled={
+                                                    litigationEvidence.saving
+                                                }
+                                                className="mt-2 inline-flex h-8 items-center rounded-full bg-white px-3 text-[11px] font-medium text-gray-700 shadow-sm outline-none transition-colors hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 disabled:cursor-default disabled:opacity-40"
+                                            >
+                                                {litigationEvidence.saving
+                                                    ? "Requesting…"
+                                                    : "Request source-bound regeneration"}
+                                            </button>
+                                        </div>
+                                    )}
                                     {!litigationEvidence.reviewActive && (
                                         <p className="mt-2 text-[11px] leading-4 text-gray-600">
                                             This Task is no longer awaiting this

@@ -28,6 +28,10 @@ import {
     parseAgentTaskWordArtifactSaveError,
     type AgentTaskWordArtifactVersion,
 } from "@/app/lib/agentTaskWordArtifactSave";
+import {
+    sourceBoundCorrectionRequestBody,
+    type SourceBoundCorrectionReasonCode,
+} from "@/app/components/tabular/litigationEvidenceInventoryUi";
 
 // Server-side shape before mapping
 interface ServerChatDetailOut {
@@ -1185,6 +1189,17 @@ export type LitigationEvidenceCellReviewResult =
         };
     };
 
+export type LitigationEvidenceCellCorrectionResult =
+    LitigationEvidenceReviewSnapshot & {
+        cell: {
+            cell_id: string | null;
+            cell_status: string | null;
+            review_status: "verified" | "unresolved" | "needs_correction" | null;
+            review_revision: number | null;
+            reviewed_at?: string | null;
+        };
+    };
+
 export async function getLitigationEvidenceReviewProgress(
     reviewId: string,
 ): Promise<LitigationEvidenceReviewSnapshot> {
@@ -1210,6 +1225,24 @@ export async function reviewLitigationEvidenceCell(
                 decision: input.decision,
                 expected_review_revision: input.expectedReviewRevision,
             }),
+        },
+    );
+}
+
+export async function requestLitigationEvidenceSourceBoundCorrection(
+    reviewId: string,
+    cellId: string,
+    input: {
+        expectedReviewRevision: number;
+        reasonCode: SourceBoundCorrectionReasonCode;
+    },
+): Promise<LitigationEvidenceCellCorrectionResult> {
+    return apiRequest<LitigationEvidenceCellCorrectionResult>(
+        `/tabular-review/${encodeURIComponent(reviewId)}/cells/${encodeURIComponent(cellId)}/source-bound-correction`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(sourceBoundCorrectionRequestBody(input)),
         },
     );
 }

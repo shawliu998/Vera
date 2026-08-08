@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { z } from "zod";
 
 import type { createServerSupabase } from "./supabase";
@@ -7,9 +9,19 @@ import {
 } from "./agentLitigationEvidenceInventoryGeneration";
 import { reviewLitigationEvidenceCell } from "./agentLitigationEvidenceCellRepository";
 import {
+  LitigationEvidenceCellCorrectionTransitionError,
+  startLitigationEvidenceCellCorrection,
+} from "./agentLitigationEvidenceCorrectionRepository";
+import {
   litigationEvidenceInventoryReceiptSchema,
   type LitigationEvidenceInventoryReceiptV1,
 } from "./agent-packs/litigation/litigationEvidenceInventoryPack";
+import {
+  compileLitigationEvidenceInventoryCorrectionReceipt,
+  litigationEvidenceCorrectionReasonCodeSchema,
+  readLitigationEvidenceInventoryCorrectionReceipt,
+  type LitigationEvidenceCorrectionReasonCode,
+} from "./agent-packs/litigation/litigationEvidenceInventoryCorrection";
 import {
   inspectLitigationEvidenceInventoryReview,
   litigationEvidenceStoredCellSchema,
@@ -53,7 +65,7 @@ async function loadTaskOwnedReview(input: {
   }
   const { data: tasks, error: taskError } = await input.db
     .from("agent_tasks")
-    .select("id,user_id,matter_id,status,latest_checkpoint")
+    .select("id,user_id,matter_id,status,current_step,latest_checkpoint")
     .eq("user_id", input.userId)
     .in("id", taskIds);
   if (taskError) throw new Error(taskError.message);
@@ -78,6 +90,55 @@ async function loadTaskOwnedReview(input: {
     );
   }
   return matches[0]!;
+}
+
+async function loadCurrentEvidenceInventoryStep(input: {
+  db: Db;
+  taskId: string;
+  currentStepId: string | null | undefined;
+  receipt: LitigationEvidenceInventoryReceiptV1;
+  status: "blocked" | "running";
+}) {
+  if (input.currentStepId !== input.receipt.step_id) {
+    throw new LitigationEvidenceReviewAccessError(
+      "review_not_active",
+      "This Evidence Inventory is not on its current lawyer-review step",
+    );
+  }
+  const { data, error } = await input.db
+    .from("agent_steps")
+    .select("id,task_id,status,attempt,capability")
+    .eq("task_id", input.taskId)
+    .eq("id", input.receipt.step_id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  const step = z
+    .object({
+      id: z.string().uuid(),
+      task_id: z.string().uuid(),
+      status: z.string(),
+      attempt: z.number().int().positive(),
+      capability: z.string(),
+    })
+    .safeParse(data);
+  if (!step.success) {
+    throw new LitigationEvidenceReviewAccessError(
+      "review_invalid",
+      "Evidence Inventory Task step is missing or malformed",
+    );
+  }
+  if (
+    step.data.task_id !== input.taskId ||
+    step.data.status !== input.status ||
+    step.data.attempt !== input.receipt.attempt ||
+    step.data.capability !== "create_tabular"
+  ) {
+    throw new LitigationEvidenceReviewAccessError(
+      "review_not_active",
+      "This Evidence Inventory is not on its current lawyer-review step",
+    );
+  }
+  return step.data;
 }
 
 async function readInspection(input: {
@@ -151,7 +212,7 @@ export async function applyLitigationEvidenceLawyerReview(input: {
   cellId: string;
   userId: string;
   expectedRevision: number;
-  decision: "verified" | "unresolved" | "needs_correction";
+  decision: "verified" | "unresolved";
 }) {
   const ownership = await loadTaskOwnedReview(input);
   if (ownership.task.status !== "waiting_input") {
@@ -219,4 +280,148 @@ export async function applyLitigationEvidenceLawyerReview(input: {
     userId: input.userId,
   });
   return { cell: reviewed, ...refreshed };
+}
+
+/**
+ * Starts one server-bound retry of one existing evidence Cell. The lawyer
+ * chooses only a closed defect reason; no free text or replacement finding is
+ * accepted here. The SQL transition clears the fixed Cell and moves the same
+ * blocked Task Step to one new running attempt atomically. A later request
+ * remains a fresh, explicit lawyer action; this endpoint never schedules an
+ * automatic correction loop.
+ */
+export async function startLitigationEvidenceSourceBoundCorrection(input: {
+  db: Db;
+  reviewId: string;
+  cellId: string;
+  userId: string;
+  expectedRevision: number;
+  reasonCode: LitigationEvidenceCorrectionReasonCode;
+}) {
+  const reasonCode = litigationEvidenceCorrectionReasonCodeSchema.parse(
+    input.reasonCode,
+  );
+  const ownership = await loadTaskOwnedReview(input);
+  if (ownership.task.status !== "waiting_input") {
+    throw new LitigationEvidenceReviewAccessError(
+      "review_not_active",
+      "This Evidence Inventory is not currently awaiting lawyer review",
+    );
+  }
+  const inspection = await readInspection({
+    db: input.db,
+    receipt: ownership.receipt,
+    userId: input.userId,
+  });
+  const cell = inspection.cells.find((candidate) => candidate.id === input.cellId);
+  if (!cell) {
+    throw new LitigationEvidenceReviewAccessError(
+      "not_found",
+      "Evidence Inventory Cell not found",
+    );
+  }
+  if (cell.review_revision !== input.expectedRevision) {
+    throw new LitigationEvidenceReviewAccessError(
+      "review_not_active",
+      "The Cell changed after this page loaded. Refresh the Review and try again.",
+    );
+  }
+  if (
+    cell.review_status !== null &&
+    cell.review_status !== "needs_correction"
+  ) {
+    throw new LitigationEvidenceReviewAccessError(
+      "review_not_active",
+      "A lawyer disposition is already final for this Evidence Inventory Cell",
+    );
+  }
+  const blockedStep = await loadCurrentEvidenceInventoryStep({
+    db: input.db,
+    taskId: ownership.task.id as string,
+    currentStepId: ownership.task.current_step as string | null | undefined,
+    receipt: ownership.receipt,
+    status: "blocked",
+  });
+  const correction = compileLitigationEvidenceInventoryCorrectionReceipt({
+    correctionId: randomUUID(),
+    receipt: ownership.receipt,
+    cellId: cell.id,
+    expectedReviewRevision: input.expectedRevision,
+    reasonCode,
+    generationStepAttempt: blockedStep.attempt + 1,
+  });
+
+  let started: Awaited<ReturnType<typeof startLitigationEvidenceCellCorrection>>;
+  try {
+    started = await startLitigationEvidenceCellCorrection(input.db, {
+      correctionId: correction.correction_id,
+      taskId: correction.task_id,
+      userId: input.userId,
+      stepId: correction.step_id,
+      expectedStepAttempt: blockedStep.attempt,
+      reviewId: correction.review_id,
+      cellId: correction.cell_id,
+      documentId: correction.document_id,
+      versionId: correction.version_id,
+      columnIndex: correction.field_index,
+      expectedReviewRevision: correction.expected_review_revision,
+      reasonCode: correction.reason_code,
+    });
+  } catch (error) {
+    if (error instanceof LitigationEvidenceCellCorrectionTransitionError) {
+      throw new LitigationEvidenceReviewAccessError(
+        "review_not_active",
+        "The Evidence Inventory changed before its source-bound correction could start. Refresh the Review and try again.",
+      );
+    }
+    throw error;
+  }
+
+  // Re-read server state before waking the runner. This verifies the RPC wrote
+  // the pure receipt and prevents a malformed checkpoint from authorizing a
+  // model request.
+  const after = await loadTaskOwnedReview(input);
+  if (after.task.status !== "running") {
+    throw new LitigationEvidenceReviewAccessError(
+      "review_invalid",
+      "The Evidence Inventory correction did not resume its fixed Task step",
+    );
+  }
+  const runningStep = await loadCurrentEvidenceInventoryStep({
+    db: input.db,
+    taskId: after.task.id as string,
+    currentStepId: after.task.current_step as string | null | undefined,
+    receipt: after.receipt,
+    status: "running",
+  });
+  const afterCheckpoint =
+    after.task.latest_checkpoint &&
+    typeof after.task.latest_checkpoint === "object" &&
+    !Array.isArray(after.task.latest_checkpoint)
+      ? (after.task.latest_checkpoint as Record<string, unknown>)
+      : {};
+  const persistedCorrection = readLitigationEvidenceInventoryCorrectionReceipt({
+    value: afterCheckpoint.litigation_evidence_inventory_correction,
+    receipt: after.receipt,
+    currentStepAttempt: runningStep.attempt,
+  });
+  if (
+    !persistedCorrection ||
+    persistedCorrection.correction_id !== correction.correction_id
+  ) {
+    throw new LitigationEvidenceReviewAccessError(
+      "review_invalid",
+      "The Evidence Inventory correction receipt was not preserved",
+    );
+  }
+  const progress = await getLitigationEvidenceReviewProgress({
+    db: input.db,
+    reviewId: input.reviewId,
+    userId: input.userId,
+  });
+  return {
+    cell: { ...started, reviewed_at: null },
+    correction: persistedCorrection,
+    ...progress,
+  };
 }

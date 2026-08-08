@@ -47,7 +47,10 @@ import {
     applyLitigationEvidenceLawyerReview,
     getLitigationEvidenceReviewProgress,
     LitigationEvidenceReviewAccessError,
+    startLitigationEvidenceSourceBoundCorrection,
 } from "../lib/agentLitigationEvidenceReviewService";
+import { litigationEvidenceCorrectionReasonCodeSchema } from "../lib/agent-packs/litigation/litigationEvidenceInventoryCorrection";
+import { wakeAgentTaskRunner } from "../lib/agentTaskRunner";
 import { isAgentStepEffectTransitionError } from "../lib/agent-kernel/effects/stepEffect";
 
 const TABULAR_DOCUMENT_CONCURRENCY = 2;
@@ -339,9 +342,7 @@ tabularRouter.patch(
         const decision = req.body?.decision;
         const expectedRevision = req.body?.expected_review_revision;
         if (
-            !["verified", "unresolved", "needs_correction"].includes(
-                decision,
-            ) ||
+            !["verified", "unresolved"].includes(decision) ||
             !Number.isInteger(expectedRevision) ||
             expectedRevision < 0
         ) {
@@ -377,6 +378,56 @@ tabularRouter.patch(
                 detail: safeErrorMessage(
                     error,
                     "Failed to save Evidence Inventory lawyer review",
+                ),
+            });
+        }
+    },
+);
+
+// POST /tabular-review/:reviewId/cells/:cellId/source-bound-correction
+tabularRouter.post(
+    "/:reviewId/cells/:cellId/source-bound-correction",
+    requireAuth,
+    async (req, res) => {
+        const expectedRevision = req.body?.expected_review_revision;
+        const reason = litigationEvidenceCorrectionReasonCodeSchema.safeParse(
+            req.body?.reason_code,
+        );
+        if (
+            !Number.isInteger(expectedRevision) ||
+            expectedRevision < 0 ||
+            !reason.success
+        ) {
+            return void res.status(400).json({
+                detail:
+                    "A closed reason_code and non-negative expected_review_revision are required",
+            });
+        }
+        try {
+            const result = await startLitigationEvidenceSourceBoundCorrection({
+                db: createServerSupabase(),
+                reviewId: req.params.reviewId,
+                cellId: req.params.cellId,
+                userId: res.locals.userId as string,
+                expectedRevision,
+                reasonCode: reason.data,
+            });
+            wakeAgentTaskRunner({
+                taskId: result.task_id,
+                userId: res.locals.userId as string,
+                userEmail: res.locals.userEmail as string | undefined,
+            });
+            res.status(202).json(result);
+        } catch (error) {
+            if (error instanceof LitigationEvidenceReviewAccessError) {
+                return void res
+                    .status(error.code === "not_found" ? 404 : 409)
+                    .json({ detail: error.message, code: error.code });
+            }
+            return void res.status(500).json({
+                detail: safeErrorMessage(
+                    error,
+                    "Failed to start source-bound Evidence Inventory correction",
                 ),
             });
         }

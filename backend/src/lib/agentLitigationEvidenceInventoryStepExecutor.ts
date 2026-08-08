@@ -26,6 +26,12 @@ import {
   type LitigationEvidenceInventoryReceiptV1,
 } from "./agent-packs/litigation/litigationEvidenceInventoryPack";
 import {
+  preserveLitigationEvidenceInventoryCorrectionGap,
+  readLitigationEvidenceInventoryCorrectionReceipt,
+  type LitigationEvidenceInventoryCorrectionIssueV1,
+  type LitigationEvidenceInventoryCorrectionReceiptV1,
+} from "./agent-packs/litigation/litigationEvidenceInventoryCorrection";
+import {
   compileLitigationEvidenceReviewCompletionReceipt,
   inspectLitigationEvidenceInventoryReview,
   litigationEvidenceStoredCellSchema,
@@ -97,10 +103,33 @@ function readCurrentAttemptPublication(step: RunningStep, reviewId: string) {
 function pendingFieldsByDocument(input: {
   receipt: LitigationEvidenceInventoryReceiptV1;
   inspection: ReturnType<typeof inspectLitigationEvidenceInventoryReview>;
+  correction: LitigationEvidenceInventoryCorrectionReceiptV1 | null;
 }) {
   const storedById = new Map(
     input.inspection.cells.map((cell) => [cell.id, cell]),
   );
+  if (input.correction) {
+    const target = storedById.get(input.correction.cell_id);
+    if (!target) {
+      throw new Error(
+        "The source-bound Evidence Inventory correction Cell is no longer present",
+      );
+    }
+    // A replay after a successful commit must not spend another provider
+    // request. The only permitted generated target is the fixed pending Cell.
+    if (target.status === "done" && target.review_status === null) return [];
+    if (target.status !== "pending" || target.review_status !== null) {
+      throw new Error(
+        "The source-bound Evidence Inventory correction Cell is no longer pending review",
+      );
+    }
+    return [
+      {
+        documentId: input.correction.document_id,
+        fields: [input.correction.field],
+      },
+    ];
+  }
   return input.receipt.source_pins.map((pin) => ({
     documentId: pin.document_id,
     fields: input.receipt.cells.flatMap((fixed) => {
@@ -163,7 +192,10 @@ export type LitigationEvidenceInventoryStepOutcome =
       kind: "awaiting_lawyer_review";
       result: AgentStepExecutionResult;
       receipt: LitigationEvidenceInventoryReceiptV1;
-      issues: ReturnType<typeof preserveLitigationEvidenceCellGap>[];
+      issues: Array<
+        | ReturnType<typeof preserveLitigationEvidenceCellGap>
+        | LitigationEvidenceInventoryCorrectionIssueV1
+      >;
     }
   | {
       kind: "completed";
@@ -247,11 +279,26 @@ export async function executeLitigationEvidenceInventoryStep(input: {
     receipt: publication.receipt,
     cells: stored,
   });
-  const issues: ReturnType<typeof preserveLitigationEvidenceCellGap>[] = [];
+  const checkpoint =
+    input.snapshot.task.latest_checkpoint &&
+    typeof input.snapshot.task.latest_checkpoint === "object" &&
+    !Array.isArray(input.snapshot.task.latest_checkpoint)
+      ? (input.snapshot.task.latest_checkpoint as Record<string, unknown>)
+      : {};
+  const correction = readLitigationEvidenceInventoryCorrectionReceipt({
+    value: checkpoint.litigation_evidence_inventory_correction,
+    receipt: publication.receipt,
+    currentStepAttempt: input.step.attempt,
+  });
+  const issues: Array<
+    | ReturnType<typeof preserveLitigationEvidenceCellGap>
+    | LitigationEvidenceInventoryCorrectionIssueV1
+  > = [];
 
   for (const document of pendingFieldsByDocument({
     receipt: publication.receipt,
     inspection,
+    correction,
   })) {
     if (!document.fields.length) continue;
     if (!(await input.shouldContinue())) {
@@ -273,6 +320,7 @@ export async function executeLitigationEvidenceInventoryStep(input: {
       model: input.model,
       apiKeys: input.apiKeys,
       complete: input.complete,
+      maxAttempts: correction?.max_attempts,
       commit: async (cell) => {
         const expected = publication.receipt.cells.find(
           (candidate) => candidate.cell_id === cell.cellId,
@@ -302,17 +350,34 @@ export async function executeLitigationEvidenceInventoryStep(input: {
         }
       },
     });
-    for (const gap of generation.gaps) {
-      issues.push(
-        preserveLitigationEvidenceCellGap({
-          receipt: publication.receipt,
-          cellId: gap.cellId,
-          reason: gap.reason,
-          attemptsExhausted: gap.attemptsExhausted,
-          completedCellsPreserved:
-            inspection.progress.generated + generation.completedFields.length,
-        }),
-      );
+    if (correction) {
+      if (generation.gaps.length) {
+        if (
+          generation.gaps.length !== 1 ||
+          generation.gaps[0]!.cellId !== correction.cell_id ||
+          generation.gaps[0]!.attemptsExhausted !== 1
+        ) {
+          throw new Error(
+            "The source-bound Evidence Inventory correction escaped its fixed Cell",
+          );
+        }
+        issues.push(
+          preserveLitigationEvidenceInventoryCorrectionGap({ correction }),
+        );
+      }
+    } else {
+      for (const gap of generation.gaps) {
+        issues.push(
+          preserveLitigationEvidenceCellGap({
+            receipt: publication.receipt,
+            cellId: gap.cellId,
+            reason: gap.reason,
+            attemptsExhausted: gap.attemptsExhausted,
+            completedCellsPreserved:
+              inspection.progress.generated + generation.completedFields.length,
+          }),
+        );
+      }
     }
     stored = await readStoredCells({
       db: input.db,
@@ -332,6 +397,22 @@ export async function executeLitigationEvidenceInventoryStep(input: {
     receipt: publication.receipt,
     cells: stored,
   });
+  if (correction && issues.length) {
+    const target = inspection.cells.find(
+      (cell) => cell.id === correction.cell_id,
+    );
+    if (
+      !target ||
+      target.status !== "pending" ||
+      target.content !== null ||
+      target.citations !== null ||
+      target.review_status !== null
+    ) {
+      throw new Error(
+        "An exhausted source-bound Evidence Inventory correction did not preserve one pending unreviewed Cell",
+      );
+    }
+  }
   const citationTotal = [...inspection.generatedContent.values()].reduce(
     (total, content) => total + (content?.candidate.citations.length ?? 0),
     0,

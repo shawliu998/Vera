@@ -7,6 +7,7 @@ import {
   buildLitigationEvidenceEffectLayout,
   buildLitigationEvidenceReviewSpec,
 } from "./agentLitigationEvidenceInventoryExecutor";
+import { buildAgentStepTabularEffectReservation } from "./agent-kernel/effects/tabularEffect";
 
 test("maps the fixed Litigation receipt to one existing document-row Review layout", () => {
   const receipt = compileLitigationEvidenceInventoryReceipt({
@@ -70,4 +71,49 @@ test("uses the caller's declared Task deliverable purpose for the linked Review"
       }),
     /declared Task deliverable purpose/,
   );
+});
+
+test("reserves a new correction attempt effect for the same fixed Review", () => {
+  const common = {
+    taskId: "11111111-1111-4111-8111-111111111111",
+    matterId: "22222222-2222-4222-8222-222222222222",
+    stepId: "33333333-3333-4333-8333-333333333333",
+    proceduralStage: "first_instance" as const,
+    representedSide: "claimant_plaintiff" as const,
+    sourcePins: [
+      {
+        document_id: "44444444-4444-4444-8444-444444444444",
+        version_id: "55555555-5555-4555-8555-555555555555",
+      },
+    ],
+  };
+  const initial = compileLitigationEvidenceInventoryReceipt({
+    ...common,
+    attempt: 1,
+  });
+  const correction = compileLitigationEvidenceInventoryReceipt({
+    ...common,
+    attempt: 2,
+  });
+  const firstSpec = buildLitigationEvidenceReviewSpec(initial);
+  const retrySpec = buildLitigationEvidenceReviewSpec(correction);
+  const firstEffect = buildAgentStepTabularEffectReservation({
+    stepId: initial.step_id,
+    attempt: initial.attempt,
+    reviewId: initial.review_id,
+    layout: buildLitigationEvidenceEffectLayout(firstSpec),
+    createdAt: "2026-08-08T00:00:00.000Z",
+  });
+  const retryEffect = buildAgentStepTabularEffectReservation({
+    stepId: correction.step_id,
+    attempt: correction.attempt,
+    reviewId: correction.review_id,
+    layout: buildLitigationEvidenceEffectLayout(retrySpec),
+    createdAt: "2026-08-08T00:01:00.000Z",
+  });
+  assert.equal(retrySpec.id, firstSpec.id);
+  assert.equal(retryEffect.target.review_id, firstEffect.target.review_id);
+  assert.equal(retryEffect.input_fingerprint, firstEffect.input_fingerprint);
+  assert.notEqual(retryEffect.effect_key, firstEffect.effect_key);
+  assert.equal(retryEffect.attempt, 2);
 });

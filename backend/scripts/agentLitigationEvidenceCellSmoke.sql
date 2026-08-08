@@ -1,7 +1,7 @@
--- Apply migrations 20260808_10 and 20260808_11 first, then run with psql.
+-- Apply migrations 20260808_10 through 20260808_12 first, then run with psql.
 -- This smoke is transactional: it leaves the local database unchanged.
--- It covers lease/effect fencing, replay, lawyer CAS, unresolved pending cells,
--- and a new Step attempt preserving completed fixed coordinates.
+-- It covers lease/effect fencing, replay, lawyer CAS, bounded source-bound
+-- correction, and a new Step attempt preserving completed fixed coordinates.
 begin;
 
 insert into public.projects(id, user_id, name)
@@ -82,20 +82,36 @@ insert into public.agent_tasks(
       'step_id', '58100000-0000-4000-8000-000000000001',
       'attempt', 1,
       'review_id', '78100000-0000-4000-8000-000000000001',
+      'procedural_stage', 'first_instance',
+      'represented_side', 'claimant_plaintiff',
+      'source_pins', jsonb_build_array(jsonb_build_object(
+        'document_id', '28100000-0000-4000-8000-000000000001',
+        'version_id', '38100000-0000-4000-8000-000000000001'
+      )),
       'cells', jsonb_build_array(
         jsonb_build_object(
           'cell_id', '88100000-0000-4000-8000-000000000001',
           'document_id', '28100000-0000-4000-8000-000000000001',
           'version_id', '38100000-0000-4000-8000-000000000001',
+          'field', 'evidence_item',
           'field_index', 0
         ),
         jsonb_build_object(
           'cell_id', '98100000-0000-4000-8000-000000000001',
           'document_id', '28100000-0000-4000-8000-000000000001',
           'version_id', '38100000-0000-4000-8000-000000000001',
+          'field', 'authenticity',
           'field_index', 1
+        ),
+        jsonb_build_object(
+          'cell_id', 'a8100000-0000-4000-8000-000000000002',
+          'document_id', '28100000-0000-4000-8000-000000000001',
+          'version_id', '38100000-0000-4000-8000-000000000001',
+          'field', 'admissibility',
+          'field_index', 2
         )
-      )
+      ),
+      'layout_digest', 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
     )
   )
 );
@@ -120,7 +136,7 @@ insert into public.tabular_reviews(
   'Litigation',
   'document_rows',
   '["28100000-0000-4000-8000-000000000001"]'::jsonb,
-  '[{"index":0,"name":"Evidence item"},{"index":1,"name":"Authenticity"}]'::jsonb
+  '[{"index":0,"name":"Evidence item"},{"index":1,"name":"Authenticity"},{"index":2,"name":"Admissibility"}]'::jsonb
 );
 
 insert into public.tabular_cells(
@@ -137,6 +153,12 @@ insert into public.tabular_cells(
     '78100000-0000-4000-8000-000000000001',
     '28100000-0000-4000-8000-000000000001',
     null, 1, 'pending'
+  ),
+  (
+    'a8100000-0000-4000-8000-000000000002',
+    '78100000-0000-4000-8000-000000000001',
+    '28100000-0000-4000-8000-000000000001',
+    null, 2, 'pending'
   );
 
 do $$
@@ -158,7 +180,7 @@ declare
   );
   v_layout jsonb := jsonb_build_object(
     'document_ids', jsonb_build_array('28100000-0000-4000-8000-000000000001'),
-    'columns_config', '[{"index":0,"name":"Evidence item"},{"index":1,"name":"Authenticity"}]'::jsonb,
+    'columns_config', '[{"index":0,"name":"Evidence item"},{"index":1,"name":"Authenticity"},{"index":2,"name":"Admissibility"}]'::jsonb,
     'cells', jsonb_build_array(
       jsonb_build_object(
         'id', '88100000-0000-4000-8000-000000000001',
@@ -169,6 +191,11 @@ declare
         'id', '98100000-0000-4000-8000-000000000001',
         'document_id', '28100000-0000-4000-8000-000000000001',
         'column_index', 1
+      ),
+      jsonb_build_object(
+        'id', 'a8100000-0000-4000-8000-000000000002',
+        'document_id', '28100000-0000-4000-8000-000000000001',
+        'column_index', 2
       )
     )
   );
@@ -320,14 +347,223 @@ begin
     1,
     'needs_correction'
   );
-  if v.outcome <> 'reviewed' or v.cell_status <> 'pending'
-    or v.review_status <> 'needs_correction' or v.review_revision <> 2 then
-    raise exception 'pending correction review failed: %', row_to_json(v);
+  if v.outcome <> 'invalid_input' then
+    raise exception 'new lawyer review unexpectedly wrote needs_correction: %', row_to_json(v);
   end if;
 
+  -- Start a distinct correction scenario from the same fixed Task. The prior
+  -- unresolved disposition is intentionally used to prove resolved Cells
+  -- cannot be overwritten; this transaction then creates a done/unreviewed
+  -- fixture for the normal source-bound correction entry point.
   update public.agent_steps
-  set attempt = 2, result_data = '{}'::jsonb
+  set status = 'blocked', attempt = 1
   where id = '58100000-0000-4000-8000-000000000001';
+  update public.agent_tasks
+  set
+    status = 'waiting_input',
+    execution_lease_owner = null,
+    execution_lease_expires_at = null
+  where id = '48100000-0000-4000-8000-000000000001';
+  insert into public.agent_artifact_links(
+    task_id, artifact_type, artifact_id, purpose
+  ) values (
+    '48100000-0000-4000-8000-000000000001',
+    'tabular_review',
+    '78100000-0000-4000-8000-000000000001',
+    'Evidence inventory'
+  );
+
+  select * into v from public.start_litigation_evidence_cell_correction_v1(
+    'a8100000-0000-4000-8000-000000000001',
+    '48100000-0000-4000-8000-000000000001',
+    'user-litigation-cell',
+    '58100000-0000-4000-8000-000000000001',
+    1,
+    '78100000-0000-4000-8000-000000000001',
+    '88100000-0000-4000-8000-000000000001',
+    '28100000-0000-4000-8000-000000000001',
+    '38100000-0000-4000-8000-000000000001',
+    0,
+    1,
+    'citation_not_exact'
+  );
+  if v.outcome <> 'conflict' then
+    raise exception 'verified Cell correction was not rejected: %', row_to_json(v);
+  end if;
+  select * into v from public.start_litigation_evidence_cell_correction_v1(
+    'a8100000-0000-4000-8000-000000000001',
+    '48100000-0000-4000-8000-000000000001',
+    'user-litigation-cell',
+    '58100000-0000-4000-8000-000000000001',
+    1,
+    '78100000-0000-4000-8000-000000000001',
+    '98100000-0000-4000-8000-000000000001',
+    '28100000-0000-4000-8000-000000000001',
+    '38100000-0000-4000-8000-000000000001',
+    1,
+    1,
+    'citation_not_exact'
+  );
+  if v.outcome <> 'conflict' then
+    raise exception 'unresolved Cell correction was not rejected: %', row_to_json(v);
+  end if;
+  update public.tabular_cells
+  set
+    status = 'done',
+    content = '{"old":"candidate"}',
+    citations = '[]'::jsonb,
+    review_status = null,
+    reviewed_at = null,
+    review_revision = 0
+  where id = '98100000-0000-4000-8000-000000000001';
+
+  select * into v from public.start_litigation_evidence_cell_correction_v1(
+    'a8100000-0000-4000-8000-000000000001',
+    '48100000-0000-4000-8000-000000000001',
+    'another-user',
+    '58100000-0000-4000-8000-000000000001',
+    1,
+    '78100000-0000-4000-8000-000000000001',
+    '98100000-0000-4000-8000-000000000001',
+    '28100000-0000-4000-8000-000000000001',
+    '38100000-0000-4000-8000-000000000001',
+    1,
+    0,
+    'citation_not_exact'
+  );
+  if v.outcome <> 'not_found' then
+    raise exception 'cross-owner correction was not rejected: %', row_to_json(v);
+  end if;
+
+  select * into v from public.start_litigation_evidence_cell_correction_v1(
+    'a8100000-0000-4000-8000-000000000001',
+    '48100000-0000-4000-8000-000000000001',
+    'user-litigation-cell',
+    '58100000-0000-4000-8000-000000000001',
+    1,
+    '78100000-0000-4000-8000-000000000001',
+    '98100000-0000-4000-8000-000000000001',
+    '28100000-0000-4000-8000-000000000001',
+    '38100000-0000-4000-8000-000000000001',
+    4,
+    0,
+    'citation_not_exact'
+  );
+  if v.outcome <> 'artifact_invalid' then
+    raise exception 'cross-coordinate correction was not rejected: %', row_to_json(v);
+  end if;
+
+  insert into public.document_versions(
+    id, document_id, storage_path, filename, file_type, version_number
+  ) values (
+    '38200000-0000-4000-8000-000000000001',
+    '28100000-0000-4000-8000-000000000001',
+    'smoke/litigation-source-v2.pdf',
+    'Bluewater evidence.pdf',
+    'pdf',
+    2
+  );
+  update public.documents
+  set current_version_id = '38200000-0000-4000-8000-000000000001'
+  where id = '28100000-0000-4000-8000-000000000001';
+  select * into v from public.start_litigation_evidence_cell_correction_v1(
+    'a8100000-0000-4000-8000-000000000001',
+    '48100000-0000-4000-8000-000000000001',
+    'user-litigation-cell',
+    '58100000-0000-4000-8000-000000000001',
+    1,
+    '78100000-0000-4000-8000-000000000001',
+    '98100000-0000-4000-8000-000000000001',
+    '28100000-0000-4000-8000-000000000001',
+    '38100000-0000-4000-8000-000000000001',
+    1,
+    0,
+    'citation_not_exact'
+  );
+  if v.outcome <> 'version_conflict' then
+    raise exception 'source Version drift was not rejected: %', row_to_json(v);
+  end if;
+  update public.documents
+  set current_version_id = '38100000-0000-4000-8000-000000000001'
+  where id = '28100000-0000-4000-8000-000000000001';
+
+  select * into v from public.start_litigation_evidence_cell_correction_v1(
+    'a8100000-0000-4000-8000-000000000001',
+    '48100000-0000-4000-8000-000000000001',
+    'user-litigation-cell',
+    '58100000-0000-4000-8000-000000000001',
+    1,
+    '78100000-0000-4000-8000-000000000001',
+    '98100000-0000-4000-8000-000000000001',
+    '28100000-0000-4000-8000-000000000001',
+    '38100000-0000-4000-8000-000000000001',
+    1,
+    0,
+    'source_conflict'
+  );
+  if v.outcome <> 'started' or v.task_status <> 'running'
+    or v.current_step <> '58100000-0000-4000-8000-000000000001'
+    or v.cell_status <> 'pending' or v.review_status is not null
+    or v.review_revision <> 1 then
+    raise exception 'source-bound correction did not atomically start: %', row_to_json(v);
+  end if;
+  if not exists (
+    select 1 from public.tabular_cells
+    where id = '98100000-0000-4000-8000-000000000001'
+      and status = 'pending'
+      and content is null and citations is null
+      and review_status is null and reviewed_at is null
+      and review_revision = 1
+  ) or not exists (
+    select 1 from public.tabular_cells
+    where id = '88100000-0000-4000-8000-000000000001'
+      and status = 'done'
+      and review_status = 'verified'
+      and review_revision = 1
+  ) then
+    raise exception 'correction changed a protected Cell or did not clear its target';
+  end if;
+
+  select * into v from public.start_litigation_evidence_cell_correction_v1(
+    'a8100000-0000-4000-8000-000000000001',
+    '48100000-0000-4000-8000-000000000001',
+    'user-litigation-cell',
+    '58100000-0000-4000-8000-000000000001',
+    1,
+    '78100000-0000-4000-8000-000000000001',
+    '98100000-0000-4000-8000-000000000001',
+    '28100000-0000-4000-8000-000000000001',
+    '38100000-0000-4000-8000-000000000001',
+    1,
+    0,
+    'source_conflict'
+  );
+  if v.outcome <> 'recovered' then
+    raise exception 'exact correction replay did not recover: %', row_to_json(v);
+  end if;
+  select * into v from public.start_litigation_evidence_cell_correction_v1(
+    'a8100000-0000-4000-8000-000000000001',
+    '48100000-0000-4000-8000-000000000001',
+    'user-litigation-cell',
+    '58100000-0000-4000-8000-000000000001',
+    1,
+    '78100000-0000-4000-8000-000000000001',
+    '98100000-0000-4000-8000-000000000001',
+    '28100000-0000-4000-8000-000000000001',
+    '38100000-0000-4000-8000-000000000001',
+    1,
+    0,
+    'material_omission'
+  );
+  if v.outcome <> 'conflict' then
+    raise exception 'non-identical correction replay did not fail closed: %', row_to_json(v);
+  end if;
+
+  update public.agent_tasks
+  set
+    execution_lease_owner = '68100000-0000-4000-8000-000000000001',
+    execution_lease_expires_at = clock_timestamp() + interval '5 minutes'
+  where id = '48100000-0000-4000-8000-000000000001';
 
   v_key := 'agent-step:58100000-0000-4000-8000-000000000001:attempt:2:create_tabular_review';
   v_receipt := jsonb_set(
@@ -361,6 +597,55 @@ begin
   );
   if v.outcome <> 'committed' then
     raise exception 'new attempt rejected completed fixed cells: %', row_to_json(v);
+  end if;
+
+  -- The runner settles its active correction receipt when it returns to
+  -- lawyer review. A different fixed Cell can then request one bounded retry;
+  -- this row emulates a historical needs_correction value created before the
+  -- new review RPC was narrowed.
+  update public.agent_steps
+  set status = 'blocked', attempt = 2
+  where id = '58100000-0000-4000-8000-000000000001';
+  update public.agent_tasks
+  set
+    status = 'waiting_input',
+    latest_checkpoint = latest_checkpoint
+      - 'litigation_evidence_inventory_correction',
+    execution_lease_owner = null,
+    execution_lease_expires_at = null
+  where id = '48100000-0000-4000-8000-000000000001';
+  update public.tabular_cells
+  set
+    status = 'done',
+    content = '{"historical":"candidate"}',
+    citations = '[]'::jsonb,
+    review_status = 'needs_correction',
+    reviewed_at = clock_timestamp(),
+    review_revision = 1
+  where id = 'a8100000-0000-4000-8000-000000000002';
+  select * into v from public.start_litigation_evidence_cell_correction_v1(
+    'a8100000-0000-4000-8000-000000000003',
+    '48100000-0000-4000-8000-000000000001',
+    'user-litigation-cell',
+    '58100000-0000-4000-8000-000000000001',
+    2,
+    '78100000-0000-4000-8000-000000000001',
+    'a8100000-0000-4000-8000-000000000002',
+    '28100000-0000-4000-8000-000000000001',
+    '38100000-0000-4000-8000-000000000001',
+    2,
+    1,
+    'material_omission'
+  );
+  if v.outcome <> 'started' or v.review_revision <> 2 then
+    raise exception 'historical needs_correction did not enter bounded recovery: %', row_to_json(v);
+  end if;
+  if not exists (
+    select 1 from public.tabular_cells
+    where id = '98100000-0000-4000-8000-000000000001'
+      and status = 'pending' and review_status is null and review_revision = 1
+  ) then
+    raise exception 'second correction changed the settled first target';
   end if;
 end;
 $$;

@@ -28,12 +28,15 @@ import {
     getTabularReviewPeople,
     listProjects,
     regenerateTabularCell,
+    requestLitigationEvidenceSourceBoundCorrection,
     reviewLitigationEvidenceCell,
     streamTabularGeneration,
     updateTabularReview,
     uploadProjectDocument,
     uploadReviewDocument,
     MikeApiError,
+    type LitigationEvidenceCellCorrectionResult,
+    type LitigationEvidenceCellReviewResult,
     type LitigationEvidenceReviewSnapshot,
     type TRCitationAnnotation,
 } from "@/app/lib/mikeApi";
@@ -89,6 +92,7 @@ import {
     evidenceInventoryReviewCompleteResponse,
     litigationEvidenceSideLabel,
     litigationEvidenceStageLabel,
+    type SourceBoundCorrectionReasonCode,
 } from "./litigationEvidenceInventoryUi";
 
 interface Props {
@@ -895,6 +899,55 @@ export function TRView({ reviewId, projectId }: Props) {
         }
     }
 
+    function applyLitigationEvidenceCellTransition(
+        cellId: string,
+        result:
+            | LitigationEvidenceCellReviewResult
+            | LitigationEvidenceCellCorrectionResult,
+    ) {
+        setCells((current) =>
+            current.map((candidate) => {
+                if (candidate.id !== cellId) return candidate;
+                const status = result.cell.cell_status;
+                return {
+                    ...candidate,
+                    ...(status === "pending" || status === "done"
+                        ? { status }
+                        : {}),
+                    review_status: result.cell.review_status,
+                    review_revision:
+                        result.cell.review_revision ?? candidate.review_revision,
+                    ...(result.cell.reviewed_at === undefined
+                        ? {}
+                        : { reviewed_at: result.cell.reviewed_at }),
+                };
+            }),
+        );
+        setExpandedCell((current) =>
+            current?.id === cellId
+                ? {
+                      ...current,
+                      review_status: result.cell.review_status,
+                      review_revision:
+                          result.cell.review_revision ?? current.review_revision,
+                      ...(result.cell.reviewed_at === undefined
+                          ? {}
+                          : { reviewed_at: result.cell.reviewed_at }),
+                  }
+                : current,
+        );
+        setLitigationReview({
+            kind: "active",
+            snapshot: {
+                task_id: result.task_id,
+                task_status: result.task_status,
+                review_id: result.review_id,
+                context: result.context,
+                progress: result.progress,
+            },
+        });
+    }
+
     async function saveLitigationCellReview(
         cell: TabularCell,
         decision: "verified" | "unresolved",
@@ -918,54 +971,52 @@ export function TRView({ reviewId, projectId }: Props) {
                     expectedReviewRevision: cell.review_revision,
                 },
             );
-            setCells((current) =>
-                current.map((candidate) => {
-                    if (candidate.id !== cell.id) return candidate;
-                    const status = result.cell.cell_status;
-                    return {
-                        ...candidate,
-                        ...(status === "pending" || status === "done"
-                            ? { status }
-                            : {}),
-                        review_status: result.cell.review_status,
-                        review_revision:
-                            result.cell.review_revision ??
-                            candidate.review_revision,
-                        reviewed_at: result.cell.reviewed_at,
-                    };
-                }),
-            );
-            setExpandedCell((current) =>
-                current?.id === cell.id
-                    ? {
-                          ...current,
-                          review_status: result.cell.review_status,
-                          review_revision:
-                              result.cell.review_revision ??
-                              current.review_revision,
-                          reviewed_at: result.cell.reviewed_at,
-                      }
-                    : current,
-            );
-            setLitigationReview((current) =>
-                current.kind === "active"
-                    ? {
-                          ...current,
-                          snapshot: {
-                              task_id: result.task_id,
-                              task_status: result.task_status,
-                              review_id: result.review_id,
-                              context: result.context,
-                              progress: result.progress,
-                          },
-                      }
-                    : current,
-            );
+            applyLitigationEvidenceCellTransition(cell.id, result);
         } catch (error) {
             setLitigationReviewError(
                 error instanceof Error
                     ? error.message
                     : "The lawyer review decision could not be saved.",
+            );
+        } finally {
+            setLitigationReviewSavingCellId(null);
+        }
+    }
+
+    async function requestLitigationEvidenceCellCorrection(
+        cell: TabularCell,
+        reasonCode: SourceBoundCorrectionReasonCode,
+    ) {
+        if (
+            !activeLitigationReview ||
+            !litigationReviewActive ||
+            litigationReviewSavingCellId ||
+            (cell.status !== "pending" && cell.status !== "done") ||
+            cell.review_revision === undefined ||
+            cell.review_status === "verified" ||
+            cell.review_status === "unresolved"
+        ) {
+            return;
+        }
+        setLitigationReviewSavingCellId(cell.id);
+        setLitigationReviewError(null);
+        try {
+            const result =
+                await requestLitigationEvidenceSourceBoundCorrection(
+                    reviewId,
+                    cell.id,
+                    {
+                        expectedReviewRevision: cell.review_revision,
+                        reasonCode,
+                    },
+                );
+            applyLitigationEvidenceCellTransition(cell.id, result);
+            router.push(`/agent-tasks/${result.task_id}?restore=1`);
+        } catch (error) {
+            setLitigationReviewError(
+                error instanceof Error
+                    ? error.message
+                    : "The source-bound regeneration request could not be saved.",
             );
         } finally {
             setLitigationReviewSavingCellId(null);
@@ -1688,6 +1739,13 @@ export function TRView({ reviewId, projectId }: Props) {
                                               saveLitigationCellReview(
                                                   expandedCell,
                                                   decision,
+                                              ),
+                                          onRequestSourceBoundCorrection: (
+                                              reasonCode,
+                                          ) =>
+                                              requestLitigationEvidenceCellCorrection(
+                                                  expandedCell,
+                                                  reasonCode,
                                               ),
                                       }
                                     : undefined
