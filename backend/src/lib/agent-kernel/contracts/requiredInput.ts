@@ -10,7 +10,14 @@ const choiceItemSchema = z
     kind: z.literal("choice"),
     question: bounded(500),
     options: z
-      .array(z.object({ value: bounded(500) }).strict())
+      .array(
+        z
+          .object({
+            value: bounded(500),
+            label: bounded(500).optional(),
+          })
+          .strict(),
+      )
       .min(1)
       .max(16),
     allow_other: z.boolean(),
@@ -62,6 +69,31 @@ export const agentRequiredInputSchema = z
 
 export type AgentRequiredInputV1 = z.infer<typeof agentRequiredInputSchema>;
 
+export const agentRequiredInputResponseSchema = z
+  .array(
+    z.discriminatedUnion("kind", [
+      z
+        .object({
+          id: bounded(80),
+          kind: z.literal("choice"),
+          answer: bounded(1_000),
+        })
+        .strict(),
+      z
+        .object({
+          id: bounded(80),
+          kind: z.literal("documents"),
+          document_ids: z.array(bounded(200)).max(100),
+        })
+        .strict(),
+    ]),
+  )
+  .max(12);
+
+export type AgentRequiredInputResponseV1 = z.infer<
+  typeof agentRequiredInputResponseSchema
+>[number];
+
 function normalized(value: string) {
   return value
     .normalize("NFKC")
@@ -85,7 +117,10 @@ function requestId(stepId: string, items: z.infer<typeof itemSchema>[]) {
       ? [
           item.id,
           normalized(item.question),
-          item.options.map((o) => normalized(o.value)),
+          item.options.map((o) => [
+            normalized(o.value),
+            o.label ? normalized(o.label) : null,
+          ]),
         ]
       : [item.id, item.required, item.document_types.map(normalized)],
   );
@@ -101,6 +136,33 @@ function prompt(items: z.infer<typeof itemSchema>[]) {
     )
     .join(" ")
     .slice(0, 4000);
+}
+
+export function createAgentRequiredInput(input: {
+  stepId: string;
+  items: AskInputItem[];
+  reasonCode?: AgentRequiredInputV1["reason_code"];
+  prompt?: string;
+  resumeStrategy?: AgentRequiredInputV1["resume_strategy"];
+  createdAt?: string;
+}) {
+  const items = z.array(itemSchema).min(1).max(12).parse(input.items);
+  return agentRequiredInputSchema.parse({
+    kind: "required_input_v1",
+    request_id: requestId(input.stepId, items),
+    step_id: input.stepId,
+    reason_code:
+      input.reasonCode ??
+      (items.some((item) => item.kind === "documents" && item.required)
+        ? "missing_source"
+        : items.some((item) => item.kind === "choice")
+          ? "lawyer_choice"
+          : "missing_fact"),
+    prompt: input.prompt?.trim() || prompt(items),
+    items,
+    resume_strategy: input.resumeStrategy ?? "retry_step",
+    created_at: input.createdAt ?? new Date().toISOString(),
+  });
 }
 
 function isContinuationOnly(item: z.infer<typeof itemSchema>) {
@@ -162,21 +224,10 @@ export function requiredInputFromAssistantEvents(
     if (!items.length) continue;
     const id = requestId(input.stepId, items);
     if (resolved.has(id)) return null;
-    return agentRequiredInputSchema.parse({
-      kind: "required_input_v1",
-      request_id: id,
-      step_id: input.stepId,
-      reason_code: items.some(
-        (item) => item.kind === "documents" && item.required,
-      )
-        ? "missing_source"
-        : items.some((item) => item.kind === "choice")
-          ? "lawyer_choice"
-          : "missing_fact",
-      prompt: prompt(items),
+    return createAgentRequiredInput({
+      stepId: input.stepId,
       items,
-      resume_strategy: "retry_step",
-      created_at: input.createdAt ?? new Date().toISOString(),
+      createdAt: input.createdAt,
     });
   }
   return null;
@@ -184,20 +235,90 @@ export function requiredInputFromAssistantEvents(
 
 export function validateRequiredInputSubmission(
   required: AgentRequiredInputV1,
-  input: { message?: string; documentIds?: string[] },
+  input: {
+    message?: string;
+    documentIds?: string[];
+    responses?: unknown;
+  },
 ) {
   const message = input.message?.trim() ?? "";
   const documentIds = input.documentIds ?? [];
+  const responses =
+    input.responses === undefined
+      ? null
+      : agentRequiredInputResponseSchema.parse(input.responses);
+  if (responses) {
+    const byId = new Map(responses.map((response) => [response.id, response]));
+    const submittedDocumentIds = new Set(documentIds);
+    if (byId.size !== responses.length) {
+      throw new Error("Required input responses must be unique");
+    }
+    for (const item of required.items) {
+      const response = byId.get(item.id);
+      if (item.kind === "choice") {
+        if (!response || response.kind !== "choice") {
+          throw new Error(`A structured choice is required for ${item.id}`);
+        }
+        const fixed = item.options.some(
+          (option) => option.value === response.answer,
+        );
+        if (!fixed && !item.allow_other) {
+          throw new Error(`Choice ${item.id} is outside the fixed options`);
+        }
+      } else {
+        if (
+          item.required &&
+          (!response ||
+            response.kind !== "documents" ||
+            response.document_ids.length === 0)
+        ) {
+          throw new Error(`Matter documents are required for ${item.id}`);
+        }
+        if (response?.kind === "documents") {
+          const responseIds = new Set(response.document_ids);
+          if (
+            responseIds.size !== response.document_ids.length ||
+            responseIds.size !== submittedDocumentIds.size ||
+            [...responseIds].some((id) => !submittedDocumentIds.has(id))
+          ) {
+            throw new Error(
+              `Matter document response ${item.id} does not match the submitted documents`,
+            );
+          }
+        }
+      }
+    }
+    if (
+      responses.some(
+        (response) =>
+          !required.items.some(
+            (item) => item.id === response.id && item.kind === response.kind,
+          ),
+      )
+    ) {
+      throw new Error("Required input contains an unknown response item");
+    }
+  }
   if (
+    !responses &&
     required.items.some((item) => item.kind === "documents" && item.required) &&
     documentIds.length === 0
   ) {
     throw new Error("The requested Matter document is required to continue");
   }
-  if (required.items.some((item) => item.kind === "choice") && !message) {
+  if (
+    !responses &&
+    required.items.some((item) => item.kind === "choice") &&
+    !message
+  ) {
     throw new Error("The requested lawyer choice is required to continue");
   }
-  return { requestId: required.request_id, message, documentIds };
+  return {
+    requestId: required.request_id,
+    message,
+    documentIds,
+    responses,
+  };
 }
 
 export function requiredInputCheckpointValue(required: AgentRequiredInputV1) {
@@ -220,17 +341,14 @@ export function createDocumentsRequiredInput(input: {
         .filter(Boolean) ?? ["Source documents"],
     },
   ];
-  return agentRequiredInputSchema.parse({
-    kind: "required_input_v1",
-    request_id: requestId(input.stepId, items),
-    step_id: input.stepId,
-    reason_code: "missing_source",
+  return createAgentRequiredInput({
+    stepId: input.stepId,
+    reasonCode: "missing_source",
     prompt:
       input.prompt ??
       "Attach the Matter source documents required for this step.",
     items,
-    resume_strategy: "retry_step",
-    created_at: input.createdAt ?? new Date().toISOString(),
+    createdAt: input.createdAt,
   });
 }
 

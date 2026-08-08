@@ -8,10 +8,12 @@ import type { Document } from "@/app/components/shared/types";
 import type {
   AgentRequiredInput,
   AgentRequiredInputChoice,
+  AgentRequiredInputResponse,
 } from "@/app/types/agent";
 import {
   agentRequiredInputNeedsDocuments,
   buildAgentRequiredInputMessage,
+  buildAgentRequiredInputResponses,
 } from "./agentRequiredInput";
 
 export function AgentRequiredInputForm({
@@ -31,7 +33,10 @@ export function AgentRequiredInputForm({
   error: string | null;
   onNoteChange: (value: string) => void;
   onAttachDocuments: () => void;
-  onSubmit: (message: string) => Promise<void>;
+  onSubmit: (
+    message: string,
+    responses: AgentRequiredInputResponse[],
+  ) => Promise<void>;
 }) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [otherOpen, setOtherOpen] = useState<Record<string, boolean>>({});
@@ -57,6 +62,12 @@ export function AgentRequiredInputForm({
     [answers, documents.length, note, requiredInput],
   );
   const ready = decisionsComplete && !requiredDocumentsMissing;
+  const responses: AgentRequiredInputResponse[] =
+    buildAgentRequiredInputResponses({
+      requiredInput,
+      answers,
+      documentIds: documents.map((document) => document.id),
+    });
 
   function choose(item: AgentRequiredInputChoice, answer: string) {
     setOtherOpen((current) => ({ ...current, [item.id]: false }));
@@ -79,7 +90,7 @@ export function AgentRequiredInputForm({
       className="mt-3 border-y border-gray-900/[0.07] py-3"
       onSubmit={(event) => {
         event.preventDefault();
-        if (submissionMessage) void onSubmit(submissionMessage);
+        if (submissionMessage) void onSubmit(submissionMessage, responses);
       }}
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -130,7 +141,7 @@ export function AgentRequiredInputForm({
                       className="mt-1 h-3.5 w-3.5 shrink-0 accent-gray-950"
                     />
                     <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
-                      {option.value}
+                      {option.label ?? option.value}
                     </span>
                     {selected && (
                       <Check className="mt-1 h-3 w-3 shrink-0 text-gray-700" />

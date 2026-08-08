@@ -49,6 +49,7 @@ import type {
   AgentEvidenceCitation,
   AgentEvidenceSnapshot,
   AgentReviewStatus,
+  AgentRequiredInputResponse,
   AgentStepStatus,
   AgentTaskSnapshot,
   AgentTaskStatus,
@@ -258,7 +259,10 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
     setTaskInputError(null);
   }
 
-  async function continueWithTaskInput(messageOverride?: string) {
+  async function continueWithTaskInput(
+    messageOverride?: string,
+    responses?: AgentRequiredInputResponse[],
+  ) {
     if (!snapshot || taskInputSubmitting) return;
     const message = messageOverride?.trim() || taskInput.trim();
     if (!message && !taskInputDocuments.length) {
@@ -272,6 +276,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
         await submitAgentTaskInput(taskId, {
           message,
           documentIds: taskInputDocuments.map((document) => document.id),
+          responses,
         }),
       );
       setTaskInput("");
@@ -1117,7 +1122,10 @@ function WorkRecord({
   inputSubmitting: boolean;
   inputError: string | null;
   onInputMessageChange: (value: string) => void;
-  onContinueInput: (messageOverride?: string) => Promise<void>;
+  onContinueInput: (
+    messageOverride?: string,
+    responses?: AgentRequiredInputResponse[],
+  ) => Promise<void>;
   onSourceSelection: (discoveryRefs: string[]) => Promise<void>;
   onRetry: () => Promise<void>;
   onAttachDocuments: () => void;
@@ -1174,8 +1182,7 @@ function WorkRecord({
               href="/account/api-keys"
               className="inline-flex h-8 items-center rounded-full bg-white px-3.5 text-xs font-medium text-gray-700 shadow-sm outline-none hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500/70"
             >
-              {providerPause?.connectorId ===
-              "patent.epo-ops.publications"
+              {providerPause?.connectorId === "patent.epo-ops.publications"
                 ? "Configure EPO OPS"
                 : "Provider settings"}
             </Link>

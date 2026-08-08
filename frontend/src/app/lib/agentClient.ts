@@ -1,6 +1,7 @@
 import { supabase } from "@/app/lib/supabase";
 import type {
   AgentEvidenceSnapshot,
+  AgentRequiredInputResponse,
   AgentTask,
   AgentTaskSnapshot,
 } from "@/app/types/agent";
@@ -145,7 +146,11 @@ export function attachAgentTaskDocuments(
 
 export function submitAgentTaskInput(
   taskId: string,
-  input: { message?: string; documentIds?: string[] },
+  input: {
+    message?: string;
+    documentIds?: string[];
+    responses?: AgentRequiredInputResponse[];
+  },
 ) {
   return request<AgentTaskSnapshot>(
     `/agent-tasks/${encodeURIComponent(taskId)}/input`,
@@ -154,6 +159,7 @@ export function submitAgentTaskInput(
       body: JSON.stringify({
         ...(input.message?.trim() ? { message: input.message.trim() } : {}),
         document_ids: input.documentIds ?? [],
+        ...(input.responses ? { responses: input.responses } : {}),
       }),
     },
   );

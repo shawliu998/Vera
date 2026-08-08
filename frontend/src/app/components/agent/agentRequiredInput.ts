@@ -1,4 +1,8 @@
-import type { AgentCheckpoint, AgentRequiredInput } from "@/app/types/agent";
+import type {
+  AgentCheckpoint,
+  AgentRequiredInput,
+  AgentRequiredInputResponse,
+} from "@/app/types/agent";
 
 export const AGENT_INPUT_MESSAGE_LIMIT = 4000;
 
@@ -23,6 +27,28 @@ export function agentRequiredInputNeedsDocuments(
 ) {
   return requiredInput.items.some(
     (item) => item.kind === "documents" && item.required !== false,
+  );
+}
+
+export function buildAgentRequiredInputResponses(input: {
+  requiredInput: AgentRequiredInput;
+  answers: Record<string, string>;
+  documentIds: string[];
+}): AgentRequiredInputResponse[] {
+  return input.requiredInput.items.flatMap<AgentRequiredInputResponse>(
+    (item) => {
+      if (item.kind === "documents") {
+        return [
+          {
+            id: item.id,
+            kind: "documents" as const,
+            document_ids: input.documentIds,
+          },
+        ];
+      }
+      const answer = input.answers[item.id]?.trim();
+      return answer ? [{ id: item.id, kind: "choice" as const, answer }] : [];
+    },
   );
 }
 

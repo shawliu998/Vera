@@ -98,6 +98,8 @@ export function resolveDocLabel(
 
 export type AskInputOption = {
   value: string;
+  /** Optional lawyer-facing copy; value remains the stable machine token. */
+  label?: string;
 };
 
 export type AskInputItem =

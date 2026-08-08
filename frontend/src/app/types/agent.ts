@@ -38,21 +38,28 @@ export type AgentCheckpoint = {
     submitted_at: string;
     message?: string;
     document_ids: string[];
+    structured_responses?: AgentRequiredInputResponse[];
   };
   required_input?: AgentRequiredInput;
   execution_pause?: unknown;
   source_acquisition?: unknown;
+  contract_playbook_context?: unknown;
+  contract_playbook_pack_receipt?: unknown;
 };
 
 export type AgentRequiredInputChoice = {
   id: string;
   kind: "choice";
   question: string;
-  options: { value: string }[];
+  options: { value: string; label?: string }[];
   allow_other: boolean;
   other_label: string;
   response_prefix?: string;
 };
+
+export type AgentRequiredInputResponse =
+  | { id: string; kind: "choice"; answer: string }
+  | { id: string; kind: "documents"; document_ids: string[] };
 
 export type AgentRequiredInputDocuments = {
   id: string;

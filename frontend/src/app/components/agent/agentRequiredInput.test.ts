@@ -5,6 +5,7 @@ import type { AgentRequiredInput } from "@/app/types/agent";
 import {
   agentRequiredInputNeedsDocuments,
   buildAgentRequiredInputMessage,
+  buildAgentRequiredInputResponses,
 } from "./agentRequiredInput";
 
 function requiredInput(documentsRequired: boolean): AgentRequiredInput {
@@ -66,5 +67,28 @@ test("required documents and every lawyer choice remain hard boundaries", () => 
       attachedDocumentCount: 1,
     }),
     null,
+  );
+});
+
+test("structured responses submit stable values rather than display labels", () => {
+  const request = requiredInput(false);
+  const posture = request.items[0];
+  assert.equal(posture?.kind, "choice");
+  if (posture?.kind !== "choice") return;
+  posture.options = [
+    { value: "balanced", label: "Balanced / 平衡" },
+    { value: "conservative", label: "Conservative / 保守" },
+  ];
+
+  assert.deepEqual(
+    buildAgentRequiredInputResponses({
+      requiredInput: request,
+      answers: { posture: "balanced" },
+      documentIds: ["document-1"],
+    }),
+    [
+      { id: "posture", kind: "choice", answer: "balanced" },
+      { id: "facts", kind: "documents", document_ids: ["document-1"] },
+    ],
   );
 });

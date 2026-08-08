@@ -412,6 +412,12 @@ test("required input is structured, validated, and replay-suppressed", () => {
     validateRequiredInputSubmission(required!, { message: "Buyer" }).requestId,
     required?.request_id,
   );
+  assert.deepEqual(
+    validateRequiredInputSubmission(required!, {
+      responses: [{ id: "represented-side", kind: "choice", answer: "Buyer" }],
+    }).responses,
+    [{ id: "represented-side", kind: "choice", answer: "Buyer" }],
+  );
   assert.equal(
     requiredInputFromAssistantEvents(
       [{ type: "ask_inputs", items: required?.items }],
@@ -427,6 +433,31 @@ test("required input is structured, validated, and replay-suppressed", () => {
   assert.throws(
     () => validateRequiredInputSubmission(documents, { message: "Continue" }),
     /Matter document/,
+  );
+  assert.throws(
+    () =>
+      validateRequiredInputSubmission(documents, {
+        responses: [
+          {
+            id: "required-source-documents",
+            kind: "documents",
+            document_ids: ["forged-document"],
+          },
+        ],
+      }),
+    /does not match the submitted documents/,
+  );
+  assert.doesNotThrow(() =>
+    validateRequiredInputSubmission(documents, {
+      documentIds: ["matter-document-1"],
+      responses: [
+        {
+          id: "required-source-documents",
+          kind: "documents",
+          document_ids: ["matter-document-1"],
+        },
+      ],
+    }),
   );
 
   const optionalDocuments = requiredInputFromAssistantEvents(
@@ -460,6 +491,24 @@ test("required input is structured, validated, and replay-suppressed", () => {
     validateRequiredInputSubmission(optionalDocuments, {
       message: "Keep unresolved",
     }),
+  );
+  assert.throws(
+    () =>
+      validateRequiredInputSubmission(optionalDocuments!, {
+        responses: [
+          {
+            id: "background-facts",
+            kind: "choice",
+            answer: "Invented fixed option",
+          },
+          {
+            id: "supporting-facts",
+            kind: "documents",
+            document_ids: [],
+          },
+        ],
+      }),
+    /outside the fixed options/i,
   );
   assert.deepEqual(
     readResolvedRequiredInputIds({

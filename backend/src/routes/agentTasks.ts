@@ -37,7 +37,10 @@ import {
 import { buildContentDisposition } from "../lib/storage";
 import { contentTypeForDocumentType } from "../lib/documentTypes";
 import { getAgentTaskEvidence } from "../lib/agentTaskEvidence";
-import { MatterContextInvalidError } from "../lib/agent-kernel/context/matterContext";
+import {
+  MatterContextInvalidError,
+  readFixedMatterContext,
+} from "../lib/agent-kernel/context/matterContext";
 import { isAgentTaskStateTransitionError } from "../lib/agent-kernel/execution/taskTransition";
 import { compileFixedMatterContext } from "../lib/agent-kernel/context/matterContextRepository";
 import {
@@ -46,6 +49,17 @@ import {
   putAgentTaskWordArtifactEdit,
 } from "../lib/agentTaskWordArtifact";
 import { singleFileUpload } from "../lib/upload";
+import {
+  agentRequiredInputResponseSchema,
+  readAgentRequiredInput,
+} from "../lib/agent-kernel/contracts/requiredInput";
+import {
+  CONTRACT_PLAYBOOK_WORKFLOW_ID,
+  ContractPlaybookContextError,
+  createContractPlaybookContextRequiredInput,
+  readContractPlaybookContext,
+} from "../lib/agent-packs/contract/contractPlaybookContext";
+import { compileContractPlaybookContextFromRequiredInput } from "../lib/agentContractPlaybookContextRepository";
 
 export const agentTasksRouter = Router();
 
@@ -61,16 +75,18 @@ function routeError(
       ? error.code === "source_selection_invalid"
         ? 400
         : 409
-    : error instanceof AgentTaskSourceAcquisitionInputError
-      ? 400
-      : error instanceof MatterContextInvalidError
+      : error instanceof AgentTaskSourceAcquisitionInputError
         ? 400
-        : detail.startsWith("Only a") ||
-            /cannot continue safely|still closing|review state changed|no longer matches|only after task completion/i.test(
-              detail,
-            )
-          ? 409
-          : 500;
+        : error instanceof MatterContextInvalidError
+          ? 400
+          : error instanceof ContractPlaybookContextError
+            ? 400
+            : detail.startsWith("Only a") ||
+                /cannot continue safely|still closing|review state changed|no longer matches|only after task completion/i.test(
+                  detail,
+                )
+              ? 409
+              : 500;
   res.status(status).json({ detail });
 }
 
@@ -540,10 +556,20 @@ agentTasksRouter.post("/:taskId/input", requireAuth, async (req, res) => {
         .filter(Boolean),
     ),
   ).slice(0, 100);
-  if (!message && !documentIds.length) {
+  const parsedResponses =
+    req.body?.responses === undefined
+      ? { success: true as const, data: undefined }
+      : agentRequiredInputResponseSchema.safeParse(req.body.responses);
+  if (!parsedResponses.success) {
     return void res
       .status(400)
-      .json({ detail: "message or document_ids is required" });
+      .json({ detail: "responses must match the active structured input" });
+  }
+  const responses = parsedResponses.data;
+  if (!message && !documentIds.length && !responses?.length) {
+    return void res
+      .status(400)
+      .json({ detail: "message, document_ids, or responses is required" });
   }
   if (message.length > 4000) {
     return void res.status(400).json({ detail: "message is too long" });
@@ -572,9 +598,45 @@ agentTasksRouter.post("/:taskId/input", requireAuth, async (req, res) => {
           .json({ detail: "One or more documents are not in this Matter" });
       }
     }
+    const fixedMatterContext = readFixedMatterContext(snapshot.task);
+    const checkpoint =
+      snapshot.task.latest_checkpoint &&
+      typeof snapshot.task.latest_checkpoint === "object" &&
+      !Array.isArray(snapshot.task.latest_checkpoint)
+        ? (snapshot.task.latest_checkpoint as Record<string, unknown>)
+        : {};
+    const activeRequiredInput = readAgentRequiredInput(
+      checkpoint.required_input,
+    );
+    let serverCheckpointValues: Record<string, unknown> | undefined;
+    if (
+      fixedMatterContext?.workflow?.id === CONTRACT_PLAYBOOK_WORKFLOW_ID &&
+      !readContractPlaybookContext(checkpoint.contract_playbook_context) &&
+      activeRequiredInput &&
+      responses?.length
+    ) {
+      const expected = createContractPlaybookContextRequiredInput({
+        matter: fixedMatterContext,
+        stepId: activeRequiredInput.step_id,
+        createdAt: activeRequiredInput.created_at,
+      });
+      if (expected.request_id === activeRequiredInput.request_id) {
+        serverCheckpointValues = {
+          contract_playbook_context:
+            await compileContractPlaybookContextFromRequiredInput({
+              db,
+              matter: fixedMatterContext,
+              requiredInput: activeRequiredInput,
+              responses,
+            }),
+        };
+      }
+    }
     const updated = await submitAgentTaskInput(db, req.params.taskId, userId, {
       message,
       documentIds,
+      responses,
+      serverCheckpointValues,
     });
     if (!updated)
       return void res.status(404).json({ detail: "Agent task not found" });

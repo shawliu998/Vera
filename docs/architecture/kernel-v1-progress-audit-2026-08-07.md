@@ -36,7 +36,7 @@ repository interfaces batch by batch, not to rewrite the execution system.
 
 | Domain | Gold workflow | Canonical outputs | Current evidence | Missing acceptance evidence |
 | --- | --- | --- | --- | --- |
-| Contract | `builtin-contract-playbook-review` | revision DOCX, clean DOCX, review opinion DOCX | Pinned first-party manifest and fixture digest; pure Contract Pack context and receipt schemas; exact contract/reference Version binding; stable server-derived finding ids; fixed `accept`/`comment`/`skip` semantics; checklist rule-set binding; deterministic current-opinion/disposition alignment; manifest-selected Pack verifier; structured `pack_check_gap` routed through existing lawyer review; 211-test backend regression | Connect explicit Pack input and structured analysis/decision receipts to Task execution; then run a fresh ordinary-user Task through UI, browser review/optional Word handoff, final verification and download without database or OOXML repair. |
+| Contract | `builtin-contract-playbook-review` | revision DOCX, clean DOCX, review opinion DOCX | Pinned first-party manifest and fixture digest; pure Contract Pack context and receipt schemas; exact contract/reference Version binding; stable server-derived finding ids; fixed `accept`/`comment`/`skip` semantics; deterministic current-opinion/disposition alignment; manifest-selected Pack verifier; structured `pack_check_gap` routed through existing lawyer review; server-issued structured Required Input with display labels and stable machine values; no model call before explicit contract/reference/mode/side/posture/jurisdiction/language/facts; fixed reference bytes hashed server-side; mechanically parsed base-plus-overlay count for checklist mode; 219-test backend and 16-test frontend Agent regressions | Connect structured analysis and finding-bound lawyer disposition receipts to document materialization; then run a fresh ordinary-user Task through UI, browser review/optional Word handoff, final verification and download without database or OOXML repair. |
 | Patent | `builtin-patentability-assessment` | feature-chart Tabular Review/XLSX and cited memo DOCX | Pinned first-party manifest and fixed two-artifact contract; deterministic synthetic target-claim and prior-art DOCX sources with continuous-quote expectations and explicit coverage gaps | Run the fixture as a fresh Task, then prove both outputs, source navigation and unresolved-gap preservation. |
 | Litigation | `builtin-litigation-hearing-preparation` | evidence inventory, objection opinion, hearing outline | Pinned first-party manifest, locked synthetic litigation DOCX, partial-cell recovery regression | Fresh first-instance, represented-side fixture import; all three outputs in one Task; direct source/page checks; exhausted-cell recovery; lawyer review and download. |
 
@@ -78,9 +78,19 @@ receipt, lawyer disposition or opinion alignment is missing or invalid. The
 generic verifier cannot clear that gap; the existing Artifact remains current
 and the Task completes into the lawyer-review path. The explicit context
 compiler also proves the contract/reference roles and exact Versions without
-guessing from filenames. Task submission and analysis must still persist those
-structured inputs and the compiled receipt before the Contract gold flow can be
-claimed.
+guessing from filenames.
+
+Task submission now carries server-validated structured responses rather than
+trusting the concatenated human-readable message. Before the first Contract
+model call, the existing Required Input surface collects the fixed contract,
+reference, review mode, contract family, represented side, negotiation posture,
+jurisdiction, output language and bounded background facts. The server reads
+the exact reference Version, persists its SHA-256 digest, and in checklist mode
+accepts only a mechanically parsed base-plus-overlay rule count. The database
+and storage adapter lives outside `agent-packs/contract`; the Pack boundary test
+continues to forbid provider, route, storage and persistence dependencies.
+Structured analysis, finding-bound lawyer dispositions and shared Word
+materialization remain pending before the Contract gold flow can be claimed.
 
 ## Legacy cleanup rule
 
@@ -103,18 +113,21 @@ preserved release capabilities.
 
 ## Next execution order
 
-1. Connect explicit Contract Pack input, rule-set binding, structured analysis
-   receipt and lawyer dispositions to the existing Task/Required Input flow.
-2. Run the contract gold workflow through browser review and optional Word
+1. Compile the bounded Contract model analysis into the existing structured Pack
+   receipt, then collect each material finding's `accept`, `comment` or `skip`
+   disposition through the same server-owned Required Input contract.
+2. Materialize only those fixed decisions through the shared Word/effect
+   boundary, preserving browser editing and the optional Word add-in handoff.
+3. Run the contract gold workflow through browser review and optional Word
    handoff, then repair only gaps demonstrated by that run.
-3. Extract the Litigation Pack field/row contracts and per-cell reviewable-gap
+4. Extract the Litigation Pack field/row contracts and per-cell reviewable-gap
    outcome; integrate one Task-owned Evidence Inventory through the existing
    Tabular Review surface.
-4. Run the litigation gold workflow, including direct source navigation and an
+5. Run the litigation gold workflow, including direct source navigation and an
    exhausted-cell recovery, before removing any legacy litigation slice.
-5. Run the current-user EPO OPS success gate when credentials are available,
+6. Run the current-user EPO OPS success gate when credentials are available,
    from search through selected import and downstream Word verification.
-6. When Word is closed, complete Batch 7 Host activation and visual acceptance.
-7. Reconcile the preserved dirty worktree only after each replacement slice has
+7. When Word is closed, complete Batch 7 Host activation and visual acceptance.
+8. Reconcile the preserved dirty worktree only after each replacement slice has
    passed its gold workflow; preserve browser Word, the Word add-in, Matter,
    Artifact, Citation, Tabular Review and review/export capabilities.

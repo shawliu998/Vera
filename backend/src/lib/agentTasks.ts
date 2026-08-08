@@ -28,10 +28,12 @@ import { extendFixedMatterContext } from "./agent-kernel/context/matterContextRe
 import type { AgentTaskArtifactContractV1 } from "./agent-kernel/contracts/taskContract";
 import { extendAgentTaskContractContext } from "./agent-kernel/contracts/taskContract";
 import {
+  agentRequiredInputResponseSchema,
   readAgentRequiredInput,
   readResolvedRequiredInputIds,
   validateRequiredInputSubmission,
   type AgentRequiredInputV1,
+  type AgentRequiredInputResponseV1,
 } from "./agent-kernel/contracts/requiredInput";
 import {
   readAgentStepContracts,
@@ -130,6 +132,7 @@ export type AgentTaskSupplementalInput = {
   submitted_at: string;
   message?: string;
   document_ids: string[];
+  structured_responses?: AgentRequiredInputResponseV1[];
 };
 
 export const DEFAULT_WORK_PLAN: StepDefinition[] = [
@@ -215,6 +218,9 @@ export function readAgentTaskSupplementalInput(task: {
   ) {
     return null;
   }
+  const structuredResponses = agentRequiredInputResponseSchema.safeParse(
+    row.structured_responses,
+  );
   return {
     ...(typeof row.submission_id === "string" && row.submission_id.trim()
       ? { submission_id: row.submission_id.trim() }
@@ -230,6 +236,11 @@ export function readAgentTaskSupplementalInput(task: {
           (documentId): documentId is string => typeof documentId === "string",
         )
       : [],
+    ...(structuredResponses.success
+      ? {
+          structured_responses: structuredResponses.data,
+        }
+      : {}),
   };
 }
 
@@ -245,7 +256,12 @@ export function prepareAgentTaskInputTransition(
       }>;
     };
   },
-  input: { message?: string; documentIds?: string[] },
+  input: {
+    message?: string;
+    documentIds?: string[];
+    responses?: AgentRequiredInputResponseV1[];
+    serverCheckpointValues?: Record<string, unknown>;
+  },
   submittedAt = now(),
   submissionId = randomUUID(),
 ) {
@@ -253,7 +269,7 @@ export function prepareAgentTaskInputTransition(
   const documentIds = Array.from(
     new Set((input.documentIds ?? []).map((documentId) => documentId.trim())),
   ).filter(Boolean);
-  if (!message && !documentIds.length) {
+  if (!message && !documentIds.length && !input.responses?.length) {
     throw new Error("A message or Matter document is required");
   }
   if (message.length > 4000) {
@@ -280,6 +296,7 @@ export function prepareAgentTaskInputTransition(
     ? validateRequiredInputSubmission(requiredInput, {
         message,
         documentIds,
+        responses: input.responses,
       })
     : null;
   delete checkpoint.runner_retry;
@@ -299,6 +316,9 @@ export function prepareAgentTaskInputTransition(
     submitted_at: submittedAt,
     ...(message ? { message } : {}),
     document_ids: documentIds,
+    ...(resolvedRequiredInput?.responses
+      ? { structured_responses: resolvedRequiredInput.responses }
+      : {}),
   } satisfies AgentTaskSupplementalInput;
   return {
     current,
@@ -323,6 +343,7 @@ export function prepareAgentTaskInputTransition(
           ? checkpoint.summary
           : "User input received. Continuing automatically.",
       created_at: submittedAt,
+      ...(input.serverCheckpointValues ?? {}),
       user_input: userInput,
     },
   };
@@ -753,7 +774,7 @@ export async function advanceAgentTask(
         summary?: string;
         artifacts?: AgentArtifactLinkInput[];
         stepReceipt?: AgentStepReceiptV1;
-        checkpointValues?: { source_acquisition?: unknown };
+        checkpointValues?: Record<string, unknown>;
       }
     | undefined,
   options: { leaseOwner: string },
@@ -1013,7 +1034,7 @@ export async function deferAgentTaskForProvider(
   options: {
     classification: AgentTaskExecutionPauseClassification;
     leaseOwner?: string | null;
-    checkpointValues?: { source_acquisition?: unknown };
+    checkpointValues?: Record<string, unknown>;
   },
 ) {
   const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
@@ -1526,7 +1547,12 @@ export async function submitAgentTaskInput(
   db: Db,
   taskId: string,
   userId: string,
-  input: { message?: string; documentIds?: string[] },
+  input: {
+    message?: string;
+    documentIds?: string[];
+    responses?: AgentRequiredInputResponseV1[];
+    serverCheckpointValues?: Record<string, unknown>;
+  },
 ) {
   const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
   if (!snapshot) return null;
@@ -1734,7 +1760,7 @@ export async function stopAgentTask(
     status: "waiting_input" | "failed";
     summary: string;
     requiredInput?: AgentRequiredInputV1 | null;
-    checkpointValues?: { source_acquisition?: unknown };
+    checkpointValues?: Record<string, unknown>;
     leaseOwner: string;
   },
 ) {

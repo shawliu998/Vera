@@ -5,6 +5,8 @@ import type { MatterContextManifestV1 } from "../../agent-kernel/context/matterC
 import {
   compileContractPlaybookContext,
   ContractPlaybookContextError,
+  createContractPlaybookContextRequiredInput,
+  parseContractPlaybookContextRequiredInput,
 } from "./contractPlaybookContext";
 
 const ids = {
@@ -118,6 +120,27 @@ test("compare mode cannot treat a baseline as a Playbook or negotiating position
   );
 });
 
+test("compare mode requires a distinct fixed DOCX baseline", () => {
+  assert.throws(
+    () =>
+      compileContractPlaybookContext({
+        matter: matter(),
+        packInput: {
+          ...packInput(),
+          review_mode: "compare",
+          reference_role: "baseline",
+        },
+        referenceRuleSet: {
+          digest: `sha256:${"c".repeat(64)}`,
+          expectedRuleCount: 0,
+        },
+      }),
+    (error) =>
+      error instanceof ContractPlaybookContextError &&
+      error.code === "contract_playbook_input_invalid",
+  );
+});
+
 test("compiler rejects a contract Version that is not DOCX", () => {
   const fixed = matter();
   fixed.sources[0] = { ...fixed.sources[0]!, file_type: "pdf" };
@@ -134,5 +157,77 @@ test("compiler rejects a contract Version that is not DOCX", () => {
     (error) =>
       error instanceof ContractPlaybookContextError &&
       error.code === "contract_playbook_contract_not_docx",
+  );
+});
+
+test("server requests explicit Contract context with display labels and stable values", () => {
+  const required = createContractPlaybookContextRequiredInput({
+    matter: matter(),
+    stepId: "step-read",
+    createdAt: "2026-08-08T01:00:00.000Z",
+  });
+  const contractChoice = required.items.find(
+    (item) => item.id === "contract-document-id",
+  );
+  assert.equal(contractChoice?.kind, "choice");
+  if (contractChoice?.kind !== "choice") return;
+  assert.deepEqual(contractChoice.options[0], {
+    value: ids.contract,
+    label: "Agreement.docx",
+  });
+
+  const contextInput = parseContractPlaybookContextRequiredInput({
+    matter: matter(),
+    requiredInput: required,
+    responses: [
+      { id: "contract-document-id", kind: "choice", answer: ids.contract },
+      {
+        id: "reference-document-id",
+        kind: "choice",
+        answer: ids.reference,
+      },
+      { id: "review-mode", kind: "choice", answer: "deep" },
+      { id: "contract-type", kind: "choice", answer: "services_commission" },
+      { id: "represented-side", kind: "choice", answer: "buyer_customer" },
+      { id: "negotiation-posture", kind: "choice", answer: "balanced" },
+      { id: "jurisdiction", kind: "choice", answer: "China (PRC)" },
+      { id: "review-language", kind: "choice", answer: "zh" },
+      { id: "background-facts", kind: "choice", answer: "keep_unresolved" },
+    ],
+  });
+  assert.deepEqual(contextInput, {
+    contract_document_id: ids.contract,
+    reference_document_id: ids.reference,
+    reference_role: "playbook",
+    review_mode: "deep",
+    contract_type: "services_commission",
+    represented_side: "buyer_customer",
+    negotiation_posture: "balanced",
+    jurisdiction: "China (PRC)",
+    language: "zh",
+    background_facts:
+      "No additional facts supplied; preserve unknown facts as unresolved.",
+  });
+});
+
+test("Contract context request rejects an ambiguous oversized source scope", () => {
+  const oversized = matter();
+  oversized.sources.push(
+    ...Array.from({ length: 15 }, (_, index) => ({
+      ...oversized.sources[1]!,
+      document_id: `${String(index + 10).padStart(8, "0")}-4444-4444-8444-444444444444`,
+      version_id: `${String(index + 10).padStart(8, "0")}-5555-4555-8555-555555555555`,
+      filename: `Reference-${index + 2}.json`,
+    })),
+  );
+  assert.throws(
+    () =>
+      createContractPlaybookContextRequiredInput({
+        matter: oversized,
+        stepId: "step-read",
+      }),
+    (error) =>
+      error instanceof ContractPlaybookContextError &&
+      error.code === "contract_playbook_source_scope_too_large",
   );
 });
