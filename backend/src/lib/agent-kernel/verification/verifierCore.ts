@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 export const AGENT_VERIFICATION_PACKET_VERSION = 1 as const;
+export const AGENT_VERIFICATION_RECORD_KEY =
+  "agent_verification_result" as const;
 
 const artifactTypeSchema = z.enum(["draft", "tabular_review"]);
 const dimensionSchema = z.enum([
@@ -56,6 +58,16 @@ const deterministicIssueSchema = z.discriminatedUnion("code", [
       deliverable_key: z.string().trim().min(1).max(120),
       document_id: z.string().uuid(),
       version_id: z.string().uuid(),
+    })
+    .strict(),
+  z
+    .object({
+      code: z.literal("artifact_incomplete_ending"),
+      deliverable_key: z.string().trim().min(1).max(120),
+      document_id: z.string().uuid(),
+      version_id: z.string().uuid(),
+      accepted_view_sha256: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+      ending_excerpt: z.string().trim().min(40).max(500),
     })
     .strict(),
   z
@@ -148,6 +160,38 @@ const deterministicIssueSchema = z.discriminatedUnion("code", [
 export type AgentVerifierDeterministicIssueV1 = z.infer<
   typeof deterministicIssueSchema
 >;
+
+const TERMINAL_SENTENCE_ENDING = /[。！？.!?][”’"'）)\]】》〉」』〕]*$/u;
+const CHINESE_CONTINUATION_ENDING =
+  /(?:均明确标注为|明确标注为|列示为|说明为|载明为|表述为|认定为|界定为|定义为|称为|视为|包括|如下|下列|以及|并且|而且|或者|但是|即|例如)(?:[：:]?)$/u;
+const ENGLISH_CONTINUATION_ENDING =
+  /(?:^|\s)(?:including|as follows|such as|and|or|but|means|is|are|to|of|for|with|by)(?:[：:]?)$/iu;
+
+/**
+ * Detect only a high-confidence abrupt prose ending. This is deliberately
+ * narrower than a general writing-quality heuristic: it requires a substantial
+ * final paragraph, no terminal sentence punctuation, and an explicit lexical
+ * continuation marker. The returned excerpt is evidence, not replacement text.
+ */
+export function detectArtifactIncompleteEnding(
+  acceptedView: string,
+): string | null {
+  const finalParagraph = acceptedView
+    .split(/\r?\n+/u)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+    .at(-1);
+  if (
+    !finalParagraph ||
+    finalParagraph.length < 40 ||
+    TERMINAL_SENTENCE_ENDING.test(finalParagraph) ||
+    (!CHINESE_CONTINUATION_ENDING.test(finalParagraph) &&
+      !ENGLISH_CONTINUATION_ENDING.test(finalParagraph))
+  ) {
+    return null;
+  }
+  return finalParagraph.slice(-500);
+}
 
 const deterministicCheckSchema = z
   .object({
@@ -334,6 +378,29 @@ export function buildAgentVerificationPacketV1(
   return verificationPacketSchema.parse(packet);
 }
 
+/**
+ * Semantic verification is sound only for complete accepted views. Missing,
+ * unreadable, drifted, or deliberately bounded projections remain visible in
+ * the full server-owned packet and are routed by deterministic checks. They
+ * must not become material-goal findings merely because a model saw a partial
+ * view or a workflow status such as a lawyer-preserved unresolved cell.
+ */
+export function buildAgentSemanticVerifierProjectionV1(
+  packet: AgentVerificationPacketV1,
+): AgentVerificationPacketV1 {
+  const fixed = buildAgentVerificationPacketV1(packet);
+  return buildAgentVerificationPacketV1({
+    ...fixed,
+    deliverables: fixed.deliverables.filter(
+      (deliverable) => deliverable.accepted_view_complete,
+    ),
+    // Source and deterministic facts remain server-owned. The semantic model
+    // receives only the bounded work product needed to compare against goal.
+    source_versions: [],
+    deterministic_checks: [],
+  });
+}
+
 export type AgentVerificationMergedIssueV1 =
   | {
       origin: "deterministic";
@@ -355,6 +422,114 @@ export type AgentVerificationResultV1 = {
   issues: AgentVerificationMergedIssueV1[];
 };
 
+const verificationMergedIssueSchema = z.discriminatedUnion("origin", [
+  z
+    .object({
+      origin: z.literal("deterministic"),
+      dimension: dimensionSchema,
+      detail: z.string().trim().min(1).max(2_000),
+      issue: deterministicIssueSchema,
+    })
+    .strict(),
+  z
+    .object({
+      origin: z.literal("semantic"),
+      dimension: z.literal("goal_coverage"),
+      detail: z.string().trim().min(1).max(2_000),
+      issue: semanticIssueSchema,
+    })
+    .strict(),
+]);
+
+const verificationResultSchema = z
+  .object({
+    kind: z.literal("agent_verification_result_v1"),
+    outcome: z.enum(["clean_pass", "review_required"]),
+    dimensions: z
+      .object({
+        goal_coverage: z.enum(["pass", "gap"]),
+        source_support: z.enum(["pass", "gap"]),
+        artifact_integrity: z.enum(["pass", "gap"]),
+        workflow_completion: z.enum(["pass", "gap"]),
+      })
+      .strict(),
+    issues: z.array(verificationMergedIssueSchema).max(120),
+  })
+  .strict()
+  .superRefine((result, context) => {
+    const expectedOutcome = result.issues.length
+      ? "review_required"
+      : "clean_pass";
+    if (result.outcome !== expectedOutcome) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["outcome"],
+        message: "Verifier outcome must match the structured issue set",
+      });
+    }
+    for (const dimension of dimensionSchema.options) {
+      const expected = result.issues.some(
+        (issue) => issue.dimension === dimension,
+      )
+        ? "gap"
+        : "pass";
+      if (result.dimensions[dimension] !== expected) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["dimensions", dimension],
+          message: "Verifier dimensions must be derived from structured issues",
+        });
+      }
+    }
+  });
+
+const verificationRecordSchema = z
+  .object({
+    kind: z.literal("agent_verification_record_v1"),
+    task_id: z.string().uuid(),
+    step_id: z.string().trim().min(1).max(200),
+    step_attempt: z.number().int().min(1),
+    result: verificationResultSchema,
+  })
+  .strict();
+
+export type AgentVerificationRecordV1 = z.infer<
+  typeof verificationRecordSchema
+>;
+
+export function buildAgentVerificationRecordV1(input: {
+  packet: AgentVerificationPacketV1;
+  result: AgentVerificationResultV1;
+}): AgentVerificationRecordV1 {
+  const packet = buildAgentVerificationPacketV1(input.packet);
+  return verificationRecordSchema.parse({
+    kind: "agent_verification_record_v1",
+    task_id: packet.task_id,
+    step_id: packet.step_id,
+    step_attempt: packet.step_attempt,
+    result: input.result,
+  });
+}
+
+export function readAgentVerificationRecordV1(checkpoint: unknown):
+  | { state: "absent" }
+  | { state: "invalid" }
+  | { state: "valid"; record: AgentVerificationRecordV1 } {
+  if (!checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint)) {
+    return { state: "absent" };
+  }
+  const row = checkpoint as Record<string, unknown>;
+  if (!Object.hasOwn(row, AGENT_VERIFICATION_RECORD_KEY)) {
+    return { state: "absent" };
+  }
+  const parsed = verificationRecordSchema.safeParse(
+    row[AGENT_VERIFICATION_RECORD_KEY],
+  );
+  return parsed.success
+    ? { state: "valid", record: parsed.data }
+    : { state: "invalid" };
+}
+
 export function mergeAgentVerificationResultV1(input: {
   packet: AgentVerificationPacketV1;
   semanticResult: AgentSemanticVerifierResultV1;
@@ -366,16 +541,18 @@ export function mergeAgentVerificationResultV1(input: {
       "Verifier profile does not authorize semantic issues",
     );
   }
-  const deliverableKeys = new Set(
-    packet.deliverables.map((deliverable) => deliverable.key),
+  const semanticDeliverableKeys = new Set(
+    packet.deliverables
+      .filter((deliverable) => deliverable.accepted_view_complete)
+      .map((deliverable) => deliverable.key),
   );
   for (const issue of semantic.issues) {
     if (
-      !deliverableKeys.has(issue.deliverable_key) ||
+      !semanticDeliverableKeys.has(issue.deliverable_key) ||
       !packet.goal.includes(issue.goal_excerpt)
     ) {
       throw new AgentVerifierStructuredOutputError(
-        "Semantic issue is not bound to the fixed goal and deliverable",
+        "Semantic issue is not bound to the fixed goal and one complete accepted-view deliverable",
       );
     }
   }

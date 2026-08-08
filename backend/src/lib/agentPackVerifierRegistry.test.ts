@@ -15,6 +15,13 @@ const profile = resolveAgentVerifierProfile("builtin-contract-playbook-review");
 test("workflow manifest selects the Contract Pack verifier profile", () => {
   assert.equal(profile.id, "work_task_contract_docx_v1");
   assert.equal(profile.version, "1.0.0");
+  assert.equal(profile.repair_policy, "one_bound_artifact");
+  assert.equal(
+    resolveAgentVerifierProfile("builtin-litigation-hearing-preparation")
+      .repair_policy,
+    "one_bound_artifact",
+  );
+  assert.equal(resolveAgentVerifierProfile(null).repair_policy, "none");
 });
 
 test("missing structured receipt becomes one review gap and preserves artifacts", () => {

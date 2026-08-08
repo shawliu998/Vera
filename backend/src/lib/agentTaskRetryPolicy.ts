@@ -1,4 +1,9 @@
-import type { AgentTaskRetryClassification } from "./agent-kernel/outcomes/executionOutcome";
+import {
+  AGENT_PROVIDER_DIAGNOSTIC_KIND,
+  type AgentProviderDiagnosticV1,
+  type AgentTaskRetryClassification,
+} from "./agent-kernel/outcomes/executionOutcome";
+import { isRequiredToolProtocolError } from "./llm/requiredToolContract";
 
 export type TransientAgentTaskError = {
   classification: AgentTaskRetryClassification;
@@ -92,7 +97,7 @@ export function parseRetryAfterMs(value: string | null, nowMs: number) {
 }
 
 function hasRateLimitSignal(message: string) {
-  return /\b1302\b|rate.?limit|throttl|速率限制|请求(?:过于|太)?频繁|resource[_ ]exhausted/i.test(
+  return /\b(?:429|1302)\b|rate.?limit|throttl|速率限制|请求(?:过于|太)?频繁|resource[_ ]exhausted|(?:exceed(?:ed|s)?|reached).{0,40}(?:quota|usage limit)|(?:quota|usage limit).{0,40}(?:exceed(?:ed|s)?|reached)/i.test(
     message,
   );
 }
@@ -123,10 +128,134 @@ function hasNetworkSignal(message: string) {
   );
 }
 
-function hasProviderConfigurationSignal(message: string) {
-  return /insufficient (?:balance|credits?|quota)|余额不足|credit balance|billing|payment required|(?:invalid|incorrect|expired) api.?key|api.?key.*(?:invalid|incorrect|expired)|authentication failed|does not have access to (?:the )?model|model.*(?:access denied|permission denied|not entitled)|模型.*(?:无权限|未授权)/i.test(
+function hasHardProviderConfigurationSignal(message: string) {
+  return /insufficient[_ ](?:balance|credits?|quota)|余额不足|credit balance|(?:invalid|incorrect|expired) api.?key|api.?key.*(?:invalid|incorrect|expired)|authentication failed|does not have access to (?:the )?model|model.*(?:access denied|permission denied|not entitled)|模型.*(?:无权限|未授权)/i.test(
     message,
   );
+}
+
+function hasProviderConfigurationSignal(message: string) {
+  return (
+    hasHardProviderConfigurationSignal(message) ||
+    /billing|payment required/i.test(message)
+  );
+}
+
+function diagnosticToken(value: unknown, maximum: number) {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const token = String(value).trim();
+  return token.length > 0 &&
+    token.length <= maximum &&
+    /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(token)
+    ? token
+    : null;
+}
+
+function nestedRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function providerCode(error: unknown, message: string) {
+  const row = nestedRecord(error);
+  const response = nestedRecord(row?.response);
+  const responseData = nestedRecord(response?.data);
+  const nestedError =
+    nestedRecord(row?.error) ?? nestedRecord(responseData?.error);
+  for (const value of [
+    row?.code,
+    nestedError?.code,
+    nestedError?.status,
+    responseData?.code,
+  ]) {
+    const token = diagnosticToken(value, 80);
+    if (token) return token;
+  }
+  return (
+    message.match(
+      /^(?:Gemini|DeepSeek|Kimi|Zhipu|Claude|OpenAI) error \(([A-Za-z0-9][A-Za-z0-9._:-]{0,79})\):/i,
+    )?.[1] ?? null
+  );
+}
+
+function requestIdHeader(error: unknown) {
+  if (!error || typeof error !== "object") return null;
+  const row = error as {
+    request_id?: unknown;
+    requestId?: unknown;
+    headers?: unknown;
+    response?: { headers?: unknown };
+  };
+  for (const value of [row.request_id, row.requestId]) {
+    const token = diagnosticToken(value, 200);
+    if (token) return token;
+  }
+  const names = [
+    "x-request-id",
+    "request-id",
+    "x-goog-request-id",
+    "x-amzn-requestid",
+  ];
+  for (const headers of [row.headers, row.response?.headers]) {
+    if (!headers || typeof headers !== "object") continue;
+    const getter = (headers as { get?: unknown }).get;
+    if (typeof getter === "function") {
+      for (const name of names) {
+        try {
+          const token = diagnosticToken(getter.call(headers, name), 200);
+          if (token) return token;
+        } catch {
+          // A provider header accessor is untrusted diagnostic input.
+        }
+      }
+    }
+    const record = headers as Record<string, unknown>;
+    for (const name of names) {
+      const value = Object.entries(record).find(
+        ([key]) => key.toLowerCase() === name,
+      )?.[1];
+      const token = diagnosticToken(value, 200);
+      if (token) return token;
+    }
+  }
+  return null;
+}
+
+/**
+ * Retains only bounded provider metadata needed to distinguish capacity,
+ * configuration and protocol incidents. It never stores response prose,
+ * prompts, source content, credentials or arbitrary headers.
+ */
+export function buildAgentTaskProviderDiagnosticV1(
+  error: unknown,
+  input: {
+    provider?: string | null;
+    model?: string | null;
+    nowMs?: number;
+  } = {},
+): AgentProviderDiagnosticV1 {
+  const message = errorMessage(error);
+  const code = providerCode(error, message);
+  const explicitStatus = numericStatus(error);
+  const codeStatus =
+    code && /^\d{3}$/.test(code) ? Number.parseInt(code, 10) : null;
+  const status = explicitStatus ?? codeStatus;
+  const retryAfterMs = parseRetryAfterMs(
+    retryAfterHeader(error),
+    input.nowMs ?? Date.now(),
+  );
+  return {
+    kind: AGENT_PROVIDER_DIAGNOSTIC_KIND,
+    provider: diagnosticToken(input.provider, 40),
+    model: diagnosticToken(input.model, 160),
+    http_status:
+      status != null && status >= 100 && status <= 599 ? status : null,
+    provider_code: code,
+    request_id: requestIdHeader(error),
+    retry_after_ms:
+      retryAfterMs == null ? null : Math.min(retryAfterMs, 86_400_000),
+  };
 }
 
 /**
@@ -198,8 +327,18 @@ export function classifyAgentTaskProviderProtocolError(
   error: unknown,
 ): AgentTaskProviderProtocolError | null {
   const message = errorMessage(error);
+  if (hasHardProviderConfigurationSignal(message)) {
+    return { classification: "provider_configuration" };
+  }
+  // A provider may include words such as "billing" in a 429/quota response.
+  // Capacity and transport evidence wins over broad configuration prose so
+  // the durable runner can apply its bounded retry policy first.
+  if (classifyAgentTaskError(error) !== null) return null;
   if (hasProviderConfigurationSignal(message)) {
     return { classification: "provider_configuration" };
+  }
+  if (isRequiredToolProtocolError(error)) {
+    return { classification: "provider_protocol" };
   }
   if (REQUIRED_TOOL_CALL_PROTOCOL_ERROR.test(message)) {
     return { classification: "provider_protocol" };

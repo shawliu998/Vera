@@ -6,6 +6,11 @@ import type {
 } from "./types";
 import { toGeminiTools } from "./tools";
 import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
+import {
+  prepareRequiredToolContract,
+  requiredToolChoiceForProvider,
+  validateRequiredToolCalls,
+} from "./requiredToolContract";
 
 type GeminiPart = {
   text?: string;
@@ -170,8 +175,14 @@ export async function streamGemini(
     enableThinking,
   } = params;
   const maxIter = params.maxIterations ?? 10;
-  const ai = client(apiKeys?.gemini);
   const functionDeclarations = toGeminiTools(tools);
+  const requiredTool = prepareRequiredToolContract({
+    provider: "gemini",
+    requiredToolName: params.requiredToolName,
+    tools,
+    runTools,
+  });
+  const ai = client(apiKeys?.gemini);
 
   const contents: GeminiContent[] = toNativeContents(params.messages);
   let fullText = "";
@@ -192,6 +203,9 @@ export async function streamGemini(
             systemInstruction: systemPrompt,
             tools: functionDeclarations.length
               ? [{ functionDeclarations } as never]
+              : undefined,
+            toolConfig: requiredTool
+              ? (requiredToolChoiceForProvider(requiredTool) as never)
               : undefined,
             // When enabled, ask Gemini to surface thought summaries.
             // When disabled, explicitly zero the thinking budget so the
@@ -269,7 +283,7 @@ export async function streamGemini(
                 name: part.functionCall.name,
                 input: part.functionCall.args ?? {},
               };
-              callbacks.onToolCallStart?.(call);
+              if (!requiredTool) callbacks.onToolCallStart?.(call);
               toolCalls.push(call);
             }
           }
@@ -288,6 +302,10 @@ export async function streamGemini(
       throwIfAborted(params.abortSignal);
 
       fullText += textParts.join("");
+      validateRequiredToolCalls(requiredTool, toolCalls);
+      if (requiredTool) {
+        for (const call of toolCalls) callbacks.onToolCallStart?.(call);
+      }
 
       if (!toolCalls.length || !runTools) {
         break;
@@ -295,6 +313,7 @@ export async function streamGemini(
 
       const results = await runTools(toolCalls);
       throwIfAborted(params.abortSignal);
+      if (requiredTool) break;
 
       // Append the model's turn (text + functionCall parts, in that order)
       // and the matching functionResponse turn.

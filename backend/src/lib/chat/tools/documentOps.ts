@@ -31,6 +31,10 @@ import {
   type TaskWordArtifactReceiptV1,
 } from "../../taskWordArtifactReceipt";
 import { sameUuidIdentity } from "../../uuidIdentity";
+import {
+  appendCurrentDocxVersion,
+  durableCurrentVersionMutationId,
+} from "../../currentDocumentVersionMutation";
 
 export function citationReminder(docLabel: string, filename: string): string {
   const isSpreadsheet = isSpreadsheetDocumentType(
@@ -536,7 +540,10 @@ export function safeGeneratedFilename(title: string, extension: string) {
   const rawTitle = typeof title === "string" ? title : "document";
   const safeTitle =
     rawTitle
-      .replace(/[^a-zA-Z0-9 -]/g, "")
+      .normalize("NFKC")
+      .replace(/[^\p{L}\p{N} _-]/gu, "")
+      .replace(/\s+/g, " ")
+      .replace(/^[-_ ]+|[-_ ]+$/g, "")
       .trim()
       .slice(0, 64) || "document";
   return `${safeTitle}.${extension}`;
@@ -903,11 +910,19 @@ ${slides
 export type GeneratedMutationIdentity = {
   documentId: string;
   versionId: string;
+  /** Server-owned stable filename title for a fixed Task deliverable. */
+  filenameTitle?: string;
   taskWordArtifact?: {
     taskId: string;
     projectId: string;
     deliverableKey: string;
   };
+  /** A bounded repair appends to this exact current Version of the same Document. */
+  baseVersionId?: string;
+  /** Stable identity used to derive and recover the successor Version. */
+  versionMutationKey?: string;
+  /** Recheck the Task lease/state immediately before activating the successor. */
+  beforeActivate?: () => Promise<void>;
 };
 
 function generatedTaskWordArtifactReceipt(
@@ -1014,9 +1029,61 @@ async function persistGeneratedFile(params: {
     projectId,
     mutationIdentity,
   });
+  const filename = safeGeneratedFilename(title, extension);
+  const hasBaseVersion = Boolean(mutationIdentity?.baseVersionId);
+  const hasVersionMutation = Boolean(mutationIdentity?.versionMutationKey);
+  if (hasBaseVersion !== hasVersionMutation) {
+    throw new Error(
+      "A generated revision requires both a base Version and a stable mutation identity",
+    );
+  }
+  if (
+    mutationIdentity?.baseVersionId &&
+    mutationIdentity.versionMutationKey
+  ) {
+    if (
+      extension !== "docx" ||
+      !projectId ||
+      durableCurrentVersionMutationId(mutationIdentity.versionMutationKey) !==
+        mutationIdentity.versionId
+    ) {
+      throw new Error(
+        "A generated revision does not match its fixed DOCX successor identity",
+      );
+    }
+    const appended = await appendCurrentDocxVersion({
+      db,
+      userId,
+      projectId,
+      documentId: mutationIdentity.documentId,
+      baseVersionId: mutationIdentity.baseVersionId,
+      mutationKey: mutationIdentity.versionMutationKey,
+      filename,
+      buffer,
+      source: "generated",
+      beforeActivate: mutationIdentity.beforeActivate,
+    });
+    await verifyRecoveredTaskWordArtifact({
+      storagePath: appended.storage_path,
+      mutationIdentity,
+    });
+    return {
+      filename: appended.filename,
+      download_url: buildDownloadUrl(
+        appended.storage_path,
+        appended.filename,
+      ),
+      document_id: appended.document_id,
+      version_id: appended.version_id,
+      version_number: appended.version_number,
+      storage_path: appended.storage_path,
+      message: appended.created
+        ? `Document '${appended.filename}' has been revised successfully.`
+        : `Document '${appended.filename}' was recovered from its bounded revision.`,
+    };
+  }
   const storageDocumentId =
     mutationIdentity?.documentId ?? crypto.randomUUID().replace(/-/g, "");
-  const filename = safeGeneratedFilename(title, extension);
   const key = generatedDocKey(userId, storageDocumentId, filename);
 
   if (mutationIdentity) {
@@ -1249,6 +1316,7 @@ export async function generateExcel(
   options?: {
     projectId?: string | null;
     mutationIdentity?: GeneratedMutationIdentity;
+    filenameTitle?: string;
   },
 ) {
   try {
@@ -1258,7 +1326,7 @@ export async function generateExcel(
       Array.isArray(sheets) ? sheets : [],
     );
     return persistGeneratedFile({
-      title: normalizedTitle,
+      title: options?.filenameTitle ?? normalizedTitle,
       extension: "xlsx",
       buffer,
       userId,

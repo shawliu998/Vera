@@ -8,12 +8,12 @@ import type {
   GoalAwareTaskPlan,
 } from "./agentTaskPlanner";
 import {
-  controlledAgentReviewArtifactLinks,
   deriveAgentReviewStatus,
   getAgentReviewVersionState,
 } from "./agentTaskReviewVersions";
 import {
   mergeAgentTaskProviderPauseCheckpoint,
+  type AgentProviderDiagnosticV1,
   type AgentTaskExecutionPauseClassification,
   type AgentTaskRetryCheckpoint,
 } from "./agent-kernel/outcomes/executionOutcome";
@@ -33,6 +33,7 @@ import {
   contractPlaybookDispositionRevisionIntentSchema,
 } from "./agent-packs/contract/contractPlaybookDisposition";
 import {
+  AgentRequiredInputSubmissionError,
   agentRequiredInputResponseSchema,
   readAgentRequiredInput,
   readResolvedRequiredInputIds,
@@ -67,6 +68,7 @@ import {
   commitAgentTaskRetryTransition,
   commitAgentTaskStateTransition,
   commitAgentTaskStopTransition,
+  commitAgentTaskVerifierRetryTransition,
   type AgentTaskInputTransitionInput,
   type AgentTaskPauseTransitionInput,
   type AgentTaskReviewDecisionTransitionInput,
@@ -75,7 +77,7 @@ import {
   type AgentTaskStateTransitionInput,
   type AgentTaskStopTransitionInput,
 } from "./agent-kernel/execution/taskTransition";
-import { startAgentTaskArtifactReverification } from "./agent-kernel/verification/artifactReverification";
+import { requireAgentTaskVerifierRetryStarted } from "./agent-kernel/verification/verifierRetry";
 
 export type {
   AgentTaskExecutionPauseClassification,
@@ -92,7 +94,11 @@ export type AgentTaskStatus =
   | "failed";
 
 export type AgentStepStatus =
-  "pending" | "running" | "completed" | "blocked" | "skipped";
+  | "pending"
+  | "running"
+  | "completed"
+  | "blocked"
+  | "skipped";
 
 export type AgentArtifactType =
   | "chat"
@@ -372,7 +378,8 @@ export async function createAgentTask(
     executionModel: string;
     plan?: StepDefinition[];
     deliverables?:
-      AgentTaskDeliverableDefinition[] | AgentTaskArtifactContractV1[];
+      | AgentTaskDeliverableDefinition[]
+      | AgentTaskArtifactContractV1[];
     planningRequest?: AgentTaskPlanningRequest;
     fixedMatterContext?: MatterContextManifestV1;
     initialCheckpoint?: Record<string, unknown>;
@@ -569,7 +576,7 @@ export async function getAgentTaskSnapshot(
       decisions,
     },
   };
-  const versionState = await getAgentReviewVersionState(db, snapshot);
+  const versionState = await getAgentReviewVersionState(db, snapshot, userId);
   return {
     ...snapshot,
     execution_recovery: evaluateAgentTaskExecutionRecovery(snapshot.task),
@@ -656,9 +663,7 @@ export async function listAgentTasks(
 
   const approvedCurrentVersionPairs = [...reviewByTask.values()]
     .filter((review) => review.status === "approved")
-    .flatMap((review) =>
-      approvedDocumentVersionPairs(review.artifactSnapshot),
-    );
+    .flatMap((review) => approvedDocumentVersionPairs(review.artifactSnapshot));
   const { data: approvedDocuments, error: documentError } =
     approvedCurrentVersionPairs.length
       ? await db
@@ -724,9 +729,7 @@ export function approvedDocumentVersionPairs(snapshot: unknown): Array<{
         ? artifact.document_id.trim()
         : "";
     const approvedVersionId =
-      typeof artifact.version_id === "string"
-        ? artifact.version_id.trim()
-        : "";
+      typeof artifact.version_id === "string" ? artifact.version_id.trim() : "";
     return documentId && approvedVersionId
       ? [{ documentId, approvedVersionId }]
       : [];
@@ -960,7 +963,9 @@ async function pauseAgentTaskSnapshotAtomically(
     taskId,
     userId,
     expectedTaskStatus: snapshot.task.status as
-      "queued" | "running" | "verifying",
+      | "queued"
+      | "running"
+      | "verifying",
     stepId: current?.id ?? null,
     expectedStepAttempt: current?.attempt ?? null,
     leaseOwner: input.leaseOwner ?? null,
@@ -1061,6 +1066,7 @@ export async function deferAgentTaskForProvider(
     classification: AgentTaskExecutionPauseClassification;
     leaseOwner?: string | null;
     checkpointValues?: Record<string, unknown>;
+    diagnostic?: AgentProviderDiagnosticV1 | null;
   },
 ) {
   const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
@@ -1083,6 +1089,7 @@ export async function deferAgentTaskForProvider(
     classification: options.classification,
     summary,
     createdAt: updatedAt,
+    diagnostic: options.diagnostic,
   });
   const checkpoint = options.checkpointValues
     ? mergeImmutableAgentTaskCheckpoint(providerCheckpoint, {
@@ -1628,50 +1635,19 @@ export async function reverifyCompletedAgentTask(
     );
   }
 
-  const links = controlledAgentReviewArtifactLinks(snapshot);
-  for (const link of links) {
-    const { data: document, error: documentError } = await db
-      .from("documents")
-      .select("id,current_version_id")
-      .eq("id", link.artifact_id)
-      .eq("user_id", userId)
-      .eq("project_id", snapshot.task.matter_id)
-      .maybeSingle();
-    if (documentError) throw new Error(documentError.message);
-    if (!document?.current_version_id) continue;
-    const { data: versions, error: versionError } = await db
-      .from("document_versions")
-      .select("id,version_number")
-      .eq("document_id", document.id)
-      .is("deleted_at", null)
-      .order("version_number", { ascending: false })
-      .limit(2);
-    if (versionError) throw new Error(versionError.message);
-    const current = (versions ?? []).find(
-      (version) => version.id === document.current_version_id,
-    );
-    const base = (versions ?? []).find(
-      (version) => version.id !== document.current_version_id,
-    );
-    if (!current || !base) continue;
-    await startAgentTaskArtifactReverification(db, {
+  requireAgentTaskVerifierRetryStarted(
+    await commitAgentTaskVerifierRetryTransition(db, {
       taskId,
       userId,
-      documentId: document.id as string,
-      baseVersionId: base.id as string,
-      versionId: current.id as string,
-      mutationId: [
-        "agent-task-verifier-retry",
-        taskId,
-        verifier.id,
-        verifier.attempt + 1,
+      retryId: [
+      "agent-task-verifier-retry",
+      taskId,
+      verifier.id,
+      verifier.attempt + 1,
       ].join(":"),
-    });
-    return getAgentTaskSnapshot(db, taskId, userId);
-  }
-  throw new Error(
-    "Re-verification requires one current Task-owned Artifact with version history",
+    }),
   );
+  return getAgentTaskSnapshot(db, taskId, userId);
 }
 
 export async function attachAgentTaskDocuments(
@@ -1780,8 +1756,19 @@ export async function submitAgentTaskInput(
       "The fixed Matter source context changed before the input was committed.",
     );
   }
+  if (committed.outcome === "invalid_input") {
+    throw new AgentRequiredInputSubmissionError(
+      "The required input submission did not match the fixed request.",
+    );
+  }
+  if (committed.outcome === "not_found") return null;
+  if (committed.outcome === "conflict") {
+    throw new Error(
+      "The required input request changed or was already resolved.",
+    );
+  }
   if (!recovered) return null;
-  throw new Error("Only one response can resume the blocked task step");
+  throw new Error("The blocked task step could not be resumed safely.");
 }
 
 export async function pauseAgentTask(db: Db, taskId: string, userId: string) {
@@ -1931,7 +1918,9 @@ export async function stopAgentTask(
     userId,
     leaseOwner: input.leaseOwner,
     expectedTaskStatus: snapshot.task.status as
-      "queued" | "running" | "verifying",
+      | "queued"
+      | "running"
+      | "verifying",
     stepId: current?.id ?? null,
     expectedStepAttempt: current?.attempt ?? null,
     targetStatus: input.status,

@@ -7,6 +7,7 @@ import type {
   AgentStep,
   AgentTaskSnapshot,
   ApprovedArtifactSnapshot,
+  ExportableApprovedArtifactSnapshot,
 } from "@/app/types/agent";
 
 export interface AgentTaskOutputRow {
@@ -15,7 +16,7 @@ export interface AgentTaskOutputRow {
   detail: string;
   version: number | null;
   currentVersion: AgentCurrentArtifactVersion | null;
-  approvedArtifact: ApprovedArtifactSnapshot | null;
+  approvedArtifact: ExportableApprovedArtifactSnapshot | null;
   linkedArtifact: AgentArtifactLink | null;
 }
 
@@ -134,12 +135,26 @@ export function agentDeliverablePurpose(deliverable: AgentDeliverable): string {
 export function latestApprovedArtifact(
   snapshot: AgentTaskSnapshot,
   artifactId: string,
-): ApprovedArtifactSnapshot | null {
+): ExportableApprovedArtifactSnapshot | null {
   const decision = latestApprovedReviewDecision(snapshot);
+  const latestDecision =
+    snapshot.review.decisions[snapshot.review.decisions.length - 1] ?? null;
+  if (!decision || latestDecision?.id !== decision.id) return null;
+  const artifact =
+    decision.artifact_snapshot.find(
+      (candidate) => candidate.artifact_id === artifactId,
+    ) ?? null;
+  if (!artifact || !isExportableApprovedArtifact(artifact)) return null;
+  return artifact;
+}
+
+function isExportableApprovedArtifact(
+  artifact: ApprovedArtifactSnapshot,
+): artifact is ExportableApprovedArtifactSnapshot {
   return (
-    decision?.artifact_snapshot.find(
-      (artifact) => artifact.artifact_id === artifactId,
-    ) ?? null
+    artifact.artifact_type === "draft" ||
+    ("kind" in artifact &&
+      artifact.kind === "agent_approved_tabular_artifact_v1")
   );
 }
 

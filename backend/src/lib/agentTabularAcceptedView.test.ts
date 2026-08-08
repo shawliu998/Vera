@@ -45,7 +45,7 @@ function materialize(cells = [cellB1, cellA1, cellA0, cellB0]) {
           content: `content-${id}`,
           citations: [{ quote: "fixed quote" }],
           review_status: "verified",
-          reviewed_at: "2026-08-08T00:00:00.000Z",
+          reviewed_at: "2026-08-08T00:00:00.123456+00:00",
           review_revision: 1,
         };
       }),

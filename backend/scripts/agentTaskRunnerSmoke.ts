@@ -11,6 +11,7 @@ import { clearAgentTaskRunnerRetryCheckpoint } from "../src/lib/agentTasks";
 type FakeTask = {
   status: string;
   latest_checkpoint: unknown;
+  execution_model?: string;
 };
 
 function snapshot(task: FakeTask) {
@@ -279,7 +280,11 @@ async function providerTransportPauseClassificationSuite() {
   ] as const;
 
   for (const transportCase of cases) {
-    const task: FakeTask = { status: "running", latest_checkpoint: null };
+    const task: FakeTask = {
+      status: "running",
+      latest_checkpoint: null,
+      execution_model: "gemini-3-flash-preview",
+    };
     let iterations = 0;
     let retryWrites = 0;
     let failures = 0;
@@ -640,10 +645,22 @@ async function providerConfigurationPauseSuite() {
         failures += 1;
         task.status = "failed";
       },
-      deferTask: async (_job, summary, classification) => {
+      deferTask: async (_job, summary, classification, diagnostic) => {
         deferrals += 1;
         assert.equal(classification, "provider_configuration");
         assert.match(summary, /API key, balance, or model access/i);
+        assert.deepEqual(diagnostic, {
+          kind: "agent_provider_diagnostic_v1",
+          provider: "gemini",
+          model: "gemini-3-flash-preview",
+          http_status: 400,
+          provider_code:
+            message.startsWith("DeepSeek error")
+              ? "invalid_request_error"
+              : null,
+          request_id: null,
+          retry_after_ms: null,
+        });
         task.status = "paused";
       },
       recoverJobs: async () => [],

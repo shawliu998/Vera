@@ -74,6 +74,53 @@ test("reserves and commits one fixed Matter-owned Tabular Review effect", async 
   assert.deepEqual(readAgentStepTabularEffectReceipts(resultData), [committed]);
 });
 
+test("recovers the exact committed Tabular effect when only replay metadata changed", async () => {
+  const layout = { fields: ["evidence_item"] };
+  const persisted = {
+    ...buildAgentStepTabularEffectReservation({
+      stepId: ids.step,
+      attempt: 1,
+      layout,
+      reviewId: ids.review,
+      createdAt: "2026-08-08T00:00:00.000Z",
+    }),
+    status: "committed" as const,
+    effect: {
+      review_id: ids.review,
+      artifact_type: "tabular_review" as const,
+    },
+    committed_at: "2026-08-08T00:01:00.000Z",
+  };
+  const replay = buildAgentStepTabularEffectReservation({
+    stepId: ids.step,
+    attempt: 1,
+    layout,
+    reviewId: ids.review,
+    createdAt: "2026-08-08T00:05:00.000Z",
+  });
+  const db = {
+    async rpc(name: string) {
+      assert.equal(name, "reserve_agent_step_tabular_effect_v1");
+      return {
+        data: [{ outcome: "recovered", effect_receipt: persisted }],
+        error: null,
+      };
+    },
+  };
+
+  const recovered = await reserveAgentStepTabularEffect(db as never, {
+    taskId: ids.task,
+    userId: "user-1",
+    leaseOwner: "55555555-5555-4555-8555-555555555555",
+    receipt: replay,
+  });
+  assert.equal(recovered.status, "committed");
+  assert.equal(recovered.created_at, "2026-08-08T00:00:00.000Z");
+  assert.equal(recovered.committed_at, "2026-08-08T00:01:00.000Z");
+  assert.equal(recovered.input_fingerprint, replay.input_fingerprint);
+  assert.equal(recovered.target.review_id, replay.target.review_id);
+});
+
 test("keeps mirrored Tabular-effect migrations lease-fenced and service-only", async () => {
   const backend = await readFile(
     new URL(
@@ -127,5 +174,34 @@ test("keeps the latest Tabular effect fence compatible with fixed completed cell
     backend,
     /execution_lease_owner is distinct from p_lease_owner/i,
   );
+  assert.match(backend, /to service_role/i);
+});
+
+test("latest Tabular effect recovery treats timestamps as metadata, not identity", async () => {
+  const backend = await readFile(
+    new URL(
+      "../../../../migrations/20260808_15_agent_step_tabular_effect_metadata_recovery.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const supabase = await readFile(
+    new URL(
+      "../../../../../supabase/migrations/20260808000015_agent_step_tabular_effect_metadata_recovery.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.equal(backend, supabase);
+  assert.match(
+    backend,
+    /'status', 'effect', 'created_at', 'committed_at'/i,
+  );
+  assert.match(
+    backend,
+    /execution_lease_owner is distinct from p_lease_owner/i,
+  );
+  assert.match(backend, /v_existing ->> 'status' = 'reserved'/i);
+  assert.match(backend, /v_existing ->> 'status' = 'committed'/i);
   assert.match(backend, /to service_role/i);
 });

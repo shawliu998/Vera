@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   checkpointAllowsPriorEffectRecovery,
+  committedStepEffectRecoveryAllowed,
   recoverCommittedStepEffectArtifact,
 } from "../../agentTaskExecution";
 
@@ -258,6 +259,36 @@ test("a resumed Step may recover the latest committed prior attempt", () => {
     1,
   );
   assert.equal(recoverCommittedStepEffectArtifact(resumed as never), null);
+});
+
+test("a current-attempt committed Word effect recovers before another provider call", () => {
+  assert.equal(
+    committedStepEffectRecoveryAllowed({
+      receiptAttempt: 1,
+      stepAttempt: 1,
+      checkpoint: null,
+    }),
+    true,
+  );
+  assert.equal(
+    committedStepEffectRecoveryAllowed({
+      receiptAttempt: 1,
+      stepAttempt: 2,
+      checkpoint: { summary: "ordinary progress" },
+    }),
+    false,
+  );
+  assert.equal(
+    committedStepEffectRecoveryAllowed({
+      receiptAttempt: 1,
+      stepAttempt: 2,
+      checkpoint: {
+        summary:
+          "The Step effect could not be published from the current Task state",
+      },
+    }),
+    true,
+  );
 });
 
 test("prior-attempt recovery requires a structured issue or exact legacy fallback", () => {

@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   MAX_AGENT_TASK_TRANSIENT_WAIT_MS,
+  buildAgentTaskProviderDiagnosticV1,
   calculateAgentTaskBackoffMs,
   classifyAgentTaskError,
   classifyAgentTaskProviderProtocolError,
   parseRetryAfterMs,
 } from "./agentTaskRetryPolicy";
+import { RequiredToolProtocolError } from "./llm/requiredToolContract";
 
 const now = Date.parse("2026-08-07T00:00:00.000Z");
 
@@ -151,6 +153,19 @@ test("classifies only an exact required-tool provider protocol diagnostic", () =
   }
 });
 
+test("classifies structured required-tool contract failures without parsing display text", () => {
+  assert.deepEqual(
+    classifyAgentTaskProviderProtocolError(
+      new RequiredToolProtocolError(
+        "provider_forced_tool_unsupported",
+        "zhipu",
+        "generate_docx",
+      ),
+    ),
+    { classification: "provider_protocol" },
+  );
+});
+
 test("classifies verifier structured-output drift separately", () => {
   const error = new Error("Verifier returned an invalid structured result");
   error.name = "AgentVerifierStructuredOutputError";
@@ -172,6 +187,73 @@ test("classifies provider key, balance, and entitlement errors as resumable conf
       { classification: "provider_configuration" },
     );
   }
+});
+
+test("classifies quota-exceeded 429 billing prose as capacity before configuration", () => {
+  const error = new Error(
+    "Gemini error (429): You exceeded your current quota. Check your plan and billing details.",
+  );
+  assert.deepEqual(classifyAgentTaskError(error, now), {
+    classification: "rate_limit",
+    retryAfterMs: null,
+  });
+  assert.equal(
+    classifyAgentTaskProviderProtocolError(error),
+    null,
+    "billing prose must not override explicit 429/quota capacity evidence",
+  );
+  assert.deepEqual(
+    classifyAgentTaskProviderProtocolError(
+      Object.assign(
+        new Error("OpenAI error: insufficient_quota; payment required"),
+        { status: 429 },
+      ),
+    ),
+    { classification: "provider_configuration" },
+    "a hard billing quota without transient evidence remains configuration",
+  );
+});
+
+test("extracts a bounded provider diagnostic without retaining response prose", () => {
+  const error = Object.assign(
+    new Error(
+      "Gemini error (RESOURCE_EXHAUSTED): quota hit; secret-source-text",
+    ),
+    {
+      status: 429,
+      code: "RESOURCE_EXHAUSTED",
+      headers: {
+        "Retry-After": "7",
+        "x-request-id": "request-123",
+        authorization: "Bearer must-not-be-retained",
+      },
+    },
+  );
+  const diagnostic = buildAgentTaskProviderDiagnosticV1(error, {
+    provider: "gemini",
+    model: "gemini-3-flash-preview",
+    nowMs: now,
+  });
+  assert.deepEqual(diagnostic, {
+    kind: "agent_provider_diagnostic_v1",
+    provider: "gemini",
+    model: "gemini-3-flash-preview",
+    http_status: 429,
+    provider_code: "RESOURCE_EXHAUSTED",
+    request_id: "request-123",
+    retry_after_ms: 7_000,
+  });
+  const serialized = JSON.stringify(diagnostic);
+  assert.doesNotMatch(serialized, /secret-source-text|authorization|Bearer/);
+
+  assert.equal(
+    buildAgentTaskProviderDiagnosticV1(
+      Object.assign(new Error("provider error"), {
+        requestId: "../../unsafe request id",
+      }),
+    ).request_id,
+    null,
+  );
 });
 
 test("fails closed for non-exact provider protocol and policy diagnostics", () => {

@@ -7,6 +7,11 @@ import type {
   StreamChatResult,
 } from "./types";
 import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
+import {
+  prepareRequiredToolContract,
+  requiredToolChoiceForProvider,
+  validateRequiredToolCalls,
+} from "./requiredToolContract";
 
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 const MAX_OUTPUT_TOKENS = 16384;
@@ -170,6 +175,7 @@ async function createResponse(params: {
   maxTokens?: number;
   previousResponseId?: string;
   reasoningSummary?: boolean;
+  toolChoice?: Record<string, unknown>;
   apiKey: string;
   signal?: AbortSignal;
 }): Promise<Response> {
@@ -184,6 +190,7 @@ async function createResponse(params: {
       instructions: params.instructions || undefined,
       input: params.input,
       tools: params.tools?.length ? params.tools : undefined,
+      tool_choice: params.toolChoice,
       stream: params.stream,
       max_output_tokens: params.maxTokens ?? MAX_OUTPUT_TOKENS,
       previous_response_id: params.previousResponseId,
@@ -221,8 +228,14 @@ export async function streamOpenAI(
     enableThinking,
   } = params;
   const maxIter = params.maxIterations ?? 10;
-  const key = apiKey(apiKeys?.openai);
   const responseTools = toResponseTools(tools);
+  const requiredTool = prepareRequiredToolContract({
+    provider: "openai",
+    requiredToolName: params.requiredToolName,
+    tools,
+    runTools,
+  });
+  const key = apiKey(apiKeys?.openai);
   let input = toResponseInput(params.messages);
   let previousResponseId: string | undefined;
   let fullText = "";
@@ -243,6 +256,9 @@ export async function streamOpenAI(
         ),
         input,
         tools: responseTools,
+        toolChoice: requiredTool
+          ? requiredToolChoiceForProvider(requiredTool)
+          : undefined,
         stream: true,
         previousResponseId,
         reasoningSummary: !!enableThinking,
@@ -325,7 +341,7 @@ export async function streamOpenAI(
           ) {
             const call = parseFunctionCall(event.item);
             startedToolCallIds.add(call.id);
-            callbacks.onToolCallStart?.(call);
+            if (!requiredTool) callbacks.onToolCallStart?.(call);
           }
 
           if (
@@ -333,7 +349,7 @@ export async function streamOpenAI(
             event.item?.type === "function_call"
           ) {
             const call = parseFunctionCall(event.item);
-            if (!startedToolCallIds.has(call.id)) {
+            if (!requiredTool && !startedToolCallIds.has(call.id)) {
               callbacks.onToolCallStart?.(call);
             }
             toolCalls.push(call);
@@ -343,6 +359,10 @@ export async function streamOpenAI(
 
       if (sawReasoning) callbacks.onReasoningBlockEnd?.();
       throwIfAborted(params.abortSignal);
+      validateRequiredToolCalls(requiredTool, toolCalls);
+      if (requiredTool) {
+        for (const call of toolCalls) callbacks.onToolCallStart?.(call);
+      }
 
       if (!toolCalls.length || !runTools) {
         break;
@@ -354,6 +374,7 @@ export async function streamOpenAI(
 
       const results = await runTools(toolCalls);
       throwIfAborted(params.abortSignal);
+      if (requiredTool) break;
       input = results.map((result) => ({
         type: "function_call_output",
         call_id: result.tool_use_id,

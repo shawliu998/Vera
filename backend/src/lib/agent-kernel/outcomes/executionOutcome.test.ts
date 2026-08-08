@@ -137,3 +137,50 @@ test("binds a running Step over stale checkpoint position without replacing othe
     false,
   );
 });
+
+test("persists only a strict bounded provider diagnostic inside the pause issue", () => {
+  const checkpoint = buildAgentTaskExecutionPauseCheckpoint({
+    classification: "provider_capacity",
+    stepId: "step-diagnostic",
+    attempt: 3,
+    createdAt,
+    diagnostic: {
+      kind: "agent_provider_diagnostic_v1",
+      provider: "gemini",
+      model: "gemini-3-flash-preview",
+      http_status: 429,
+      provider_code: "RESOURCE_EXHAUSTED",
+      request_id: "request-123",
+      retry_after_ms: 7_000,
+    },
+  });
+  assert.deepEqual(
+    checkpoint.issue.facts.provider_diagnostic,
+    {
+      kind: "agent_provider_diagnostic_v1",
+      provider: "gemini",
+      model: "gemini-3-flash-preview",
+      http_status: 429,
+      provider_code: "RESOURCE_EXHAUSTED",
+      request_id: "request-123",
+      retry_after_ms: 7_000,
+    },
+  );
+  assert.equal(
+    readAgentTaskExecutionPauseCheckpoint({
+      ...checkpoint,
+      issue: {
+        ...checkpoint.issue,
+        facts: {
+          ...checkpoint.issue.facts,
+          provider_diagnostic: {
+            ...checkpoint.issue.facts.provider_diagnostic,
+            response_text: "must never be persisted",
+          },
+        },
+      },
+    }),
+    null,
+    "an expanded or malformed diagnostic must fail closed",
+  );
+});

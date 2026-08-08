@@ -74,3 +74,112 @@ test("keeps approved Tabular export migrations mirrored and fail closed", async 
   assert.match(backend, /from public, anon, authenticated, service_role/i);
   assert.match(backend, /to service_role/i);
 });
+
+test("keeps structured Verifier decision migrations mirrored and fail closed", async () => {
+  const backend = await readFile(
+    new URL(
+      "../../migrations/20260808_17_agent_verifier_review_decision.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const supabase = await readFile(
+    new URL(
+      "../../../supabase/migrations/20260808000017_agent_verifier_review_decision.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  assert.equal(backend, supabase);
+  assert.doesNotMatch(backend, /\\ir\s+/i);
+  assert.match(
+    backend,
+    /create or replace function public\.agent_verifier_deterministic_issue_valid_v1/i,
+  );
+  assert.match(
+    backend,
+    /create or replace function public\.agent_verifier_review_decision_ready_v1/i,
+  );
+  assert.equal(
+    (
+      backend.match(
+        /not public\.agent_verifier_review_decision_ready_v1\s*\(/gi,
+      ) ?? []
+    ).length,
+    3,
+  );
+  assert.match(
+    backend,
+    /v_receipt_outcome = 'review_required'[\s\S]*v_result_outcome = 'review_required'/i,
+  );
+  assert.match(
+    backend,
+    /issue\.value ->> 'origin' = 'deterministic'[\s\S]*agent_verifier_deterministic_issue_valid_v1/i,
+  );
+  assert.match(
+    backend,
+    /revoke all on function public\.agent_verifier_review_decision_ready_v1[\s\S]*from public, anon, authenticated, service_role/i,
+  );
+});
+
+test("keeps abrupt-ending Verifier issue migrations mirrored and fail closed", async () => {
+  const backend = await readFile(
+    new URL(
+      "../../migrations/20260808_20_agent_verifier_incomplete_ending.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const supabase = await readFile(
+    new URL(
+      "../../../supabase/migrations/20260808000020_agent_verifier_incomplete_ending.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  assert.equal(backend, supabase);
+  assert.match(backend, /artifact_incomplete_ending/i);
+  assert.match(backend, /accepted_view_sha256/i);
+  assert.match(backend, /ending_excerpt/i);
+  assert.match(backend, /length\(v_ending_excerpt\) between 40 and 500/i);
+  assert.match(backend, /agent_verifier_deterministic_issue_valid_legacy_v1/i);
+  assert.match(
+    backend,
+    /revoke all on function public\.agent_verifier_deterministic_issue_valid_v1[\s\S]*from public, anon, authenticated, service_role/i,
+  );
+});
+
+test("keeps Step receipt and Verifier dimension status axes distinct", async () => {
+  const backend = await readFile(
+    new URL(
+      "../../migrations/20260808_21_agent_verifier_receipt_status.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const supabase = await readFile(
+    new URL(
+      "../../../supabase/migrations/20260808000021_agent_verifier_receipt_status.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  assert.equal(backend, supabase);
+  assert.match(backend, /item\.value ->> 'status' not in \('pass', 'fail'\)/i);
+  assert.match(
+    backend,
+    /item\.value ->> 'code' = 'verifier_passed'[\s\S]*item\.value ->> 'status' = 'fail'/i,
+  );
+  assert.match(backend, /dimension\.value #>> '\{\}' not in \('pass', 'gap'\)/i);
+  assert.match(
+    backend,
+    /item\.value - array\['code', 'status'\] <> '\{\}'::jsonb/i,
+  );
+  assert.match(
+    backend,
+    /revoke all on function public\.agent_verifier_review_decision_ready_v1[\s\S]*from public, anon, authenticated, service_role/i,
+  );
+});

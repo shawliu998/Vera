@@ -22,6 +22,7 @@ import {
   commitAgentTaskResumeTransition,
   commitAgentTaskStateTransition,
   commitAgentTaskStopTransition,
+  commitAgentTaskVerifierRetryTransition,
   type AgentTaskInputTransitionInput,
   type AgentTaskCheckpointTransitionInput,
   type AgentTaskArtifactReverificationTransitionInput,
@@ -31,6 +32,7 @@ import {
   type AgentTaskRetryTransitionInput,
   type AgentTaskStateTransitionInput,
   type AgentTaskStopTransitionInput,
+  type AgentTaskVerifierRetryTransitionInput,
 } from "./taskTransition";
 
 const input: AgentTaskStateTransitionInput = {
@@ -133,6 +135,45 @@ test("maps Artifact re-verification to one server-owned atomic transition", asyn
     p_base_version_id: transition.baseVersionId,
     p_version_id: transition.versionId,
     p_mutation_id: transition.mutationId,
+  });
+  assert.deepEqual(result, {
+    outcome: "started",
+    taskStatus: "verifying",
+    currentStep: "verifier-step",
+  });
+});
+
+test("maps a multi-Artifact Verifier retry to one server-owned transition", async () => {
+  let call: { name: string; args: Record<string, unknown> } | null = null;
+  const db = {
+    async rpc(name: string, args: Record<string, unknown>) {
+      call = { name, args };
+      return {
+        data: [
+          {
+            outcome: "started",
+            task_status: "verifying",
+            current_step: "verifier-step",
+          },
+        ],
+        error: null,
+      };
+    },
+  };
+  const transition: AgentTaskVerifierRetryTransitionInput = {
+    taskId: input.taskId,
+    userId: input.userId,
+    retryId: "agent-task-verifier-retry:task:step:2",
+  };
+  const result = await commitAgentTaskVerifierRetryTransition(
+    db as never,
+    transition,
+  );
+  assert.equal(call?.name, "start_agent_task_verifier_retry_v2");
+  assert.deepEqual(call?.args, {
+    p_task_id: transition.taskId,
+    p_user_id: transition.userId,
+    p_retry_id: transition.retryId,
   });
   assert.deepEqual(result, {
     outcome: "started",
@@ -452,17 +493,50 @@ test("maps in-flight Step progress to one lease-fenced checkpoint RPC", async ()
   });
 });
 
+test("checkpoint database failures retain a bounded structured cause", async () => {
+  const checkpoint: AgentTaskCheckpointTransitionInput = {
+    taskId: input.taskId,
+    userId: input.userId,
+    leaseOwner: input.leaseOwner,
+    expectedTaskStatus: "running",
+    stepId: input.stepId,
+    expectedStepAttempt: 2,
+    latestCheckpoint: { publication: "fixed" },
+    sourceDocumentIds: [],
+  };
+  const db = {
+    async rpc() {
+      return {
+        data: null,
+        error: {
+          code: "42883",
+          message: "operator does not exist: uuid = text\nHINT: cast it",
+        },
+      };
+    },
+  };
+  await assert.rejects(
+    commitAgentTaskCheckpointTransition(db as never, checkpoint),
+    (error: unknown) =>
+      error instanceof AgentTaskStateTransitionError &&
+      error.code === "task_state_transition_unavailable" &&
+      error.facts.database_error_code === "42883" &&
+      error.facts.database_error_message ===
+        "operator does not exist: uuid = text HINT: cast it",
+  );
+});
+
 test("keeps atomic checkpoint migrations mirrored and fenced to one live Step lease", async () => {
   const backend = await readFile(
     new URL(
-      "../../../../migrations/20260808_07_agent_task_source_checkpoint.sql",
+      "../../../../migrations/20260808_16_agent_task_checkpoint_lease_type.sql",
       import.meta.url,
     ),
     "utf8",
   );
   const supabase = await readFile(
     new URL(
-      "../../../../../supabase/migrations/20260808000007_agent_task_source_checkpoint.sql",
+      "../../../../../supabase/migrations/20260808000016_agent_task_checkpoint_lease_type.sql",
       import.meta.url,
     ),
     "utf8",
@@ -475,6 +549,7 @@ test("keeps atomic checkpoint migrations mirrored and fenced to one live Step le
   assert.match(backend, /v_step\.attempt <> p_expected_step_attempt/i);
   assert.match(backend, /v_running_count <> 1/i);
   assert.match(backend, /latest_checkpoint = p_latest_checkpoint/i);
+  assert.match(backend, /p_lease_owner uuid/i);
   assert.match(backend, /p_source_document_ids uuid\[\]/i);
   assert.match(
     backend,
@@ -975,6 +1050,152 @@ test("keeps Artifact re-verification migrations mirrored and narrowly scoped", a
   assert.match(backend, /result_summary = null[\s\S]*result_data = null/i);
   assert.match(backend, /status = 'verifying'/i);
   assert.match(backend, /artifact_reverification/i);
+  assert.match(backend, /from public, anon, authenticated/i);
+  assert.match(backend, /to service_role/i);
+});
+
+test("keeps final Verifier retry migrations mirrored and issue-bound", async () => {
+  const backend = await readFile(
+    new URL(
+      "../../../../migrations/20260808_18_agent_task_verifier_retry.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const supabase = await readFile(
+    new URL(
+      "../../../../../supabase/migrations/20260808000018_agent_task_verifier_retry.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.equal(backend, supabase);
+  assert.match(
+    backend,
+    /create or replace function public\.start_agent_task_verifier_retry_v1/i,
+  );
+  assert.match(
+    backend,
+    /agent_verifier_review_decision_ready_v1\s*\(/i,
+  );
+  assert.match(backend, /outcome' <> 'review_required'/i);
+  assert.match(
+    backend,
+    /latest_checkpoint - array\[[\s\S]*'agent_verification_result'[\s\S]*'agent_verification_repair'/i,
+  );
+  assert.match(
+    backend,
+    /status = 'running'[\s\S]*attempt = attempt \+ 1[\s\S]*repair_attempt = 0/i,
+  );
+  assert.match(backend, /status = 'verifying'/i);
+  assert.match(backend, /from public, anon, authenticated/i);
+  assert.match(backend, /to service_role/i);
+});
+
+test("keeps legacy Verifier retry forward migration fail closed", async () => {
+  const backend = await readFile(
+    new URL(
+      "../../../../migrations/20260808_19_agent_task_legacy_verifier_retry.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const supabase = await readFile(
+    new URL(
+      "../../../../../supabase/migrations/20260808000019_agent_task_legacy_verifier_retry.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.equal(backend, supabase);
+  assert.match(
+    backend,
+    /latest_checkpoint \? 'agent_verification_result'[\s\S]*agent_verifier_review_decision_ready_v1/i,
+  );
+  assert.match(
+    backend,
+    /else[\s\S]*item\.value ->> 'code' = 'verifier_passed'[\s\S]*in \('fail', 'gap'\)/i,
+  );
+  assert.match(
+    backend,
+    /v_retry_source := 'legacy_unstructured_review_gap'/i,
+  );
+  assert.match(
+    backend,
+    /jsonb_array_length\(v_receipt -> 'verified_artifacts'\)[\s\S]*jsonb_array_length\(v_receipt -> 'artifact_ids'\)/i,
+  );
+  assert.match(backend, /it never selects or mutates an Artifact/i);
+});
+
+test("permits a strict partial verified identity set when retrying an Artifact gap", async () => {
+  const backend = await readFile(
+    new URL(
+      "../../../../migrations/20260808_22_agent_verifier_retry_partial_identity.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const supabase = await readFile(
+    new URL(
+      "../../../../../supabase/migrations/20260808000022_agent_verifier_retry_partial_identity.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.equal(backend, supabase);
+  assert.match(
+    backend,
+    /create or replace function public\.agent_verifier_retry_identity_valid_v1/i,
+  );
+  assert.match(
+    backend,
+    /jsonb_array_length\(v_receipt -> 'verified_artifacts'\)[\s\S]*>[\s\S]*jsonb_array_length\(v_receipt -> 'artifact_ids'\)/i,
+  );
+  assert.match(
+    backend,
+    /agent_verifier_retry_identity_valid_v1\s*\([\s\S]*identity\.value/i,
+  );
+  assert.match(
+    backend,
+    /link\.task_id = p_task_id[\s\S]*link\.artifact_type in \('draft', 'tabular_review'\)/i,
+  );
+  assert.match(backend, /group by verified\.artifact_id[\s\S]*count\(\*\) > 1/i);
+  assert.match(backend, /from public, anon, authenticated/i);
+  assert.match(backend, /to service_role/i);
+});
+
+test("preserves only strict committed Verifier effect provenance across retries", async () => {
+  const backend = await readFile(
+    new URL(
+      "../../../../migrations/20260808_23_agent_verifier_retry_effect_history.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const supabase = await readFile(
+    new URL(
+      "../../../../../supabase/migrations/20260808000023_agent_verifier_retry_effect_history.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.equal(backend, supabase);
+  assert.match(
+    backend,
+    /create or replace function public\.start_agent_task_verifier_retry_v2/i,
+  );
+  assert.match(
+    backend,
+    /from public\.start_agent_task_verifier_retry_v1\s*\(/i,
+  );
+  assert.match(
+    backend,
+    /v_effect_count > 60[\s\S]*receipt\.value ->> 'status' = 'committed'/i,
+  );
+  assert.match(
+    backend,
+    /set result_data = v_preserved_result_data[\s\S]*attempt = v_verifier\.attempt \+ 1/i,
+  );
   assert.match(backend, /from public, anon, authenticated/i);
   assert.match(backend, /to service_role/i);
 });

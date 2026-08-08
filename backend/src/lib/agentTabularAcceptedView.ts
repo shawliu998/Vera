@@ -102,7 +102,7 @@ export const agentTabularAcceptedViewSchema = z
             review_status: z
               .enum(["verified", "unresolved", "needs_correction"])
               .nullable(),
-            reviewed_at: z.string().datetime().nullable(),
+            reviewed_at: z.string().datetime({ offset: true }).nullable(),
             review_revision: z.number().int().nonnegative(),
           })
           .strict(),

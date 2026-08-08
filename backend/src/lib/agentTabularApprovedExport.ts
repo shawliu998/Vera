@@ -27,11 +27,7 @@ import {
   readCurrentLitigationEvidenceInventoryBinding,
   type LitigationEvidenceInventoryBinding,
 } from "./agentLitigationEvidenceInventoryBinding";
-import {
-  downloadFile,
-  uploadFileIfAbsent,
-  versionStorageKey,
-} from "./storage";
+import { downloadFile, uploadFileIfAbsent, versionStorageKey } from "./storage";
 import type { createServerSupabase } from "./supabase";
 
 type Db = ReturnType<typeof createServerSupabase>;
@@ -74,7 +70,6 @@ type PublicationStep = {
 export type ApprovedTabularExportSnapshotInput = {
   task: {
     id: string;
-    user_id: string;
     matter_id: string;
     status: string;
     latest_checkpoint?: unknown;
@@ -145,7 +140,7 @@ export type ApprovedTabularExportMaterialization = {
 };
 
 export type ApprovedTabularExportRepository = {
-  load(input: { taskId: string; reviewId: string }): Promise<{
+  load(input: { taskId: string; userId: string; reviewId: string }): Promise<{
     userId: string;
     taskMatterId: string;
     taskStatus: string;
@@ -469,6 +464,7 @@ function createRepository(db: Db): ApprovedTabularExportRepository {
         .from("agent_tasks")
         .select("id,user_id,matter_id,status")
         .eq("id", input.taskId)
+        .eq("user_id", input.userId)
         .maybeSingle();
       if (taskError) throw new Error(taskError.message);
       if (!task) return null;
@@ -609,6 +605,7 @@ function verifiedIdentityForReview(input: {
 export async function materializeApprovedLitigationEvidenceInventoryXlsx(input: {
   db: Db;
   snapshot: ApprovedTabularExportSnapshotInput;
+  userId: string;
   reviewId: string;
   purpose: string;
   dependencies?: ApprovedTabularExportDependencies;
@@ -617,11 +614,12 @@ export async function materializeApprovedLitigationEvidenceInventoryXlsx(input: 
     input.dependencies?.repository ?? createRepository(input.db);
   const loaded = await repository.load({
     taskId: input.snapshot.task.id,
+    userId: input.userId,
     reviewId: input.reviewId,
   });
   if (
     !loaded ||
-    loaded.userId !== input.snapshot.task.user_id ||
+    loaded.userId !== input.userId ||
     loaded.taskMatterId !== input.snapshot.task.matter_id ||
     loaded.taskStatus !== "completed" ||
     input.snapshot.task.status !== "completed" ||

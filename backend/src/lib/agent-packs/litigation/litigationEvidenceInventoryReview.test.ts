@@ -130,7 +130,7 @@ function completedCell(
     content: JSON.stringify(content),
     citations: candidate.citations,
     review_status: decision,
-    reviewed_at: decision ? "2026-08-08T12:00:00.000Z" : null,
+    reviewed_at: decision ? "2026-08-08T12:00:00.123456+00:00" : null,
     review_revision: decision ? 1 : 0,
   };
 }

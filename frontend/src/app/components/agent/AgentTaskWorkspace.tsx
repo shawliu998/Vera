@@ -54,7 +54,7 @@ import type {
   AgentStepStatus,
   AgentTaskSnapshot,
   AgentTaskStatus,
-  ApprovedArtifactSnapshot,
+  ExportableApprovedArtifactSnapshot,
   ContractDispositionRevisionDecision,
 } from "@/app/types/agent";
 import type { Document, Project } from "@/app/components/shared/types";
@@ -462,7 +462,9 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
     }
   }
 
-  async function downloadApprovedArtifact(artifact: ApprovedArtifactSnapshot) {
+  async function downloadApprovedArtifact(
+    artifact: ExportableApprovedArtifactSnapshot,
+  ) {
     if (downloadingArtifact) return;
     setDownloadingArtifact(artifact.artifact_id);
     setReviewError(null);
@@ -626,9 +628,14 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
       artifact.artifact_type === "document" ||
       artifact.artifact_type === "draft"
     ) {
+      const approvedArtifact = latestApprovedArtifact(
+        snapshot,
+        artifact.artifact_id,
+      );
       const lockedVersionId =
-        snapshot.review.status === "approved"
-          ? latestApprovedArtifact(snapshot, artifact.artifact_id)?.version_id
+        snapshot.review.status === "approved" &&
+        approvedArtifact?.artifact_type === "draft"
+          ? approvedArtifact.version_id
           : undefined;
       const query = new URLSearchParams({
         open_document: artifact.artifact_id,
@@ -876,7 +883,7 @@ function DeliverablesPanel({
   ) => Promise<boolean>;
   onRevise: () => Promise<void>;
   onReverify: () => Promise<void>;
-  onDownload: (artifact: ApprovedArtifactSnapshot) => Promise<void>;
+  onDownload: (artifact: ExportableApprovedArtifactSnapshot) => Promise<void>;
   onOpenArtifact: (
     artifact: AgentTaskSnapshot["artifacts"][number],
     options?: { versionId?: string | null },
@@ -1039,6 +1046,10 @@ function DeliverablesPanel({
             {outputRows.map((output) => {
               const canDownload = output.approvedArtifact !== null;
               const canOpen = agentTaskOutputCanOpen(output);
+              const tabularExportLabel =
+                output.approvedArtifact?.artifact_type === "tabular_review"
+                  ? `Export approved ${output.label}`
+                  : null;
               return (
                 <div key={output.key} className="flex min-w-0 items-stretch">
                   <button
@@ -1091,15 +1102,34 @@ function DeliverablesPanel({
                       type="button"
                       onClick={() => void onDownload(output.approvedArtifact!)}
                       disabled={downloadingArtifact !== null}
-                      title={`${output.currentVersion?.edited_after_approval ? "Export previously approved" : "Export locked"} ${output.approvedArtifact.filename}`}
-                      aria-label={`${output.currentVersion?.edited_after_approval ? "Export previously approved" : "Export locked"} ${output.approvedArtifact.filename}`}
-                      className="flex w-10 shrink-0 items-center justify-center text-gray-500 outline-none transition-colors hover:bg-white/60 hover:text-gray-800 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/70 disabled:opacity-50"
+                      title={
+                        tabularExportLabel ??
+                        `${output.currentVersion?.edited_after_approval ? "Export previously approved" : "Export locked"} ${output.approvedArtifact.filename}`
+                      }
+                      aria-label={
+                        tabularExportLabel ??
+                        `${output.currentVersion?.edited_after_approval ? "Export previously approved" : "Export locked"} ${output.approvedArtifact.filename}`
+                      }
+                      className={cn(
+                        "flex shrink-0 items-center justify-center text-gray-500 outline-none transition-colors hover:bg-white/60 hover:text-gray-800 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/70 disabled:opacity-50",
+                        tabularExportLabel ? "gap-1.5 px-3" : "w-10",
+                      )}
                     >
                       {downloadingArtifact ===
                       output.approvedArtifact.artifact_id ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       ) : (
                         <Download className="h-3.5 w-3.5" />
+                      )}
+                      {tabularExportLabel && (
+                        <>
+                          <span className="hidden whitespace-nowrap text-xs font-medium sm:inline">
+                            {tabularExportLabel}
+                          </span>
+                          <span className="whitespace-nowrap text-xs font-medium sm:hidden">
+                            Export approved
+                          </span>
+                        </>
                       )}
                     </button>
                   )}
@@ -1382,14 +1412,27 @@ function DeliverablesPanel({
               Vera records the signed-in account identity; it does not verify
               professional licensing or credentials.
             </p>
-            {latestApprovedDecision?.artifact_snapshot.map((artifact) => (
-              <p
-                key={artifact.version_id}
-                className="mt-2 break-words text-[10px] text-gray-500 [overflow-wrap:anywhere]"
-              >
-                {artifact.filename} · V{artifact.version_number}
-              </p>
-            ))}
+            {latestApprovedDecision?.artifact_snapshot.map((artifact) => {
+              if (artifact.artifact_type === "draft") {
+                return (
+                  <p
+                    key={artifact.version_id}
+                    className="mt-2 break-words text-[10px] text-gray-500 [overflow-wrap:anywhere]"
+                  >
+                    {artifact.filename} · V{artifact.version_number}
+                  </p>
+                );
+              }
+              if (!("kind" in artifact)) return null;
+              return (
+                <p
+                  key={artifact.export_version_id}
+                  className="mt-2 break-words text-[10px] text-gray-500 [overflow-wrap:anywhere]"
+                >
+                  {artifact.filename} · V{artifact.version_number}
+                </p>
+              );
+            })}
             <p className="mt-2">
               Vera output remains subject to professional judgment and is not
               legal advice.

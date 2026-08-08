@@ -54,7 +54,7 @@ test("commits a fixed litigation cell and preserves an explicit lawyer review", 
             cell_status: "done",
             review_status: "verified",
             review_revision: 1,
-            reviewed_at: "2026-08-08T00:02:00.000Z",
+            reviewed_at: "2026-08-08T00:02:00.123456+00:00",
           },
         ],
         error: null,
@@ -87,6 +87,7 @@ test("commits a fixed litigation cell and preserves an explicit lawyer review", 
     reviewStatus: "verified",
   });
   assert.equal(reviewed.outcome, "reviewed");
+  assert.equal(reviewed.reviewed_at, "2026-08-08T00:02:00.123456+00:00");
   assert.equal(calls[1]!.name, "review_litigation_evidence_cell_v1");
   assert.equal(calls[1]!.args.p_expected_review_revision, 0);
 });

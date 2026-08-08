@@ -1,11 +1,21 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { createAgentRequiredInput } from "./agent-kernel/contracts/requiredInput";
 import {
   prepareAgentTaskInputTransition,
   readAgentTaskSupplementalInput,
 } from "./agentTasks";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+
+function sha256(value: string) {
+  return createHash("sha256").update(value).digest("hex");
+}
 
 test("structured Required Input resumes one blocked Step and persists server-owned context", () => {
   const required = createAgentRequiredInput({
@@ -85,4 +95,27 @@ test("malformed checkpoint responses are not trusted as supplemental input", () 
   });
   assert.ok(supplemental);
   assert.equal(supplemental.structured_responses, undefined);
+});
+
+test("latest atomic input migration accepts bounded structured-only submissions", () => {
+  const backend = readFileSync(
+    resolve(root, "backend/migrations/20260808_14_agent_task_structured_input.sql"),
+    "utf8",
+  );
+  const mirrored = readFileSync(
+    resolve(root, "supabase/migrations/20260808000014_agent_task_structured_input.sql"),
+    "utf8",
+  );
+  assert.equal(sha256(backend), sha256(mirrored));
+  assert.match(backend, /v_structured_response_count = 0/);
+  assert.match(backend, /jsonb_array_length\([\s\S]*structured_responses/);
+  assert.match(backend, /not in \('choice', 'documents'\)/);
+  assert.match(
+    backend,
+    /cardinality\(p_document_ids\) = 0[\s\S]*message[\s\S]*v_structured_response_count = 0/,
+  );
+  assert.match(
+    backend,
+    /grant execute on function public\.submit_agent_task_input_v1[\s\S]*to service_role/,
+  );
 });

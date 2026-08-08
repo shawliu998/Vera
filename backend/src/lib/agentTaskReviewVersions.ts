@@ -4,20 +4,15 @@ import {
   requiredTaskDeliverables,
   taskDeliverablePurpose,
 } from "./agentTaskDeliverables";
-import type {
-  AgentReviewStatus,
-} from "./agentTaskReviews";
+import type { AgentReviewStatus } from "./agentTaskReviews";
 import { createServerSupabase } from "./supabase";
-import {
-  readApprovedArtifactSnapshot,
-} from "./agentApprovedArtifactSnapshot";
+import { readApprovedArtifactSnapshot } from "./agentApprovedArtifactSnapshot";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
 type TaskSnapshot = {
   task: {
     id: string;
-    user_id: string;
     matter_id: string;
     status: string;
     deliverables: Array<{
@@ -136,7 +131,9 @@ export function buildAgentReviewVersionState(
       new Set(approvedIdentityKeys).size === approvedIdentityKeys.length &&
       new Set(linkIdentityKeys).size === linkIdentityKeys.length &&
       linkIdentityKeys.every(
-        (key) => approvedIdentityKeys.filter((candidate) => candidate === key).length === 1,
+        (key) =>
+          approvedIdentityKeys.filter((candidate) => candidate === key)
+            .length === 1,
       ));
   const tabularReviewIds = new Set(tabularReviews.map((review) => review.id));
   const currentArtifacts = links.map((link) => {
@@ -148,17 +145,17 @@ export function buildAgentReviewVersionState(
       ) ?? null;
     const approvedSnapshotInvalid = Boolean(
       latestApproved &&
-        (!approvalSnapshotGloballyValid ||
-          !approvedRead ||
-          approvedRead.state === "invalid" ||
-          (link.artifact_type === "draft" &&
-            (approvedRead.state !== "current" ||
-              approvedRead.artifact.artifact_type !== "draft")) ||
-          (link.artifact_type === "tabular_review" &&
-            (approvedRead.state === "legacy_tabular"
-              ? false
-              : approvedRead.state !== "current" ||
-                approvedRead.artifact.artifact_type !== "tabular_review"))),
+      (!approvalSnapshotGloballyValid ||
+        !approvedRead ||
+        approvedRead.state === "invalid" ||
+        (link.artifact_type === "draft" &&
+          (approvedRead.state !== "current" ||
+            approvedRead.artifact.artifact_type !== "draft")) ||
+        (link.artifact_type === "tabular_review" &&
+          (approvedRead.state === "legacy_tabular"
+            ? false
+            : approvedRead.state !== "current" ||
+              approvedRead.artifact.artifact_type !== "tabular_review"))),
     );
     if (link.artifact_type === "tabular_review") {
       const available = tabularReviewIds.has(link.artifact_id);
@@ -168,11 +165,11 @@ export function buildAgentReviewVersionState(
           ? approvedRead.artifact
           : null;
       const legacy = approvedRead?.state === "legacy_tabular";
-      const currentRevision = currentTabularRevisions.get(link.artifact_id) ?? null;
+      const currentRevision =
+        currentTabularRevisions.get(link.artifact_id) ?? null;
       const differs = Boolean(
         approved &&
-          (!currentRevision ||
-            currentRevision !== approved.revision_fingerprint),
+        (!currentRevision || currentRevision !== approved.revision_fingerprint),
       );
       return {
         artifact_type: link.artifact_type,
@@ -190,10 +187,10 @@ export function buildAgentReviewVersionState(
         approved_snapshot_state: approvedSnapshotInvalid
           ? "invalid"
           : legacy
-          ? "legacy_tabular"
-          : approved
-            ? "current"
-            : null,
+            ? "legacy_tabular"
+            : approved
+              ? "current"
+              : null,
         edited_after_approval: Boolean(legacy || differs),
         review_current_required:
           approvedSnapshotInvalid ||
@@ -272,6 +269,7 @@ export function deriveAgentReviewStatus(
 export async function getAgentReviewVersionState(
   db: Db,
   snapshot: TaskSnapshot,
+  userId: string,
 ): Promise<AgentReviewVersionState> {
   const links = controlledAgentReviewArtifactLinks(snapshot);
   const latestApproved =
@@ -281,18 +279,26 @@ export async function getAgentReviewVersionState(
   if (!links.length) {
     return buildAgentReviewVersionState([], [], [], latestApproved);
   }
-  const draftDocumentIds = Array.from(new Set(links
-    .filter((artifact) => artifact.artifact_type === "draft")
-    .map((artifact) => artifact.artifact_id)));
-  const tabularReviewIds = Array.from(new Set(links
-    .filter((artifact) => artifact.artifact_type === "tabular_review")
-    .map((artifact) => artifact.artifact_id)));
+  const draftDocumentIds = Array.from(
+    new Set(
+      links
+        .filter((artifact) => artifact.artifact_type === "draft")
+        .map((artifact) => artifact.artifact_id),
+    ),
+  );
+  const tabularReviewIds = Array.from(
+    new Set(
+      links
+        .filter((artifact) => artifact.artifact_type === "tabular_review")
+        .map((artifact) => artifact.artifact_id),
+    ),
+  );
   const { data: documents, error: documentError } = draftDocumentIds.length
     ? await db
         .from("documents")
         .select("id,current_version_id")
         .in("id", draftDocumentIds)
-        .eq("user_id", snapshot.task.user_id)
+        .eq("user_id", userId)
         .eq("project_id", snapshot.task.matter_id)
     : { data: [], error: null };
   if (documentError) throw new Error(documentError.message);
@@ -330,20 +336,21 @@ export async function getAgentReviewVersionState(
       "read_agent_tabular_review_revision_fingerprint_v1",
       {
         p_task_id: snapshot.task.id,
-        p_user_id: snapshot.task.user_id,
+        p_user_id: userId,
         p_review_id: approved.artifact.review_id,
         p_expected_input_digest: approved.artifact.input_digest,
       },
     );
     if (error) throw new Error(error.message);
-    const row = (Array.isArray(data) ? data[0] : data) as
-      | Record<string, unknown>
-      | null;
+    const row = (Array.isArray(data) ? data[0] : data) as Record<
+      string,
+      unknown
+    > | null;
     currentTabularRevisions.set(
       approved.artifact.review_id,
       row?.outcome === "current" &&
-      typeof row.revision_fingerprint === "string" &&
-      /^[a-f0-9]{64}$/.test(row.revision_fingerprint)
+        typeof row.revision_fingerprint === "string" &&
+        /^[a-f0-9]{64}$/.test(row.revision_fingerprint)
         ? row.revision_fingerprint
         : null,
     );
@@ -363,15 +370,17 @@ export async function getAgentReviewVersionState(
       deleted_at: string | null;
     }>,
     latestApproved,
-    ((tabularReviews ?? []) as Array<{
-      id: string;
-      project_id: string | null;
-      user_id: string | null;
-      row_protocol: string | null;
-    }>).filter(
+    (
+      (tabularReviews ?? []) as Array<{
+        id: string;
+        project_id: string | null;
+        user_id: string | null;
+        row_protocol: string | null;
+      }>
+    ).filter(
       (review) =>
         review.project_id === snapshot.task.matter_id &&
-        review.user_id === snapshot.task.user_id &&
+        review.user_id === userId &&
         review.row_protocol === "document_rows",
     ),
     currentTabularRevisions,

@@ -116,7 +116,10 @@ test("legacy seven-field Tabular approval is readable but always requires curren
     [{ id: reviewId }],
     new Map([[reviewId, "b".repeat(64)]]),
   );
-  assert.equal(state.current_artifacts[0]?.approved_snapshot_state, "legacy_tabular");
+  assert.equal(
+    state.current_artifacts[0]?.approved_snapshot_state,
+    "legacy_tabular",
+  );
   assert.equal(state.current_artifacts[0]?.review_current_required, true);
 });
 
@@ -154,7 +157,10 @@ test("missing, invalid, or wrong-type approved entries cannot preserve approval"
       [{ id: reviewId }],
       new Map([[reviewId, "b".repeat(64)]]),
     );
-    assert.equal(state.current_artifacts[0]?.approved_snapshot_state, "invalid");
+    assert.equal(
+      state.current_artifacts[0]?.approved_snapshot_state,
+      "invalid",
+    );
     assert.equal(state.current_artifacts[0]?.review_current_required, true);
   }
 });
@@ -188,39 +194,42 @@ test("Tabular availability rejects a Review outside the Task owner or Matter", a
       error: null,
     }),
   };
-  const state = await getAgentReviewVersionState(db as never, {
-    task: {
-      id: "task-1",
-      user_id: "user-1",
-      matter_id: "matter-1",
-      status: "completed",
-      deliverables: [
-        {
-          key: "inventory",
-          artifact_type: "tabular_review",
-          purpose: "Evidence inventory",
-          required: true,
-        },
-      ],
-    },
-    artifacts: [
-      {
-        artifact_type: "tabular_review",
-        artifact_id: reviewId,
-        purpose: "Evidence inventory",
+  const state = await getAgentReviewVersionState(
+    db as never,
+    {
+      task: {
+        id: "task-1",
+        matter_id: "matter-1",
+        status: "completed",
+        deliverables: [
+          {
+            key: "inventory",
+            artifact_type: "tabular_review",
+            purpose: "Evidence inventory",
+            required: true,
+          },
+        ],
       },
-    ],
-    review: {
-      decisions: [
+      artifacts: [
         {
-          id: "decision-1",
-          status: "approved",
-          created_at: "2026-08-08T00:00:00.000Z",
-          artifact_snapshot: approvedSnapshot(),
+          artifact_type: "tabular_review",
+          artifact_id: reviewId,
+          purpose: "Evidence inventory",
         },
       ],
+      review: {
+        decisions: [
+          {
+            id: "decision-1",
+            status: "approved",
+            created_at: "2026-08-08T00:00:00.000Z",
+            artifact_snapshot: approvedSnapshot(),
+          },
+        ],
+      },
     },
-  });
+    "user-1",
+  );
   assert.equal(state.current_artifacts[0]?.current_version_available, false);
   assert.equal(state.current_artifacts[0]?.review_current_required, true);
 });
@@ -265,29 +274,32 @@ test("Draft availability binds its Document query to the Task owner and Matter",
     },
     rpc: async () => ({ data: null, error: null }),
   };
-  const state = await getAgentReviewVersionState(db as never, {
-    task: {
-      id: "task-1",
-      user_id: "user-1",
-      matter_id: "matter-1",
-      status: "completed",
-      deliverables: [
+  const state = await getAgentReviewVersionState(
+    db as never,
+    {
+      task: {
+        id: "task-1",
+        matter_id: "matter-1",
+        status: "completed",
+        deliverables: [
+          {
+            key: "opinion",
+            artifact_type: "draft",
+            purpose: "Evidence opinion",
+            required: true,
+          },
+        ],
+      },
+      artifacts: [
         {
-          key: "opinion",
           artifact_type: "draft",
+          artifact_id: draftId,
           purpose: "Evidence opinion",
-          required: true,
         },
       ],
     },
-    artifacts: [
-      {
-        artifact_type: "draft",
-        artifact_id: draftId,
-        purpose: "Evidence opinion",
-      },
-    ],
-  });
+    "user-1",
+  );
   assert.deepEqual(documentFilters, [
     ["user_id", "user-1"],
     ["project_id", "matter-1"],
@@ -297,9 +309,15 @@ test("Draft availability binds its Document query to the Task owner and Matter",
 
 test("version-state repository does not query documents with a Tabular Review id", async () => {
   const source = await import("node:fs/promises").then((fs) =>
-    fs.readFile(new URL("./agentTaskReviewVersions.ts", import.meta.url), "utf8"),
+    fs.readFile(
+      new URL("./agentTaskReviewVersions.ts", import.meta.url),
+      "utf8",
+    ),
   );
   assert.match(source, /draftDocumentIds/);
   assert.match(source, /from\("tabular_reviews"\)/);
-  assert.doesNotMatch(source, /links\.map\(\(artifact\) => artifact\.artifact_id\)/);
+  assert.doesNotMatch(
+    source,
+    /links\.map\(\(artifact\) => artifact\.artifact_id\)/,
+  );
 });

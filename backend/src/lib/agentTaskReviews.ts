@@ -19,6 +19,7 @@ import {
   controlledAgentReviewArtifactLinks,
   getAgentReviewVersionState,
 } from "./agentTaskReviewVersions";
+import { readAgentVerificationRecordV1 } from "./agent-kernel/verification/verifierCore";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -30,7 +31,6 @@ export type AgentReviewStatus =
 type TaskSnapshot = {
   task: {
     id: string;
-    user_id: string;
     matter_id: string;
     status: string;
     deliverables: Array<{
@@ -66,6 +66,7 @@ export type AgentTaskReviewDependencies = {
   materializeApprovedTabular?: (input: {
     db: Db;
     snapshot: TaskSnapshot;
+    userId: string;
     reviewId: string;
     purpose: string;
   }) => Promise<ApprovedTabularExportMaterialization>;
@@ -93,13 +94,43 @@ export function approvedArtifactBytesMatch(
   return sha256(bytes) === artifact.sha256;
 }
 
+export function structuredVerifierBindingIssue(input: {
+  taskId: string;
+  checkpoint: unknown;
+  verifier: { id: string; attempt?: number };
+  receipt: { capability: string; outcome: string; attempt: number };
+}) {
+  if (input.receipt.capability !== "verify") {
+    return "The final Step has no structured Verifier receipt.";
+  }
+  const verificationRecord = readAgentVerificationRecordV1(input.checkpoint);
+  const expectedOutcome =
+    input.receipt.outcome === "review_required"
+      ? "review_required"
+      : input.receipt.outcome === "postconditions_satisfied"
+        ? "clean_pass"
+        : null;
+  if (
+    !expectedOutcome ||
+    verificationRecord.state !== "valid" ||
+    verificationRecord.record.task_id !== input.taskId ||
+    verificationRecord.record.step_id !== input.verifier.id ||
+    verificationRecord.record.step_attempt !== input.receipt.attempt ||
+    verificationRecord.record.step_attempt !== input.verifier.attempt ||
+    verificationRecord.record.result.outcome !== expectedOutcome
+  ) {
+    return "The current structured Verifier result is unavailable or does not match the final Step.";
+  }
+  return null;
+}
+
 export async function getApprovalBlockers(
   db: Db,
   snapshot: TaskSnapshot,
   userId: string,
 ) {
   const base = await getReviewBlockers(db, snapshot, userId);
-  const versionState = await getAgentReviewVersionState(db, snapshot);
+  const versionState = await getAgentReviewVersionState(db, snapshot, userId);
   const unavailable = versionState.current_artifacts.filter(
     (artifact) => !artifact.current_version_available,
   );
@@ -143,9 +174,13 @@ export async function getReviewBlockers(
       (snapshot.task as { latest_checkpoint?: unknown }).latest_checkpoint,
     ).at(-1);
     if (verifierReceipt?.capability === "verify") {
-      if (verifierReceipt.outcome === "review_required") {
-        blockers.push("The Verifier reported one or more unresolved gaps.");
-      }
+      const issue = structuredVerifierBindingIssue({
+        taskId: snapshot.task.id,
+        checkpoint: snapshot.task.latest_checkpoint,
+        verifier,
+        receipt: verifierReceipt,
+      });
+      if (issue) blockers.push(issue);
     } else if (
       /\bGAP\b/i.test(verifier.result_summary ?? "") &&
       !/\bno\b[^.]{0,80}\bgap\b/i.test(verifier.result_summary ?? "")
@@ -187,6 +222,7 @@ export async function getReviewBlockers(
 export async function captureApprovedArtifacts(
   db: Db,
   snapshot: TaskSnapshot,
+  userId: string,
   dependencies: AgentTaskReviewDependencies = {},
 ): Promise<ApprovedArtifactSnapshot[]> {
   const links = controlledAgentReviewArtifactLinks(snapshot);
@@ -199,7 +235,7 @@ export async function captureApprovedArtifacts(
         .from("documents")
         .select("id,current_version_id")
         .in("id", documentIds)
-        .eq("user_id", snapshot.task.user_id)
+        .eq("user_id", userId)
         .eq("project_id", snapshot.task.matter_id)
     : { data: [], error: null };
   if (documentError) throw new Error(documentError.message);
@@ -282,6 +318,7 @@ export async function captureApprovedArtifacts(
     const materialized = await materialize({
       db,
       snapshot,
+      userId,
       reviewId: link.artifact_id,
       purpose: link.purpose,
     });

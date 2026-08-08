@@ -1,5 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { Tool } from "@anthropic-ai/sdk/resources/messages/messages";
+import type {
+  Tool,
+  ToolChoice,
+} from "@anthropic-ai/sdk/resources/messages/messages";
 import type {
   StreamChatParams,
   StreamChatResult,
@@ -8,6 +11,12 @@ import type {
 } from "./types";
 import { toClaudeTools } from "./tools";
 import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
+import {
+  RequiredToolProtocolError,
+  prepareRequiredToolContract,
+  requiredToolChoiceForProvider,
+  validateRequiredToolCalls,
+} from "./requiredToolContract";
 
 type ContentBlock =
   | { type: "text"; text: string }
@@ -114,8 +123,14 @@ export async function streamClaude(
     enableThinking,
   } = params;
   const maxIter = params.maxIterations ?? 10;
-  const anthropic = client(apiKeys?.claude);
   const claudeTools = toClaudeTools(tools);
+  const requiredTool = prepareRequiredToolContract({
+    provider: "claude",
+    requiredToolName: params.requiredToolName,
+    tools,
+    runTools,
+  });
+  const anthropic = client(apiKeys?.claude);
 
   const messages: NativeMessage[] = toNativeMessages(params.messages);
   let fullText = "";
@@ -133,6 +148,11 @@ export async function streamClaude(
         messages: messages as Anthropic.MessageParam[],
         tools: claudeTools.length
           ? (claudeTools as unknown as Tool[])
+          : undefined,
+        tool_choice: requiredTool
+          ? (requiredToolChoiceForProvider(
+              requiredTool,
+            ) as unknown as ToolChoice)
           : undefined,
         max_tokens: MAX_TOKENS,
         // Claude 4.x models require `thinking.type: "adaptive"` and
@@ -231,10 +251,20 @@ export async function streamClaude(
             name: tu.name,
             input: (tu.input as Record<string, unknown>) ?? {},
           };
-          callbacks.onToolCallStart?.(call);
           toolCalls.push(call);
         }
       }
+
+      validateRequiredToolCalls(requiredTool, toolCalls);
+      if (requiredTool && stopReason !== "tool_use") {
+        throw new RequiredToolProtocolError(
+          "required_tool_call_incomplete",
+          "claude",
+          requiredTool.requiredToolName,
+          { stop_reason: stopReason },
+        );
+      }
+      for (const call of toolCalls) callbacks.onToolCallStart?.(call);
 
       if (stopReason !== "tool_use" || !toolCalls.length || !runTools) {
         break;
@@ -242,6 +272,7 @@ export async function streamClaude(
 
       const results = await runTools(toolCalls);
       throwIfAborted(params.abortSignal);
+      if (requiredTool) break;
 
       // Record the assistant turn (preserving the original content blocks,
       // which Claude requires on the follow-up) and the user turn that

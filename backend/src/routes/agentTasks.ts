@@ -104,7 +104,7 @@ function routeError(
               : error instanceof LitigationEvidenceInventoryContextError
                 ? 400
                 : detail.startsWith("Only a") ||
-                    /cannot continue safely|still closing|review state changed|no longer matches|only after task completion/i.test(
+                    /already resolved|cannot continue safely|still closing|review state changed|no longer matches|only after task completion/i.test(
                       detail,
                     )
                   ? 409
@@ -321,7 +321,7 @@ agentTasksRouter.post(
             blockers,
           });
         }
-        artifactSnapshot = await captureApprovedArtifacts(db, snapshot);
+        artifactSnapshot = await captureApprovedArtifacts(db, snapshot, userId);
       } else {
         const checkpoint =
           snapshot.task.latest_checkpoint &&

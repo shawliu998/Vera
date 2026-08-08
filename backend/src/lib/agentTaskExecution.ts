@@ -24,10 +24,12 @@ import {
 import {
   AgentModelRequestTimeoutError,
   completeAgentTextWithQueueRetry,
+  buildAgentVerifierRepairMutationIdentity,
   executeAgentStep,
   isAgentTaskExecutionInterrupted,
   isTransientModelError,
   type AgentStepExecutionResult,
+  type AgentStepRepairDirective,
   verifyTaskCitationLinks,
 } from "./agentStepExecutor";
 import {
@@ -68,9 +70,19 @@ import {
   isAgentTaskStateTransitionError,
 } from "./agent-kernel/execution/taskTransition";
 import { AgentVerifierStructuredOutputError } from "./agent-kernel/verification/verifierCore";
+import {
+  AGENT_VERIFICATION_REPAIR_KEY,
+  buildAgentVerificationRepairReceiptV1,
+  coordinateOneAgentVerificationRepairV1,
+  decideAgentVerificationRepairV1,
+  readAgentVerificationRepairReceiptV1,
+} from "./agent-kernel/verification/repairEligibility";
 import { ContractPlaybookStructuredOutputError } from "./agent-packs/contract/contractPlaybookPack";
 import { ContractPlaybookWordMaterializationError } from "./agentContractPlaybookWordMaterializer";
-import { classifyAgentTaskProviderProtocolError } from "./agentTaskRetryPolicy";
+import {
+  buildAgentTaskProviderDiagnosticV1,
+  classifyAgentTaskProviderProtocolError,
+} from "./agentTaskRetryPolicy";
 import {
   executeLitigationEvidenceInventoryStep,
   isLitigationEvidenceInventoryCreationStep,
@@ -78,7 +90,7 @@ import {
 import { LitigationEvidenceInventoryDownstreamContextError } from "./agentLitigationEvidenceInventoryDownstreamContext";
 import { readLitigationEvidenceInventoryContext } from "./agent-packs/litigation/litigationEvidenceInventoryContext";
 import { getUserModelSettings } from "./userSettings";
-import { DEFAULT_MAIN_MODEL } from "./llm";
+import { DEFAULT_MAIN_MODEL, providerForModel } from "./llm";
 
 type Db = ReturnType<typeof createServerSupabase>;
 type Snapshot = NonNullable<Awaited<ReturnType<typeof getAgentTaskSnapshot>>>;
@@ -96,6 +108,7 @@ export class AgentStepPostconditionError extends Error {
 export async function buildCurrentStepReceipt(
   db: Db,
   snapshot: Snapshot,
+  userId: string,
   execution: Awaited<ReturnType<typeof executeAgentStep>>,
 ) {
   const contractRead = readAgentStepContracts(snapshot.task);
@@ -170,7 +183,7 @@ export async function buildCurrentStepReceipt(
         if (
           review &&
           review.project_id === snapshot.task.matter_id &&
-          review.user_id === snapshot.task.user_id &&
+          review.user_id === userId &&
           review.row_protocol === "document_rows"
         ) {
           satisfied.add("artifact_current_version");
@@ -244,31 +257,31 @@ export async function buildCurrentStepReceipt(
         }
     > = [];
     for (const deliverable of verification?.packet.deliverables ?? []) {
-        if (
-          deliverable.artifact_type === "draft" &&
-          deliverable.document_id !== null &&
-          deliverable.current_version_id !== null &&
-          deliverable.accepted_view_sha256 !== null
-        ) {
-          controlledDeliverables.push({
-            kind: "draft",
-            documentId: deliverable.document_id,
-            versionId: deliverable.current_version_id,
-            acceptedViewSha256: deliverable.accepted_view_sha256,
-          });
-          continue;
-        }
-        if (
-          deliverable.artifact_type === "tabular_review" &&
-          deliverable.artifact_id !== null &&
-          deliverable.accepted_view_sha256 !== null
-        ) {
-          controlledDeliverables.push({
-            kind: "tabular_review",
-            reviewId: deliverable.artifact_id,
-            acceptedViewSha256: deliverable.accepted_view_sha256,
-          });
-        }
+      if (
+        deliverable.artifact_type === "draft" &&
+        deliverable.document_id !== null &&
+        deliverable.current_version_id !== null &&
+        deliverable.accepted_view_sha256 !== null
+      ) {
+        controlledDeliverables.push({
+          kind: "draft",
+          documentId: deliverable.document_id,
+          versionId: deliverable.current_version_id,
+          acceptedViewSha256: deliverable.accepted_view_sha256,
+        });
+        continue;
+      }
+      if (
+        deliverable.artifact_type === "tabular_review" &&
+        deliverable.artifact_id !== null &&
+        deliverable.accepted_view_sha256 !== null
+      ) {
+        controlledDeliverables.push({
+          kind: "tabular_review",
+          reviewId: deliverable.artifact_id,
+          acceptedViewSha256: deliverable.accepted_view_sha256,
+        });
+      }
     }
     const matchesExactlyOnce = controlledDeliverables.every((deliverable) => {
       const matches = verifiedArtifacts.filter((artifact) =>
@@ -359,9 +372,13 @@ export async function buildCurrentStepReceipt(
 export async function prepareCurrentAgentStepTransition(
   db: Db,
   snapshot: Snapshot,
+  userId: string,
   execution: Awaited<ReturnType<typeof executeAgentStep>>,
 ): Promise<
-  | { kind: "advance"; stepReceipt: Awaited<ReturnType<typeof buildCurrentStepReceipt>> }
+  | {
+      kind: "advance";
+      stepReceipt: Awaited<ReturnType<typeof buildCurrentStepReceipt>>;
+    }
   | {
       kind: "postcondition_pause";
       summary: string;
@@ -372,7 +389,12 @@ export async function prepareCurrentAgentStepTransition(
   try {
     return {
       kind: "advance",
-      stepReceipt: await buildCurrentStepReceipt(db, snapshot, execution),
+      stepReceipt: await buildCurrentStepReceipt(
+        db,
+        snapshot,
+        userId,
+        execution,
+      ),
     };
   } catch (error) {
     if (!(error instanceof AgentStepPostconditionError)) throw error;
@@ -517,6 +539,18 @@ export function checkpointAllowsPriorEffectRecovery(checkpoint: unknown) {
   );
 }
 
+export function committedStepEffectRecoveryAllowed(input: {
+  receiptAttempt: number;
+  stepAttempt: number;
+  checkpoint: unknown;
+}) {
+  if (input.receiptAttempt === input.stepAttempt) return true;
+  return (
+    input.receiptAttempt < input.stepAttempt &&
+    checkpointAllowsPriorEffectRecovery(input.checkpoint)
+  );
+}
+
 async function completeVerifierForLawyerReview(input: {
   db: Db;
   taskId: string;
@@ -530,6 +564,7 @@ async function completeVerifierForLawyerReview(input: {
   const stepReceipt = await buildCurrentStepReceipt(
     input.db,
     input.snapshot,
+    input.userId,
     result,
   );
   return commitAgentTaskAdvance({
@@ -589,6 +624,22 @@ export function agentTaskExecutionErrorMessage(error: unknown) {
     return "The selected model is temporarily unavailable.";
   }
   return message;
+}
+
+function providerDiagnosticForTaskError(error: unknown, snapshot: Snapshot) {
+  const model =
+    typeof snapshot.task.execution_model === "string" &&
+    snapshot.task.execution_model.trim()
+      ? snapshot.task.execution_model
+      : DEFAULT_MAIN_MODEL;
+  let provider: string | null = null;
+  try {
+    provider = providerForModel(model);
+  } catch {
+    // Invalid legacy model identifiers remain fail-closed elsewhere, but must
+    // not suppress the bounded provider diagnostic attached to a pause.
+  }
+  return buildAgentTaskProviderDiagnosticV1(error, { provider, model });
 }
 
 export function agentTaskStatusAllowsExecution(
@@ -718,6 +769,7 @@ export async function advanceAgentTaskExecution(input: {
     }
     return lease.result;
   }
+  const leaseGuard = input.leaseGuard;
   if (current.task.status === "queued") {
     const planningRequest = readAgentTaskPlanningRequest(current.task);
     if (planningRequest) {
@@ -763,13 +815,17 @@ export async function advanceAgentTaskExecution(input: {
   if (
     priorCommittedEffect &&
     runningStep &&
-    priorCommittedEffect.receiptAttempt < runningStep.attempt &&
-    checkpointAllowsPriorEffectRecovery(current.task.latest_checkpoint) &&
+    committedStepEffectRecoveryAllowed({
+      receiptAttempt: priorCommittedEffect.receiptAttempt,
+      stepAttempt: runningStep.attempt,
+      checkpoint: current.task.latest_checkpoint,
+    }) &&
     (await committedStepEffectIsCurrent(db, current, priorCommittedEffect))
   ) {
     const stepReceipt = await buildCurrentStepReceipt(
       db,
       current,
+      userId,
       priorCommittedEffect,
     );
     return commitAgentTaskAdvance({
@@ -995,6 +1051,7 @@ export async function advanceAgentTaskExecution(input: {
         const stepReceipt = await buildCurrentStepReceipt(
           db,
           recoveredSnapshot,
+          userId,
           recovered,
         );
         return commitAgentTaskAdvance({
@@ -1033,6 +1090,7 @@ export async function advanceAgentTaskExecution(input: {
         { leaseOwner: input.leaseGuard.ownerToken },
       );
     }
+    const providerDiagnostic = providerDiagnosticForTaskError(error, current);
     if (
       error instanceof AgentVerifierStructuredOutputError ||
       error instanceof ContractPlaybookStructuredOutputError
@@ -1047,6 +1105,7 @@ export async function advanceAgentTaskExecution(input: {
         {
           classification: "provider_structured_output",
           leaseOwner: input.leaseGuard.ownerToken,
+          diagnostic: providerDiagnostic,
         },
       );
     }
@@ -1059,6 +1118,7 @@ export async function advanceAgentTaskExecution(input: {
         {
           classification: "provider_timeout",
           leaseOwner: input.leaseGuard.ownerToken,
+          diagnostic: providerDiagnostic,
         },
       );
     }
@@ -1077,6 +1137,7 @@ export async function advanceAgentTaskExecution(input: {
         {
           classification: providerProtocol.classification,
           leaseOwner: input.leaseGuard.ownerToken,
+          diagnostic: providerDiagnostic,
         },
       );
     }
@@ -1105,15 +1166,370 @@ export async function advanceAgentTaskExecution(input: {
     current.task.status === "verifying" &&
     execution.verification?.result.outcome === "review_required"
   ) {
-    return completeVerifierForLawyerReview({
-      db,
-      taskId,
-      userId,
-      snapshot: current,
-      execution,
-      summary: execution.summary,
-      leaseGuard: input.leaseGuard,
+    const runningVerifier = current.task.current_plan.find(
+      (step: { status: string }) => step.status === "running",
+    );
+    const storedRepair = readAgentVerificationRepairReceiptV1(
+      current.task.latest_checkpoint,
+    );
+    if (storedRepair.state === "invalid" || !runningVerifier) {
+      return completeVerifierForLawyerReview({
+        db,
+        taskId,
+        userId,
+        snapshot: current,
+        execution,
+        summary:
+          "Verification preserved the current deliverables, but the bounded repair identity is unavailable or malformed. Lawyer review is required; no Artifact was mutated.",
+        leaseGuard: input.leaseGuard,
+      });
+    }
+    const currentStoredRepair =
+      storedRepair.state === "valid" &&
+      storedRepair.receipt.task_id === taskId &&
+      storedRepair.receipt.step_id === runningVerifier.id &&
+      storedRepair.receipt.step_attempt === runningVerifier.attempt
+        ? storedRepair.receipt
+        : null;
+    let repairEffects;
+    try {
+      repairEffects = readAgentStepEffectReceipts(runningVerifier.result_data);
+    } catch {
+      return completeVerifierForLawyerReview({
+        db,
+        taskId,
+        userId,
+        snapshot: current,
+        execution,
+        summary:
+          "Verification preserved the current deliverables, but the current repair effect receipt is malformed. Lawyer review is required; no further automatic mutation was attempted.",
+        leaseGuard: input.leaseGuard,
+      });
+    }
+    const currentRepairEffect = currentStoredRepair
+      ? repairEffects.find(
+          (receipt) =>
+            receipt.effect_key ===
+              `agent-step:${runningVerifier.id}:attempt:${runningVerifier.attempt}:generate_docx` &&
+            receipt.target.document_id === currentStoredRepair.document_id &&
+            receipt.target.version_id === currentStoredRepair.target_version_id,
+        )
+      : null;
+    const repairDecision = decideAgentVerificationRepairV1({
+      packet: execution.verification.packet,
+      result: execution.verification.result,
+      repairAlreadyAttempted: Boolean(currentStoredRepair && currentRepairEffect),
     });
+    if (repairDecision.kind !== "bounded_artifact_edit") {
+      return completeVerifierForLawyerReview({
+        db,
+        taskId,
+        userId,
+        snapshot: current,
+        execution,
+        summary: execution.summary,
+        leaseGuard: input.leaseGuard,
+      });
+    }
+    const deliverable = execution.verification.packet.deliverables.find(
+      (candidate) => candidate.key === repairDecision.deliverableKey,
+    );
+    if (
+      !deliverable ||
+      deliverable.artifact_type !== "draft" ||
+      deliverable.document_id !== repairDecision.documentId ||
+      deliverable.current_version_id !== repairDecision.versionId ||
+      !deliverable.accepted_view_complete ||
+      !deliverable.accepted_view_sha256 ||
+      !deliverable.accepted_view_text
+    ) {
+      return completeVerifierForLawyerReview({
+        db,
+        taskId,
+        userId,
+        snapshot: current,
+        execution,
+        summary:
+          "Verification found a possible content repair, but the affected draft is not one complete fixed current Version. Existing work was preserved for lawyer review.",
+        leaseGuard: input.leaseGuard,
+      });
+    }
+    const mutation = buildAgentVerifierRepairMutationIdentity({
+      taskId,
+      stepId: runningVerifier.id,
+      stepAttempt: runningVerifier.attempt,
+      deliverableKey: deliverable.key,
+      documentId: deliverable.document_id,
+      baseVersionId: deliverable.current_version_id,
+    });
+    const repairReceipt = buildAgentVerificationRepairReceiptV1({
+      kind: "agent_verification_repair_v1",
+      task_id: taskId,
+      step_id: runningVerifier.id,
+      step_attempt: runningVerifier.attempt,
+      issue_code: repairDecision.issueCode,
+      deliverable_key: deliverable.key,
+      document_id: deliverable.document_id,
+      base_version_id: deliverable.current_version_id,
+      target_version_id: mutation.versionId,
+      accepted_view_sha256: deliverable.accepted_view_sha256,
+      goal_excerpt: repairDecision.goalExcerpt,
+    });
+    if (
+      currentStoredRepair &&
+      JSON.stringify(currentStoredRepair) !== JSON.stringify(repairReceipt)
+    ) {
+      return completeVerifierForLawyerReview({
+        db,
+        taskId,
+        userId,
+        snapshot: current,
+        execution,
+        summary:
+          "Verification found a repairable gap, but the persisted repair target no longer matches the current fixed draft. Existing work was preserved for lawyer review.",
+        leaseGuard: input.leaseGuard,
+      });
+    }
+    const repairCheckpointValues = {
+      ...(execution.checkpointValues ?? {}),
+      [AGENT_VERIFICATION_REPAIR_KEY]: repairReceipt,
+    };
+    if (!currentStoredRepair) {
+      const recorded = await recordAgentTaskExecutionCheckpoint(db, {
+        taskId,
+        userId,
+        leaseOwner: input.leaseGuard.ownerToken,
+        expectedTaskStatus: "verifying",
+        step: {
+          id: runningVerifier.id,
+          attempt: runningVerifier.attempt,
+        },
+        previousCheckpoint: current.task.latest_checkpoint,
+        summary: `Verifier repair 1/1 started for ${deliverable.key}.`,
+        checkpointValues: repairCheckpointValues,
+      });
+      if (!recorded) return getAgentTaskSnapshot(db, taskId, userId);
+    }
+
+    const repairDirective: AgentStepRepairDirective = {
+      kind: "bounded_artifact_edit_v1",
+      issueCode: repairDecision.issueCode,
+      deliverableKey: deliverable.key,
+      documentId: deliverable.document_id,
+      baseVersionId: deliverable.current_version_id,
+      acceptedViewSha256: deliverable.accepted_view_sha256,
+      acceptedViewText: deliverable.accepted_view_text,
+      goalExcerpt: repairDecision.goalExcerpt,
+    };
+    const repairState: {
+      repair: AgentStepExecutionResult | null;
+      recheck: AgentStepExecutionResult | null;
+    } = { repair: null, recheck: null };
+    try {
+      await coordinateOneAgentVerificationRepairV1({
+        packet: execution.verification.packet,
+        result: execution.verification.result,
+        repairAlreadyAttempted: false,
+        executeRepair: async (decision) => {
+          if (
+            decision.kind !== "bounded_artifact_edit" ||
+            decision.documentId !== repairDirective.documentId ||
+            decision.versionId !== repairDirective.baseVersionId ||
+            decision.deliverableKey !== repairDirective.deliverableKey ||
+            decision.issueCode !== repairDirective.issueCode
+          ) {
+            throw new Error(
+              "The repair coordinator changed the fixed Artifact target",
+            );
+          }
+          repairState.repair = await executeAgentStep({
+            db,
+            snapshot: current,
+            userId,
+            userEmail,
+            leaseOwner: leaseGuard.ownerToken,
+            shouldContinue,
+            repairDirective,
+          });
+          await linkAgentTaskArtifacts(
+            db,
+            taskId,
+            userId,
+            repairState.repair.artifacts,
+          );
+        },
+        recheck: async () => {
+          if (!repairState.repair) {
+            throw new Error("The bounded repair did not produce a result");
+          }
+          // The committed repair effect updates both the Document's current
+          // Version and the running Verifier Step result_data. Reusing the
+          // pre-mutation snapshot would compare the new Version against the
+          // original create-Step receipt and manufacture a version-drift gap.
+          const repairedSnapshot = await getAgentTaskSnapshot(
+            db,
+            taskId,
+            userId,
+          );
+          const refreshedVerifier = repairedSnapshot?.task.current_plan.find(
+            (step: { status: string }) => step.status === "running",
+          );
+          if (
+            !repairedSnapshot ||
+            repairedSnapshot.task.status !== "verifying" ||
+            refreshedVerifier?.id !== runningVerifier.id ||
+            refreshedVerifier.attempt !== runningVerifier.attempt
+          ) {
+            throw new AgentTaskStateTransitionError(
+              "task_state_transition_conflict",
+              "The bounded repair committed, but the Verifier state changed before its fresh recheck.",
+              {
+                task_id: taskId,
+                expected_step_id: runningVerifier.id,
+                expected_attempt: runningVerifier.attempt,
+              },
+            );
+          }
+          repairState.recheck = await executeAgentStep({
+            db,
+            snapshot: repairedSnapshot,
+            userId,
+            userEmail,
+            leaseOwner: leaseGuard.ownerToken,
+            shouldContinue,
+          });
+          if (!repairState.recheck.verification) {
+            throw new Error("The bounded repair recheck returned no Verifier result");
+          }
+          return {
+            packet: repairState.recheck.verification.packet,
+            result: repairState.recheck.verification.result,
+          };
+        },
+      });
+    } catch (error) {
+      if (isAgentTaskExecutionInterrupted(error)) {
+        return getAgentTaskSnapshot(db, taskId, userId);
+      }
+      if (isAgentTaskStateTransitionError(error)) {
+        return pauseAgentTaskForStateTransition(db, taskId, userId, error, {
+          leaseOwner: input.leaseGuard.ownerToken,
+        });
+      }
+      if (isAgentStepEffectTransitionError(error)) {
+        if (error.outcome === "lease_lost") {
+          return getAgentTaskSnapshot(db, taskId, userId);
+        }
+        return pauseAgentTaskForStateTransition(
+          db,
+          taskId,
+          userId,
+          new AgentTaskStateTransitionError(
+            "task_state_transition_conflict",
+            "The bounded Word repair could not be committed from the current Task state. Existing Versions were preserved for safe re-verification.",
+            error.facts,
+          ),
+          { leaseOwner: input.leaseGuard.ownerToken },
+        );
+      }
+      const providerDiagnostic = providerDiagnosticForTaskError(error, current);
+      if (error instanceof AgentVerifierStructuredOutputError) {
+        return deferAgentTaskForProvider(
+          db,
+          taskId,
+          userId,
+          "The repaired Artifact was preserved, but the fresh verifier response could not be mechanically validated. Resume this same Step or choose another configured model.",
+          {
+            classification: "provider_structured_output",
+            leaseOwner: input.leaseGuard.ownerToken,
+            checkpointValues: repairCheckpointValues,
+            diagnostic: providerDiagnostic,
+          },
+        );
+      }
+      if (error instanceof AgentModelRequestTimeoutError) {
+        return deferAgentTaskForProvider(
+          db,
+          taskId,
+          userId,
+          "The one bounded repair timed out. Existing work and any committed Version were preserved; resume with a responsive configured model.",
+          {
+            classification: "provider_timeout",
+            leaseOwner: input.leaseGuard.ownerToken,
+            checkpointValues: repairCheckpointValues,
+            diagnostic: providerDiagnostic,
+          },
+        );
+      }
+      const providerProtocol = classifyAgentTaskProviderProtocolError(error);
+      if (
+        providerProtocol?.classification === "provider_configuration" ||
+        providerProtocol?.classification === "provider_protocol"
+      ) {
+        return deferAgentTaskForProvider(
+          db,
+          taskId,
+          userId,
+          providerProtocol.classification === "provider_configuration"
+            ? "The configured provider could not run the bounded repair. Existing work was preserved; update the provider configuration or select another compatible model."
+            : "The configured provider cannot guarantee the one required Word mutation. Existing work was preserved; resume with a compatible model.",
+          {
+            classification: providerProtocol.classification,
+            leaseOwner: input.leaseGuard.ownerToken,
+            checkpointValues: repairCheckpointValues,
+            diagnostic: providerDiagnostic,
+          },
+        );
+      }
+      if (isTransientModelError(error)) throw error;
+      return completeVerifierForLawyerReview({
+        db,
+        taskId,
+        userId,
+        snapshot: current,
+        execution: {
+          ...execution,
+          artifacts: [
+            ...execution.artifacts,
+            ...(repairState.repair?.artifacts ?? []),
+          ],
+        },
+        summary: `The one bounded Word repair could not be safely completed: ${agentTaskExecutionErrorMessage(error)} Existing deliverables and Versions were preserved for lawyer review.`,
+        leaseGuard: input.leaseGuard,
+      });
+    }
+    if (!repairState.repair || !repairState.recheck?.verification) {
+      return completeVerifierForLawyerReview({
+        db,
+        taskId,
+        userId,
+        snapshot: current,
+        execution,
+        summary:
+          "The bounded repair did not produce one complete re-verification result. Existing deliverables were preserved for lawyer review.",
+        leaseGuard: input.leaseGuard,
+      });
+    }
+    execution = {
+      ...repairState.recheck,
+      summary: `Verifier repair 1/1 completed. ${repairState.recheck.summary}`,
+      artifacts: [
+        ...execution.artifacts,
+        ...repairState.repair.artifacts,
+        ...repairState.recheck.artifacts,
+      ],
+    };
+    if (execution.verification?.result.outcome === "review_required") {
+      return completeVerifierForLawyerReview({
+        db,
+        taskId,
+        userId,
+        snapshot: current,
+        execution,
+        summary: execution.summary,
+        leaseGuard: input.leaseGuard,
+      });
+    }
   }
 
   // Unversioned Tasks retain their historical verifier compatibility path.
@@ -1266,6 +1682,26 @@ export async function advanceAgentTaskExecution(input: {
         if (isAgentTaskExecutionInterrupted(error)) {
           return getAgentTaskSnapshot(db, taskId, userId);
         }
+        const providerDiagnostic = providerDiagnosticForTaskError(
+          error,
+          current,
+        );
+        const providerProtocol = classifyAgentTaskProviderProtocolError(error);
+        if (providerProtocol) {
+          return deferAgentTaskForProvider(
+            db,
+            taskId,
+            userId,
+            providerProtocol.classification === "provider_configuration"
+              ? "The configured provider could not run the bounded verifier repair. Existing work was preserved; update provider settings or choose another compatible model."
+              : "The configured provider could not complete the bounded verifier protocol. Existing work was preserved; resume with a compatible model.",
+            {
+              classification: providerProtocol.classification,
+              leaseOwner: input.leaseGuard.ownerToken,
+              diagnostic: providerDiagnostic,
+            },
+          );
+        }
         if (isTransientModelError(error)) throw error;
         return stopAgentTask(db, taskId, userId, {
           status: "failed",
@@ -1337,6 +1773,7 @@ export async function advanceAgentTaskExecution(input: {
   const transition = await prepareCurrentAgentStepTransition(
     db,
     current,
+    userId,
     execution,
   );
   if (transition.kind === "postcondition_pause") {

@@ -26,7 +26,7 @@ export const litigationEvidenceStoredCellSchema = z
     content: z.string().nullable(),
     citations: z.unknown().nullable(),
     review_status: reviewDecisionSchema.nullable(),
-    reviewed_at: z.string().datetime().nullable(),
+    reviewed_at: z.string().datetime({ offset: true }).nullable(),
     review_revision: z.number().int().nonnegative(),
   })
   .strict()

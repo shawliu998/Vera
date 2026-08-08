@@ -226,6 +226,10 @@ declare
   v_draft_identity jsonb;
   v_tabular_receipt jsonb;
   v_draft_receipt jsonb;
+  v_tabular_record jsonb;
+  v_draft_record jsonb;
+  v_review_receipt jsonb;
+  v_review_record jsonb;
   v_snapshot jsonb;
   v_draft_snapshot jsonb;
   v_revision record;
@@ -352,9 +356,32 @@ begin
       jsonb_build_object('code', 'verifier_passed', 'status', 'pass')
     )
   );
+  v_tabular_record := jsonb_build_object(
+    'kind', 'agent_verification_record_v1',
+    'task_id', 'a4300000-0000-4000-8000-000000000001',
+    'step_id', 'a5300000-0000-4000-8000-000000000002',
+    'step_attempt', 1,
+    'result', jsonb_build_object(
+      'kind', 'agent_verification_result_v1',
+      'outcome', 'clean_pass',
+      'dimensions', jsonb_build_object(
+        'goal_coverage', 'pass',
+        'source_support', 'pass',
+        'artifact_integrity', 'pass',
+        'workflow_completion', 'pass'
+      ),
+      'issues', '[]'::jsonb
+    )
+  );
   update public.agent_tasks
   set latest_checkpoint = jsonb_set(
-    latest_checkpoint, '{step_receipts}', jsonb_build_array(v_tabular_receipt)
+    jsonb_set(
+      latest_checkpoint,
+      '{step_receipts}',
+      jsonb_build_array(v_tabular_receipt)
+    ),
+    '{agent_verification_result}',
+    v_tabular_record
   )
   where id = 'a4300000-0000-4000-8000-000000000001';
 
@@ -554,9 +581,27 @@ begin
       jsonb_build_object('code', 'verifier_passed', 'status', 'pass')
     )
   );
+  v_draft_record := jsonb_build_object(
+    'kind', 'agent_verification_record_v1',
+    'task_id', 'a4300000-0000-4000-8000-000000000002',
+    'step_id', 'a5300000-0000-4000-8000-000000000004',
+    'step_attempt', 1,
+    'result', jsonb_build_object(
+      'kind', 'agent_verification_result_v1',
+      'outcome', 'clean_pass',
+      'dimensions', jsonb_build_object(
+        'goal_coverage', 'pass',
+        'source_support', 'pass',
+        'artifact_integrity', 'pass',
+        'workflow_completion', 'pass'
+      ),
+      'issues', '[]'::jsonb
+    )
+  );
   update public.agent_tasks
   set latest_checkpoint = jsonb_build_object(
-    'step_receipts', jsonb_build_array(v_draft_receipt)
+    'step_receipts', jsonb_build_array(v_draft_receipt),
+    'agent_verification_result', v_draft_record
   )
   where id = 'a4300000-0000-4000-8000-000000000002';
 
@@ -723,6 +768,74 @@ begin
     'size_bytes', 8192,
     'sha256', 'sha256:' || repeat('5', 64)
   ));
+
+  -- review_required is an automated verification outcome, not an approval
+  -- veto. A current, exact structured result may reach the explicit lawyer
+  -- Decision while every Artifact/source/snapshot binding remains mandatory.
+  v_review_receipt := jsonb_set(
+    jsonb_set(
+      v_tabular_receipt,
+      '{outcome}',
+      to_jsonb('review_required'::text)
+    ),
+    '{postconditions,1,status}',
+    to_jsonb('fail'::text)
+  );
+  v_review_record := jsonb_set(
+    jsonb_set(
+      jsonb_set(
+        v_tabular_record,
+        '{result,outcome}',
+        to_jsonb('review_required'::text)
+      ),
+      '{result,dimensions,goal_coverage}',
+      to_jsonb('gap'::text)
+    ),
+    '{result,issues}',
+    jsonb_build_array(jsonb_build_object(
+      'origin', 'deterministic',
+      'dimension', 'goal_coverage',
+      'detail', 'The accepted view exceeded the bounded semantic projection.',
+      'issue', jsonb_build_object(
+        'code', 'verification_scope_exceeded',
+        'deliverable_key', 'evidence',
+        'accepted_view_characters', 120001,
+        'projected_characters', 100000
+      )
+    ))
+  );
+  update public.agent_tasks
+  set latest_checkpoint = jsonb_set(
+    jsonb_set(
+      latest_checkpoint,
+      '{step_receipts}',
+      jsonb_build_array(v_review_receipt)
+    ),
+    '{agent_verification_result}',
+    v_review_record
+  )
+  where id = 'a4300000-0000-4000-8000-000000000001';
+  if not public.agent_tabular_final_verifier_matches_v1(
+    'a4300000-0000-4000-8000-000000000001',
+    'a6300000-0000-4000-8000-000000000001',
+    v_identity
+  ) or not public.agent_final_verifier_snapshot_matches_v1(
+    'a4300000-0000-4000-8000-000000000001',
+    v_snapshot
+  ) then
+    raise exception 'current review_required verifier binding blocked lawyer Decision';
+  end if;
+  update public.agent_tasks
+  set latest_checkpoint = jsonb_set(
+    jsonb_set(
+      latest_checkpoint,
+      '{step_receipts}',
+      jsonb_build_array(v_tabular_receipt)
+    ),
+    '{agent_verification_result}',
+    v_tabular_record
+  )
+  where id = 'a4300000-0000-4000-8000-000000000001';
 
   -- An extra final-verifier identity cannot be hidden behind an otherwise
   -- exact approved snapshot, and the failed transaction materializes nothing.
@@ -1005,7 +1118,8 @@ begin
   );
   if v.outcome <> 'invalid_artifacts' then raise exception 'missing Draft verifier identity was accepted'; end if;
   update public.agent_tasks set latest_checkpoint = jsonb_build_object(
-    'step_receipts', jsonb_build_array(v_draft_receipt)
+    'step_receipts', jsonb_build_array(v_draft_receipt),
+    'agent_verification_result', v_draft_record
   ) where id = 'a4300000-0000-4000-8000-000000000002';
   select * into v from public.record_agent_task_review_decision_v1(
     'a8300000-0000-4000-8000-000000000008',

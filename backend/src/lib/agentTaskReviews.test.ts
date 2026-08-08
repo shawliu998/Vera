@@ -4,10 +4,73 @@ import test from "node:test";
 import {
   captureApprovedArtifacts,
   loadApprovedExport,
+  structuredVerifierBindingIssue,
 } from "./agentTaskReviews";
 import { compileLitigationEvidenceInventoryReceipt } from "./agent-packs/litigation/litigationEvidenceInventoryPack";
 
 type EqCall = { column: string; value: unknown };
+
+test("review_required remains a lawyer decision when its structured result matches the final Step", () => {
+  const taskId = "10000000-0000-4000-8000-000000000001";
+  const stepId = "10000000-0000-4000-8000-000000000002";
+  const checkpoint = {
+    agent_verification_result: {
+      kind: "agent_verification_record_v1",
+      task_id: taskId,
+      step_id: stepId,
+      step_attempt: 2,
+      result: {
+        kind: "agent_verification_result_v1",
+        outcome: "review_required",
+        dimensions: {
+          goal_coverage: "gap",
+          source_support: "pass",
+          artifact_integrity: "pass",
+          workflow_completion: "pass",
+        },
+        issues: [
+          {
+            origin: "deterministic",
+            dimension: "goal_coverage",
+            detail: "The full accepted-view remains available to the lawyer.",
+            issue: {
+              code: "verification_scope_exceeded",
+              deliverable_key: "evidence-inventory",
+              accepted_view_characters: 120_000,
+              projected_characters: 80_000,
+            },
+          },
+        ],
+      },
+    },
+  };
+  assert.equal(
+    structuredVerifierBindingIssue({
+      taskId,
+      checkpoint,
+      verifier: { id: stepId, attempt: 2 },
+      receipt: {
+        capability: "verify",
+        outcome: "review_required",
+        attempt: 2,
+      },
+    }),
+    null,
+  );
+  assert.match(
+    structuredVerifierBindingIssue({
+      taskId,
+      checkpoint,
+      verifier: { id: stepId, attempt: 3 },
+      receipt: {
+        capability: "verify",
+        outcome: "review_required",
+        attempt: 3,
+      },
+    }) ?? "",
+    /does not match/,
+  );
+});
 
 function chain(result: unknown, eqCalls: EqCall[]) {
   const query = {
@@ -131,7 +194,7 @@ test("generic Tabular approvals fail closed without a registered server material
     ],
   };
   await assert.rejects(
-    captureApprovedArtifacts({} as never, snapshot, {
+    captureApprovedArtifacts({} as never, snapshot, "user-1", {
       async materializeApprovedTabular() {
         materializerCalled = true;
         throw new Error("must not be called");
@@ -233,43 +296,49 @@ test("mixed capture validates all owned Draft bytes before Tabular materializati
       },
     ],
   };
-  const captured = await captureApprovedArtifacts(db as never, snapshot, {
-    async download() {
-      events.push("draft-download");
-      return draftBytes.buffer.slice(
-        draftBytes.byteOffset,
-        draftBytes.byteOffset + draftBytes.byteLength,
-      );
+  const captured = await captureApprovedArtifacts(
+    db as never,
+    snapshot,
+    "user-1",
+    {
+      async download() {
+        events.push("draft-download");
+        return draftBytes.buffer.slice(
+          draftBytes.byteOffset,
+          draftBytes.byteOffset + draftBytes.byteLength,
+        );
+      },
+      async materializeApprovedTabular(input) {
+        events.push("tabular-materialize");
+        assert.equal(input.reviewId, receipt.review_id);
+        assert.equal(input.userId, "user-1");
+        return {
+          storage_path: "invisible/export.xlsx",
+          artifact: {
+            kind: "agent_approved_tabular_artifact_v1",
+            artifact_type: "tabular_review",
+            artifact_id: receipt.review_id,
+            purpose: "Evidence inventory",
+            review_id: receipt.review_id,
+            row_protocol: "document_rows",
+            input_digest: "a".repeat(64),
+            revision_fingerprint: "b".repeat(64),
+            accepted_view_sha256: `sha256:${"c".repeat(64)}`,
+            source_receipt_fingerprint: "d".repeat(64),
+            decision_fingerprint: "e".repeat(64),
+            completion_sha256: `sha256:${"f".repeat(64)}`,
+            export_document_id: "20000000-0000-4000-8000-000000000001",
+            export_version_id: "20000000-0000-4000-8000-000000000002",
+            version_number: 1,
+            filename: "Evidence inventory - Approved.xlsx",
+            file_type: "xlsx",
+            size_bytes: 100,
+            sha256: `sha256:${"1".repeat(64)}`,
+          },
+        };
+      },
     },
-    async materializeApprovedTabular(input) {
-      events.push("tabular-materialize");
-      assert.equal(input.reviewId, receipt.review_id);
-      return {
-        storage_path: "invisible/export.xlsx",
-        artifact: {
-          kind: "agent_approved_tabular_artifact_v1",
-          artifact_type: "tabular_review",
-          artifact_id: receipt.review_id,
-          purpose: "Evidence inventory",
-          review_id: receipt.review_id,
-          row_protocol: "document_rows",
-          input_digest: "a".repeat(64),
-          revision_fingerprint: "b".repeat(64),
-          accepted_view_sha256: `sha256:${"c".repeat(64)}`,
-          source_receipt_fingerprint: "d".repeat(64),
-          decision_fingerprint: "e".repeat(64),
-          completion_sha256: `sha256:${"f".repeat(64)}`,
-          export_document_id: "20000000-0000-4000-8000-000000000001",
-          export_version_id: "20000000-0000-4000-8000-000000000002",
-          version_number: 1,
-          filename: "Evidence inventory - Approved.xlsx",
-          file_type: "xlsx",
-          size_bytes: 100,
-          sha256: `sha256:${"1".repeat(64)}`,
-        },
-      };
-    },
-  });
+  );
   assert.deepEqual(events, ["draft-download", "tabular-materialize"]);
   assert.deepEqual(
     captured.map((artifact) => artifact.artifact_type),

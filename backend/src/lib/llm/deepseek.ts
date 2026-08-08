@@ -6,6 +6,11 @@ import type {
   StreamChatResult,
 } from "./types";
 import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
+import {
+  prepareRequiredToolContract,
+  requiredToolChoiceForProvider,
+  validateRequiredToolCalls,
+} from "./requiredToolContract";
 
 const DEEPSEEK_CHAT_URL = "https://api.deepseek.com/chat/completions";
 const MAX_OUTPUT_TOKENS = 16_384;
@@ -148,6 +153,7 @@ async function createChatCompletion(input: {
   stream: boolean;
   maxTokens: number;
   enableThinking: boolean;
+  toolChoice?: Record<string, unknown>;
   key: string;
   signal?: AbortSignal;
 }) {
@@ -163,7 +169,8 @@ async function createChatCompletion(input: {
         model: input.model,
         messages: input.messages,
         tools: input.tools?.length ? input.tools : undefined,
-        tool_choice: input.tools?.length ? "auto" : undefined,
+        tool_choice:
+          input.toolChoice ?? (input.tools?.length ? "auto" : undefined),
         stream: input.stream,
         max_tokens: input.maxTokens,
         thinking: {
@@ -202,6 +209,12 @@ export async function streamDeepSeek(
   } = params;
   const maxIterations = params.maxIterations ?? 10;
   const messages = toMessages(systemPrompt, params.messages);
+  const requiredTool = prepareRequiredToolContract({
+    provider: "deepseek",
+    requiredToolName: params.requiredToolName,
+    tools,
+    runTools,
+  });
   const key = apiKey(apiKeys?.deepseek);
   let fullText = "";
   const rawStreamRecorder = createRawLlmStreamRecorder({
@@ -216,6 +229,9 @@ export async function streamDeepSeek(
         model,
         messages,
         tools,
+        toolChoice: requiredTool
+          ? requiredToolChoiceForProvider(requiredTool)
+          : undefined,
         stream: true,
         maxTokens: MAX_OUTPUT_TOKENS,
         enableThinking,
@@ -315,11 +331,13 @@ export async function streamDeepSeek(
           input: parseToolInput(call.function.arguments),
         }),
       );
+      validateRequiredToolCalls(requiredTool, normalizedCalls);
       for (const call of normalizedCalls) callbacks.onToolCallStart?.(call);
 
       if (!normalizedCalls.length || !runTools) break;
       const results = await runTools(normalizedCalls);
       throwIfAborted(params.abortSignal);
+      if (requiredTool) break;
       messages.push({
         role: "assistant",
         content: content || null,

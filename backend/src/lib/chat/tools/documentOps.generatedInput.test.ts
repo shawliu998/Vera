@@ -8,6 +8,7 @@ import {
   bindGeneratedTaskWordArtifact,
   isValidGenerateDocxInput,
   isValidGenerateExcelInput,
+  safeGeneratedFilename,
 } from "./documentOps";
 
 async function minimalDocx() {
@@ -55,6 +56,14 @@ test("generated Excel input can be corrected before effect reservation", () => {
     isValidGenerateExcelInput({ title: "Evidence inventory", sheets: [] }),
     false,
   );
+});
+
+test("generated filenames preserve legal-language letters and reject punctuation-only titles", () => {
+  assert.equal(
+    safeGeneratedFilename("听证会大纲 — Hearing Outline", "docx"),
+    "听证会大纲 Hearing Outline.docx",
+  );
+  assert.equal(safeGeneratedFilename("---", "docx"), "document.docx");
 });
 
 test("generated Task Word bytes carry the server-owned artifact identity", async () => {

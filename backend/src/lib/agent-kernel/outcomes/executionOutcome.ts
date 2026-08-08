@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 export const AGENT_EXECUTION_ISSUE_KIND = "agent_execution_issue_v1" as const;
+export const AGENT_PROVIDER_DIAGNOSTIC_KIND =
+  "agent_provider_diagnostic_v1" as const;
 export const AGENT_TASK_EXECUTION_PAUSE_KIND =
   "agent_task_execution_pause_v1" as const;
 
@@ -39,11 +41,52 @@ export type AgentTaskRetryCheckpoint = {
   classification: AgentTaskRetryClassification;
 };
 
+const providerDiagnosticSchema = z
+  .object({
+    kind: z.literal(AGENT_PROVIDER_DIAGNOSTIC_KIND),
+    provider: z
+      .string()
+      .trim()
+      .min(1)
+      .max(40)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
+      .nullable(),
+    model: z
+      .string()
+      .trim()
+      .min(1)
+      .max(160)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/)
+      .nullable(),
+    http_status: z.number().int().min(100).max(599).nullable(),
+    provider_code: z
+      .string()
+      .trim()
+      .min(1)
+      .max(80)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)
+      .nullable(),
+    request_id: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/)
+      .nullable(),
+    retry_after_ms: z.number().int().min(0).max(86_400_000).nullable(),
+  })
+  .strict();
+
+export type AgentProviderDiagnosticV1 = z.infer<
+  typeof providerDiagnosticSchema
+>;
+
 const issueFactsSchema = z
   .object({
     step_id: z.string().trim().min(1).max(200),
     attempt: z.number().int().min(0),
     automatic_retries_exhausted: z.boolean(),
+    provider_diagnostic: providerDiagnosticSchema.optional(),
   })
   .strict();
 const providerIssueSchema = z
@@ -171,6 +214,7 @@ export function buildAgentTaskExecutionPauseCheckpoint(input: {
   stepId: string;
   attempt: number;
   createdAt: string;
+  diagnostic?: AgentProviderDiagnosticV1 | null;
 }): AgentTaskExecutionPauseCheckpointV1 {
   return executionPauseSchema.parse({
     kind: AGENT_TASK_EXECUTION_PAUSE_KIND,
@@ -192,6 +236,9 @@ export function buildAgentTaskExecutionPauseCheckpoint(input: {
           "provider_structured_output",
           "provider_configuration",
         ].includes(input.classification),
+        ...(input.diagnostic
+          ? { provider_diagnostic: input.diagnostic }
+          : {}),
       },
     },
   });
@@ -203,6 +250,7 @@ export function mergeAgentTaskProviderPauseCheckpoint(input: {
   classification: AgentTaskExecutionPauseClassification;
   summary: string;
   createdAt: string;
+  diagnostic?: AgentProviderDiagnosticV1 | null;
 }) {
   const previous =
     input.previous &&
@@ -233,6 +281,7 @@ export function mergeAgentTaskProviderPauseCheckpoint(input: {
       stepId,
       attempt,
       createdAt: input.createdAt,
+      diagnostic: input.diagnostic,
     }),
   };
 }

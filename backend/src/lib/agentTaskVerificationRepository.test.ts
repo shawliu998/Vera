@@ -493,6 +493,98 @@ test("builds a verifier packet from the fixed current accepted view", async () =
   );
 });
 
+test("binds an abrupt Word ending to the exact current accepted view", async () => {
+  const { reserved, snapshot } = fixture();
+  const db = fakeDb({
+    documents: [
+      {
+        id: reserved.target.document_id,
+        user_id: "user-1",
+        project_id: matterId,
+        current_version_id: reserved.target.version_id,
+      },
+    ],
+    versions: [
+      {
+        id: reserved.target.version_id,
+        document_id: reserved.target.document_id,
+        storage_path: "truncated.docx",
+        file_type: "docx",
+        deleted_at: null,
+      },
+    ],
+  });
+  const truncated =
+    "本意见书依据本案固定证据源文件编制。凡源文件未予确立的真实性、可采性、关联性及款项分配等事项，均明确标注为";
+  const { packet } = await buildCurrentAgentVerificationPacket({
+    db: db as never,
+    snapshot,
+    userId: "user-1",
+    stepId: "step-verify",
+    stepAttempt: 1,
+    profile,
+    citationsRequired: false,
+    citationCoverage: { total: 0, relocatable: 0, missing: 0 },
+    loadAcceptedView: async () => truncated,
+  });
+  const issue = packet.deterministic_checks.find(
+    (check) => check.code === "artifact-ending:opinion",
+  )?.issue;
+  assert.deepEqual(issue, {
+    code: "artifact_incomplete_ending",
+    deliverable_key: "opinion",
+    document_id: reserved.target.document_id,
+    version_id: reserved.target.version_id,
+    accepted_view_sha256: packet.deliverables[0]?.accepted_view_sha256,
+    ending_excerpt: truncated,
+  });
+});
+
+test("does not treat completed prose or a short heading as a truncated Artifact", async () => {
+  for (const acceptedView of [
+    "本意见书依据本案固定证据源文件编制。凡源文件未予确立的事项，均明确标注为未解决。",
+    "结论如下",
+  ]) {
+    const { reserved, snapshot } = fixture();
+    const db = fakeDb({
+      documents: [
+        {
+          id: reserved.target.document_id,
+          user_id: "user-1",
+          project_id: matterId,
+          current_version_id: reserved.target.version_id,
+        },
+      ],
+      versions: [
+        {
+          id: reserved.target.version_id,
+          document_id: reserved.target.document_id,
+          storage_path: "complete.docx",
+          file_type: "docx",
+          deleted_at: null,
+        },
+      ],
+    });
+    const { packet } = await buildCurrentAgentVerificationPacket({
+      db: db as never,
+      snapshot,
+      userId: "user-1",
+      stepId: "step-verify",
+      stepAttempt: 1,
+      profile,
+      citationsRequired: false,
+      citationCoverage: { total: 0, relocatable: 0, missing: 0 },
+      loadAcceptedView: async () => acceptedView,
+    });
+    assert.equal(
+      packet.deterministic_checks.find(
+        (check) => check.code === "artifact-ending:opinion",
+      )?.status,
+      "pass",
+    );
+  }
+});
+
 test("verifies a Matter-owned Tabular Review without treating its id as a Document", async () => {
   const reviewId = "44444444-4444-4444-8444-444444444444";
   const sourceDocumentId = "55555555-5555-4555-8555-555555555555";
@@ -923,6 +1015,90 @@ test("fixed effect Version drift stops before accepted-view loading", async () =
       (check) => check.code === "artifact-version:opinion",
     )?.issue?.code,
     "artifact_version_changed",
+  );
+});
+
+test("a later committed Verifier repair remains the fixed Version across retries", async () => {
+  const { reserved, snapshot } = fixture();
+  const olderVersion = "88888888-8888-4888-8888-888888888888";
+  const repairedVersion = "99999999-9999-4999-8999-999999999999";
+  const committedRepair = (attempt: number, versionId: string) => {
+    const receipt = buildAgentStepEffectReservation({
+      stepId: "step-verify",
+      attempt,
+      toolName: "generate_docx",
+      toolInput: { base_version_id: reserved.target.version_id, attempt },
+      target: {
+        documentId: reserved.target.document_id,
+        versionId,
+      },
+      createdAt: `2026-08-07T00:0${attempt}:00.000Z`,
+    });
+    return {
+      ...receipt,
+      status: "committed" as const,
+      effect: {
+        document_id: reserved.target.document_id,
+        version_id: versionId,
+        artifact_type: "draft" as const,
+      },
+      committed_at: `2026-08-07T00:1${attempt}:00.000Z`,
+    };
+  };
+  const older = committedRepair(1, olderVersion);
+  const repaired = committedRepair(2, repairedVersion);
+  snapshot.task.current_plan[1] = {
+    id: "step-verify",
+    status: "running",
+    attempt: 3,
+    // Deliberately store the older receipt last. Selection must use Step and
+    // attempt identity, never JSON object insertion order.
+    result_data: {
+      effect_receipts: {
+        [repaired.effect_key]: repaired,
+        [older.effect_key]: older,
+      },
+    },
+  };
+  let loaded = false;
+  const { packet } = await buildCurrentAgentVerificationPacket({
+    db: fakeDb({
+      documents: [
+        {
+          id: reserved.target.document_id,
+          user_id: "user-1",
+          project_id: matterId,
+          current_version_id: repairedVersion,
+        },
+      ],
+      versions: [
+        {
+          id: repairedVersion,
+          document_id: reserved.target.document_id,
+          storage_path: "repaired.docx",
+          file_type: "docx",
+          deleted_at: null,
+        },
+      ],
+    }) as never,
+    snapshot,
+    userId: "user-1",
+    stepId: "step-verify",
+    stepAttempt: 3,
+    profile,
+    citationsRequired: false,
+    citationCoverage: { total: 0, relocatable: 0, missing: 0 },
+    loadAcceptedView: async () => {
+      loaded = true;
+      return "Repaired opinion.";
+    },
+  });
+  assert.equal(loaded, true);
+  assert.equal(
+    packet.deterministic_checks.some(
+      (check) => check.issue?.code === "artifact_version_changed",
+    ),
+    false,
   );
 });
 

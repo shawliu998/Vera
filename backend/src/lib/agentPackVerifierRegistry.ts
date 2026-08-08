@@ -14,6 +14,11 @@ type Deliverable = AgentVerificationPacketV1["deliverables"][number];
 type DeterministicCheck =
   AgentVerificationPacketV1["deterministic_checks"][number];
 
+const ONE_BOUND_ARTIFACT_REPAIR_PROFILES = new Set([
+  "work_task_source_citation_v1",
+  CONTRACT_PLAYBOOK_PACK_PROFILE_ID,
+]);
+
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -34,7 +39,10 @@ export function resolveAgentVerifierProfile(
         ? CONTRACT_PLAYBOOK_PACK_VERSION
         : "1",
     semantic_goal_check: true,
-    repair_policy: "none",
+    repair_policy:
+      profileId && ONE_BOUND_ARTIFACT_REPAIR_PROFILES.has(profileId)
+        ? "one_bound_artifact"
+        : "none",
   };
 }
 

@@ -120,6 +120,24 @@ export type AgentTaskArtifactReverificationTransitionOutcome =
   | "verifier_invalid"
   | "version_conflict";
 
+export type AgentTaskVerifierRetryTransitionInput = {
+  taskId: string;
+  userId: string;
+  retryId: string;
+};
+
+export type AgentTaskVerifierRetryTransitionOutcome =
+  | "started"
+  | "already_started"
+  | "artifacts_invalid"
+  | "conflict"
+  | "contract_invalid"
+  | "invalid_input"
+  | "lease_busy"
+  | "not_found"
+  | "verification_result_invalid"
+  | "verifier_invalid";
+
 export class AgentTaskStateTransitionError extends Error {
   constructor(
     readonly code:
@@ -156,6 +174,21 @@ function transitionError(message: string, facts: Record<string, unknown>) {
     message,
     facts,
   );
+}
+
+function boundedDatabaseErrorFacts(error: unknown) {
+  const value =
+    error && typeof error === "object"
+      ? (error as { code?: unknown; message?: unknown })
+      : null;
+  return {
+    database_error_code:
+      typeof value?.code === "string" ? value.code.slice(0, 80) : null,
+    database_error_message:
+      typeof value?.message === "string"
+        ? value.message.replace(/\s+/g, " ").trim().slice(0, 500)
+        : null,
+  };
 }
 
 function readOutcome<const TAllowed extends readonly string[]>(
@@ -343,6 +376,7 @@ export async function commitAgentTaskCheckpointTransition(
         task_id: input.taskId,
         step_id: input.stepId,
         expected_step_attempt: input.expectedStepAttempt,
+        ...boundedDatabaseErrorFacts(error),
       },
     );
   }
@@ -442,6 +476,52 @@ export async function commitAgentTaskArtifactReverificationTransition(
     },
   ) as {
     outcome: AgentTaskArtifactReverificationTransitionOutcome;
+    taskStatus: string | null;
+    currentStep: string | null;
+  };
+}
+
+export async function commitAgentTaskVerifierRetryTransition(
+  db: Db,
+  input: AgentTaskVerifierRetryTransitionInput,
+) {
+  const { data, error } = await db.rpc(
+    "start_agent_task_verifier_retry_v2",
+    {
+      p_task_id: input.taskId,
+      p_user_id: input.userId,
+      p_retry_id: input.retryId,
+    },
+  );
+  if (error) {
+    throw transitionError(
+      `Failed to restart the Agent Task Verifier atomically: ${error.message}`,
+      {
+        task_id: input.taskId,
+        retry_id: input.retryId,
+      },
+    );
+  }
+  return readOutcome(
+    data,
+    [
+      "started",
+      "already_started",
+      "artifacts_invalid",
+      "conflict",
+      "contract_invalid",
+      "invalid_input",
+      "lease_busy",
+      "not_found",
+      "verification_result_invalid",
+      "verifier_invalid",
+    ],
+    {
+      task_id: input.taskId,
+      retry_id: input.retryId,
+    },
+  ) as {
+    outcome: AgentTaskVerifierRetryTransitionOutcome;
     taskStatus: string | null;
     currentStep: string | null;
   };

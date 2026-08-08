@@ -165,6 +165,7 @@ export function mergeImmutableAgentTaskCheckpoint(
       "source_acquisition",
       "contract_playbook_context",
       "contract_playbook_pack_receipt",
+      "agent_verification_result",
       "litigation_evidence_inventory_context",
       "litigation_evidence_inventory_receipt",
       "litigation_evidence_review_completion",

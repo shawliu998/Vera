@@ -8,6 +8,7 @@ import {
 import {
   providerPauseClassificationForRetry,
   providerPauseSummary,
+  type AgentProviderDiagnosticV1,
   type AgentTaskExecutionPauseClassification,
   type AgentTaskRetryCheckpoint,
 } from "./agent-kernel/outcomes/executionOutcome";
@@ -20,11 +21,13 @@ import {
   MAX_AGENT_TASK_TRANSIENT_WAIT_MS,
   agentTaskRetryBaseMs,
   calculateAgentTaskBackoffMs,
+  buildAgentTaskProviderDiagnosticV1,
   classifyAgentTaskError,
   classifyAgentTaskProviderProtocolError,
   parseRetryAfterMs,
   type TransientAgentTaskError,
 } from "./agentTaskRetryPolicy";
+import { DEFAULT_MAIN_MODEL, providerForModel } from "./llm";
 import { createServerSupabase } from "./supabase";
 import {
   isAgentTaskLeaseBusyError,
@@ -51,6 +54,7 @@ type RunnerTaskSnapshot = {
   task: {
     status: string;
     latest_checkpoint?: unknown;
+    execution_model?: unknown;
   };
 };
 
@@ -67,6 +71,7 @@ type AgentTaskRunnerDependencies = {
     job: AgentTaskRunnerJob,
     summary: string,
     classification: AgentTaskExecutionPauseClassification,
+    diagnostic?: AgentProviderDiagnosticV1 | null,
   ) => Promise<void>;
   recoverJobs: () => Promise<AgentTaskRunnerJob[]>;
   sleep?: (ms: number) => Promise<void>;
@@ -184,7 +189,25 @@ export class AgentTaskRunner {
           // memory: the periodic recovery sweep will retry this active Task.
           return;
         }
-        const transient = classifyAgentTaskError(error, now());
+        const incidentAt = now();
+        const executionModel = snapshot?.task.execution_model;
+        const selectedModel =
+          typeof executionModel === "string" && executionModel.trim()
+            ? executionModel
+            : DEFAULT_MAIN_MODEL;
+        let selectedProvider: string | null = null;
+        try {
+          selectedProvider = providerForModel(selectedModel);
+        } catch {
+          // The Task contract validates supported models. An invalid legacy
+          // value must not prevent a bounded diagnostic from being recorded.
+        }
+        const diagnostic = buildAgentTaskProviderDiagnosticV1(error, {
+          provider: selectedProvider,
+          model: selectedModel,
+          nowMs: incidentAt,
+        });
+        const transient = classifyAgentTaskError(error, incidentAt);
         if (!transient) {
           const protocol = classifyAgentTaskProviderProtocolError(error);
           if (protocol) {
@@ -194,6 +217,7 @@ export class AgentTaskRunner {
                 job,
                 summary,
                 protocol.classification,
+                diagnostic,
               );
             } else {
               await this.dependencies.failTask(job, summary);
@@ -215,7 +239,12 @@ export class AgentTaskRunner {
             MAX_AGENT_TASK_TRANSIENT_RETRIES,
           );
           if (this.dependencies.deferTask) {
-            await this.dependencies.deferTask(job, summary, classification);
+            await this.dependencies.deferTask(
+              job,
+              summary,
+              classification,
+              diagnostic,
+            );
           } else {
             await this.dependencies.failTask(job, summary);
           }
@@ -289,13 +318,13 @@ export const agentTaskRunner = new AgentTaskRunner({
         }),
     );
   },
-  deferTask: (job, summary, classification) =>
+  deferTask: (job, summary, classification, diagnostic) =>
     deferAgentTaskForProvider(
       createServerSupabase(),
       job.taskId,
       job.userId,
       summary,
-      { classification },
+      { classification, diagnostic },
     ).then(() => {}),
   recoverJobs: recoverAgentTaskJobs,
 });

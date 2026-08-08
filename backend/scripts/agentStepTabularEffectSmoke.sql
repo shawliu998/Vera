@@ -49,6 +49,7 @@ declare
     'created_at', '2026-08-08T10:00:00.000Z',
     'committed_at', null
   );
+  v_replay jsonb;
 begin
   select * into v from public.reserve_agent_step_tabular_effect_v1(
     '47000000-0000-4000-8000-000000000001',
@@ -158,6 +159,81 @@ begin
     where id = '57000000-0000-4000-8000-000000000001'
   ) <> 'keep' then
     raise exception 'Tabular effect replaced unrelated Step result data';
+  end if;
+
+  -- Simulate the exact production boundary: the Review/effect committed, the
+  -- runner stopped before its Task checkpoint, and Resume acquired a new
+  -- lease. A new wall-clock timestamp must recover the persisted receipt.
+  update public.agent_tasks
+  set
+    execution_lease_owner = '67000000-0000-4000-8000-000000000002',
+    execution_lease_expires_at = clock_timestamp() + interval '5 minutes'
+  where id = '47000000-0000-4000-8000-000000000001';
+  v_replay := jsonb_set(
+    v_receipt,
+    '{created_at}',
+    '"2026-08-08T10:05:00.000Z"'::jsonb
+  );
+  select * into v from public.reserve_agent_step_tabular_effect_v1(
+    '47000000-0000-4000-8000-000000000001',
+    'user-tabular-effect',
+    '57000000-0000-4000-8000-000000000001',
+    1,
+    '67000000-0000-4000-8000-000000000002',
+    v_key,
+    v_replay
+  );
+  if v.outcome <> 'recovered'
+    or v.effect_receipt ->> 'status' <> 'committed'
+    or v.effect_receipt ->> 'created_at' <> '2026-08-08T10:00:00.000Z' then
+    raise exception 'new lease did not recover committed Tabular effect: %',
+      row_to_json(v);
+  end if;
+
+  v_replay := v.effect_receipt || jsonb_build_object(
+    'status', 'reserved',
+    'effect', null,
+    'committed_at', null
+  );
+  select * into v from public.commit_agent_step_tabular_effect_v1(
+    '47000000-0000-4000-8000-000000000001',
+    'user-tabular-effect',
+    '57000000-0000-4000-8000-000000000001',
+    1,
+    '67000000-0000-4000-8000-000000000002',
+    v_key,
+    v_replay,
+    '27000000-0000-4000-8000-000000000001',
+    '{"document_ids":[],"columns_config":[],"cells":[]}'::jsonb,
+    '2026-08-08T10:06:00.000Z'
+  );
+  if v.outcome <> 'committed'
+    or v.effect_receipt ->> 'created_at' <> '2026-08-08T10:00:00.000Z'
+    or v.effect_receipt ->> 'committed_at' <> '2026-08-08T10:01:00.000Z' then
+    raise exception 'committed Tabular effect replay did not converge: %',
+      row_to_json(v);
+  end if;
+
+  select * into v from public.reserve_agent_step_tabular_effect_v1(
+    '47000000-0000-4000-8000-000000000001',
+    'user-tabular-effect',
+    '57000000-0000-4000-8000-000000000001',
+    1,
+    '67000000-0000-4000-8000-000000000002',
+    v_key,
+    jsonb_set(v_replay, '{input_fingerprint}', to_jsonb(repeat('b', 64)))
+  );
+  if v.outcome <> 'conflict' then
+    raise exception 'non-identical Tabular effect replay did not fail closed: %',
+      row_to_json(v);
+  end if;
+
+  if (
+    select count(*)
+    from public.tabular_reviews
+    where id = '27000000-0000-4000-8000-000000000001'
+  ) <> 1 then
+    raise exception 'Tabular effect replay duplicated its fixed Review';
   end if;
 end;
 $$;

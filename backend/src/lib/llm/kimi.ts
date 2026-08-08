@@ -6,6 +6,11 @@ import type {
   StreamChatResult,
 } from "./types";
 import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
+import {
+  prepareRequiredToolContract,
+  requiredToolChoiceForProvider,
+  validateRequiredToolCalls,
+} from "./requiredToolContract";
 
 // Kimi and Zhipu use the OpenAI-compatible Chat Completions protocol. Keep
 // this shared adapter separate from the OpenAI Responses adapter: their
@@ -181,6 +186,7 @@ async function createChatCompletion(input: {
   stream: boolean;
   maxTokens: number;
   enableThinking: boolean;
+  toolChoice?: Record<string, unknown>;
   config: CompatibleProviderConfig;
   signal?: AbortSignal;
 }) {
@@ -196,7 +202,8 @@ async function createChatCompletion(input: {
         model: input.model,
         messages: input.messages,
         tools: input.tools?.length ? input.tools : undefined,
-        tool_choice: input.tools?.length ? "auto" : undefined,
+        tool_choice:
+          input.toolChoice ?? (input.tools?.length ? "auto" : undefined),
         stream: input.stream,
         ...(input.config.provider === "zhipu"
           ? {
@@ -249,6 +256,12 @@ async function streamOpenAiCompatible(
   } = params;
   const maxIterations = params.maxIterations ?? 10;
   const messages = toMessages(systemPrompt, params.messages);
+  const requiredTool = prepareRequiredToolContract({
+    provider,
+    requiredToolName: params.requiredToolName,
+    tools,
+    runTools,
+  });
   const config = providerConfig(provider, apiKeys?.[provider]);
   let fullText = "";
   const rawStreamRecorder = createRawLlmStreamRecorder({
@@ -263,6 +276,9 @@ async function streamOpenAiCompatible(
         model,
         messages,
         tools,
+        toolChoice: requiredTool
+          ? requiredToolChoiceForProvider(requiredTool)
+          : undefined,
         stream: true,
         maxTokens: config.maxOutputTokens,
         enableThinking,
@@ -364,11 +380,13 @@ async function streamOpenAiCompatible(
           input: parseToolInput(call.function.arguments),
         }),
       );
+      validateRequiredToolCalls(requiredTool, normalizedCalls);
       for (const call of normalizedCalls) callbacks.onToolCallStart?.(call);
 
       if (!normalizedCalls.length || !runTools) break;
       const results = await runTools(normalizedCalls);
       throwIfAborted(params.abortSignal);
+      if (requiredTool) break;
       // Both providers require the complete assistant message (including
       // reasoning and tool calls) before matching tool messages.
       messages.push({

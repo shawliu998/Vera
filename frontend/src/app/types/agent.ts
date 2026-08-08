@@ -138,8 +138,8 @@ export type ContractDispositionRevisionDecision = {
   direction: string | null;
 };
 
-export type ApprovedArtifactSnapshot = {
-  artifact_type: "draft" | "tabular_review";
+export type ApprovedDraftArtifactSnapshot = {
+  artifact_type: "draft";
   artifact_id: string;
   purpose: string;
   document_id: string;
@@ -150,6 +150,48 @@ export type ApprovedArtifactSnapshot = {
   size_bytes: number;
   sha256: string;
 };
+
+/** Historical identity only. It explains an old decision but cannot export. */
+export type LegacyApprovedTabularArtifactSnapshot = {
+  artifact_type: "tabular_review";
+  artifact_id: string;
+  purpose: string;
+  review_id: string;
+  row_protocol: "document_rows";
+  input_digest: string;
+  revision_fingerprint: string;
+};
+
+export type ApprovedTabularArtifactSnapshot = {
+  kind: "agent_approved_tabular_artifact_v1";
+  artifact_type: "tabular_review";
+  artifact_id: string;
+  purpose: string;
+  review_id: string;
+  row_protocol: "document_rows";
+  input_digest: string;
+  revision_fingerprint: string;
+  accepted_view_sha256: string;
+  source_receipt_fingerprint: string | null;
+  decision_fingerprint: string | null;
+  completion_sha256: string | null;
+  export_document_id: string;
+  export_version_id: string;
+  version_number: number;
+  filename: string;
+  file_type: "xlsx";
+  size_bytes: number;
+  sha256: string;
+};
+
+export type ApprovedArtifactSnapshot =
+  | ApprovedDraftArtifactSnapshot
+  | LegacyApprovedTabularArtifactSnapshot
+  | ApprovedTabularArtifactSnapshot;
+
+export type ExportableApprovedArtifactSnapshot =
+  | ApprovedDraftArtifactSnapshot
+  | ApprovedTabularArtifactSnapshot;
 
 export type AgentReviewDecision = {
   id: string;
@@ -174,6 +216,9 @@ export type AgentCurrentArtifactVersion = {
   current_version_available: boolean;
   approved_version_id: string | null;
   approved_version_number: number | null;
+  current_revision_fingerprint: string | null;
+  approved_revision_fingerprint: string | null;
+  approved_snapshot_state: "current" | "legacy_tabular" | "invalid" | null;
   edited_after_approval: boolean;
   review_current_required: boolean;
 };

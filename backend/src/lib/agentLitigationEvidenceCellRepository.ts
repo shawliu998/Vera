@@ -79,7 +79,9 @@ const litigationEvidenceCellResultSchema = z
       .enum(["verified", "unresolved", "needs_correction"])
       .nullable(),
     review_revision: z.number().int().nonnegative().nullable(),
-    reviewed_at: z.string().datetime().nullable(),
+    // PostgREST serializes timestamptz with an explicit UTC offset and may
+    // preserve PostgreSQL microseconds (for example +00:00, six decimals).
+    reviewed_at: z.string().datetime({ offset: true }).nullable(),
   })
   .strict();
 

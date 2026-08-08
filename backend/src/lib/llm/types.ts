@@ -52,6 +52,12 @@ export type StreamChatParams = {
     systemPrompt: string;
     messages: LlmMessage[];
     tools?: OpenAIToolSchema[];
+    /**
+     * Require one exact registered tool in the first provider turn. Adapters
+     * that cannot force a named tool must reject this contract before making
+     * a provider request rather than falling back to prompt-only selection.
+     */
+    requiredToolName?: string;
     maxIterations?: number;
     callbacks?: StreamCallbacks;
     runTools?: (calls: NormalizedToolCall[]) => Promise<NormalizedToolResult[]>;

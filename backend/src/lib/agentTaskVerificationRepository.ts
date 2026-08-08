@@ -8,6 +8,7 @@ import { buildAgentStepTabularEffectReservation } from "./agent-kernel/effects/t
 import { readFixedMatterContext } from "./agent-kernel/context/matterContext";
 import {
   buildAgentVerificationPacketV1,
+  detectArtifactIncompleteEnding,
   type AgentVerificationPacketV1,
   type AgentVerifierDeterministicIssueV1,
   type AgentVerifierProfileV1,
@@ -381,14 +382,54 @@ async function extractAcceptedView(version: {
 }
 
 function fixedCreatedVersionByDocument(snapshot: VerificationSnapshot) {
-  const pairs = snapshot.task.current_plan.flatMap((step) =>
-    readAgentStepEffectReceipts(step.result_data).flatMap((receipt) =>
-      receipt.status === "committed" && receipt.effect
-        ? [[receipt.effect.document_id, receipt.effect.version_id] as const]
-        : [],
-    ),
+  const latest = new Map<
+    string,
+    {
+      stepIndex: number;
+      attempt: number;
+      committedAt: string;
+      effectKey: string;
+      versionId: string;
+    }
+  >();
+  snapshot.task.current_plan.forEach((step, stepIndex) => {
+    for (const receipt of readAgentStepEffectReceipts(step.result_data)) {
+      if (
+        receipt.status !== "committed" ||
+        !receipt.effect ||
+        receipt.step_id !== step.id ||
+        receipt.attempt > step.attempt
+      ) {
+        continue;
+      }
+      const candidate = {
+        stepIndex,
+        attempt: receipt.attempt,
+        committedAt: receipt.committed_at!,
+        effectKey: receipt.effect_key,
+        versionId: receipt.effect.version_id,
+      };
+      const current = latest.get(receipt.effect.document_id);
+      if (
+        !current ||
+        candidate.stepIndex > current.stepIndex ||
+        (candidate.stepIndex === current.stepIndex &&
+          (candidate.attempt > current.attempt ||
+            (candidate.attempt === current.attempt &&
+              (candidate.committedAt > current.committedAt ||
+                (candidate.committedAt === current.committedAt &&
+                  candidate.effectKey > current.effectKey)))))
+      ) {
+        latest.set(receipt.effect.document_id, candidate);
+      }
+    }
+  });
+  return new Map(
+    Array.from(latest, ([documentId, receipt]) => [
+      documentId,
+      receipt.versionId,
+    ]),
   );
-  return new Map(pairs);
 }
 
 function committedTabularInputDigest(
@@ -1328,6 +1369,32 @@ export async function buildCurrentAgentVerificationPacket(input: {
         `${item.key} is the readable current Version in the fixed Matter.`,
       ),
     );
+    const incompleteEnding = detectArtifactIncompleteEnding(acceptedView);
+    if (incompleteEnding) {
+      checks.push(
+        gapCheck(
+          `artifact-ending:${item.key}`,
+          "artifact_integrity",
+          `${item.key} ends at an explicit continuation marker without completing the final sentence.`,
+          {
+            code: "artifact_incomplete_ending",
+            deliverable_key: item.key,
+            document_id: document.id as string,
+            version_id: currentVersionId,
+            accepted_view_sha256: acceptedViewSha256(acceptedView),
+            ending_excerpt: incompleteEnding,
+          },
+        ),
+      );
+    } else {
+      checks.push(
+        passCheck(
+          `artifact-ending:${item.key}`,
+          "artifact_integrity",
+          `${item.key} has no high-confidence abrupt final-sentence ending.`,
+        ),
+      );
+    }
     if (!projectionComplete) {
       checks.push(
         gapCheck(

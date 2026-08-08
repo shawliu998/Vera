@@ -2,14 +2,23 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  AGENT_MODEL_REQUEST_TIMEOUT_MS,
   AgentModelRequestTimeoutError,
+  agentStepAttachesRawDocuments,
+  agentStepProviderMaxIterations,
   agentStepThinkingEnabled,
   authoritativeTaskCitationSnapshotIds,
+  buildAgentVerifierRepairMutationIdentity,
   shouldRetryAgentStepModelError,
 } from "./agentStepExecutor";
+import { DEFAULT_TASK_LEASE_TTL_SECONDS } from "./agent-kernel/execution/taskLease";
 import { compileContractPlaybookReceipt } from "./agent-packs/contract/contractPlaybookPack";
 
 test("a server deadline pauses instead of replaying the same model payload", () => {
+  assert.equal(AGENT_MODEL_REQUEST_TIMEOUT_MS, 180_000);
+  assert.ok(
+    AGENT_MODEL_REQUEST_TIMEOUT_MS < DEFAULT_TASK_LEASE_TTL_SECONDS * 1_000,
+  );
   assert.equal(
     shouldRetryAgentStepModelError(
       new AgentModelRequestTimeoutError("glm-5.2"),
@@ -23,14 +32,100 @@ test("a server deadline pauses instead of replaying the same model payload", () 
     true,
   );
   assert.equal(
+    shouldRetryAgentStepModelError(
+      new Error(
+        "Gemini error (429): You exceeded your current quota. Check billing details.",
+      ),
+    ),
+    true,
+  );
+  assert.equal(
     shouldRetryAgentStepModelError(new Error("invalid legal finding")),
     false,
   );
 });
 
-test("bounded Contract extraction disables provider thinking only for that step", () => {
-  assert.equal(agentStepThinkingEnabled(true), false);
-  assert.equal(agentStepThinkingEnabled(false), true);
+test("server-owned Work Tasks disable provider thinking and rely on post-generation verification", () => {
+  assert.equal(agentStepThinkingEnabled(), false);
+});
+
+test("a fixed Artifact mutation stops after its one authorized provider tool turn", () => {
+  assert.equal(
+    agentStepProviderMaxIterations({
+      artifactMutation: true,
+      repairPass: false,
+    }),
+    1,
+  );
+  assert.equal(
+    agentStepProviderMaxIterations({
+      artifactMutation: false,
+      repairPass: true,
+    }),
+    1,
+  );
+  assert.equal(
+    agentStepProviderMaxIterations({
+      artifactMutation: false,
+      repairPass: false,
+    }),
+    10,
+  );
+});
+
+test("a bounded verifier repair keeps the fixed Document and derives one successor Version", () => {
+  const identity = buildAgentVerifierRepairMutationIdentity({
+    taskId: "11111111-1111-4111-8111-111111111111",
+    stepId: "22222222-2222-4222-8222-222222222222",
+    stepAttempt: 2,
+    deliverableKey: "evidence-objection-opinion",
+    documentId: "33333333-3333-4333-8333-333333333333",
+    baseVersionId: "44444444-4444-4444-8444-444444444444",
+  });
+  assert.equal(
+    identity.documentId,
+    "33333333-3333-4333-8333-333333333333",
+  );
+  assert.match(identity.versionId, /^[0-9a-f-]{36}$/);
+  assert.notEqual(
+    identity.versionId,
+    "44444444-4444-4444-8444-444444444444",
+  );
+  assert.deepEqual(
+    buildAgentVerifierRepairMutationIdentity({
+      taskId: "11111111-1111-4111-8111-111111111111",
+      stepId: "22222222-2222-4222-8222-222222222222",
+      stepAttempt: 2,
+      deliverableKey: "evidence-objection-opinion",
+      documentId: "33333333-3333-4333-8333-333333333333",
+      baseVersionId: "44444444-4444-4444-8444-444444444444",
+    }),
+    identity,
+  );
+});
+
+test("a lawyer-reviewed bounded accepted-view replaces repeated raw document reads", () => {
+  assert.equal(
+    agentStepAttachesRawDocuments({
+      verifierOnly: false,
+      hasBoundedAcceptedView: true,
+    }),
+    false,
+  );
+  assert.equal(
+    agentStepAttachesRawDocuments({
+      verifierOnly: true,
+      hasBoundedAcceptedView: false,
+    }),
+    false,
+  );
+  assert.equal(
+    agentStepAttachesRawDocuments({
+      verifierOnly: false,
+      hasBoundedAcceptedView: false,
+    }),
+    true,
+  );
 });
 
 test("a fixed Contract receipt excludes unrelated earlier citation snapshots", () => {

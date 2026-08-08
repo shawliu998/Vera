@@ -1816,10 +1816,12 @@ export async function runToolCalls(
       }
       const title = args.title as string;
       const landscape = !!args.landscape;
+      const mutationIdentity = mutationTargets?.get(tc.id);
+      const filenameTitle = mutationIdentity?.filenameTitle ?? title;
       devLog(
         `[generate_docx] title="${title}" landscape=${landscape} args.landscape=${args.landscape}`,
       );
-      const previewFilename = safeGeneratedFilename(title, "docx");
+      const previewFilename = safeGeneratedFilename(filenameTitle, "docx");
       write(
         `data: ${JSON.stringify({ type: "doc_created_start", filename: previewFilename })}\n\n`,
       );
@@ -1831,7 +1833,8 @@ export async function runToolCalls(
         {
           landscape,
           projectId: projectId ?? null,
-          mutationIdentity: mutationTargets?.get(tc.id),
+          mutationIdentity,
+          filenameTitle,
         },
       );
       registerGeneratedDocument(
@@ -1856,13 +1859,16 @@ export async function runToolCalls(
         continue;
       }
       devLog(`[generate_excel] title="${title}"`);
-      const previewFilename = safeGeneratedFilename(title, "xlsx");
+      const mutationIdentity = mutationTargets?.get(tc.id);
+      const filenameTitle = mutationIdentity?.filenameTitle ?? title;
+      const previewFilename = safeGeneratedFilename(filenameTitle, "xlsx");
       write(
         `data: ${JSON.stringify({ type: "doc_created_start", filename: previewFilename })}\n\n`,
       );
       const result = await generateExcel(title, sheets, userId, db, {
         projectId: projectId ?? null,
-        mutationIdentity: mutationTargets?.get(tc.id),
+        mutationIdentity,
+        filenameTitle,
       });
       registerGeneratedDocument(
         tc,

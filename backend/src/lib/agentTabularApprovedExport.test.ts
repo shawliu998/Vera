@@ -498,6 +498,7 @@ test("materializes one DB-planned invisible storage object and replays without u
   const first = await materializeApprovedLitigationEvidenceInventoryXlsx({
     db: {} as never,
     snapshot,
+    userId,
     reviewId: receipt.review_id,
     purpose: "Evidence inventory",
     dependencies,
@@ -505,6 +506,7 @@ test("materializes one DB-planned invisible storage object and replays without u
   const second = await materializeApprovedLitigationEvidenceInventoryXlsx({
     db: {} as never,
     snapshot,
+    userId,
     reviewId: receipt.review_id,
     purpose: "Evidence inventory",
     dependencies,
@@ -550,9 +552,8 @@ test("rejects a materialization whose authenticated snapshot owner changed", asy
   await assert.rejects(
     materializeApprovedLitigationEvidenceInventoryXlsx({
       db: {} as never,
-      snapshot: {
-        task: { ...snapshot.task, user_id: "different-user" },
-      },
+      snapshot,
+      userId: "different-user",
       reviewId: receipt.review_id,
       purpose: "Evidence inventory",
       dependencies: { repository },
@@ -596,6 +597,7 @@ test("fails closed when deterministic storage already contains different bytes",
     materializeApprovedLitigationEvidenceInventoryXlsx({
       db: {} as never,
       snapshot,
+      userId,
       reviewId: receipt.review_id,
       purpose: "Evidence inventory",
       dependencies: {

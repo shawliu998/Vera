@@ -131,6 +131,9 @@ function snapshotFixture(): AgentTaskSnapshot {
             current_version_available: true,
             approved_version_id: "version-2",
             approved_version_number: 2,
+            current_revision_fingerprint: null,
+            approved_revision_fingerprint: null,
+            approved_snapshot_state: "current",
             edited_after_approval: false,
             review_current_required: false,
           },
@@ -156,11 +159,105 @@ test("binds a required deliverable to its explicit artifact and current version"
   assert.equal(rows.length, 1);
   assert.equal(rows[0].linkedArtifact?.artifact_id, "memo-current");
   assert.equal(rows[0].currentVersion?.current_version_id, "version-2");
-  assert.equal(rows[0].approvedArtifact?.version_id, "version-2");
+  const rowApproved = rows[0].approvedArtifact;
+  assert.ok(rowApproved && rowApproved.artifact_type === "draft");
+  assert.equal(rowApproved.version_id, "version-2");
+  const latestApproved = latestApprovedArtifact(snapshot, "memo-current");
+  assert.ok(latestApproved && latestApproved.artifact_type === "draft");
+  assert.equal(latestApproved.version_id, "version-2");
+});
+
+test("offers only a fixed approved Tabular export and rejects legacy identity-only approval", () => {
+  const snapshot = snapshotFixture();
+  snapshot.task.deliverables[0] = {
+    key: "evidence-inventory",
+    title: "Evidence inventory",
+    required: true,
+    artifact_type: "tabular_review",
+    artifact_id: "review-1",
+  };
+  snapshot.artifacts.push({
+    task_id: "task",
+    artifact_type: "tabular_review",
+    artifact_id: "review-1",
+    purpose: "Evidence inventory",
+  });
+  snapshot.review.decisions[0].artifact_snapshot = [
+    {
+      kind: "agent_approved_tabular_artifact_v1",
+      artifact_type: "tabular_review",
+      artifact_id: "review-1",
+      purpose: "Evidence inventory",
+      review_id: "review-1",
+      row_protocol: "document_rows",
+      input_digest: "input",
+      revision_fingerprint: "revision",
+      accepted_view_sha256: "sha256:accepted",
+      source_receipt_fingerprint: "source",
+      decision_fingerprint: "decision",
+      completion_sha256: "sha256:completion",
+      export_document_id: "export-document",
+      export_version_id: "export-version",
+      version_number: 1,
+      filename: "Evidence Inventory.xlsx",
+      file_type: "xlsx",
+      size_bytes: 42,
+      sha256: "sha256:bytes",
+    },
+  ];
+  const current = snapshot.review.version_state.current_artifacts[0];
+  Object.assign(current, {
+    artifact_type: "tabular_review",
+    artifact_id: "review-1",
+    purpose: "Evidence inventory",
+    current_version_id: null,
+    current_version_number: null,
+    current_filename: null,
+    current_file_type: null,
+    current_version_available: true,
+    approved_version_id: "export-version",
+    approved_version_number: 1,
+    current_revision_fingerprint: "revision",
+    approved_revision_fingerprint: "revision",
+  });
+
+  const [row] = buildAgentTaskOutputRows(snapshot);
+  assert.equal(row.approvedArtifact?.artifact_type, "tabular_review");
   assert.equal(
-    latestApprovedArtifact(snapshot, "memo-current")?.version_id,
-    "version-2",
+    row.approvedArtifact?.artifact_type === "tabular_review"
+      ? row.approvedArtifact.export_version_id
+      : null,
+    "export-version",
   );
+
+  snapshot.review.decisions[0].artifact_snapshot = [
+    {
+      artifact_type: "tabular_review",
+      artifact_id: "review-1",
+      purpose: "Evidence inventory",
+      review_id: "review-1",
+      row_protocol: "document_rows",
+      input_digest: "input",
+      revision_fingerprint: "revision",
+    },
+  ];
+  assert.equal(latestApprovedArtifact(snapshot, "review-1"), null);
+});
+
+test("does not offer an older approved export after a changes-requested decision", () => {
+  const snapshot = snapshotFixture();
+  snapshot.review.decisions.push({
+    id: "changes",
+    task_id: "task",
+    status: "changes_requested",
+    reviewer_id: null,
+    reviewer_email: null,
+    reviewer_name: null,
+    note: "Update the deliverable",
+    artifact_snapshot: [],
+    created_at: "later",
+  });
+  assert.equal(latestApprovedArtifact(snapshot, "memo-current"), null);
 });
 
 test("opens a Tabular Review without pretending it has a DocumentVersion", () => {
