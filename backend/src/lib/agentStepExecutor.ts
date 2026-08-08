@@ -78,6 +78,10 @@ import {
 } from "./agent-packs/contract/contractPlaybookPack";
 import { createContractPlaybookDispositionRequiredInput } from "./agent-packs/contract/contractPlaybookDisposition";
 import { compileContractPlaybookAnalysisReceipt } from "./agentContractPlaybookAnalysis";
+import {
+  executeContractPlaybookMaterializationStep,
+  isContractPlaybookMaterializedDeliverableKey,
+} from "./agentContractPlaybookMaterializationExecutor";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -600,6 +604,35 @@ export async function executeAgentStep(input: {
         requiredInput,
         citationCheck: { total: 0, relocatable: 0, missing: 0 },
       };
+    }
+    const output = stepContract.output_expectation;
+    if (
+      output.kind === "artifact" &&
+      isContractPlaybookMaterializedDeliverableKey(output.deliverable_key)
+    ) {
+      if (input.shouldContinue && !(await input.shouldContinue())) {
+        throw new AgentTaskExecutionInterruptedError();
+      }
+      const deliverable = requiredTaskDeliverables(snapshot.task).find(
+        (candidate) => candidate.key === output.deliverable_key,
+      );
+      if (!deliverable || deliverable.artifact_type !== "draft") {
+        throw new Error(
+          "Contract materialization output does not match the fixed Task deliverable",
+        );
+      }
+      return executeContractPlaybookMaterializationStep({
+        db,
+        userId,
+        taskId: snapshot.task.id,
+        matterId: snapshot.task.matter_id,
+        stepId: currentStep.id,
+        attempt: currentStep.attempt,
+        leaseOwner: input.leaseOwner,
+        receipt: contractPlaybookReceipt,
+        deliverableKey: output.deliverable_key,
+        artifactPurpose: taskDeliverablePurpose(deliverable),
+      });
     }
   }
   const selectedWorkflow = snapshot.artifacts.find(

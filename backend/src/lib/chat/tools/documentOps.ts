@@ -1202,6 +1202,35 @@ async function persistGeneratedFile(params: {
   };
 }
 
+/**
+ * Publish server-materialized DOCX bytes through the same fixed
+ * Document/Version and Task receipt boundary used by generate_docx. The
+ * caller owns content construction; this function owns only persistence and
+ * recovery of the reserved mutation identity.
+ */
+export async function persistGeneratedDocxBytes(input: {
+  title: string;
+  buffer: Buffer;
+  userId: string;
+  db: ReturnType<typeof createServerSupabase>;
+  projectId: string;
+  mutationIdentity: GeneratedMutationIdentity;
+}) {
+  try {
+    return await persistGeneratedFile({
+      title: input.title,
+      extension: "docx",
+      buffer: input.buffer,
+      userId: input.userId,
+      db: input.db,
+      projectId: input.projectId,
+      mutationIdentity: input.mutationIdentity,
+    });
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
 export async function generateExcel(
   title: string,
   sheets: unknown[],

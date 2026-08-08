@@ -94,6 +94,9 @@ async function sourceDocx() {
               new Paragraph({
                 children: [new TextRun(commentFinding.contract_quote)],
               }),
+              new Paragraph({
+                children: [new TextRun("Background note is preliminary.")],
+              }),
             ],
           },
         ],
@@ -114,7 +117,7 @@ test("revision and clean copy are materialized from one fixed plan", async () =>
   assert.equal(result.comments.length, 1);
   assert.equal(
     result.acceptedBody,
-    `${replaceFinding.proposed_text}\n${commentFinding.contract_quote}`,
+    `${replaceFinding.proposed_text}\n${commentFinding.contract_quote}\nBackground note is preliminary.`,
   );
   assert.equal(result.sourceBody.includes("English law"), true);
   assert.equal(result.acceptedBody.includes("English law"), false);
@@ -131,25 +134,32 @@ test("revision and clean copy are materialized from one fixed plan", async () =>
   );
 });
 
-test("pre-existing source review markup is preserved and routed to review", async () => {
+test("pre-existing source review markup stays in the source while derived outputs use its accepted view", async () => {
   const source = await sourceDocx();
   const marked = await applyTrackedEdits(source, [
     {
-      find: "English law",
-      replace: "Singapore law",
-      context_before: "governed by",
+      find: "preliminary",
+      replace: "confirmed",
+      context_before: "Background note is",
       context_after: ".",
     },
   ]);
-  await assert.rejects(
-    () =>
-      materializeContractPlaybookWordDocuments({
-        sourceBytes: marked.bytes,
-        plan: compileContractPlaybookMaterializationPlan(fixedReceipt()),
-      }),
-    (error: unknown) =>
-      error instanceof ContractPlaybookWordMaterializationError &&
-      error.issueCode === "source_review_markup_present",
+  const result = await materializeContractPlaybookWordDocuments({
+    sourceBytes: marked.bytes,
+    plan: compileContractPlaybookMaterializationPlan(fixedReceipt()),
+  });
+  assert.equal(result.sourceReviewMarkupCount, 2);
+  assert.deepEqual(result.sourceReviewMarkupKinds.sort(), [
+    "deletion",
+    "insertion",
+  ]);
+  assert.match(result.sourceBody, /Background note is confirmed\./);
+  assert.doesNotMatch(result.sourceBody, /preliminary/);
+  assert.deepEqual(
+    (await extractDocxReviewMarkup(marked.bytes)).items
+      .map((item) => item.kind)
+      .sort(),
+    ["deletion", "insertion"],
   );
 });
 

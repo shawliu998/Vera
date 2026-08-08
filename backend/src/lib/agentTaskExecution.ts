@@ -67,6 +67,7 @@ import {
 } from "./agent-kernel/execution/taskTransition";
 import { AgentVerifierStructuredOutputError } from "./agent-kernel/verification/verifierCore";
 import { ContractPlaybookStructuredOutputError } from "./agent-packs/contract/contractPlaybookPack";
+import { ContractPlaybookWordMaterializationError } from "./agentContractPlaybookWordMaterializer";
 
 type Db = ReturnType<typeof createServerSupabase>;
 type Snapshot = NonNullable<Awaited<ReturnType<typeof getAgentTaskSnapshot>>>;
@@ -755,6 +756,22 @@ export async function advanceAgentTaskExecution(input: {
           "task_state_transition_conflict",
           error.message,
           error.facts,
+        ),
+        { leaseOwner: input.leaseGuard.ownerToken },
+      );
+    }
+    if (error instanceof ContractPlaybookWordMaterializationError) {
+      return pauseAgentTaskForStateTransition(
+        db,
+        taskId,
+        userId,
+        new AgentTaskStateTransitionError(
+          "task_state_transition_conflict",
+          "Contract Word materialization stopped before an unsafe or unprovable mutation. Existing sources and completed effects were preserved for bounded lawyer review.",
+          {
+            contract_materialization_issue_code: error.issueCode,
+            ...error.facts,
+          },
         ),
         { leaseOwner: input.leaseGuard.ownerToken },
       );

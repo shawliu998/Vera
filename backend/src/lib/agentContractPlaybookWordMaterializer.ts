@@ -10,6 +10,7 @@ import type { ContractPlaybookMaterializationPlanV1 } from "./agent-packs/contra
 
 export type ContractPlaybookWordMaterializationIssueCode =
   | "plan_review_required"
+  | "source_version_unavailable"
   | "source_review_markup_present"
   | "source_hidden_review_markup_present"
   | "action_anchor_not_unique"
@@ -112,8 +113,9 @@ function exactActionRanges(
 
 /**
  * Materialize revision and clean-copy bytes from one server-owned plan. The
- * source contract is read-only. Any ambiguity or unsupported pre-existing
- * review markup fails before a derived document is returned.
+ * source contract is read-only. Existing main-story review markup remains in
+ * that immutable source while derived outputs use its accepted view. Any
+ * ambiguous action or hidden-story markup fails before bytes are returned.
  */
 export async function materializeContractPlaybookWordDocuments(input: {
   sourceBytes: Buffer;
@@ -137,16 +139,14 @@ export async function materializeContractPlaybookWordDocuments(input: {
     );
   }
   const sourceMarkup = await extractDocxReviewMarkup(input.sourceBytes);
-  if (sourceMarkup.items.length) {
-    throw new ContractPlaybookWordMaterializationError(
-      "source_review_markup_present",
-      {
-        markup_count: sourceMarkup.items.length,
-        markup_kinds: sourceMarkup.items.map((item) => item.kind),
-      },
-    );
-  }
-  const sourceBody = await extractDocxBodyText(input.sourceBytes);
+  // Existing redlines/comments are a supported source condition, not new Vera
+  // actions. Build derived outputs from the source's accepted view while
+  // leaving the immutable source Version untouched and reporting the condition
+  // in the opinion/review path.
+  const workingBase = sourceMarkup.items.length
+    ? await finalizeCleanDocx(input.sourceBytes)
+    : input.sourceBytes;
+  const sourceBody = await extractDocxBodyText(workingBase);
   const ranges = exactActionRanges(sourceBody, input.plan);
   const ordered = [...ranges].sort((left, right) => left.start - right.start);
   for (let index = 1; index < ordered.length; index += 1) {
@@ -171,7 +171,7 @@ export async function materializeContractPlaybookWordDocuments(input: {
     (action) => action.kind === "comment_exact_span",
   );
   const commented = await applyDocxComments(
-    input.sourceBytes,
+    workingBase,
     commentActions.map((action) => ({
       anchor: action.anchor,
       comment: action.comment,
@@ -242,5 +242,7 @@ export async function materializeContractPlaybookWordDocuments(input: {
     acceptedBody: cleanBody,
     trackedChanges: revision.changes,
     comments: commented.comments,
+    sourceReviewMarkupCount: sourceMarkup.items.length,
+    sourceReviewMarkupKinds: sourceMarkup.items.map((item) => item.kind),
   };
 }

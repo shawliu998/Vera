@@ -36,7 +36,7 @@ repository interfaces batch by batch, not to rewrite the execution system.
 
 | Domain | Gold workflow | Canonical outputs | Current evidence | Missing acceptance evidence |
 | --- | --- | --- | --- | --- |
-| Contract | `builtin-contract-playbook-review` | revision DOCX, clean DOCX, review opinion DOCX | Pinned first-party manifest and fixture digest; pure Contract Pack context and receipt schemas; exact contract/reference Version binding; stable server-derived finding ids; fixed `accept`/`comment`/`skip` semantics; deterministic current-opinion/disposition alignment; manifest-selected Pack verifier; structured `pack_check_gap` routed through existing lawyer review; server-issued structured Required Input with display labels and stable machine values; no model call before explicit contract/reference/mode/side/posture/jurisdiction/language/facts; fixed reference bytes hashed server-side; mechanically parsed base-plus-overlay count for checklist mode; bounded Contract analysis JSON with one correction attempt; exact finding citation-to-Document/Version/quote checks; durable checkpoint receipt consumed by final verification; material findings batched through exact `accept`/`comment`/`skip` decisions where free text is always a comment direction; one pure receipt-to-materialization plan for revision actions, unresolved findings and review-opinion sections; unique/non-overlapping exact-span preflight; native Word comments and tracked changes; clean copy derived by accepting the revision; accepted-view equality and no-markup checks; existing source review markup preserved and routed to review; 237-test backend regression, Workflow sync and backend build gates | Publish the server-materialized bytes through the existing Step effect, fixed Document/Version and ArtifactLink boundary; then run a fresh ordinary-user Task through UI, browser review/optional Word handoff, final verification and download without database or OOXML repair. |
+| Contract | `builtin-contract-playbook-review` | revision DOCX, clean DOCX, review opinion DOCX | Pinned first-party manifest and fixture digest; pure Contract Pack context and receipt schemas; exact contract/reference Version binding; stable server-derived finding ids; fixed `accept`/`comment`/`skip` semantics; deterministic current-opinion/disposition alignment; manifest-selected Pack verifier; structured `pack_check_gap` routed through existing lawyer review; server-issued structured Required Input with display labels and stable machine values; no model call before explicit contract/reference/mode/side/posture/jurisdiction/language/facts; fixed reference bytes hashed server-side; mechanically parsed base-plus-overlay count for checklist mode; bounded Contract analysis JSON with one correction attempt; exact finding citation-to-Document/Version/quote checks; durable checkpoint receipt consumed by final verification; material findings batched through exact `accept`/`comment`/`skip` decisions where free text is always a comment direction; one pure receipt-to-materialization plan for revision actions, unresolved findings and review-opinion sections; unique/non-overlapping exact-span preflight; native Word comments and tracked changes; clean copy derived by accepting the revision; accepted-view equality and no-markup checks; pre-existing source review markup retained in the immutable source while derived outputs use and disclose its accepted view; the three creation Steps now bypass drafting models and publish through the existing reserved Step effect, fixed Document/Version, Task Word receipt and ArtifactLink boundaries; 239-test backend regression, Workflow sync and backend build gates | Run a fresh ordinary-user Task through UI, browser review/optional Word handoff, final verification and download without database or OOXML repair; add conflict-disposition reopening only if the gold fixture demonstrates an exact-span collision. |
 | Patent | `builtin-patentability-assessment` | feature-chart Tabular Review/XLSX and cited memo DOCX | Pinned first-party manifest and fixed two-artifact contract; deterministic synthetic target-claim and prior-art DOCX sources with continuous-quote expectations and explicit coverage gaps | Run the fixture as a fresh Task, then prove both outputs, source navigation and unresolved-gap preservation. |
 | Litigation | `builtin-litigation-hearing-preparation` | evidence inventory, objection opinion, hearing outline | Pinned first-party manifest, locked synthetic litigation DOCX, partial-cell recovery regression | Fresh first-instance, represented-side fixture import; all three outputs in one Task; direct source/page checks; exhausted-cell recovery; lawyer review and download. |
 
@@ -89,8 +89,8 @@ the exact reference Version, persists its SHA-256 digest, and in checklist mode
 accepts only a mechanically parsed base-plus-overlay rule count. The database
 and storage adapter lives outside `agent-packs/contract`; the Pack boundary test
 continues to forbid provider, route, storage and persistence dependencies.
-Shared Word materialization and the live gold flow remain pending before the
-Contract workflow can be claimed complete.
+The live gold flow remains pending before the Contract workflow can be claimed
+complete.
 
 The structured analysis and disposition portions are now connected. The
 bounded analysis Step emits one versioned JSON object and receives one bounded
@@ -104,22 +104,34 @@ Step in batches of eight. `accept` is offered only for a complete fixed source
 span plus fixed proposed text; `comment` and free-text Other preserve operative
 text and record direction; `skip` preserves text without a document action.
 The verifier reads the durable receipt from the existing Task checkpoint, with
-legacy Step `result_data` retained only as a compatible source. Shared Word
-materialization is the remaining Contract implementation boundary.
+legacy Step `result_data` retained only as a compatible source. The Task
+executor now selects server-owned materialization for the three output Steps.
 
-The pure Word materialization boundary is now implemented and regression
-tested, but is not yet published by the Task executor. One receipt compiles a
+The pure Word materialization boundary is now implemented, regression tested,
+and selected by the Task executor for exactly the three Contract creation
+Steps. One receipt compiles a
 stable fingerprint, exact replacement/comment actions, unresolved items, and
 deterministic opinion sections. The DOCX layer writes native pending tracked
 changes and classic Word comments only for unique, continuous, non-overlapping
-main-story spans; ambiguous spans, hidden-story markup, pre-existing source
-review markup, no-op replacements, and conflicting actions fail closed with
-server-owned issue codes before derived bytes are returned. `contract-clean`
-is generated by accepting the revision and removing comments, then proving
-accepted-view text equality and absence of review markup. The lawyer decision
+main-story spans; ambiguous spans, hidden-story markup, no-op replacements,
+and conflicting actions fail closed with
+server-owned issue codes before derived bytes are returned. Main-story markup
+already present in the fixed source is kept in that immutable Version; derived
+outputs use its accepted view and the review opinion discloses this condition.
+`contract-clean` is generated by accepting the revision and removing comments,
+then proving accepted-view text equality and absence of review markup. The lawyer decision
 surface now displays both the fixed source span and the exact proposed text,
 so `accept` binds a visible source/replacement pair rather than an identifier
-alone. No provider, database, route, new table, or new UI surface was added.
+alone.
+
+Each server-materialized Step reserves the ordinary `generate_docx` effect
+identity using the fixed receipt fingerprint, source Document/Version and one
+deliverable key, writes the Task Word identity into the DOCX, publishes the
+reserved current Version, commits the existing effect receipt, and returns the
+ordinary draft ArtifactLink. No named model tool call or separate effect state
+is involved. Unsafe or unprovable materialization pauses the existing Task with
+a structured issue code instead of being reported as a failed legal result. No
+provider, route, new table, or new UI surface was added.
 
 ## Legacy cleanup rule
 
@@ -142,20 +154,16 @@ preserved release capabilities.
 
 ## Next execution order
 
-1. Publish the already-tested revision and clean-copy bytes plus deterministic
-   opinion through the existing Step effect, fixed Document/Version,
-   ArtifactLink and Task Word receipt boundary; do not add a second effect
-   system or bypass current-Version recovery.
-2. Run the contract gold workflow through browser review and optional Word
+1. Run the contract gold workflow through browser review and optional Word
    handoff, then repair only gaps demonstrated by that run.
-3. Extract the Litigation Pack field/row contracts and per-cell reviewable-gap
+2. Extract the Litigation Pack field/row contracts and per-cell reviewable-gap
    outcome; integrate one Task-owned Evidence Inventory through the existing
    Tabular Review surface.
-4. Run the litigation gold workflow, including direct source navigation and an
+3. Run the litigation gold workflow, including direct source navigation and an
    exhausted-cell recovery, before removing any legacy litigation slice.
-5. Run the current-user EPO OPS success gate when credentials are available,
+4. Run the current-user EPO OPS success gate when credentials are available,
    from search through selected import and downstream Word verification.
-6. When Word is closed, complete Batch 7 Host activation and visual acceptance.
-7. Reconcile the preserved dirty worktree only after each replacement slice has
+5. When Word is closed, complete Batch 7 Host activation and visual acceptance.
+6. Reconcile the preserved dirty worktree only after each replacement slice has
    passed its gold workflow; preserve browser Word, the Word add-in, Matter,
    Artifact, Citation, Tabular Review and review/export capabilities.
