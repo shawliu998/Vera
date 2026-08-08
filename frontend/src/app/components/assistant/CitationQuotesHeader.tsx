@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Minus, RectangleHorizontal, Rows3 } from "lucide-react";
 import { CiteButton } from "@/app/components/ui/cite-button";
 
@@ -43,13 +43,8 @@ export function CitationQuotesHeader({
     const [isExpanded, setIsExpanded] = useState(true);
     const [viewMode, setViewMode] = useState<"single" | "list">("single");
     const hasMultipleQuotes = quotes.length > 1;
+    const effectiveViewMode = hasMultipleQuotes ? viewMode : "single";
     const currentQuote = quotes[currentIndex];
-
-    useEffect(() => {
-        if (!hasMultipleQuotes && viewMode === "list") {
-            setViewMode("single");
-        }
-    }, [hasMultipleQuotes, viewMode]);
 
     return (
         <div className="px-3">
@@ -109,7 +104,7 @@ export function CitationQuotesHeader({
                                     !isExpanded
                                         ? "left-1"
                                         : hasMultipleQuotes &&
-                                            viewMode === "list"
+                                            effectiveViewMode === "list"
                                           ? "left-11"
                                           : "left-6"
                                 }`}
@@ -133,7 +128,7 @@ export function CitationQuotesHeader({
                                     setViewMode("single");
                                 }}
                                 className={`relative z-10 flex h-4 w-4 items-center justify-center rounded-full ${
-                                    isExpanded && viewMode === "single"
+                                    isExpanded && effectiveViewMode === "single"
                                         ? "text-gray-800"
                                         : "text-gray-500 hover:text-gray-700"
                                 }`}
@@ -149,7 +144,7 @@ export function CitationQuotesHeader({
                                         setViewMode("list");
                                     }}
                                     className={`relative z-10 flex h-4 w-4 items-center justify-center rounded-full ${
-                                        isExpanded && viewMode === "list"
+                                        isExpanded && effectiveViewMode === "list"
                                             ? "text-gray-800"
                                             : "text-gray-500 hover:text-gray-700"
                                     }`}
@@ -170,7 +165,7 @@ export function CitationQuotesHeader({
                                 {error}
                             </RelevantQuoteMessage>
                         ) : quotes.length > 0 ? (
-                            viewMode === "list" ? (
+                            effectiveViewMode === "list" ? (
                                 <div className="space-y-2">
                                     {quotes.map((quote, index) => (
                                         <QuoteItem

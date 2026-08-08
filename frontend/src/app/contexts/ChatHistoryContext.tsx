@@ -73,6 +73,9 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         if (!user) {
+            // Authentication scope owns these pointers; logout must clear all
+            // prior-user chat state in one render cycle.
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setChats([]);
             setChatLimit(INITIAL_CHAT_LIMIT);
             setHasMoreChats(false);

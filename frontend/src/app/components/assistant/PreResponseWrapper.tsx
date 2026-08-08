@@ -27,6 +27,7 @@ export function PreResponseWrapper({
     // flips off at the end of the response.
     const hasMinimizedRef = useRef(shouldMinimize);
 
+    /* eslint-disable react-hooks/set-state-in-effect -- Streaming lifecycle props intentionally drive the preserved disclosure state until the user takes control. */
     useEffect(() => {
         if (forceOpen) {
             setIsOpen(true);
@@ -36,6 +37,7 @@ export function PreResponseWrapper({
         if (userToggled) return;
         setIsOpen(!shouldMinimize && !hasMinimizedRef.current);
     }, [forceOpen, shouldMinimize, userToggled]);
+    /* eslint-enable react-hooks/set-state-in-effect */
 
     const stepWord = `step${stepCount === 1 ? "" : "s"}`;
     const label = isStreaming

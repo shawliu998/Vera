@@ -214,6 +214,7 @@ export function CaseLawPanel({
     const opinionScrollRef = useRef<HTMLDivElement | null>(null);
     const opinionContentRef = useRef<HTMLElement | null>(null);
 
+    /* eslint-disable react-hooks/set-state-in-effect -- The panel stays mounted per tab; these effects intentionally synchronize newly streamed/cached provider data into its preserved interactive state. */
     useEffect(() => {
         if (tab.opinions?.length) {
             setOpinions(tab.opinions);
@@ -328,6 +329,7 @@ export function CaseLawPanel({
             setActiveOpinionId(firstQuote.opinionId);
         }
     }, [quoteCacheKey, relevantQuotes]);
+    /* eslint-enable react-hooks/set-state-in-effect */
 
     useEffect(() => {
         const root = opinionContentRef.current;

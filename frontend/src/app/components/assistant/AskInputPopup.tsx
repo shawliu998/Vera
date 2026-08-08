@@ -242,6 +242,9 @@ export function AskInputPopup({
     };
 
     useEffect(() => {
+        // Auto-submit is the terminal transition of this controlled input
+        // workflow, not a derived-state synchronization.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         if (canSubmit) submit();
     });
 

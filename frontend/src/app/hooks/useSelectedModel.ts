@@ -16,6 +16,9 @@ export function useSelectedModel(): [string, (id: string) => void] {
     const [model, setModelState] = useState<string>(DEFAULT_MODEL_ID);
 
     useEffect(() => {
+        // Read after hydration so server and first client render share the
+        // default snapshot before applying this browser-owned preference.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setModelState(readStored());
     }, []);
 
