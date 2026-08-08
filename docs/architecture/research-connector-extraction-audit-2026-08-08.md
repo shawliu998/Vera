@@ -103,6 +103,11 @@ approval, export, or a second source database.
   no-result issues, and exact selected discovery refs. Immutable Task contract,
   fixed Matter context, durable Step receipts, and acquisition progress survive
   progress-checkpoint replacement; transient retry and free-text input do not.
+- Selected reads now run in the fixed lawyer-selected order and persist only
+  validated connector/import receipts. Completion requires one current
+  `DocumentVersion` import per selected discovery. Missing snapshots preserve
+  all discoveries and completed imports and enter review; exact search/import
+  replay returns the committed state, while same-identity drift fails closed.
 - The current EPO OPS endpoint and CQL semantics were checked against the EPO
   OPS 3.2 reference guide and official service page on 2026-08-08:
   <https://www.epo.org/en/searching-for-patents/data/web-services/ops> and
@@ -110,8 +115,8 @@ approval, export, or a second source database.
 
 ## Remaining gates
 
-1. Execute the exact selected reads, persist their body-free import receipts,
-   and complete one explicit `source.acquire` workflow. Ordinary patent
+1. Wire this completed acquisition state machine into one explicit
+   `source.acquire` Workflow and its atomic Task transitions. Ordinary patent
    analysis Tasks still correctly receive no pin.
 2. Decide whether PatSnap provides a material, licensed coverage increment over
    EPO OPS before adapting it; do not copy the old parallel patent subsystem.

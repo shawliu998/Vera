@@ -15,7 +15,7 @@ import { sameUuidIdentity } from "./uuidIdentity";
 
 export type ProviderSourceImportDb = ReturnType<typeof createServerSupabase>;
 type Db = ProviderSourceImportDb;
-const PROVIDER_SOURCE_IMPORT_RECEIPT_VERSION =
+export const PROVIDER_SOURCE_IMPORT_RECEIPT_VERSION =
   "provider_source_import_receipt_v1" as const;
 
 type ProviderSourceDocumentRow = {
@@ -127,19 +127,34 @@ export type ProviderSourceImportDependencies = {
   now?: () => string;
 };
 
-export type ProviderSourceImportReceiptV1 = {
-  schema_version: typeof PROVIDER_SOURCE_IMPORT_RECEIPT_VERSION;
-  provider_id: string;
-  external_id: string;
-  snapshot_ref: string;
-  content_sha256: string;
-  document_id: string;
-  version_id: string;
-  version_number: number;
-  filename: string;
-  created: boolean;
-  current_version_id: string;
-};
+export const providerSourceImportReceiptSchema = z
+  .object({
+    schema_version: z.literal(PROVIDER_SOURCE_IMPORT_RECEIPT_VERSION),
+    provider_id: z.string().trim().min(1).max(160),
+    external_id: z.string().trim().min(1).max(500),
+    snapshot_ref: z.string().trim().min(1).max(160),
+    content_sha256: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+    document_id: z.string().uuid(),
+    version_id: z.string().uuid(),
+    version_number: z.number().int().positive(),
+    filename: z.string().trim().min(1).max(1_000),
+    created: z.boolean(),
+    current_version_id: z.string().uuid(),
+  })
+  .strict()
+  .superRefine((receipt, context) => {
+    if (receipt.current_version_id !== receipt.version_id) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["current_version_id"],
+        message: "Imported source receipt must identify its current Version",
+      });
+    }
+  });
+
+export type ProviderSourceImportReceiptV1 = z.infer<
+  typeof providerSourceImportReceiptSchema
+>;
 
 export class ProviderSourceImportError extends Error {
   constructor(
@@ -199,7 +214,7 @@ function safeFilename(snapshot: ReadOnlySourceSnapshotV1) {
 }
 
 function createRepository(db: Db): ProviderSourceImportRepository {
-  return {
+  return providerSourceImportReceiptSchema.parse({
     async loadDocument(documentId) {
       const { data, error } = await db
         .from("documents")
@@ -304,7 +319,7 @@ function createRepository(db: Db): ProviderSourceImportRepository {
         currentVersionId: row.current_version_id,
       };
     },
-  };
+  });
 }
 
 function buildProvenance(

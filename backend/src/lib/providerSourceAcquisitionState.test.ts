@@ -8,7 +8,9 @@ import {
 } from "./providerSourceAcquisition";
 import {
   appendProviderSourceSearchPage,
+  compileNextProviderSourceSelectedRead,
   createProviderSourceAcquisitionState,
+  recordProviderSourceSelectedRead,
   selectProviderSourceDiscoveries,
   selectedProviderSourceDiscoveries,
 } from "./providerSourceAcquisitionState";
@@ -106,6 +108,125 @@ function searchOutcome(input: {
   };
 }
 
+function selectionState() {
+  const initial = createProviderSourceAcquisitionState({
+    spec,
+    pin: EPO_OPS_SOURCE_CONNECTOR_PIN,
+  });
+  const request = compileProviderSourceSearchRequest({
+    spec,
+    pin: EPO_OPS_SOURCE_CONNECTOR_PIN,
+    requestRef: "search-selection",
+    page: 1,
+  });
+  const searched = appendProviderSourceSearchPage({
+    state: initial,
+    pin: EPO_OPS_SOURCE_CONNECTOR_PIN,
+    request,
+    outcome: searchOutcome({
+      requestRef: request.request_ref,
+      discoveries: [discovery("US1A1"), discovery("US2A1")],
+      truncated: false,
+    }),
+  });
+  return selectProviderSourceDiscoveries({
+    state: searched,
+    discoveryRefs: searched.discoveries.map((item) => item.discovery_ref),
+  });
+}
+
+function readOutcome(input: {
+  requestRef: string;
+  selected: ReturnType<typeof discovery>;
+  index: 1 | 2;
+  importable?: boolean;
+}) {
+  const snapshotRef = input.selected.discovery_ref;
+  return {
+    kind: "completed" as const,
+    operation: "read_snapshot" as const,
+    discoveries: [] as [],
+    coverage: {
+      schema_version: "read_only_source_coverage_v1" as const,
+      request_ref: input.requestRef,
+      status: input.importable === false ? ("incomplete" as const) : ("complete" as const),
+      pages_examined: 1,
+      items_examined: input.importable === false ? 0 : 1,
+      truncated: false,
+      gaps:
+        input.importable === false
+          ? [
+              {
+                code: "snapshot_unavailable" as const,
+                detail: "No readable snapshot.",
+              },
+            ]
+          : [],
+    },
+    receipt: {
+      schema_version: "read_only_source_receipt_v2" as const,
+      task_id: "task-1",
+      step_id: "step-1",
+      step_position: 0,
+      attempt: 1,
+      matter_id: "22222222-2222-4222-8222-222222222222",
+      source_version_ids: [],
+      connector_pin: EPO_OPS_SOURCE_CONNECTOR_PIN,
+      authorization: {
+        schema_version: "read_only_source_authorization_v1" as const,
+        connector_id: EPO_OPS_SOURCE_CONNECTOR_PIN.connector_id,
+        connection: "connected" as const,
+        subscription: "not_required" as const,
+        checked_at: NOW,
+      },
+      request_ref: input.requestRef,
+      operation: "read_snapshot" as const,
+      egress_fields_sent: [
+        "jurisdiction" as const,
+        "as_of_date" as const,
+        "external_id" as const,
+      ],
+      external_call_attempted: true,
+      external_side_effect: "none" as const,
+      status: "ok" as const,
+      error_category: null,
+      returned_discovery_refs: [],
+      returned_snapshot_refs:
+        input.importable === false ? [] : [snapshotRef],
+      started_at: NOW,
+      completed_at: NOW,
+      idempotency_key: `source:${String(input.index).repeat(64)}`,
+    },
+    imports:
+      input.importable === false
+        ? []
+        : [
+            {
+              schema_version: "provider_source_import_receipt_v1" as const,
+              provider_id: input.selected.provider_id,
+              external_id: input.selected.external_id,
+              snapshot_ref: snapshotRef,
+              content_sha256: `sha256:${String(input.index).repeat(64)}`,
+              document_id:
+                input.index === 1
+                  ? "33333333-3333-4333-8333-333333333333"
+                  : "55555555-5555-4555-8555-555555555555",
+              version_id:
+                input.index === 1
+                  ? "44444444-4444-4444-8444-444444444444"
+                  : "66666666-6666-4666-8666-666666666666",
+              version_number: 1,
+              filename: `${input.selected.external_id}.json`,
+              created: true,
+              current_version_id:
+                input.index === 1
+                  ? "44444444-4444-4444-8444-444444444444"
+                  : "66666666-6666-4666-8666-666666666666",
+            },
+          ],
+  };
+}
+
 test("search pages remain bounded and finish at an exact lawyer-selection checkpoint", () => {
   const initial = createProviderSourceAcquisitionState({
     spec,
@@ -155,6 +276,19 @@ test("search pages remain bounded and finish at an exact lawyer-selection checkp
       "epo-ops:publication:US2A1",
       "epo-ops:publication:US3A1",
     ],
+  );
+  assert.deepEqual(
+    appendProviderSourceSearchPage({
+      state: page2,
+      pin: EPO_OPS_SOURCE_CONNECTOR_PIN,
+      request: request2,
+      outcome: searchOutcome({
+        requestRef: "search-2",
+        discoveries: [discovery("US2A1"), discovery("US3A1")],
+        truncated: false,
+      }),
+    }),
+    page2,
   );
 
   const selected = selectProviderSourceDiscoveries({
@@ -226,4 +360,83 @@ test("selection cannot invent a provider result or exceed the fixed limit", () =
       }),
     /receipt does not match discoveries/,
   );
+});
+
+test("selected reads import exactly the lawyer-selected discoveries and then complete", () => {
+  const selected = selectionState();
+  const request1 = compileNextProviderSourceSelectedRead({
+    state: selected,
+    pin: EPO_OPS_SOURCE_CONNECTOR_PIN,
+    requestRef: "read-1",
+  });
+  assert.equal(request1.external_id, "publication:US1A1");
+  const first = recordProviderSourceSelectedRead({
+    state: selected,
+    pin: EPO_OPS_SOURCE_CONNECTOR_PIN,
+    request: request1,
+    outcome: readOutcome({
+      requestRef: request1.request_ref,
+      selected: discovery("US1A1"),
+      index: 1,
+    }),
+  });
+  assert.equal(first.phase, "read_pending");
+  assert.equal(first.import_receipts.length, 1);
+
+  const request2 = compileNextProviderSourceSelectedRead({
+    state: first,
+    pin: EPO_OPS_SOURCE_CONNECTOR_PIN,
+    requestRef: "read-2",
+  });
+  assert.equal(request2.external_id, "publication:US2A1");
+  const completed = recordProviderSourceSelectedRead({
+    state: first,
+    pin: EPO_OPS_SOURCE_CONNECTOR_PIN,
+    request: request2,
+    outcome: readOutcome({
+      requestRef: request2.request_ref,
+      selected: discovery("US2A1"),
+      index: 2,
+    }),
+  });
+  assert.equal(completed.phase, "completed");
+  assert.equal(completed.import_receipts.length, 2);
+  assert.doesNotMatch(JSON.stringify(completed), /source_body|consumerSecret/);
+  assert.deepEqual(
+    recordProviderSourceSelectedRead({
+      state: completed,
+      pin: EPO_OPS_SOURCE_CONNECTOR_PIN,
+      request: request2,
+      outcome: readOutcome({
+        requestRef: request2.request_ref,
+        selected: discovery("US2A1"),
+        index: 2,
+      }),
+    }),
+    completed,
+  );
+});
+
+test("an unavailable selected snapshot preserves discoveries and enters review", () => {
+  const selected = selectionState();
+  const request = compileNextProviderSourceSelectedRead({
+    state: selected,
+    pin: EPO_OPS_SOURCE_CONNECTOR_PIN,
+    requestRef: "read-unavailable",
+  });
+  const reviewed = recordProviderSourceSelectedRead({
+    state: selected,
+    pin: EPO_OPS_SOURCE_CONNECTOR_PIN,
+    request,
+    outcome: readOutcome({
+      requestRef: request.request_ref,
+      selected: discovery("US1A1"),
+      index: 1,
+      importable: false,
+    }),
+  });
+  assert.equal(reviewed.phase, "review_required");
+  assert.equal(reviewed.discoveries.length, 2);
+  assert.equal(reviewed.import_receipts.length, 0);
+  assert.equal(reviewed.issues.at(-1)?.code, "snapshot_unavailable");
 });
