@@ -5,6 +5,10 @@ import type {
   AgentTaskArtifactContractV1,
 } from "./taskContract";
 import type { MatterContextManifestV1 } from "../context/matterContext";
+import {
+  verifiedArtifactIdentitySchema,
+  type VerifiedArtifactIdentity,
+} from "./verifiedArtifactIdentity";
 
 export const AGENT_STEP_CONTRACT_VERSION = "agent_step_contract_v1" as const;
 export const AGENT_STEP_CONTRACT_SET_KIND =
@@ -142,6 +146,9 @@ const stepReceiptSchema = z
     summary: z.string().trim().min(1).max(4000),
     source_version_ids: z.array(z.string().trim().min(1).max(200)).max(100),
     artifact_ids: z.array(z.string().trim().min(1).max(200)).max(3),
+    // Optional solely to keep historical verifier receipts readable. New
+    // verifier receipts are built below with the strict server-owned union.
+    verified_artifacts: z.array(verifiedArtifactIdentitySchema).max(30).optional(),
     postconditions: z
       .array(
         z
@@ -177,6 +184,28 @@ const stepReceiptSchema = z
         code: z.ZodIssueCode.custom,
         path: ["capability"],
         message: "Only a verifier Step can enter the lawyer review path",
+      });
+    }
+    if (
+      receipt.capability !== "verify" &&
+      receipt.verified_artifacts !== undefined
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["verified_artifacts"],
+        message: "Only a verifier Step may persist verified Artifact identities",
+      });
+    }
+    const identityKeys = (receipt.verified_artifacts ?? []).map((artifact) =>
+      artifact.kind === "agent_verified_draft_artifact_v1"
+        ? `draft:${artifact.document_id}`
+        : `tabular:${artifact.review_id}`,
+    );
+    if (new Set(identityKeys).size !== identityKeys.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["verified_artifacts"],
+        message: "Verified Artifact identities must be unique",
       });
     }
   });
@@ -384,6 +413,7 @@ export function buildAgentStepReceipt(input: {
   sourceVersionIds: string[];
   artifactIds: string[];
   satisfiedPostconditions: AgentStepPostcondition[];
+  verifiedArtifacts?: VerifiedArtifactIdentity[];
 }) {
   const satisfied = new Set(input.satisfiedPostconditions);
   const missing = input.contract.deterministic_postconditions.filter(
@@ -393,6 +423,12 @@ export function buildAgentStepReceipt(input: {
     throw new Error(
       `Step postconditions are not satisfied: ${missing.join(", ")}`,
     );
+  }
+  if (input.contract.capability === "verify" && !input.verifiedArtifacts) {
+    throw new Error("A verifier Step receipt requires server-owned Artifact identities");
+  }
+  if (input.contract.capability !== "verify" && input.verifiedArtifacts) {
+    throw new Error("Only a verifier Step may persist Artifact identities");
   }
   return stepReceiptSchema.parse({
     kind: "agent_step_receipt_v1",
@@ -405,6 +441,9 @@ export function buildAgentStepReceipt(input: {
     summary: input.summary.trim(),
     source_version_ids: Array.from(new Set(input.sourceVersionIds)),
     artifact_ids: Array.from(new Set(input.artifactIds)),
+    ...(input.contract.capability === "verify"
+      ? { verified_artifacts: input.verifiedArtifacts }
+      : {}),
     postconditions: input.contract.deterministic_postconditions.map((code) => ({
       code,
       status: "pass" as const,
@@ -419,6 +458,7 @@ export function buildAgentStepReviewReceipt(input: {
   sourceVersionIds: string[];
   artifactIds: string[];
   satisfiedPostconditions: AgentStepPostcondition[];
+  verifiedArtifacts?: VerifiedArtifactIdentity[];
 }) {
   if (input.contract.capability !== "verify") {
     throw new Error("Only a verifier Step can require lawyer review");
@@ -429,6 +469,9 @@ export function buildAgentStepReviewReceipt(input: {
   );
   if (!missing.length) {
     throw new Error("A clean verifier Step does not require lawyer review");
+  }
+  if (!input.verifiedArtifacts) {
+    throw new Error("A verifier Step receipt requires server-owned Artifact identities");
   }
   return stepReceiptSchema.parse({
     kind: "agent_step_receipt_v1",
@@ -441,6 +484,7 @@ export function buildAgentStepReviewReceipt(input: {
     summary: input.summary.trim(),
     source_version_ids: Array.from(new Set(input.sourceVersionIds)),
     artifact_ids: Array.from(new Set(input.artifactIds)),
+    verified_artifacts: input.verifiedArtifacts,
     postconditions: input.contract.deterministic_postconditions.map((code) => ({
       code,
       status: satisfied.has(code) ? ("pass" as const) : ("fail" as const),

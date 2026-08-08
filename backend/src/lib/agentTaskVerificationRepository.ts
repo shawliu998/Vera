@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 
+import { z } from "zod";
+
 import { readAgentStepEffectReceipts } from "./agent-kernel/effects/stepEffect";
+import { readAgentStepTabularEffectReceipts } from "./agent-kernel/effects/tabularEffect";
+import { buildAgentStepTabularEffectReservation } from "./agent-kernel/effects/tabularEffect";
 import { readFixedMatterContext } from "./agent-kernel/context/matterContext";
 import {
   buildAgentVerificationPacketV1,
@@ -22,6 +26,21 @@ import { buildAgentPackDeterministicChecks } from "./agentPackVerifierRegistry";
 import { litigationEvidenceInventoryReceiptSchema } from "./agent-packs/litigation/litigationEvidenceInventoryPack";
 import { litigationEvidenceReviewCompletionReceiptSchema } from "./agent-packs/litigation/litigationEvidenceInventoryReview";
 import { readCurrentLitigationEvidenceInventoryBinding } from "./agentLitigationEvidenceInventoryBinding";
+import {
+  buildLitigationEvidenceEffectLayout,
+  buildLitigationEvidenceReviewSpec,
+} from "./agentLitigationEvidenceInventoryExecutor";
+import {
+  verifiedArtifactIdentitySchema,
+  verifiedTabularArtifactIdentitySchema,
+  type VerifiedArtifactIdentity,
+} from "./agent-kernel/contracts/verifiedArtifactIdentity";
+import { assertLitigationVerifiedTabularArtifact } from "./agent-packs/litigation/litigationEvidenceInventoryVerifiedArtifact";
+import {
+  buildAgentTabularAcceptedView,
+  isAgentTabularAcceptedViewBuildError,
+  sha256AgentArtifact,
+} from "./agentTabularAcceptedView";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -49,6 +68,16 @@ type CitationCoverage = {
 };
 
 type MutableCheck = AgentVerificationPacketV1["deterministic_checks"][number];
+
+export type CurrentAgentVerification = {
+  packet: AgentVerificationPacketV1;
+  /** Internal server data; intentionally absent from the model packet. */
+  verifiedArtifacts: VerifiedArtifactIdentity[];
+};
+
+type TabularRevisionIdentity = {
+  revision_fingerprint: string;
+};
 
 type TabularReviewRow = {
   id: string;
@@ -93,7 +122,7 @@ type TabularReviewValidation =
 
 export const MAX_VERIFIER_DELIVERABLE_PROJECTION_CHARS = 80_000;
 export const MAX_VERIFIER_PACKET_PROJECTION_CHARS = 160_000;
-export const MAX_VERIFIER_TABULAR_REVIEW_CELLS = 10_000;
+export const MAX_VERIFIER_TABULAR_REVIEW_CELLS = 500;
 
 function passCheck(
   code: string,
@@ -122,7 +151,9 @@ function canonical(value: unknown): string {
   }
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   return `{${Object.entries(value as Record<string, unknown>)
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) =>
+      left < right ? -1 : left > right ? 1 : 0,
+    )
     .map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`)
     .join(",")}}`;
 }
@@ -165,7 +196,6 @@ function validateTabularReview(input: {
   documentById: Map<string, Record<string, unknown>>;
   matterId: string;
   userId: string;
-  cellsTruncated: boolean;
 }): TabularReviewValidation {
   if (input.review.row_protocol !== "document_rows") {
     return {
@@ -176,7 +206,7 @@ function validateTabularReview(input: {
   }
   const documentIds = tabularDocumentIds(input.review.document_ids);
   const columnIndexes = tabularColumnIndexes(input.review.columns_config);
-  if (!documentIds || !columnIndexes || input.cellsTruncated) {
+  if (!documentIds || !columnIndexes) {
     return {
       status: "invalid",
       reason: "layout",
@@ -361,6 +391,127 @@ function fixedCreatedVersionByDocument(snapshot: VerificationSnapshot) {
   return new Map(pairs);
 }
 
+function committedTabularInputDigest(
+  snapshot: VerificationSnapshot,
+  reviewId: string,
+  litigationBinding: ReturnType<
+    typeof readCurrentLitigationEvidenceInventoryBinding
+  > | null,
+) {
+  if (litigationBinding?.status === "valid") {
+    const spec = buildLitigationEvidenceReviewSpec(
+      litigationBinding.binding.receipt,
+    );
+    return buildAgentStepTabularEffectReservation({
+      stepId: litigationBinding.binding.receipt.step_id,
+      attempt: litigationBinding.binding.receipt.attempt,
+      reviewId: litigationBinding.binding.receipt.review_id,
+      layout: buildLitigationEvidenceEffectLayout(spec),
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }).input_fingerprint;
+  }
+  const fingerprints = snapshot.task.current_plan.flatMap((step) =>
+    readAgentStepTabularEffectReceipts(step.result_data).flatMap((receipt) =>
+      receipt.status === "committed" &&
+      receipt.step_id === step.id &&
+      receipt.attempt === step.attempt &&
+      receipt.target.review_id === reviewId &&
+      receipt.effect?.review_id === reviewId
+        ? [receipt.input_fingerprint]
+        : [],
+    ),
+  );
+  const unique = Array.from(new Set(fingerprints));
+  return unique.length === 1 ? unique[0]! : null;
+}
+
+function tabularRevisionUnstableGap(input: {
+  key: string;
+  reviewId: string;
+  totalCells: number;
+  reason:
+    | "input_digest_unavailable"
+    | "input_digest_changed"
+    | "before_unavailable"
+    | "after_unavailable"
+    | "changed";
+}) {
+  return gapCheck(
+    `tabular-review-revision:${input.key}`,
+    "artifact_integrity",
+    "The server could not establish one stable current Tabular Review identity; the current Review is preserved for lawyer review.",
+    {
+      code: "tabular_review_revision_unstable",
+      deliverable_key: input.key,
+      review_id: input.reviewId,
+      reason: input.reason,
+      total_cells: input.totalCells,
+    },
+  );
+}
+
+async function readCurrentTabularReviewState(input: {
+  db: Db;
+  reviewId: string;
+}) {
+  const [reviewResult, cellsResult] = await Promise.all([
+    input.db
+      .from("tabular_reviews")
+      .select(
+        "id,project_id,user_id,title,practice,row_protocol,workflow_id,document_ids,columns_config",
+      )
+      .in("id", [input.reviewId]),
+    input.db
+      .from("tabular_cells")
+      .select(
+        "id,review_id,document_id,row_id,column_index,content,citations,status,review_status,reviewed_at,review_revision",
+      )
+      .in("review_id", [input.reviewId])
+      .limit(MAX_VERIFIER_TABULAR_REVIEW_CELLS + 1),
+  ]);
+  if (reviewResult.error) throw new Error(reviewResult.error.message);
+  if (cellsResult.error) throw new Error(cellsResult.error.message);
+  const review = ((reviewResult.data ?? []) as TabularReviewRow[])[0] ?? null;
+  return {
+    review,
+    cells: (cellsResult.data ?? []) as TabularCellRow[],
+  };
+}
+
+async function readCurrentTabularRevisionIdentity(input: {
+  db: Db;
+  taskId: string;
+  userId: string;
+  reviewId: string;
+  inputDigest: string;
+}) {
+  const { data, error } = await input.db.rpc(
+    "read_agent_tabular_review_revision_fingerprint_v1",
+    {
+      p_task_id: input.taskId,
+      p_user_id: input.userId,
+      p_review_id: input.reviewId,
+      p_expected_input_digest: input.inputDigest,
+    },
+  );
+  if (error) throw new Error(error.message);
+  const row = (Array.isArray(data) ? data[0] : data) as
+    | Record<string, unknown>
+    | null;
+  if (row?.outcome !== "current") return null;
+  const parsed = z
+    .object({
+      outcome: z.literal("current"),
+      revision_fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    })
+    .strict()
+    .safeParse(row);
+  if (!parsed.success) return null;
+  return {
+    revision_fingerprint: parsed.data.revision_fingerprint,
+  };
+}
+
 function deliverableKey(deliverable: {
   key?: string;
   title?: string;
@@ -379,7 +530,13 @@ export async function buildCurrentAgentVerificationPacket(input: {
   citationsRequired: boolean;
   citationCoverage: CitationCoverage;
   loadAcceptedView?: typeof extractAcceptedView;
-}) {
+  readTabularRevisionIdentity?: (input: {
+    taskId: string;
+    userId: string;
+    reviewId: string;
+    inputDigest: string;
+  }) => Promise<TabularRevisionIdentity | null>;
+}): Promise<CurrentAgentVerification> {
   const checkpoint =
     input.snapshot.task.latest_checkpoint &&
     typeof input.snapshot.task.latest_checkpoint === "object" &&
@@ -432,17 +589,24 @@ export async function buildCurrentAgentVerificationPacket(input: {
       review,
     ]),
   );
-  const { data: tabularCells, error: tabularCellsError } =
-    tabularReviewIds.length
-      ? await input.db
-          .from("tabular_cells")
-          .select(
-            "id,review_id,document_id,row_id,column_index,content,citations,status,review_status,reviewed_at,review_revision",
-          )
-          .in("review_id", tabularReviewIds)
-          .limit(MAX_VERIFIER_TABULAR_REVIEW_CELLS + 1)
-      : { data: [], error: null };
+  const tabularCellResults = await Promise.all(
+    tabularReviewIds.map((reviewId) =>
+      input.db
+        .from("tabular_cells")
+        .select(
+          "id,review_id,document_id,row_id,column_index,content,citations,status,review_status,reviewed_at,review_revision",
+        )
+        .in("review_id", [reviewId])
+        .limit(MAX_VERIFIER_TABULAR_REVIEW_CELLS + 1),
+    ),
+  );
+  const tabularCellsError = tabularCellResults.find(
+    (result) => result.error,
+  )?.error;
   if (tabularCellsError) throw new Error(tabularCellsError.message);
+  const tabularCells = tabularCellResults.flatMap(
+    (result) => result.data ?? [],
+  );
   const cellsByReviewId = new Map<string, TabularCellRow[]>();
   for (const cell of (tabularCells ?? []) as TabularCellRow[]) {
     const existing = cellsByReviewId.get(cell.review_id) ?? [];
@@ -498,6 +662,7 @@ export async function buildCurrentAgentVerificationPacket(input: {
   );
   const checks: MutableCheck[] = [];
   const deliverables: AgentVerificationPacketV1["deliverables"] = [];
+  const verifiedArtifacts: VerifiedArtifactIdentity[] = [];
   let remainingProjectionCharacters = MAX_VERIFIER_PACKET_PROJECTION_CHARS;
 
   for (const item of artifacts) {
@@ -593,7 +758,6 @@ export async function buildCurrentAgentVerificationPacket(input: {
         documentById: documentById as Map<string, Record<string, unknown>>,
         matterId: input.snapshot.task.matter_id,
         userId: input.userId,
-        cellsTruncated: reviewCells.length > MAX_VERIFIER_TABULAR_REVIEW_CELLS,
       });
       if (validation.status === "invalid") {
         deliverables.push({
@@ -622,8 +786,10 @@ export async function buildCurrentAgentVerificationPacket(input: {
         );
         continue;
       }
-      let incompleteCells = validation.incompleteCells;
-      const litigationBinding =
+      let boundReview = review;
+      let boundCells = reviewCells;
+      let boundValidation = validation;
+      let litigationBinding =
         litigationReceipt.success && litigationCompletion.success
           ? readCurrentLitigationEvidenceInventoryBinding({
               snapshot: input.snapshot,
@@ -633,15 +799,218 @@ export async function buildCurrentAgentVerificationPacket(input: {
               cells: reviewCells,
             })
           : null;
+      let inputDigest = committedTabularInputDigest(
+        input.snapshot,
+        review.id,
+        litigationBinding,
+      );
+      const inputDigestBefore = inputDigest;
+      let revisionBefore: TabularRevisionIdentity | null = null;
+      let revisionUnstableReason:
+        | "input_digest_unavailable"
+        | "input_digest_changed"
+        | "before_unavailable"
+        | null = inputDigest ? null : "input_digest_unavailable";
+      if (inputDigest) {
+        revisionBefore = await (input.readTabularRevisionIdentity
+          ? input.readTabularRevisionIdentity({
+              taskId: input.snapshot.task.id,
+              userId: input.userId,
+              reviewId: review.id,
+              inputDigest,
+            })
+          : readCurrentTabularRevisionIdentity({
+              db: input.db,
+              taskId: input.snapshot.task.id,
+              userId: input.userId,
+              reviewId: review.id,
+              inputDigest,
+            }));
+        const current = await readCurrentTabularReviewState({
+          db: input.db,
+          reviewId: review.id,
+        });
+        if (!current.review) {
+          deliverables.push({
+            key: item.key,
+            artifact_type: artifactType,
+            artifact_id: item.artifact.artifact_id,
+            document_id: null,
+            current_version_id: null,
+            accepted_view_sha256: null,
+            accepted_view_text: null,
+            accepted_view_complete: false,
+          });
+          checks.push(
+            gapCheck(
+              `artifact-available:${item.key}`,
+              "artifact_integrity",
+              `${item.key} no longer resolves to an available Tabular Review.`,
+              {
+                code: "artifact_unavailable",
+                deliverable_key: item.key,
+                artifact_id: item.artifact.artifact_id,
+              },
+            ),
+          );
+          continue;
+        }
+        boundReview = current.review;
+        boundCells = current.cells;
+        const refreshedValidation = validateTabularReview({
+          review: boundReview,
+          cells: boundCells,
+          documentById: documentById as Map<string, Record<string, unknown>>,
+          matterId: input.snapshot.task.matter_id,
+          userId: input.userId,
+        });
+        if (
+          boundReview.project_id !== input.snapshot.task.matter_id ||
+          boundReview.user_id !== input.userId ||
+          refreshedValidation.status === "invalid"
+        ) {
+          deliverables.push({
+            key: item.key,
+            artifact_type: artifactType,
+            artifact_id: item.artifact.artifact_id,
+            document_id: null,
+            current_version_id: null,
+            accepted_view_sha256: null,
+            accepted_view_text: null,
+            accepted_view_complete: false,
+          });
+          checks.push(
+            gapCheck(
+              `tabular-review-integrity:${item.key}`,
+              "artifact_integrity",
+              `${item.key} changed while the server was binding its current accepted view.`,
+              {
+                code: "tabular_review_invalid",
+                deliverable_key: item.key,
+                review_id: boundReview.id,
+                reason:
+                  refreshedValidation.status === "invalid"
+                    ? refreshedValidation.reason
+                    : "source_scope",
+                total_cells:
+                  refreshedValidation.status === "invalid"
+                    ? refreshedValidation.totalCells
+                    : boundCells.length,
+              },
+            ),
+          );
+          continue;
+        }
+        boundValidation = refreshedValidation;
+        litigationBinding =
+          litigationReceipt.success && litigationCompletion.success
+            ? readCurrentLitigationEvidenceInventoryBinding({
+                snapshot: input.snapshot,
+                receipt: litigationReceipt.data,
+                completion: litigationCompletion.data,
+                review: boundReview,
+                cells: boundCells,
+              })
+            : null;
+        inputDigest = committedTabularInputDigest(
+          input.snapshot,
+          boundReview.id,
+          litigationBinding,
+        );
+        if (
+          inputDigest !== inputDigestBefore ||
+          ((litigationReceipt.success || litigationCompletion.success) &&
+            litigationBinding?.status !== "valid")
+        ) {
+          // A source-bound correction may have changed the attempt while the
+          // view was being read. Do not combine the before revision with the
+          // later effect; deterministic review routing preserves this view.
+          revisionBefore = null;
+          revisionUnstableReason = "input_digest_changed";
+        }
+      }
+      let incompleteCells = boundValidation.incompleteCells;
       if (litigationBinding?.status === "valid") {
         incompleteCells = 0;
       }
-      const acceptedView = tabularReviewAcceptedView({
-        review,
-        documentIds: validation.documentIds,
-        columnIndexes: validation.columnIndexes,
-        cellsByCoordinate: validation.cellsByCoordinate,
-      });
+      let accepted: ReturnType<typeof buildAgentTabularAcceptedView> | null =
+        null;
+      if (inputDigest) {
+        try {
+          accepted = buildAgentTabularAcceptedView({
+            review: boundReview,
+            input_digest: inputDigest,
+            document_ids: boundValidation.documentIds,
+            column_indexes: boundValidation.columnIndexes,
+            cells: Array.from(boundValidation.cellsByCoordinate.values()).map(
+              (cell) => ({
+                ...cell,
+                document_id: cell.document_id!,
+                column_index: cell.column_index!,
+              }),
+            ),
+          });
+        } catch (error) {
+          const fallbackAcceptedView = tabularReviewAcceptedView({
+            review: boundReview,
+            documentIds: boundValidation.documentIds,
+            columnIndexes: boundValidation.columnIndexes,
+            cellsByCoordinate: boundValidation.cellsByCoordinate,
+          });
+          deliverables.push({
+            key: item.key,
+            artifact_type: artifactType,
+            artifact_id: item.artifact.artifact_id,
+            document_id: null,
+            current_version_id: null,
+            accepted_view_sha256: null,
+            accepted_view_text: null,
+            accepted_view_complete: false,
+          });
+          if (
+            isAgentTabularAcceptedViewBuildError(error) &&
+            error.code === "cell_scope_exceeded"
+          ) {
+            checks.push(
+              gapCheck(
+                `verification-scope:${item.key}`,
+                "goal_coverage",
+                `${item.key} exceeds the fixed complete Tabular accepted-view scope and requires lawyer review.`,
+                {
+                  code: "verification_scope_exceeded",
+                  deliverable_key: item.key,
+                  accepted_view_characters: fallbackAcceptedView.length,
+                  projected_characters: 0,
+                },
+              ),
+            );
+          } else {
+            checks.push(
+              gapCheck(
+                `tabular-review-integrity:${item.key}`,
+                "artifact_integrity",
+                `${item.key} has an invalid current Tabular accepted view.`,
+                {
+                  code: "tabular_review_invalid",
+                  deliverable_key: item.key,
+                  review_id: boundReview.id,
+                  reason: "layout",
+                  total_cells: boundCells.length,
+                },
+              ),
+            );
+          }
+          continue;
+        }
+      }
+      const acceptedView =
+        accepted?.accepted_view_text ??
+        tabularReviewAcceptedView({
+          review: boundReview,
+          documentIds: boundValidation.documentIds,
+          columnIndexes: boundValidation.columnIndexes,
+          cellsByCoordinate: boundValidation.cellsByCoordinate,
+        });
       const projection = projectAcceptedView({
         acceptedView,
         remainingCharacters: remainingProjectionCharacters,
@@ -656,7 +1025,8 @@ export async function buildCurrentAgentVerificationPacket(input: {
         artifact_id: item.artifact.artifact_id,
         document_id: null,
         current_version_id: null,
-        accepted_view_sha256: acceptedViewSha256(acceptedView),
+        accepted_view_sha256:
+          accepted?.accepted_view_sha256 ?? acceptedViewSha256(acceptedView),
         accepted_view_text: projection.projection,
         accepted_view_complete: projection.projectionComplete,
       });
@@ -676,8 +1046,8 @@ export async function buildCurrentAgentVerificationPacket(input: {
             {
               code: "tabular_review_incomplete",
               deliverable_key: item.key,
-              review_id: review.id,
-              total_cells: validation.totalCells,
+              review_id: boundReview.id,
+              total_cells: boundValidation.totalCells,
               incomplete_cells: incompleteCells,
             },
           ),
@@ -704,6 +1074,80 @@ export async function buildCurrentAgentVerificationPacket(input: {
               projected_characters: projection.projectedCharacters,
             },
           ),
+        );
+      }
+      if (accepted && inputDigest && revisionBefore) {
+        const revisionAfter = await (input.readTabularRevisionIdentity
+          ? input.readTabularRevisionIdentity({
+              taskId: input.snapshot.task.id,
+              userId: input.userId,
+              reviewId: boundReview.id,
+              inputDigest,
+            })
+          : readCurrentTabularRevisionIdentity({
+              db: input.db,
+              taskId: input.snapshot.task.id,
+              userId: input.userId,
+              reviewId: boundReview.id,
+              inputDigest,
+            }));
+        if (
+          revisionAfter &&
+          revisionAfter.revision_fingerprint ===
+            revisionBefore.revision_fingerprint
+        ) {
+          const identity = verifiedTabularArtifactIdentitySchema.parse({
+            kind: "agent_verified_tabular_artifact_v1",
+            review_id: boundReview.id,
+            row_protocol: "document_rows",
+            input_digest: inputDigest,
+            revision_fingerprint: revisionAfter.revision_fingerprint,
+            accepted_view_sha256: accepted.accepted_view_sha256,
+            source_receipt_fingerprint:
+              litigationBinding?.status === "valid"
+                ? litigationBinding.binding.completion.source_receipt_fingerprint
+                : null,
+            decision_fingerprint:
+              litigationBinding?.status === "valid"
+                ? litigationBinding.binding.completion.decision_fingerprint
+                : null,
+            completion_sha256:
+              litigationBinding?.status === "valid"
+                ? sha256AgentArtifact(litigationBinding.binding.completion)
+                : null,
+          });
+          verifiedArtifacts.push(
+            litigationBinding?.status === "valid"
+              ? assertLitigationVerifiedTabularArtifact(identity)
+              : identity,
+          );
+        } else {
+          checks.push(
+            tabularRevisionUnstableGap({
+              key: item.key,
+              reviewId: boundReview.id,
+              totalCells: boundValidation.totalCells,
+              reason: revisionAfter ? "changed" : "after_unavailable",
+            }),
+          );
+        }
+      } else if (accepted) {
+        checks.push(
+          tabularRevisionUnstableGap({
+            key: item.key,
+            reviewId: boundReview.id,
+            totalCells: boundValidation.totalCells,
+            reason: revisionUnstableReason ?? "before_unavailable",
+          }),
+        );
+      } else {
+        checks.push(
+          tabularRevisionUnstableGap({
+            key: item.key,
+            reviewId: boundReview.id,
+            totalCells: boundValidation.totalCells,
+            reason: revisionUnstableReason ?? "input_digest_unavailable",
+          }),
         );
       }
       continue;
@@ -869,6 +1313,14 @@ export async function buildCurrentAgentVerificationPacket(input: {
       accepted_view_text: acceptedViewProjection,
       accepted_view_complete: projectionComplete,
     });
+    verifiedArtifacts.push(
+      verifiedArtifactIdentitySchema.parse({
+        kind: "agent_verified_draft_artifact_v1",
+        document_id: document.id as string,
+        version_id: currentVersionId,
+        accepted_view_sha256: acceptedViewSha256(acceptedView),
+      }),
+    );
     checks.push(
       passCheck(
         `current-artifact:${item.key}`,
@@ -962,7 +1414,7 @@ export async function buildCurrentAgentVerificationPacket(input: {
   );
 
   const context = readFixedMatterContext(input.snapshot.task);
-  return buildAgentVerificationPacketV1({
+  const packet = buildAgentVerificationPacketV1({
     kind: "agent_verification_packet_v1",
     version: 1,
     task_id: input.snapshot.task.id,
@@ -979,4 +1431,5 @@ export async function buildCurrentAgentVerificationPacket(input: {
     })),
     deterministic_checks: checks,
   });
+  return { packet, verifiedArtifacts };
 }

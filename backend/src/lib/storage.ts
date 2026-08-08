@@ -74,6 +74,46 @@ export async function uploadFile(
   );
 }
 
+export type ConditionalUploadResult = "created" | "exists";
+
+/**
+ * Creates an immutable storage object without overwriting an existing key.
+ * A provider/read failure must never be interpreted as permission to replace
+ * approved bytes at a deterministic DocumentVersion path.
+ */
+export async function uploadFileIfAbsent(
+  key: string,
+  content: ArrayBuffer,
+  contentType: string,
+): Promise<ConditionalUploadResult> {
+  requireStorageConfig();
+  const client = getClient();
+  try {
+    await client.send(
+      new PutObjectCommand({
+        Bucket: BUCKET,
+        Key: key,
+        Body: Buffer.from(content),
+        ContentType: contentType,
+        IfNoneMatch: "*",
+      }),
+    );
+    return "created";
+  } catch (error) {
+    const candidate = error as {
+      name?: unknown;
+      $metadata?: { httpStatusCode?: unknown };
+    };
+    if (
+      candidate.name === "PreconditionFailed" ||
+      candidate.$metadata?.httpStatusCode === 412
+    ) {
+      return "exists";
+    }
+    throw error;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Download
 // ---------------------------------------------------------------------------

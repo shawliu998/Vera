@@ -113,6 +113,21 @@ const deterministicIssueSchema = z.discriminatedUnion("code", [
     .strict(),
   z
     .object({
+      code: z.literal("tabular_review_revision_unstable"),
+      deliverable_key: z.string().trim().min(1).max(120),
+      review_id: z.string().uuid(),
+      reason: z.enum([
+        "input_digest_unavailable",
+        "input_digest_changed",
+        "before_unavailable",
+        "after_unavailable",
+        "changed",
+      ]),
+      total_cells: z.number().int().min(0).max(50_000),
+    })
+    .strict(),
+  z
+    .object({
       code: z.literal("tabular_review_incomplete"),
       deliverable_key: z.string().trim().min(1).max(120),
       review_id: z.string().uuid(),

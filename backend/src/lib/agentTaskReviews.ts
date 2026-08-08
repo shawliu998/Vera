@@ -6,6 +6,16 @@ import { downloadFile } from "./storage";
 import { evaluateTaskDeliverables } from "./agentTaskDeliverables";
 import { readAgentStepReceipts } from "./agent-kernel/contracts/stepContract";
 import {
+  approvedArtifactSnapshotSchema,
+  readApprovedArtifactSnapshot,
+  type ApprovedArtifactSnapshot,
+} from "./agentApprovedArtifactSnapshot";
+import {
+  materializeApprovedLitigationEvidenceInventoryXlsx,
+  type ApprovedTabularExportMaterialization,
+} from "./agentTabularApprovedExport";
+import { litigationEvidenceInventoryReceiptSchema } from "./agent-packs/litigation/litigationEvidenceInventoryPack";
+import {
   controlledAgentReviewArtifactLinks,
   getAgentReviewVersionState,
 } from "./agentTaskReviewVersions";
@@ -13,11 +23,14 @@ import {
 type Db = ReturnType<typeof createServerSupabase>;
 
 export type AgentReviewStatus =
-  "review_required" | "changes_requested" | "approved";
+  | "review_required"
+  | "changes_requested"
+  | "approved";
 
 type TaskSnapshot = {
   task: {
     id: string;
+    user_id: string;
     matter_id: string;
     status: string;
     deliverables: Array<{
@@ -30,9 +43,12 @@ type TaskSnapshot = {
     }>;
     current_plan: Array<{
       id: string;
+      position?: number;
       status: string;
+      attempt?: number;
       result_summary: string | null;
     }>;
+    latest_checkpoint?: unknown;
   };
   artifacts: AgentArtifactLinkInput[];
   review?: {
@@ -45,17 +61,25 @@ type TaskSnapshot = {
   };
 };
 
-export type ApprovedArtifactSnapshot = {
-  artifact_type: "draft" | "tabular_review";
-  artifact_id: string;
-  purpose: string;
-  document_id: string;
-  version_id: string;
-  version_number: number | null;
-  filename: string;
-  file_type: string | null;
-  size_bytes: number;
-  sha256: string;
+export type AgentTaskReviewDependencies = {
+  download?: typeof downloadFile;
+  materializeApprovedTabular?: (input: {
+    db: Db;
+    snapshot: TaskSnapshot;
+    reviewId: string;
+    purpose: string;
+  }) => Promise<ApprovedTabularExportMaterialization>;
+};
+
+export type ApprovedExportDependencies = {
+  download?: typeof downloadFile;
+  verifyLock?: (input: {
+    taskId: string;
+    userId: string;
+    decisionId: string;
+    documentId: string;
+    versionId: string;
+  }) => Promise<boolean>;
 };
 
 function sha256(bytes: Uint8Array) {
@@ -63,7 +87,7 @@ function sha256(bytes: Uint8Array) {
 }
 
 export function approvedArtifactBytesMatch(
-  artifact: Pick<ApprovedArtifactSnapshot, "sha256">,
+  artifact: { sha256: string },
   bytes: Uint8Array,
 ) {
   return sha256(bytes) === artifact.sha256;
@@ -163,17 +187,21 @@ export async function getReviewBlockers(
 export async function captureApprovedArtifacts(
   db: Db,
   snapshot: TaskSnapshot,
+  dependencies: AgentTaskReviewDependencies = {},
 ): Promise<ApprovedArtifactSnapshot[]> {
   const links = controlledAgentReviewArtifactLinks(snapshot);
+  const draftLinks = links.filter((link) => link.artifact_type === "draft");
   const documentIds = Array.from(
-    new Set(links.map((artifact) => artifact.artifact_id)),
+    new Set(draftLinks.map((artifact) => artifact.artifact_id)),
   );
-  if (!documentIds.length) return [];
-
-  const { data: documents, error: documentError } = await db
-    .from("documents")
-    .select("id,current_version_id")
-    .in("id", documentIds);
+  const { data: documents, error: documentError } = documentIds.length
+    ? await db
+        .from("documents")
+        .select("id,current_version_id")
+        .in("id", documentIds)
+        .eq("user_id", snapshot.task.user_id)
+        .eq("project_id", snapshot.task.matter_id)
+    : { data: [], error: null };
   if (documentError) throw new Error(documentError.message);
   const versionIds = (documents ?? [])
     .map((document) => document.current_version_id as string | null)
@@ -192,30 +220,80 @@ export async function captureApprovedArtifacts(
     (versions ?? []).map((version) => [version.document_id as string, version]),
   );
 
-  const captured: ApprovedArtifactSnapshot[] = [];
-  for (const link of links) {
+  const capturedByLink = new Map<
+    (typeof links)[number],
+    ApprovedArtifactSnapshot
+  >();
+  // Read and validate every existing Draft first. A later Draft failure must
+  // not leave an otherwise unnecessary Tabular storage object behind.
+  for (const link of draftLinks) {
     const version = versionByDocument.get(link.artifact_id);
     if (!version?.id || !version.storage_path) {
       throw new Error(`No exportable version exists for ${link.purpose}.`);
     }
-    const raw = await downloadFile(version.storage_path as string);
+    const raw = await (dependencies.download ?? downloadFile)(
+      version.storage_path as string,
+    );
     if (!raw) throw new Error(`Stored bytes are missing for ${link.purpose}.`);
     const bytes = Buffer.from(raw);
-    captured.push({
-      artifact_type: link.artifact_type as "draft" | "tabular_review",
-      artifact_id: link.artifact_id,
-      purpose: link.purpose,
-      document_id: link.artifact_id,
-      version_id: version.id as string,
-      version_number: (version.version_number as number | null) ?? null,
-      filename:
-        (version.filename as string | null)?.trim() || "Approved artifact",
-      file_type: (version.file_type as string | null) ?? null,
-      size_bytes: bytes.byteLength,
-      sha256: sha256(bytes),
-    });
+    capturedByLink.set(
+      link,
+      approvedArtifactSnapshotSchema.parse({
+        artifact_type: "draft",
+        artifact_id: link.artifact_id,
+        purpose: link.purpose,
+        document_id: link.artifact_id,
+        version_id: version.id as string,
+        version_number: (version.version_number as number | null) ?? null,
+        filename:
+          (version.filename as string | null)?.trim() || "Approved artifact",
+        file_type: (version.file_type as string | null) ?? null,
+        size_bytes: bytes.byteLength,
+        sha256: sha256(bytes),
+      }),
+    );
   }
-  return captured;
+  const checkpoint =
+    snapshot.task.latest_checkpoint &&
+    typeof snapshot.task.latest_checkpoint === "object" &&
+    !Array.isArray(snapshot.task.latest_checkpoint)
+      ? (snapshot.task.latest_checkpoint as Record<string, unknown>)
+      : null;
+  for (const link of links.filter(
+    (candidate) => candidate.artifact_type === "tabular_review",
+  )) {
+    const litigationReceipt =
+      litigationEvidenceInventoryReceiptSchema.safeParse(
+        checkpoint?.litigation_evidence_inventory_receipt,
+      );
+    if (
+      !litigationReceipt.success ||
+      litigationReceipt.data.task_id !== snapshot.task.id ||
+      litigationReceipt.data.matter_id !== snapshot.task.matter_id ||
+      litigationReceipt.data.review_id !== link.artifact_id
+    ) {
+      throw new Error(
+        `No server approval materializer is registered for ${link.purpose}.`,
+      );
+    }
+    const materialize =
+      dependencies.materializeApprovedTabular ??
+      materializeApprovedLitigationEvidenceInventoryXlsx;
+    const materialized = await materialize({
+      db,
+      snapshot,
+      reviewId: link.artifact_id,
+      purpose: link.purpose,
+    });
+    capturedByLink.set(link, materialized.artifact);
+  }
+  return links.map((link) => {
+    const artifact = capturedByLink.get(link);
+    if (!artifact) {
+      throw new Error(`No approved artifact was captured for ${link.purpose}.`);
+    }
+    return artifact;
+  });
 }
 
 export async function loadApprovedExport(
@@ -223,6 +301,7 @@ export async function loadApprovedExport(
   taskId: string,
   userId: string,
   artifactId: string,
+  dependencies: ApprovedExportDependencies = {},
 ) {
   const { data: task } = await db
     .from("agent_tasks")
@@ -251,34 +330,104 @@ export async function loadApprovedExport(
       "Final export is blocked because the most recent review decision requests changes.",
     );
   }
-  const artifacts = Array.isArray(decision.artifact_snapshot)
-    ? (decision.artifact_snapshot as ApprovedArtifactSnapshot[])
-    : [];
-  const locked = artifacts.find(
-    (artifact) => artifact.artifact_id === artifactId,
+  if (!Array.isArray(decision.artifact_snapshot)) {
+    throw new Error("The approved version snapshot is malformed.");
+  }
+  const artifacts = decision.artifact_snapshot.map(
+    readApprovedArtifactSnapshot,
   );
-  if (!locked) {
+  if (artifacts.some((artifact) => artifact.state === "invalid")) {
+    throw new Error("The approved version snapshot is malformed.");
+  }
+  if (artifacts.some((artifact) => artifact.state === "legacy_tabular")) {
+    throw new Error(
+      "This historical approval Decision contains Tabular state with no fixed approved export bytes.",
+    );
+  }
+  const matching = artifacts.flatMap((item) =>
+    item.state === "current" && item.artifact.artifact_id === artifactId
+      ? [item.artifact]
+      : [],
+  );
+  if (matching.length !== 1) {
     throw new Error(
       "This artifact is not part of the approved version snapshot.",
     );
   }
+  const locked = matching[0]!;
+  const documentId =
+    locked.artifact_type === "draft"
+      ? locked.document_id
+      : locked.export_document_id;
+  const versionId =
+    locked.artifact_type === "draft"
+      ? locked.version_id
+      : locked.export_version_id;
 
   const { data: version, error: versionError } = await db
     .from("document_versions")
-    .select("id,document_id,storage_path,deleted_at")
-    .eq("id", locked.version_id)
-    .eq("document_id", locked.document_id)
+    .select(
+      "id,document_id,storage_path,version_number,filename,file_type,size_bytes,deleted_at",
+    )
+    .eq("id", versionId)
+    .eq("document_id", documentId)
     .maybeSingle();
   if (versionError) throw new Error(versionError.message);
   if (!version?.storage_path || version.deleted_at) {
     throw new Error("The approved artifact version is no longer available.");
   }
-  const raw = await downloadFile(version.storage_path as string);
+  const storedFilename =
+    typeof version.filename === "string" && version.filename.trim()
+      ? version.filename.trim()
+      : "Approved artifact";
+  if (
+    version.version_number !== locked.version_number ||
+    storedFilename !== locked.filename ||
+    version.file_type !== locked.file_type ||
+    version.size_bytes !== locked.size_bytes
+  ) {
+    throw new Error("The approved artifact metadata no longer matches.");
+  }
+  const verifyLock =
+    dependencies.verifyLock ??
+    (async (lockInput) => {
+      const { data, error } = await db.rpc("verify_approved_export_lock", {
+        p_task_id: lockInput.taskId,
+        p_user_id: lockInput.userId,
+        p_decision_id: lockInput.decisionId,
+        p_document_id: lockInput.documentId,
+        p_version_id: lockInput.versionId,
+      });
+      if (error) throw new Error(error.message);
+      return data === true;
+    });
+  const lockInput = {
+    taskId,
+    userId,
+    decisionId: String(decision.id),
+    documentId,
+    versionId,
+  };
+  if (!(await verifyLock(lockInput))) {
+    throw new Error(
+      "Final export is blocked because the approved version lock changed.",
+    );
+  }
+  const download = dependencies.download ?? downloadFile;
+  const raw = await download(version.storage_path as string);
   if (!raw) throw new Error("The approved artifact bytes are unavailable.");
   const bytes = Buffer.from(raw);
-  if (!approvedArtifactBytesMatch(locked, bytes)) {
+  if (
+    bytes.byteLength !== locked.size_bytes ||
+    !approvedArtifactBytesMatch(locked, bytes)
+  ) {
     throw new Error(
       "The approved artifact failed its SHA-256 integrity check.",
+    );
+  }
+  if (!(await verifyLock(lockInput))) {
+    throw new Error(
+      "Final export is blocked because the approved version lock changed.",
     );
   }
   return { bytes, artifact: locked, decision };

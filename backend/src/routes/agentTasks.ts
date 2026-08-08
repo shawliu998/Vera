@@ -32,7 +32,6 @@ import { resolveAgentWorkflowConstraint } from "../lib/agentTaskPlanner";
 import {
   captureApprovedArtifacts,
   getApprovalBlockers,
-  getReviewBlockers,
   loadApprovedExport,
 } from "../lib/agentTaskReviews";
 import { buildContentDisposition } from "../lib/storage";
@@ -441,21 +440,6 @@ agentTasksRouter.get(
     try {
       const db = createServerSupabase();
       const userId = res.locals.userId as string;
-      const snapshot = await getAgentTaskSnapshot(
-        db,
-        req.params.taskId,
-        userId,
-      );
-      if (!snapshot) {
-        return void res.status(404).json({ detail: "Agent task not found" });
-      }
-      const { blockers } = await getReviewBlockers(db, snapshot, userId);
-      if (blockers.length) {
-        return void res.status(409).json({
-          detail: `Final export is blocked: ${blockers.join(" ")}`,
-          blockers,
-        });
-      }
       const exported = await loadApprovedExport(
         db,
         req.params.taskId,
@@ -473,13 +457,22 @@ agentTasksRouter.get(
         "Content-Disposition",
         buildContentDisposition("attachment", exported.artifact.filename),
       );
-      res.setHeader("X-Vera-Approved-Version", exported.artifact.version_id);
+      res.setHeader(
+        "X-Vera-Approved-Version",
+        exported.artifact.artifact_type === "draft"
+          ? exported.artifact.version_id
+          : exported.artifact.export_version_id,
+      );
       res.setHeader("X-Vera-Approved-SHA256", exported.artifact.sha256);
       res.send(exported.bytes);
     } catch (error) {
       const detail =
         error instanceof Error ? error.message : "Final export failed";
-      if (/blocked|not part|no longer|unavailable|integrity/i.test(detail)) {
+      if (
+        /blocked|not part|no longer|unavailable|integrity|malformed|historical|metadata|lock changed/i.test(
+          detail,
+        )
+      ) {
         return void res.status(409).json({ detail });
       }
       routeError(res, error);

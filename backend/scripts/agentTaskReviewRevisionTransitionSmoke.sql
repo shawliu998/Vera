@@ -1,3 +1,5 @@
+begin;
+
 insert into public.projects(id, user_id, name)
 values (
   '13000000-0000-4000-8000-000000000001',
@@ -45,6 +47,7 @@ insert into public.agent_tasks(
   goal,
   status,
   current_step,
+  deliverables,
   latest_checkpoint,
   execution_lease_owner,
   execution_lease_expires_at
@@ -56,6 +59,7 @@ insert into public.agent_tasks(
     'Revision fixture',
     'completed',
     '53000000-0000-4000-8000-000000000005',
+    '[{"key":"review-memo","title":"Review memo","description":"Current reviewed memo","required":true,"artifact_type":"draft","purpose":"Review memo"}]'::jsonb,
     '{"step_receipts":[{"kind":"historical"}]}'::jsonb,
     '63000000-0000-4000-8000-000000000001',
     clock_timestamp() + interval '5 minutes'
@@ -67,7 +71,36 @@ insert into public.agent_tasks(
     'Approval fixture',
     'completed',
     '53000000-0000-4000-8000-000000000010',
-    '{}'::jsonb,
+    '[{"key":"review-memo","title":"Review memo","description":"Current reviewed memo","required":true,"artifact_type":"draft","purpose":"Review memo"}]'::jsonb,
+    jsonb_build_object(
+      'step_receipts',
+      jsonb_build_array(jsonb_build_object(
+        'kind', 'agent_step_receipt_v1',
+        'contract_version', 'agent_step_contract_v1',
+        'position', 0,
+        'attempt', 1,
+        'capability', 'verify',
+        'operation', 'verify',
+        'outcome', 'postconditions_satisfied',
+        'summary', 'Verified current memo.',
+        'source_version_ids', '[]'::jsonb,
+        'artifact_ids', jsonb_build_array(
+          '23000000-0000-4000-8000-000000000001'
+        ),
+        'verified_artifacts', jsonb_build_array(jsonb_build_object(
+          'kind', 'agent_verified_draft_artifact_v1',
+          'document_id', '23000000-0000-4000-8000-000000000001',
+          'version_id', '33000000-0000-4000-8000-000000000001',
+          'accepted_view_sha256', 'sha256:' || repeat('b', 64)
+        )),
+        'postconditions', jsonb_build_array(
+          jsonb_build_object(
+            'code', 'required_deliverables_current', 'status', 'pass'
+          ),
+          jsonb_build_object('code', 'verifier_passed', 'status', 'pass')
+        )
+      ))
+    ),
     null,
     null
   );
@@ -457,3 +490,5 @@ begin
     raise exception 'authenticated role can execute an internal review transition';
   end if;
 end $$;
+
+rollback;

@@ -6,14 +6,19 @@ import {
 } from "./agentTaskDeliverables";
 import type {
   AgentReviewStatus,
-  ApprovedArtifactSnapshot,
 } from "./agentTaskReviews";
 import { createServerSupabase } from "./supabase";
+import {
+  readApprovedArtifactSnapshot,
+} from "./agentApprovedArtifactSnapshot";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
 type TaskSnapshot = {
   task: {
+    id: string;
+    user_id: string;
+    matter_id: string;
     status: string;
     deliverables: Array<{
       key?: string;
@@ -46,6 +51,9 @@ export type CurrentArtifactVersion = {
   current_version_available: boolean;
   approved_version_id: string | null;
   approved_version_number: number | null;
+  current_revision_fingerprint: string | null;
+  approved_revision_fingerprint: string | null;
+  approved_snapshot_state: "current" | "legacy_tabular" | "invalid" | null;
   edited_after_approval: boolean;
   review_current_required: boolean;
 };
@@ -103,24 +111,107 @@ export function buildAgentReviewVersionState(
     created_at: string;
     artifact_snapshot: unknown[];
   } | null,
+  tabularReviews: Array<{ id: string }> = [],
+  currentTabularRevisions: Map<string, string | null> = new Map(),
 ): AgentReviewVersionState {
   const documentById = new Map(
     documents.map((document) => [document.id, document]),
   );
   const versionById = new Map(versions.map((version) => [version.id, version]));
   const approvedArtifacts = Array.isArray(latestApproved?.artifact_snapshot)
-    ? (latestApproved.artifact_snapshot as ApprovedArtifactSnapshot[])
+    ? latestApproved.artifact_snapshot.map(readApprovedArtifactSnapshot)
     : [];
+  const linkIdentityKeys = links.map(
+    (link) => `${link.artifact_type}:${link.artifact_id}`,
+  );
+  const approvedIdentityKeys = approvedArtifacts.map((item) =>
+    item.state === "invalid"
+      ? null
+      : `${item.artifact.artifact_type}:${item.artifact.artifact_id}`,
+  );
+  const approvalSnapshotGloballyValid =
+    !latestApproved ||
+    (approvedArtifacts.length === links.length &&
+      approvedIdentityKeys.every((key) => key !== null) &&
+      new Set(approvedIdentityKeys).size === approvedIdentityKeys.length &&
+      new Set(linkIdentityKeys).size === linkIdentityKeys.length &&
+      linkIdentityKeys.every(
+        (key) => approvedIdentityKeys.filter((candidate) => candidate === key).length === 1,
+      ));
+  const tabularReviewIds = new Set(tabularReviews.map((review) => review.id));
   const currentArtifacts = links.map((link) => {
+    const approvedRead =
+      approvedArtifacts.find(
+        (item) =>
+          item.state !== "invalid" &&
+          item.artifact.artifact_id === link.artifact_id,
+      ) ?? null;
+    const approvedSnapshotInvalid = Boolean(
+      latestApproved &&
+        (!approvalSnapshotGloballyValid ||
+          !approvedRead ||
+          approvedRead.state === "invalid" ||
+          (link.artifact_type === "draft" &&
+            (approvedRead.state !== "current" ||
+              approvedRead.artifact.artifact_type !== "draft")) ||
+          (link.artifact_type === "tabular_review" &&
+            (approvedRead.state === "legacy_tabular"
+              ? false
+              : approvedRead.state !== "current" ||
+                approvedRead.artifact.artifact_type !== "tabular_review"))),
+    );
+    if (link.artifact_type === "tabular_review") {
+      const available = tabularReviewIds.has(link.artifact_id);
+      const approved =
+        approvedRead?.state === "current" &&
+        approvedRead.artifact.artifact_type === "tabular_review"
+          ? approvedRead.artifact
+          : null;
+      const legacy = approvedRead?.state === "legacy_tabular";
+      const currentRevision = currentTabularRevisions.get(link.artifact_id) ?? null;
+      const differs = Boolean(
+        approved &&
+          (!currentRevision ||
+            currentRevision !== approved.revision_fingerprint),
+      );
+      return {
+        artifact_type: link.artifact_type,
+        artifact_id: link.artifact_id,
+        purpose: link.purpose,
+        current_version_id: null,
+        current_version_number: null,
+        current_filename: null,
+        current_file_type: null,
+        current_version_available: available,
+        approved_version_id: approved?.export_version_id ?? null,
+        approved_version_number: approved?.version_number ?? null,
+        current_revision_fingerprint: currentRevision,
+        approved_revision_fingerprint: approved?.revision_fingerprint ?? null,
+        approved_snapshot_state: approvedSnapshotInvalid
+          ? "invalid"
+          : legacy
+          ? "legacy_tabular"
+          : approved
+            ? "current"
+            : null,
+        edited_after_approval: Boolean(legacy || differs),
+        review_current_required:
+          approvedSnapshotInvalid ||
+          Boolean(legacy) ||
+          Boolean(approved && differs) ||
+          !available,
+      } satisfies CurrentArtifactVersion;
+    }
     const currentVersionId =
       documentById.get(link.artifact_id)?.current_version_id ?? null;
     const currentVersion = currentVersionId
       ? (versionById.get(currentVersionId) ?? null)
       : null;
     const approved =
-      approvedArtifacts.find(
-        (artifact) => artifact.artifact_id === link.artifact_id,
-      ) ?? null;
+      approvedRead?.state === "current" &&
+      approvedRead.artifact.artifact_type === "draft"
+        ? approvedRead.artifact
+        : null;
     const currentVersionAvailable = Boolean(
       currentVersion && !currentVersion.deleted_at,
     );
@@ -141,8 +232,18 @@ export function buildAgentReviewVersionState(
       current_version_available: currentVersionAvailable,
       approved_version_id: approved?.version_id ?? null,
       approved_version_number: approved?.version_number ?? null,
-      edited_after_approval: Boolean(currentVersionId && differs),
-      review_current_required: differs || unavailableAfterApproval,
+      current_revision_fingerprint: null,
+      approved_revision_fingerprint: null,
+      approved_snapshot_state: approvedSnapshotInvalid
+        ? "invalid"
+        : approved
+          ? "current"
+          : null,
+      edited_after_approval: Boolean(
+        approvedSnapshotInvalid || (currentVersionId && differs),
+      ),
+      review_current_required:
+        approvedSnapshotInvalid || differs || unavailableAfterApproval,
     } satisfies CurrentArtifactVersion;
   });
   return {
@@ -180,13 +281,20 @@ export async function getAgentReviewVersionState(
   if (!links.length) {
     return buildAgentReviewVersionState([], [], [], latestApproved);
   }
-  const documentIds = Array.from(
-    new Set(links.map((artifact) => artifact.artifact_id)),
-  );
-  const { data: documents, error: documentError } = await db
-    .from("documents")
-    .select("id,current_version_id")
-    .in("id", documentIds);
+  const draftDocumentIds = Array.from(new Set(links
+    .filter((artifact) => artifact.artifact_type === "draft")
+    .map((artifact) => artifact.artifact_id)));
+  const tabularReviewIds = Array.from(new Set(links
+    .filter((artifact) => artifact.artifact_type === "tabular_review")
+    .map((artifact) => artifact.artifact_id)));
+  const { data: documents, error: documentError } = draftDocumentIds.length
+    ? await db
+        .from("documents")
+        .select("id,current_version_id")
+        .in("id", draftDocumentIds)
+        .eq("user_id", snapshot.task.user_id)
+        .eq("project_id", snapshot.task.matter_id)
+    : { data: [], error: null };
   if (documentError) throw new Error(documentError.message);
   const versionIds = (documents ?? [])
     .map((document) => document.current_version_id as string | null)
@@ -198,6 +306,48 @@ export async function getAgentReviewVersionState(
         .in("id", versionIds)
     : { data: [], error: null };
   if (versionError) throw new Error(versionError.message);
+  const { data: tabularReviews, error: tabularReviewsError } =
+    tabularReviewIds.length
+      ? await db
+          .from("tabular_reviews")
+          .select("id,project_id,user_id,row_protocol")
+          .in("id", tabularReviewIds)
+      : { data: [], error: null };
+  if (tabularReviewsError) throw new Error(tabularReviewsError.message);
+
+  const approvedArtifacts = Array.isArray(latestApproved?.artifact_snapshot)
+    ? latestApproved.artifact_snapshot.map(readApprovedArtifactSnapshot)
+    : [];
+  const currentTabularRevisions = new Map<string, string | null>();
+  for (const approved of approvedArtifacts) {
+    if (
+      approved.state !== "current" ||
+      approved.artifact.artifact_type !== "tabular_review"
+    ) {
+      continue;
+    }
+    const { data, error } = await db.rpc(
+      "read_agent_tabular_review_revision_fingerprint_v1",
+      {
+        p_task_id: snapshot.task.id,
+        p_user_id: snapshot.task.user_id,
+        p_review_id: approved.artifact.review_id,
+        p_expected_input_digest: approved.artifact.input_digest,
+      },
+    );
+    if (error) throw new Error(error.message);
+    const row = (Array.isArray(data) ? data[0] : data) as
+      | Record<string, unknown>
+      | null;
+    currentTabularRevisions.set(
+      approved.artifact.review_id,
+      row?.outcome === "current" &&
+      typeof row.revision_fingerprint === "string" &&
+      /^[a-f0-9]{64}$/.test(row.revision_fingerprint)
+        ? row.revision_fingerprint
+        : null,
+    );
+  }
   return buildAgentReviewVersionState(
     links,
     (documents ?? []) as Array<{
@@ -213,5 +363,17 @@ export async function getAgentReviewVersionState(
       deleted_at: string | null;
     }>,
     latestApproved,
+    ((tabularReviews ?? []) as Array<{
+      id: string;
+      project_id: string | null;
+      user_id: string | null;
+      row_protocol: string | null;
+    }>).filter(
+      (review) =>
+        review.project_id === snapshot.task.matter_id &&
+        review.user_id === snapshot.task.user_id &&
+        review.row_protocol === "document_rows",
+    ),
+    currentTabularRevisions,
   );
 }

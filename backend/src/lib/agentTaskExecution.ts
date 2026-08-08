@@ -83,7 +83,7 @@ import { DEFAULT_MAIN_MODEL } from "./llm";
 type Db = ReturnType<typeof createServerSupabase>;
 type Snapshot = NonNullable<Awaited<ReturnType<typeof getAgentTaskSnapshot>>>;
 
-class AgentStepPostconditionError extends Error {
+export class AgentStepPostconditionError extends Error {
   constructor(
     readonly missing: string[],
     readonly facts: Record<string, unknown>,
@@ -93,7 +93,7 @@ class AgentStepPostconditionError extends Error {
   }
 }
 
-async function buildCurrentStepReceipt(
+export async function buildCurrentStepReceipt(
   db: Db,
   snapshot: Snapshot,
   execution: Awaited<ReturnType<typeof executeAgentStep>>,
@@ -229,6 +229,87 @@ async function buildCurrentStepReceipt(
     ) {
       satisfied.add("verifier_passed");
     }
+    const verifiedArtifacts = verification?.verifiedArtifacts ?? [];
+    const controlledDeliverables: Array<
+      | {
+          kind: "draft";
+          documentId: string;
+          versionId: string;
+          acceptedViewSha256: string;
+        }
+      | {
+          kind: "tabular_review";
+          reviewId: string;
+          acceptedViewSha256: string;
+        }
+    > = [];
+    for (const deliverable of verification?.packet.deliverables ?? []) {
+        if (
+          deliverable.artifact_type === "draft" &&
+          deliverable.document_id !== null &&
+          deliverable.current_version_id !== null &&
+          deliverable.accepted_view_sha256 !== null
+        ) {
+          controlledDeliverables.push({
+            kind: "draft",
+            documentId: deliverable.document_id,
+            versionId: deliverable.current_version_id,
+            acceptedViewSha256: deliverable.accepted_view_sha256,
+          });
+          continue;
+        }
+        if (
+          deliverable.artifact_type === "tabular_review" &&
+          deliverable.artifact_id !== null &&
+          deliverable.accepted_view_sha256 !== null
+        ) {
+          controlledDeliverables.push({
+            kind: "tabular_review",
+            reviewId: deliverable.artifact_id,
+            acceptedViewSha256: deliverable.accepted_view_sha256,
+          });
+        }
+    }
+    const matchesExactlyOnce = controlledDeliverables.every((deliverable) => {
+      const matches = verifiedArtifacts.filter((artifact) =>
+        deliverable.kind === "draft"
+          ? artifact.kind === "agent_verified_draft_artifact_v1" &&
+            artifact.document_id === deliverable.documentId &&
+            artifact.version_id === deliverable.versionId &&
+            artifact.accepted_view_sha256 === deliverable.acceptedViewSha256
+          : artifact.kind === "agent_verified_tabular_artifact_v1" &&
+            artifact.review_id === deliverable.reviewId &&
+            artifact.accepted_view_sha256 === deliverable.acceptedViewSha256,
+      );
+      return matches.length === 1;
+    });
+    const hasNoExtraIdentity = verifiedArtifacts.every((artifact) =>
+      controlledDeliverables.some((deliverable) =>
+        deliverable.kind === "draft"
+          ? artifact.kind === "agent_verified_draft_artifact_v1" &&
+            artifact.document_id === deliverable.documentId &&
+            artifact.version_id === deliverable.versionId &&
+            artifact.accepted_view_sha256 === deliverable.acceptedViewSha256
+          : artifact.kind === "agent_verified_tabular_artifact_v1" &&
+            artifact.review_id === deliverable.reviewId &&
+            artifact.accepted_view_sha256 === deliverable.acceptedViewSha256,
+      ),
+    );
+    if (
+      verification?.result.outcome === "clean_pass" &&
+      (!matchesExactlyOnce ||
+        !hasNoExtraIdentity ||
+        controlledDeliverables.length !== verifiedArtifacts.length)
+    ) {
+      throw new AgentStepPostconditionError(["verified_artifact_identity"], {
+        step_id: step.id,
+        attempt: step.attempt,
+        reason:
+          "The final verifier identity does not exactly match every readable controlled deliverable.",
+        expected_identity_count: controlledDeliverables.length,
+        actual_identity_count: verifiedArtifacts.length,
+      });
+    }
   }
 
   const missing = contract.deterministic_postconditions.filter(
@@ -243,6 +324,7 @@ async function buildCurrentStepReceipt(
         sourceVersionIds,
         artifactIds,
         satisfiedPostconditions: [...satisfied],
+        verifiedArtifacts: execution.verification?.verifiedArtifacts ?? [],
       });
     }
     throw new AgentStepPostconditionError(missing, {
@@ -262,7 +344,45 @@ async function buildCurrentStepReceipt(
     sourceVersionIds,
     artifactIds,
     satisfiedPostconditions: [...satisfied],
+    verifiedArtifacts:
+      contract.capability === "verify"
+        ? (execution.verification?.verifiedArtifacts ?? [])
+        : undefined,
   });
+}
+
+/**
+ * Classifies the one final Step transition before any Task state write. A
+ * verifier identity mismatch is a recoverable postcondition pause, while a
+ * review receipt advances normally into the existing lawyer-review path.
+ */
+export async function prepareCurrentAgentStepTransition(
+  db: Db,
+  snapshot: Snapshot,
+  execution: Awaited<ReturnType<typeof executeAgentStep>>,
+): Promise<
+  | { kind: "advance"; stepReceipt: Awaited<ReturnType<typeof buildCurrentStepReceipt>> }
+  | {
+      kind: "postcondition_pause";
+      summary: string;
+      facts: Record<string, unknown>;
+      artifacts: Awaited<ReturnType<typeof executeAgentStep>>["artifacts"];
+    }
+> {
+  try {
+    return {
+      kind: "advance",
+      stepReceipt: await buildCurrentStepReceipt(db, snapshot, execution),
+    };
+  } catch (error) {
+    if (!(error instanceof AgentStepPostconditionError)) throw error;
+    return {
+      kind: "postcondition_pause",
+      summary: `${error.message}. Existing work was preserved for a resumable review.`,
+      facts: error.facts,
+      artifacts: execution.artifacts,
+    };
+  }
 }
 
 export function recoverCommittedStepEffectArtifact(
@@ -1214,24 +1334,24 @@ export async function advanceAgentTaskExecution(input: {
 
   const beforeCommit = await executionCanContinue();
   if (!beforeCommit.active) return beforeCommit.snapshot;
-  try {
-    const stepReceipt = await buildCurrentStepReceipt(db, current, execution);
-    return commitAgentTaskAdvance({
-      db,
-      taskId,
-      userId,
-      leaseGuard: input.leaseGuard,
-      result: { ...execution, stepReceipt },
+  const transition = await prepareCurrentAgentStepTransition(
+    db,
+    current,
+    execution,
+  );
+  if (transition.kind === "postcondition_pause") {
+    return pauseAgentTaskForStepPostcondition(db, taskId, userId, {
+      summary: transition.summary,
+      facts: transition.facts,
+      artifacts: transition.artifacts,
+      leaseOwner: input.leaseGuard.ownerToken,
     });
-  } catch (error) {
-    if (error instanceof AgentStepPostconditionError) {
-      return pauseAgentTaskForStepPostcondition(db, taskId, userId, {
-        summary: `${error.message}. Existing work was preserved for a resumable review.`,
-        facts: error.facts,
-        artifacts: execution.artifacts,
-        leaseOwner: input.leaseGuard.ownerToken,
-      });
-    }
-    throw error;
   }
+  return commitAgentTaskAdvance({
+    db,
+    taskId,
+    userId,
+    leaseGuard: input.leaseGuard,
+    result: { ...execution, stepReceipt: transition.stepReceipt },
+  });
 }

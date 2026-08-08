@@ -331,6 +331,7 @@ test("a verifier gap produces a review receipt without claiming a clean pass", (
     summary: "Citation relocation requires lawyer review.",
     sourceVersionIds: ["version-1"],
     artifactIds: [],
+    verifiedArtifacts: [],
     satisfiedPostconditions: [
       "summary_present",
       "source_versions_recorded",
@@ -343,6 +344,51 @@ test("a verifier gap produces a review receipt without claiming a clean pass", (
       .filter((postcondition) => postcondition.status === "fail")
       .map((postcondition) => postcondition.code),
     ["source_requirement_satisfied", "verifier_passed"],
+  );
+});
+
+test("new verifier receipts persist only strict server-owned Artifact identities while old receipts remain readable", () => {
+  const task = versionedTask();
+  const contracts = readAgentStepContracts(task);
+  assert.equal(contracts.state, "valid");
+  if (contracts.state !== "valid") return;
+  const receipt = buildAgentStepReceipt({
+    contract: contracts.contracts.at(-1)!,
+    attempt: 1,
+    summary: "Every current artifact is verified.",
+    sourceVersionIds: ["version-1"],
+    artifactIds: ["draft-1"],
+    verifiedArtifacts: [
+      {
+        kind: "agent_verified_draft_artifact_v1",
+        document_id: "11111111-1111-4111-8111-111111111111",
+        version_id: "22222222-2222-4222-8222-222222222222",
+        accepted_view_sha256: `sha256:${"a".repeat(64)}`,
+      },
+    ],
+    satisfiedPostconditions: contracts.contracts.at(-1)!
+      .deterministic_postconditions,
+  });
+  assert.equal(receipt.verified_artifacts?.length, 1);
+  const legacy = { ...receipt } as Record<string, unknown>;
+  delete legacy.verified_artifacts;
+  assert.equal(
+    readAgentStepReceipts({ step_receipts: [legacy] })[0]
+      ?.verified_artifacts,
+    undefined,
+  );
+  assert.throws(
+    () =>
+      buildAgentStepReceipt({
+        contract: contracts.contracts.at(-1)!,
+        attempt: 1,
+        summary: "Missing identity.",
+        sourceVersionIds: ["version-1"],
+        artifactIds: [],
+        satisfiedPostconditions: contracts.contracts.at(-1)!
+          .deterministic_postconditions,
+      }),
+    /requires server-owned Artifact identities/,
   );
 });
 

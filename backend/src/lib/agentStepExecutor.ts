@@ -69,6 +69,7 @@ import {
   type AgentVerificationResultV1,
 } from "./agent-kernel/verification/verifierCore";
 import { buildCurrentAgentVerificationPacket } from "./agentTaskVerificationRepository";
+import type { VerifiedArtifactIdentity } from "./agent-kernel/contracts/verifiedArtifactIdentity";
 import { buildAgentSourceAcquisitionWorkProductContext } from "./agentSourceAcquisitionWorkProduct";
 import { resolveAgentVerifierProfile } from "./agentPackVerifierRegistry";
 import {
@@ -282,6 +283,8 @@ export type AgentStepExecutionResult = {
   verification?: {
     packet: AgentVerificationPacketV1;
     result: AgentVerificationResultV1;
+    /** Server-built identity; it is deliberately not put in the model packet. */
+    verifiedArtifacts: VerifiedArtifactIdentity[];
   } | null;
   checkpointValues?: Record<string, unknown>;
 };
@@ -974,7 +977,7 @@ export async function executeAgentStep(input: {
     verifierOnly && stepContract
       ? await verifyTaskCitationLinks(db, snapshot, userId)
       : null;
-  const verificationPacket =
+  const verificationBuild =
     verifierOnly && stepContract
       ? await buildCurrentAgentVerificationPacket({
           db,
@@ -996,6 +999,7 @@ export async function executeAgentStep(input: {
           },
         })
       : null;
+  const verificationPacket = verificationBuild?.packet ?? null;
   if (verificationPacket) {
     prompt = [
       "Verify only whether each current accepted-view deliverable answers the fixed WORK TASK GOAL.",
@@ -1491,6 +1495,7 @@ export async function executeAgentStep(input: {
           packet: verificationPacket,
           semanticResult: semanticVerification!,
         }),
+        verifiedArtifacts: verificationBuild!.verifiedArtifacts,
       }
     : null;
   const contractPlaybookAnalysisReceipt =
