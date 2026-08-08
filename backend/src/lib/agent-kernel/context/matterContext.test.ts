@@ -128,6 +128,10 @@ test("progress checkpoint replacement retains assignment and durable execution r
           revision_id: "revision-1",
         },
         step_receipts: [{ kind: "agent_step_receipt_v1" }],
+        source_acquisition: {
+          schema_version: "provider_source_acquisition_state_v1",
+          phase: "selection_required",
+        },
         runner_retry: { attempt: 2 },
         user_input: { message: "transient" },
       },
@@ -144,6 +148,10 @@ test("progress checkpoint replacement retains assignment and durable execution r
         revision_id: "revision-1",
       },
       step_receipts: [{ kind: "agent_step_receipt_v1" }],
+      source_acquisition: {
+        schema_version: "provider_source_acquisition_state_v1",
+        phase: "selection_required",
+      },
       step_id: "step-2",
       iteration: 1,
       summary: "Done",

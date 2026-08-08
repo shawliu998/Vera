@@ -98,6 +98,11 @@ approval, export, or a second source database.
   selections to the connector pin. Search requests are compiled only from that
   specification; selected reads are compiled only from an actual validated,
   non-citable discovery, not from a model-supplied external identifier.
+- Bounded search progress now persists under the existing Task checkpoint:
+  page receipts, coverage, deduplicated non-citable discoveries, truncation or
+  no-result issues, and exact selected discovery refs. Immutable Task contract,
+  fixed Matter context, durable Step receipts, and acquisition progress survive
+  progress-checkpoint replacement; transient retry and free-text input do not.
 - The current EPO OPS endpoint and CQL semantics were checked against the EPO
   OPS 3.2 reference guide and official service page on 2026-08-08:
   <https://www.epo.org/en/searching-for-patents/data/web-services/ops> and
@@ -105,10 +110,9 @@ approval, export, or a second source database.
 
 ## Remaining gates
 
-1. Persist the fixed acquisition specification and bounded discoveries in the
-   existing Task checkpoint, then add the exact lawyer-selection transition for
-   one explicit `source.acquire` workflow. Ordinary patent analysis Tasks still
-   correctly receive no pin.
+1. Execute the exact selected reads, persist their body-free import receipts,
+   and complete one explicit `source.acquire` workflow. Ordinary patent
+   analysis Tasks still correctly receive no pin.
 2. Decide whether PatSnap provides a material, licensed coverage increment over
    EPO OPS before adapting it; do not copy the old parallel patent subsystem.
 3. Run real credential, database, and product-level patent research acceptance;

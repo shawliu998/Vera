@@ -162,6 +162,7 @@ export function mergeImmutableAgentTaskCheckpoint(
       "resolved_required_input_ids",
       "revision_request",
       "step_receipts",
+      "source_acquisition",
     ]) {
       if (Object.hasOwn(row, key)) retained[key] = row[key];
     }
