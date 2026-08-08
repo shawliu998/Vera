@@ -1147,6 +1147,73 @@ export async function getTabularReview(
     return apiRequest<TabularReviewDetailOut>(`/tabular-review/${reviewId}`);
 }
 
+export type LitigationEvidenceReviewProgress = {
+    total: number;
+    generated: number;
+    verified: number;
+    unresolved: number;
+    needs_correction: number;
+    remaining: number;
+    first_incomplete_cell_id: string | null;
+};
+
+export type LitigationEvidenceReviewSnapshot = {
+    task_id: string;
+    task_status: string;
+    review_id: string;
+    context: {
+        procedural_stage: "first_instance";
+        represented_side:
+            | "claimant_plaintiff"
+            | "defendant_respondent"
+            | "appellant"
+            | "appellee"
+            | "applicant"
+            | "respondent";
+    };
+    progress: LitigationEvidenceReviewProgress;
+};
+
+export type LitigationEvidenceCellReviewResult =
+    LitigationEvidenceReviewSnapshot & {
+        cell: {
+            cell_id: string | null;
+            cell_status: string | null;
+            review_status: "verified" | "unresolved" | "needs_correction" | null;
+            review_revision: number | null;
+            reviewed_at: string | null;
+        };
+    };
+
+export async function getLitigationEvidenceReviewProgress(
+    reviewId: string,
+): Promise<LitigationEvidenceReviewSnapshot> {
+    return apiRequest<LitigationEvidenceReviewSnapshot>(
+        `/tabular-review/${encodeURIComponent(reviewId)}/litigation-review-progress`,
+    );
+}
+
+export async function reviewLitigationEvidenceCell(
+    reviewId: string,
+    cellId: string,
+    input: {
+        decision: "verified" | "unresolved";
+        expectedReviewRevision: number;
+    },
+): Promise<LitigationEvidenceCellReviewResult> {
+    return apiRequest<LitigationEvidenceCellReviewResult>(
+        `/tabular-review/${encodeURIComponent(reviewId)}/cells/${encodeURIComponent(cellId)}/lawyer-review`,
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                decision: input.decision,
+                expected_review_revision: input.expectedReviewRevision,
+            }),
+        },
+    );
+}
+
 export async function updateTabularReview(
     reviewId: string,
     payload: {

@@ -75,6 +75,7 @@ import {
   executeLitigationEvidenceInventoryStep,
   isLitigationEvidenceInventoryCreationStep,
 } from "./agentLitigationEvidenceInventoryStepExecutor";
+import { LitigationEvidenceInventoryDownstreamContextError } from "./agentLitigationEvidenceInventoryDownstreamContext";
 import { readLitigationEvidenceInventoryContext } from "./agent-packs/litigation/litigationEvidenceInventoryContext";
 import { getUserModelSettings } from "./userSettings";
 import { DEFAULT_MAIN_MODEL } from "./llm";
@@ -841,6 +842,22 @@ export async function advanceAgentTaskExecution(input: {
       return pauseAgentTaskForStateTransition(db, taskId, userId, error, {
         leaseOwner: input.leaseGuard.ownerToken,
       });
+    }
+    if (error instanceof LitigationEvidenceInventoryDownstreamContextError) {
+      return pauseAgentTaskForStateTransition(
+        db,
+        taskId,
+        userId,
+        new AgentTaskStateTransitionError(
+          "task_state_transition_conflict",
+          "The server could not safely bind the completed Evidence Inventory to this downstream Step. Existing evidence and lawyer decisions were preserved for resumable review.",
+          {
+            litigation_evidence_downstream_context_issue_code: error.code,
+            ...error.facts,
+          },
+        ),
+        { leaseOwner: input.leaseGuard.ownerToken },
+      );
     }
     if (isAgentStepEffectTransitionError(error)) {
       if (error.outcome === "lease_lost") {

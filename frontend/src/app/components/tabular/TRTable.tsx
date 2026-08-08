@@ -52,6 +52,7 @@ interface Props {
     cells: TabularCell[];
     savingColumn: boolean;
     savingColumnsConfig: boolean;
+    readOnly?: boolean;
     selectedDocIds: string[];
     uploadingFilenames?: string[];
     dragOverFiles?: boolean;
@@ -80,6 +81,7 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
         cells,
         savingColumn,
         savingColumnsConfig,
+        readOnly = false,
         selectedDocIds,
         uploadingFilenames = [],
         dragOverFiles = false,
@@ -249,26 +251,28 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                         <p className="mt-1 text-xs text-gray-400 text-left">
                             Add columns and documents to get started.
                         </p>
-                        <div className="mt-4 flex items-center gap-2">
-                            <PillButton
-                                tone="black"
-                                size="sm"
-                                onClick={onAddColumn}
-                                className="px-3"
-                            >
-                                <Plus className="h-3.5 w-3.5" />
-                                Add Columns
-                            </PillButton>
-                            <PillButton
-                                tone="white"
-                                size="sm"
-                                onClick={onAddDocuments}
-                                className="px-3"
-                            >
-                                <Upload className="h-3.5 w-3.5" />
-                                Add Documents
-                            </PillButton>
-                        </div>
+                        {!readOnly && (
+                            <div className="mt-4 flex items-center gap-2">
+                                <PillButton
+                                    tone="black"
+                                    size="sm"
+                                    onClick={onAddColumn}
+                                    className="px-3"
+                                >
+                                    <Plus className="h-3.5 w-3.5" />
+                                    Add Columns
+                                </PillButton>
+                                <PillButton
+                                    tone="white"
+                                    size="sm"
+                                    onClick={onAddDocuments}
+                                    className="px-3"
+                                >
+                                    <Upload className="h-3.5 w-3.5" />
+                                    Add Documents
+                                </PillButton>
+                            </div>
+                        )}
                     </div>
                 </div>
             </TableScrollArea>
@@ -287,15 +291,17 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                     <div
                         className={`sticky left-0 z-[80] ${DOC_COL_W} ${TR_STICKY_CELL_BG} border-b border-r border-gray-200 flex items-center py-2 pl-4 pr-2 text-left text-xs font-medium text-gray-500 select-none`}
                     >
-                        <input
-                            type="checkbox"
-                            checked={allSelected}
-                            ref={(el) => {
-                                if (el) el.indeterminate = someSelected;
-                            }}
-                            onChange={toggleAll}
-                            className={TABLE_CHECKBOX_CLASS}
-                        />
+                        {!readOnly && (
+                            <input
+                                type="checkbox"
+                                checked={allSelected}
+                                ref={(el) => {
+                                    if (el) el.indeterminate = someSelected;
+                                }}
+                                onChange={toggleAll}
+                                className={TABLE_CHECKBOX_CLASS}
+                            />
+                        )}
                         <span>Document</span>
                     </div>
                     {columns.map((col) => (
@@ -306,24 +312,30 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                         >
                             <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
                                 <span className="truncate">{col.name}</span>
-                                <TREditColumnMenu
-                                    column={col}
-                                    closeSignal={scrollCloseSignal}
-                                    disabled={savingColumn || savingColumnsConfig}
-                                    onSave={onUpdateColumn}
-                                    onDelete={onDeleteColumn}
-                                />
+                                {!readOnly && (
+                                    <TREditColumnMenu
+                                        column={col}
+                                        closeSignal={scrollCloseSignal}
+                                        disabled={
+                                            savingColumn || savingColumnsConfig
+                                        }
+                                        onSave={onUpdateColumn}
+                                        onDelete={onDeleteColumn}
+                                    />
+                                )}
                             </div>
                         </div>
                     ))}
                     <div className="flex-1 border-b border-gray-200 flex items-center justify-start p-2 min-w-8">
-                        <button
-                            onClick={onAddColumn}
-                            disabled={savingColumn || savingColumnsConfig}
-                            className="flex items-center justify-center text-gray-400 hover:text-gray-700 transition-colors disabled:text-gray-200"
-                        >
-                            <Plus className="h-4 w-4" />
-                        </button>
+                        {!readOnly && (
+                            <button
+                                onClick={onAddColumn}
+                                disabled={savingColumn || savingColumnsConfig}
+                                className="flex items-center justify-center text-gray-400 hover:text-gray-700 transition-colors disabled:text-gray-200"
+                            >
+                                <Plus className="h-4 w-4" />
+                            </button>
+                        )}
                     </div>
                 </div>
             }
@@ -379,12 +391,14 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                             <div
                                 className={`sticky left-0 z-[60] ${DOC_COL_W} border-b border-r border-gray-200 py-2 pl-4 pr-2 text-xs text-gray-800 flex items-center transition-colors ${stickyRowBg} ${isSelected ? "" : APP_SURFACE_GROUP_HOVER_CLASS}`}
                             >
-                                <input
-                                    type="checkbox"
-                                    checked={selectedDocIds.includes(doc.id)}
-                                    onChange={() => toggleDoc(doc.id)}
-                                    className={TABLE_CHECKBOX_CLASS}
-                                />
+                                {!readOnly && (
+                                    <input
+                                        type="checkbox"
+                                        checked={selectedDocIds.includes(doc.id)}
+                                        onChange={() => toggleDoc(doc.id)}
+                                        className={TABLE_CHECKBOX_CLASS}
+                                    />
+                                )}
                                 <span
                                     className="line-clamp-1"
                                     title={doc.filename}

@@ -19,6 +19,12 @@ export interface AgentTaskOutputRow {
   linkedArtifact: AgentArtifactLink | null;
 }
 
+export function agentTaskOutputCanOpen(output: AgentTaskOutputRow) {
+  if (!output.linkedArtifact) return false;
+  if (output.linkedArtifact.artifact_type === "tabular_review") return true;
+  return output.currentVersion?.current_version_available !== false;
+}
+
 export type AgentTaskProviderPause = {
   classification:
     | "provider_capacity"

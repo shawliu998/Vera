@@ -316,6 +316,32 @@ all fixed identities server-side, deduplicates quotations into deterministic
 citation ids, and leaves every compiled candidate `unverified`. This removes
 protocol work from the model without weakening the fixed-source boundary.
 
+## Litigation Evidence Inventory shared-UI preflight — 2026-08-08
+
+The review surface remains the existing Matter-owned Tabular Review rather
+than a litigation-specific page. The visual comparison source is Mike Tabular
+at `docs/screenshots/product-scope-audit-2026-07-22/14-mike-tabular-1280x800.png`;
+the existing Vera comparison is
+`docs/screenshots/product-scope-audit-2026-07-22/23-vera-tabular-post-change-1280x800.png`;
+and the narrow Mike interaction reference is
+`docs/screenshots/product-scope-audit-2026-07-22/24-mike-tabular-detail-narrow-393x900.png`.
+
+| Inherited region | Decision | Canonical object and purpose |
+| --- | --- | --- |
+| Mike shell, breadcrumb and table | Keep | Matter-owned `TabularReview`; the lawyer reads the generated inventory in the shared work surface. |
+| Table rows and columns | Keep, read-only for the Task-owned Review | Fixed `TabularCell` values; no lawyer mutation changes a source, layout or model result. |
+| Detail pane | Adapt | Fixed `DocumentVersion` citations, page/locator inspection, and one per-cell lawyer disposition. |
+| Bottom action region | Adapt | Server progress identifies the first incomplete `TabularCell`; only a completed server count enables the existing Task input transition. |
+| Generic table actions and export | Remove for the Task-owned Review | They would alter or export an intermediate review rather than the fixed Task deliverable. |
+
+The primary lawyer operation is: open the first incomplete finding, inspect one
+continuous fixed-source quotation, then choose **Verify against source** or
+**Keep unresolved**. The stated context is first instance and the server-owned
+represented side. This UI slice is exploratory until it has a running
+same-size Mike/Vera capture, keyboard visible-focus check, long Chinese check,
+125%/150% zoom check and narrow-window check; it is not implementation-ready
+until those acceptance items and the end-to-end source review flow pass.
+
 ## Legacy cleanup rule
 
 The earlier Aletheia civil-litigation workbench, dedicated routes and local

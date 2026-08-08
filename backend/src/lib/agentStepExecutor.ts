@@ -81,6 +81,7 @@ import {
   createLitigationEvidenceInventoryContextRequiredInput,
   readLitigationEvidenceInventoryContext,
 } from "./agent-packs/litigation/litigationEvidenceInventoryContext";
+import { buildLitigationEvidenceInventoryDownstreamContext } from "./agentLitigationEvidenceInventoryDownstreamContext";
 import {
   contractPlaybookReceiptSchema,
   ContractPlaybookStructuredOutputError,
@@ -136,6 +137,7 @@ function taskPrompt(
   stepIndex: number,
   artifactManifest: string[],
   workflowInstruction?: string,
+  litigationEvidenceAcceptedView?: string | null,
 ) {
   const currentStep = snapshot.task.current_plan[stepIndex];
   const completed = snapshot.task.current_plan
@@ -203,6 +205,7 @@ function taskPrompt(
     litigationEvidenceContext
       ? `FIXED LITIGATION EVIDENCE CONTEXT\n${JSON.stringify(litigationEvidenceContext)}`
       : "",
+    litigationEvidenceAcceptedView ?? "",
     contractPlaybookReceipt
       ? `FIXED CONTRACT PLAYBOOK RECEIPT\n${JSON.stringify(contractPlaybookReceipt)}`
       : "",
@@ -903,6 +906,17 @@ export async function executeAgentStep(input: {
         .filter(Boolean)
         .join("\n")
     : undefined;
+  const litigationEvidenceAcceptedView =
+    await buildLitigationEvidenceInventoryDownstreamContext({
+      db,
+      snapshot,
+      userId,
+      matter: fixedMatterContext,
+      currentStepIndex: stepIndex,
+      currentStepIsVerifier:
+        stepContract?.capability === "verify" ||
+        snapshot.task.status === "verifying",
+    });
   let prompt = input.instructionOverride
     ? `${taskPrompt(
         snapshot,
@@ -912,6 +926,7 @@ export async function executeAgentStep(input: {
             `- ${artifact.purpose}: ${artifact.artifact_type}/${artifact.artifact_id}`,
         ),
         workflowInstruction,
+        litigationEvidenceAcceptedView,
       )}\n\nREPAIR INSTRUCTION\n${input.instructionOverride}`
     : taskPrompt(
         snapshot,
@@ -921,6 +936,7 @@ export async function executeAgentStep(input: {
             `- ${artifact.purpose}: ${artifact.artifact_type}/${artifact.artifact_id}`,
         ),
         workflowInstruction,
+        litigationEvidenceAcceptedView,
       );
   const repairPass = Boolean(
     input.instructionOverride?.startsWith(

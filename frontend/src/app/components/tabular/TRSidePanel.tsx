@@ -12,6 +12,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+    Check,
     ChevronDown,
     ChevronLeft,
     ChevronRight,
@@ -21,7 +22,12 @@ import {
     RefreshCw,
     X,
 } from "lucide-react";
-import type { ColumnConfig, Document, TabularCell } from "../shared/types";
+import type {
+    ColumnConfig,
+    Document,
+    TabularCell,
+    TabularRecordCitation,
+} from "../shared/types";
 import { isSpreadsheetFilename } from "../shared/types";
 import { preprocessCitations, type ParsedCitation } from "./citation-utils";
 import { getPillClass } from "./pillUtils";
@@ -51,6 +57,8 @@ interface Props {
     cell: TabularCell;
     document: Document;
     documents: Document[];
+    /** All Review Documents, used to resolve a citation's fixed document id. */
+    sourceDocuments?: Document[];
     column: ColumnConfig;
     columns: ColumnConfig[];
     onClose: () => void;
@@ -68,6 +76,17 @@ interface Props {
     citationCell?: string;
     /** One-based citation number shown in the cell content */
     citationRef?: number;
+    /** Task-owned Evidence Inventory controls; absent for an ordinary review. */
+    litigationEvidence?: {
+        stageLabel: string;
+        representedSideLabel: string;
+        citations: TabularRecordCitation[];
+        reviewStatus?: "verified" | "unresolved" | "needs_correction" | null;
+        reviewActive: boolean;
+        saving: boolean;
+        error: string | null;
+        onReview: (decision: "verified" | "unresolved") => Promise<void>;
+    };
 }
 
 type TRPanelCitation = {
@@ -76,6 +95,9 @@ type TRPanelCitation = {
     sheet?: string;
     cell?: string;
     citationRef?: number;
+    documentId?: string;
+    versionId?: string;
+    locatorLabel?: string;
 };
 
 const FLAG_BADGE: Record<string, string> = {
@@ -98,6 +120,7 @@ export function TRSidePanel({
     cell,
     document: doc,
     documents,
+    sourceDocuments,
     column,
     columns,
     onClose,
@@ -109,6 +132,7 @@ export function TRSidePanel({
     citationSheet,
     citationCell,
     citationRef,
+    litigationEvidence,
 }: Props) {
     const sortedColumns = [...columns].sort((a, b) => a.index - b.index);
     const currentPos = sortedColumns.findIndex((c) => c.index === column.index);
@@ -149,6 +173,11 @@ export function TRSidePanel({
               }
             : undefined,
     );
+    const documentForView = docCitation?.documentId
+        ? (sourceDocuments ?? documents).find(
+              (candidate) => candidate.id === docCitation.documentId,
+          )
+        : doc;
 
     // Re-sync when the panel opens for a different cell or citation
     useEffect(() => {
@@ -249,6 +278,25 @@ export function TRSidePanel({
         setDocumentPaneOpen(true);
     }
 
+    function handleStructuredCitationOpen(
+        citation: TabularRecordCitation,
+        citationIndex: number,
+    ) {
+        const parsedPage =
+            citation.locator.kind === "page" &&
+            /^\d+$/.test(citation.locator.value)
+                ? Number(citation.locator.value)
+                : undefined;
+        handleCitationOpen({
+            quote: citation.quote,
+            page: parsedPage,
+            citationRef: citationIndex + 1,
+            documentId: citation.document_id,
+            versionId: citation.version_id,
+            locatorLabel: `${citation.locator.kind}: ${citation.locator.value}`,
+        });
+    }
+
     const { processed: summaryText, citations: summaryCitations } =
         preprocessCitations(cell.content?.summary ?? "");
     const { processed: reasoningText, citations: reasoningCitations } =
@@ -264,7 +312,7 @@ export function TRSidePanel({
             )}
         >
             {/* Resizable document panel — left */}
-            {documentPaneOpen && (
+            {documentPaneOpen && documentForView && (
                 <div
                     className="relative flex min-h-0 w-full flex-1 shrink flex-col border-b border-white/30 px-3 pb-3 md:w-[min(var(--document-pane-width),calc(100vw-324px))] md:flex-none md:shrink-0 md:border-b-0 md:border-r"
                     style={
@@ -285,14 +333,17 @@ export function TRSidePanel({
                     <div className="flex min-h-11 shrink-0 items-center gap-3">
                         <div className="flex min-w-0 items-center gap-2">
                             <FileTypeIcon
-                                fileType={doc.file_type ?? doc.filename}
+                                fileType={
+                                    documentForView.file_type ??
+                                    documentForView.filename
+                                }
                                 className="h-4 w-4"
                             />
                             <div
                                 className="min-w-0 truncate text-sm font-medium text-gray-700"
-                                title={doc.filename}
+                                title={documentForView.filename}
                             >
-                                {doc.filename}
+                                {documentForView.filename}
                             </div>
                         </div>
                     </div>
@@ -306,7 +357,7 @@ export function TRSidePanel({
                                         quote: docCitation.quote,
                                         inlineDetail:
                                             formatCitationLocation(docCitation),
-                                        citationText: `${doc.filename}, ${formatCitationLocation(docCitation)}`,
+                                        citationText: `${documentForView.filename}, ${formatCitationLocation(docCitation)}`,
                                     },
                                 ]}
                                 activeQuoteId={citationKey(
@@ -314,13 +365,15 @@ export function TRSidePanel({
                                     docCitation,
                                 )}
                                 citationRef={docCitation.citationRef}
-                                citationText={`${doc.filename}, ${formatCitationLocation(docCitation)}`}
+                                citationText={`${documentForView.filename}, ${formatCitationLocation(docCitation)}`}
                             />
                         </div>
                     )}
-                    {isDocxDocument(doc) && !doc.pdf_storage_path ? (
+                    {isDocxDocument(documentForView) &&
+                    !documentForView.pdf_storage_path ? (
                         <DocxView
-                            documentId={doc.id}
+                            documentId={documentForView.id}
+                            versionId={docCitation?.versionId}
                             quotes={
                                 docCitation
                                     ? [
@@ -332,9 +385,10 @@ export function TRSidePanel({
                                     : undefined
                             }
                         />
-                    ) : isSpreadsheetFilename(doc.filename ?? "") ? (
+                    ) : isSpreadsheetFilename(documentForView.filename ?? "") ? (
                         <SpreadsheetView
-                            documentId={doc.id}
+                            documentId={documentForView.id}
+                            versionId={docCitation?.versionId}
                             highlightCells={
                                 docCitation?.sheet || docCitation?.cell
                                     ? [
@@ -348,11 +402,23 @@ export function TRSidePanel({
                         />
                     ) : (
                         <PdfView
-                            doc={{ document_id: doc.id }}
+                            doc={{
+                                document_id: documentForView.id,
+                                version_id: docCitation?.versionId,
+                            }}
                             quote={docCitation?.quote}
                             fallbackPage={docCitation?.page}
                         />
                     )}
+                </div>
+            )}
+            {documentPaneOpen && !documentForView && (
+                <div
+                    role="alert"
+                    className="flex min-h-0 flex-1 items-center p-5 text-xs leading-5 text-amber-900"
+                >
+                    The fixed source for this citation is unavailable in this
+                    Review.
                 </div>
             )}
 
@@ -441,6 +507,19 @@ export function TRSidePanel({
                             </div>
                         </div>
 
+                        {litigationEvidence && (
+                            <section className="mb-5 border-y border-gray-900/[0.07] py-3">
+                                <p className="text-[11px] font-medium text-gray-900">
+                                    {litigationEvidence.stageLabel} · {" "}
+                                    {litigationEvidence.representedSideLabel}
+                                </p>
+                                <p className="mt-1 text-[11px] leading-4 text-gray-600">
+                                    AI draft. Verify the exact quoted source
+                                    before relying on this finding.
+                                </p>
+                            </section>
+                        )}
+
                         {/* Column field */}
                         <div className="mb-4">
                             <div className="mb-3 text-xs font-medium text-gray-900">
@@ -452,7 +531,7 @@ export function TRSidePanel({
                         </div>
 
                         {/* Flag section */}
-                        {cell.content?.flag && (
+                        {!litigationEvidence && cell.content?.flag && (
                             <div className="mb-5">
                                 <h4 className="mb-2 text-xs font-medium text-gray-900">
                                     Flag
@@ -500,6 +579,118 @@ export function TRSidePanel({
                                     </MarkdownContent>
                                 </div>
                             </div>
+                        )}
+
+                        {litigationEvidence && (
+                            <section className="mt-6 border-t border-gray-900/[0.07] pt-4">
+                                <h4 className="text-xs font-medium text-gray-900">
+                                    Exact source citations
+                                </h4>
+                                {litigationEvidence.citations.length > 0 ? (
+                                    <ul className="mt-2 space-y-2">
+                                        {litigationEvidence.citations.map(
+                                            (citation, citationIndex) => (
+                                                <li
+                                                    key={citation.citation_id}
+                                                    className="rounded-md bg-white/55 p-2 text-[11px] leading-4 text-gray-600"
+                                                >
+                                                    <p className="font-medium text-gray-800">
+                                                        {citation.locator.kind}:{" "}
+                                                        {citation.locator.value}
+                                                    </p>
+                                                    <p className="mt-1 line-clamp-3 break-words [overflow-wrap:anywhere]">
+                                                        {citation.quote}
+                                                    </p>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                            handleStructuredCitationOpen(
+                                                                citation,
+                                                                citationIndex,
+                                                            )
+                                                        }
+                                                        className="mt-1.5 text-[11px] font-medium text-blue-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/70"
+                                                    >
+                                                        Open cited page
+                                                    </button>
+                                                </li>
+                                            ),
+                                        )}
+                                    </ul>
+                                ) : (
+                                    <p className="mt-2 text-[11px] leading-4 text-gray-600">
+                                        No generated citation is available. Keep
+                                        this finding unresolved.
+                                    </p>
+                                )}
+
+                                <div className="mt-4 border-t border-gray-900/[0.07] pt-3">
+                                    {litigationEvidence.reviewStatus ===
+                                        "verified" && (
+                                        <p className="mb-2 inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700">
+                                            <Check className="h-3 w-3" />
+                                            Verified against source
+                                        </p>
+                                    )}
+                                    {litigationEvidence.reviewStatus ===
+                                        "unresolved" && (
+                                        <p className="mb-2 text-[11px] font-medium text-amber-800">
+                                            Kept unresolved
+                                        </p>
+                                    )}
+                                    <div className="flex flex-wrap gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() =>
+                                                void litigationEvidence.onReview(
+                                                    "verified",
+                                                )
+                                            }
+                                            disabled={
+                                                !litigationEvidence.reviewActive ||
+                                                litigationEvidence.saving ||
+                                                cell.status !== "done" ||
+                                                cell.review_revision === undefined ||
+                                                litigationEvidence.citations
+                                                    .length === 0
+                                            }
+                                            className="inline-flex h-8 items-center rounded-full bg-gray-950 px-3 text-[11px] font-medium text-white outline-none transition-colors hover:bg-black focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 disabled:cursor-default disabled:opacity-40"
+                                        >
+                                            Verify against source
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() =>
+                                                void litigationEvidence.onReview(
+                                                    "unresolved",
+                                                )
+                                            }
+                                            disabled={
+                                                !litigationEvidence.reviewActive ||
+                                                litigationEvidence.saving ||
+                                                cell.review_revision === undefined
+                                            }
+                                            className="inline-flex h-8 items-center rounded-full bg-white px-3 text-[11px] font-medium text-gray-700 shadow-sm outline-none transition-colors hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 disabled:cursor-default disabled:opacity-40"
+                                        >
+                                            Keep unresolved
+                                        </button>
+                                    </div>
+                                    {!litigationEvidence.reviewActive && (
+                                        <p className="mt-2 text-[11px] leading-4 text-gray-600">
+                                            This Task is no longer awaiting this
+                                            review.
+                                        </p>
+                                    )}
+                                    {litigationEvidence.error && (
+                                        <p
+                                            role="alert"
+                                            className="mt-2 text-[11px] leading-4 text-red-700"
+                                        >
+                                            {litigationEvidence.error}
+                                        </p>
+                                    )}
+                                </div>
+                            </section>
                         )}
                     </div>
                 </div>
@@ -599,14 +790,20 @@ function CellNavigatorButton({
 // Markdown renderer
 // ---------------------------------------------------------------------------
 
-function formatCitationLocation(citation: ParsedCitation): string {
+function formatCitationLocation(citation: ParsedCitation | TRPanelCitation): string {
+    if ("locatorLabel" in citation && citation.locatorLabel) {
+        return citation.locatorLabel;
+    }
     if (citation.sheet && citation.cell) {
         return `${citation.sheet}, cell ${citation.cell}`;
     }
     return `Page ${citation.page ?? 1}`;
 }
 
-function citationKey(cellId: string, citation: ParsedCitation): string {
+function citationKey(
+    cellId: string,
+    citation: ParsedCitation | TRPanelCitation,
+): string {
     const location = citation.sheet
         ? `${citation.sheet}:${citation.cell ?? ""}`
         : `page:${citation.page ?? 1}`;

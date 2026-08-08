@@ -59,6 +59,7 @@ import type {
 } from "@/app/types/agent";
 import type { Document, Project } from "@/app/components/shared/types";
 import {
+  agentTaskOutputCanOpen,
   agentTaskWorkTitle,
   buildAgentTaskOutputRows,
   canRecoverAgentTaskExecution,
@@ -614,10 +615,16 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
       void showEvidenceArtifact(artifact.artifact_id, { focus: true });
       return;
     }
+    if (artifact.artifact_type === "tabular_review") {
+      const query = new URLSearchParams({ return_task: taskId });
+      router.push(
+        `/projects/${task.matter_id}/tabular-reviews/${artifact.artifact_id}?${query}`,
+      );
+      return;
+    }
     if (
       artifact.artifact_type === "document" ||
-      artifact.artifact_type === "draft" ||
-      artifact.artifact_type === "tabular_review"
+      artifact.artifact_type === "draft"
     ) {
       const lockedVersionId =
         snapshot.review.status === "approved"
@@ -1031,9 +1038,7 @@ function DeliverablesPanel({
           <div className="mt-3 divide-y divide-gray-900/[0.06] border-y border-gray-900/[0.06]">
             {outputRows.map((output) => {
               const canDownload = output.approvedArtifact !== null;
-              const canOpen =
-                output.linkedArtifact !== null &&
-                output.currentVersion?.current_version_available !== false;
+              const canOpen = agentTaskOutputCanOpen(output);
               return (
                 <div key={output.key} className="flex min-w-0 items-stretch">
                   <button

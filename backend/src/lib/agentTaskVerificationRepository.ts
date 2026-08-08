@@ -1,10 +1,6 @@
 import { createHash } from "node:crypto";
 
 import { readAgentStepEffectReceipts } from "./agent-kernel/effects/stepEffect";
-import {
-  buildAgentStepTabularEffectReservation,
-  readAgentStepTabularEffectReceipts,
-} from "./agent-kernel/effects/tabularEffect";
 import { readFixedMatterContext } from "./agent-kernel/context/matterContext";
 import {
   buildAgentVerificationPacketV1,
@@ -23,20 +19,9 @@ import { spreadsheetToLLMText } from "./spreadsheet";
 import { downloadFile } from "./storage";
 import type { createServerSupabase } from "./supabase";
 import { buildAgentPackDeterministicChecks } from "./agentPackVerifierRegistry";
-import {
-  compileLitigationEvidenceInventoryReceipt,
-  litigationEvidenceInventoryReceiptSchema,
-  type LitigationEvidenceInventoryReceiptV1,
-} from "./agent-packs/litigation/litigationEvidenceInventoryPack";
-import {
-  compileLitigationEvidenceReviewCompletionReceipt,
-  litigationEvidenceReviewCompletionReceiptSchema,
-  litigationEvidenceStoredCellSchema,
-} from "./agent-packs/litigation/litigationEvidenceInventoryReview";
-import {
-  buildLitigationEvidenceEffectLayout,
-  buildLitigationEvidenceReviewSpec,
-} from "./agentLitigationEvidenceInventoryExecutor";
+import { litigationEvidenceInventoryReceiptSchema } from "./agent-packs/litigation/litigationEvidenceInventoryPack";
+import { litigationEvidenceReviewCompletionReceiptSchema } from "./agent-packs/litigation/litigationEvidenceInventoryReview";
+import { readCurrentLitigationEvidenceInventoryBinding } from "./agentLitigationEvidenceInventoryBinding";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -349,84 +334,6 @@ function projectAcceptedView(input: {
   };
 }
 
-function currentLitigationReceiptMatchesPublication(input: {
-  snapshot: VerificationSnapshot;
-  receipt: LitigationEvidenceInventoryReceiptV1;
-  review: TabularReviewRow;
-}) {
-  if (
-    input.receipt.task_id !== input.snapshot.task.id ||
-    input.receipt.matter_id !== input.snapshot.task.matter_id ||
-    input.receipt.review_id !== input.review.id
-  ) {
-    return false;
-  }
-  let recomputed: LitigationEvidenceInventoryReceiptV1;
-  let expectedEffect: ReturnType<typeof buildAgentStepTabularEffectReservation>;
-  let expectedReview: ReturnType<typeof buildLitigationEvidenceReviewSpec>;
-  try {
-    recomputed = compileLitigationEvidenceInventoryReceipt({
-      taskId: input.receipt.task_id,
-      matterId: input.receipt.matter_id,
-      stepId: input.receipt.step_id,
-      attempt: input.receipt.attempt,
-      proceduralStage: input.receipt.procedural_stage,
-      representedSide: input.receipt.represented_side,
-      sourcePins: input.receipt.source_pins,
-    });
-    expectedReview = buildLitigationEvidenceReviewSpec(recomputed);
-    expectedEffect = buildAgentStepTabularEffectReservation({
-      stepId: recomputed.step_id,
-      attempt: recomputed.attempt,
-      reviewId: recomputed.review_id,
-      layout: buildLitigationEvidenceEffectLayout(expectedReview),
-    });
-  } catch {
-    return false;
-  }
-  if (
-    canonical(input.receipt) !== canonical(recomputed) ||
-    input.review.project_id !== expectedReview.project_id ||
-    input.review.title !== expectedReview.title ||
-    input.review.practice !== expectedReview.practice ||
-    input.review.row_protocol !== expectedReview.row_protocol ||
-    input.review.workflow_id !== expectedReview.workflow_id ||
-    canonical(input.review.document_ids) !==
-      canonical(expectedReview.document_ids) ||
-    canonical(input.review.columns_config) !==
-      canonical(expectedReview.columns_config)
-  ) {
-    return false;
-  }
-  const step = input.snapshot.task.current_plan.find(
-    (candidate) => candidate.id === input.receipt.step_id,
-  );
-  if (
-    !step ||
-    step.status !== "completed" ||
-    step.attempt !== input.receipt.attempt
-  ) {
-    return false;
-  }
-  try {
-    const matching = readAgentStepTabularEffectReceipts(
-      step.result_data,
-    ).filter(
-      (effect) =>
-        effect.status === "committed" &&
-        effect.effect_key === expectedEffect.effect_key &&
-        effect.step_id === expectedEffect.step_id &&
-        effect.attempt === expectedEffect.attempt &&
-        effect.input_fingerprint === expectedEffect.input_fingerprint &&
-        effect.target.review_id === expectedEffect.target.review_id &&
-        effect.effect?.review_id === expectedEffect.target.review_id,
-    );
-    return matching.length === 1;
-  } catch {
-    return false;
-  }
-}
-
 async function extractAcceptedView(version: {
   storage_path?: string | null;
   file_type?: string | null;
@@ -716,50 +623,18 @@ export async function buildCurrentAgentVerificationPacket(input: {
         continue;
       }
       let incompleteCells = validation.incompleteCells;
-      if (
-        litigationReceipt.success &&
-        litigationCompletion.success &&
-        litigationCompletion.data.task_id === input.snapshot.task.id &&
-        litigationCompletion.data.review_id === review.id &&
-        litigationCompletion.data.step_id === litigationReceipt.data.step_id &&
-        currentLitigationReceiptMatchesPublication({
-          snapshot: input.snapshot,
-          receipt: litigationReceipt.data,
-          review,
-        })
-      ) {
-        try {
-          const fixedCells = reviewCells.map((cell) =>
-            litigationEvidenceStoredCellSchema.parse({
-              ...cell,
-              status: cell.status,
-              review_status: cell.review_status ?? null,
-              reviewed_at: cell.reviewed_at ?? null,
-              review_revision: cell.review_revision ?? 0,
-            }),
-          );
-          const currentCompletion =
-            compileLitigationEvidenceReviewCompletionReceipt({
+      const litigationBinding =
+        litigationReceipt.success && litigationCompletion.success
+          ? readCurrentLitigationEvidenceInventoryBinding({
+              snapshot: input.snapshot,
               receipt: litigationReceipt.data,
-              cells: fixedCells,
-              completedAt: litigationCompletion.data.completed_at,
-            });
-          if (
-            currentCompletion.source_receipt_fingerprint !==
-              litigationCompletion.data.source_receipt_fingerprint ||
-            currentCompletion.decision_fingerprint !==
-              litigationCompletion.data.decision_fingerprint ||
-            currentCompletion.verified_cells !==
-              litigationCompletion.data.verified_cells ||
-            currentCompletion.unresolved_cells !==
-              litigationCompletion.data.unresolved_cells
-          ) {
-            throw new Error("completion receipt drift");
-          }
-          incompleteCells = 0;
-        } catch {
-          incompleteCells = Math.max(1, validation.incompleteCells);
-        }
+              completion: litigationCompletion.data,
+              review,
+              cells: reviewCells,
+            })
+          : null;
+      if (litigationBinding?.status === "valid") {
+        incompleteCells = 0;
       }
       const acceptedView = tabularReviewAcceptedView({
         review,

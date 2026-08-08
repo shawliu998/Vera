@@ -573,7 +573,28 @@ export interface TabularCell {
     reasoning?: string;
   } | null;
   status: "pending" | "generating" | "done" | "error";
+  /**
+   * Present for the fixed, task-owned Litigation Evidence Inventory only.
+   * These are server-bound record citations, not a client-generated
+   * approximation of the source.
+   */
+  citations?: TabularRecordCitation[] | null;
+  review_status?: "verified" | "unresolved" | "needs_correction" | null;
+  reviewed_at?: string | null;
+  review_revision?: number;
   created_at: string;
+}
+
+export interface TabularRecordCitation {
+  citation_id: string;
+  source_type: "record_evidence";
+  document_id: string;
+  version_id: string;
+  locator: {
+    kind: "page" | "paragraph" | "exhibit" | "timestamp";
+    value: string;
+  };
+  quote: string;
 }
 
 // Workflows

@@ -4,6 +4,7 @@ import test from "node:test";
 import type { Document } from "@/app/components/shared/types";
 import type { AgentTaskSnapshot } from "@/app/types/agent";
 import {
+  agentTaskOutputCanOpen,
   agentTaskWorkTitle,
   buildAgentTaskOutputRows,
   canRecoverAgentTaskExecution,
@@ -160,6 +161,26 @@ test("binds a required deliverable to its explicit artifact and current version"
     latestApprovedArtifact(snapshot, "memo-current")?.version_id,
     "version-2",
   );
+});
+
+test("opens a Tabular Review without pretending it has a DocumentVersion", () => {
+  const snapshot = snapshotFixture();
+  snapshot.task.deliverables[0] = {
+    key: "evidence-inventory",
+    title: "Evidence inventory",
+    required: true,
+    artifact_type: "tabular_review",
+    artifact_id: "review-1",
+  };
+  snapshot.artifacts.push({
+    task_id: "task",
+    artifact_type: "tabular_review",
+    artifact_id: "review-1",
+    purpose: "Evidence inventory",
+  });
+  const [row] = buildAgentTaskOutputRows(snapshot);
+  assert.equal(row.currentVersion, null);
+  assert.equal(agentTaskOutputCanOpen(row), true);
 });
 
 test("keeps only the latest evidence snapshot and related deliverable for a step", () => {

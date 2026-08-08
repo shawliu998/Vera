@@ -22,17 +22,22 @@ import {
 import {
     clearTabularCells,
     deleteTabularReview,
+    getLitigationEvidenceReviewProgress,
     getTabularReview,
     getProject,
     getTabularReviewPeople,
     listProjects,
     regenerateTabularCell,
+    reviewLitigationEvidenceCell,
     streamTabularGeneration,
     updateTabularReview,
     uploadProjectDocument,
     uploadReviewDocument,
+    MikeApiError,
+    type LitigationEvidenceReviewSnapshot,
     type TRCitationAnnotation,
 } from "@/app/lib/mikeApi";
+import { submitAgentTaskInput } from "@/app/lib/agentClient";
 import type {
     ColumnConfig,
     Document,
@@ -80,11 +85,25 @@ import {
     prepareTabularCellsForGeneration,
     readTabularGenerationStream,
 } from "./tabularGenerationClient";
+import {
+    evidenceInventoryReviewCompleteResponse,
+    litigationEvidenceSideLabel,
+    litigationEvidenceStageLabel,
+} from "./litigationEvidenceInventoryUi";
 
 interface Props {
     reviewId: string;
     projectId?: string;
 }
+
+type LitigationEvidenceReviewState =
+    | { kind: "checking" }
+    | { kind: "ordinary" }
+    | {
+          kind: "active";
+          snapshot: LitigationEvidenceReviewSnapshot;
+      }
+    | { kind: "unavailable"; detail: string };
 
 export function TRView({ reviewId, projectId }: Props) {
     const { setSidebarOpen } = useSidebar();
@@ -113,13 +132,14 @@ export function TRView({ reviewId, projectId }: Props) {
     const { user } = useAuth();
     const [expandedCell, setExpandedCell] = useState<TabularCell | null>(null);
     const [expandedCellCitation, setExpandedCellCitation] = useState<
-        {
-            quote: string;
-            page?: number;
-            sheet?: string;
-            cell?: string;
-            citationRef: number;
-        } | undefined
+        | {
+              quote: string;
+              page?: number;
+              sheet?: string;
+              cell?: string;
+              citationRef: number;
+          }
+        | undefined
     >(undefined);
     const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
     const [actionsOpen, setActionsOpen] = useState(false);
@@ -148,6 +168,18 @@ export function TRView({ reviewId, projectId }: Props) {
     } | null>(null);
     const [apiKeyModalProvider, setApiKeyModalProvider] =
         useState<ModelProvider | null>(null);
+    const [litigationReview, setLitigationReview] =
+        useState<LitigationEvidenceReviewState>({ kind: "checking" });
+    const [litigationReviewSavingCellId, setLitigationReviewSavingCellId] =
+        useState<string | null>(null);
+    const [litigationReviewError, setLitigationReviewError] = useState<
+        string | null
+    >(null);
+    const [litigationCompletionSubmitting, setLitigationCompletionSubmitting] =
+        useState(false);
+    const [litigationCompletionError, setLitigationCompletionError] = useState<
+        string | null
+    >(null);
     const actionsRef = useRef<HTMLDivElement>(null);
     const tableRef = useRef<TRTableHandle>(null);
     const router = useRouter();
@@ -206,13 +238,72 @@ export function TRView({ reviewId, projectId }: Props) {
         Promise.all(fetches).finally(() => setLoading(false));
     }, [reviewId, projectId]);
 
+    useEffect(() => {
+        let cancelled = false;
+        setLitigationReview({ kind: "checking" });
+        setLitigationReviewError(null);
+        setLitigationCompletionError(null);
+
+        void (async () => {
+            try {
+                const progress =
+                    await getLitigationEvidenceReviewProgress(reviewId);
+                if (!cancelled) {
+                    setLitigationReview({
+                        kind: "active",
+                        snapshot: progress,
+                    });
+                }
+            } catch (error) {
+                if (cancelled) return;
+                if (
+                    error instanceof MikeApiError &&
+                    error.status === 404 &&
+                    error.code === "not_found"
+                ) {
+                    setLitigationReview({ kind: "ordinary" });
+                    return;
+                }
+                setLitigationReview({
+                    kind: "unavailable",
+                    detail:
+                        error instanceof Error
+                            ? error.message
+                            : "Evidence Inventory review status could not be loaded.",
+                });
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [reviewId]);
+
     function getNextColumnIndex() {
         return (
             columns.reduce((max, column) => Math.max(max, column.index), -1) + 1
         );
     }
 
+    const taskOwnedReviewLocked = litigationReview.kind !== "ordinary";
+    const activeLitigationReview =
+        litigationReview.kind === "active" ? litigationReview : null;
+    const litigationProgress =
+        activeLitigationReview?.snapshot.progress ?? null;
+    const litigationReviewActive =
+        activeLitigationReview?.snapshot.task_status === "waiting_input";
+    const litigationReviewCanComplete =
+        Boolean(litigationProgress) &&
+        litigationProgress!.remaining === 0 &&
+        litigationReviewActive &&
+        !litigationCompletionSubmitting;
+
+    function taskOwnedReviewActionBlocked() {
+        return taskOwnedReviewLocked;
+    }
+
     async function saveColumnsConfig(nextColumns: ColumnConfig[]) {
+        if (taskOwnedReviewActionBlocked()) return;
         setSavingColumnsConfig(true);
         try {
             const updated = await updateTabularReview(reviewId, {
@@ -227,6 +318,7 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     async function handleAddDocuments(newDocs: Document[]) {
+        if (taskOwnedReviewActionBlocked()) return;
         const toAdd = newDocs.filter(
             (d) => !documents.some((existing) => existing.id === d.id),
         );
@@ -264,6 +356,7 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     async function handleDropReviewFiles(files: File[]) {
+        if (taskOwnedReviewActionBlocked()) return;
         if (files.length === 0) return;
         setUploadingDroppedFilenames(files.map((file) => file.name));
         try {
@@ -287,6 +380,7 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     async function handleRegenerateCell(docId: string, colIndex: number) {
+        if (taskOwnedReviewActionBlocked()) return;
         if (apiKeys && !isModelAvailable(tabularModel, apiKeys)) {
             setApiKeyModalProvider(getModelProvider(tabularModel));
             return;
@@ -340,6 +434,7 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     async function handleGenerate() {
+        if (taskOwnedReviewActionBlocked()) return;
         if (!review || generating) return;
 
         // If columns changed since last save, update the review first
@@ -400,6 +495,7 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     async function handleAddColumn(newColumns: ColumnConfig[]) {
+        if (taskOwnedReviewActionBlocked()) return;
         const startIndex = getNextColumnIndex();
         const normalizedColumns = newColumns.map((column, index) => ({
             ...column,
@@ -461,6 +557,7 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     async function handleUpdateColumn(nextColumn: ColumnConfig) {
+        if (taskOwnedReviewActionBlocked()) return;
         const nextColumns = columns.map((column) =>
             column.index === nextColumn.index ? nextColumn : column,
         );
@@ -475,6 +572,7 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     async function handleDeleteColumn(columnIndex: number) {
+        if (taskOwnedReviewActionBlocked()) return;
         const previousColumns = columns;
         const nextColumns = columns.filter(
             (column) => column.index !== columnIndex,
@@ -519,14 +617,10 @@ export function TRView({ reviewId, projectId }: Props) {
                   )
                 : undefined;
         const resolvedColIdx = column
-            ? columns.findIndex(
-                  (candidate) => candidate.index === column.index,
-              )
+            ? columns.findIndex((candidate) => candidate.index === column.index)
             : -1;
         const resolvedRowIdx = document
-            ? documents.findIndex(
-                  (candidate) => candidate.id === document.id,
-              )
+            ? documents.findIndex((candidate) => candidate.id === document.id)
             : -1;
         const colIdx =
             resolvedColIdx >= 0 ? resolvedColIdx : citation.col_index;
@@ -564,6 +658,7 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     async function handleDeleteDocuments() {
+        if (taskOwnedReviewActionBlocked()) return;
         const idsToDelete = [...selectedDocIds];
         if (idsToDelete.length === 0) return;
         const previousDocuments = documents;
@@ -589,6 +684,7 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     async function clearResultsForDocuments(docIds: string[]) {
+        if (taskOwnedReviewActionBlocked()) return;
         if (docIds.length === 0) return;
         setCells((prev) =>
             prev.map((c) =>
@@ -613,6 +709,7 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     function requestReviewDetails() {
+        if (taskOwnedReviewActionBlocked()) return;
         if (review?.is_owner === false) {
             setOwnerOnlyAction("edit tabular review details");
             return;
@@ -624,6 +721,7 @@ export function TRView({ reviewId, projectId }: Props) {
         title: string;
         projectId?: string | null;
     }) {
+        if (taskOwnedReviewActionBlocked()) return;
         if (!review || review.is_owner === false) {
             setOwnerOnlyAction("edit tabular review details");
             return;
@@ -649,6 +747,7 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     function requestReviewDelete() {
+        if (taskOwnedReviewActionBlocked()) return;
         if (review?.is_owner === false) {
             setOwnerOnlyAction("delete this tabular review");
             return;
@@ -658,6 +757,7 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     async function confirmReviewDelete() {
+        if (taskOwnedReviewActionBlocked()) return;
         if (deleteReviewStatus === "deleting") return;
         setDeleteReviewStatus("deleting");
         try {
@@ -677,6 +777,7 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     function requestWorkflow() {
+        if (taskOwnedReviewActionBlocked()) return;
         if (review?.is_owner === false) {
             setOwnerOnlyAction("apply a workflow");
             return;
@@ -685,6 +786,7 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     async function handleApplyWorkflow(workflow: Workflow) {
+        if (taskOwnedReviewActionBlocked()) return;
         if (!workflow.columns_config?.length) return;
         const nextColumns = workflow.columns_config.map((column, index) => ({
             ...column,
@@ -719,16 +821,17 @@ export function TRView({ reviewId, projectId }: Props) {
 
     const matterSourcesVerified = Boolean(
         projectId &&
-            review?.project_id === projectId &&
-            project?.id === projectId &&
-            documents.length > 0 &&
-            documents.every((document) => document.project_id === projectId),
+        review?.project_id === projectId &&
+        project?.id === projectId &&
+        documents.length > 0 &&
+        documents.every((document) => document.project_id === projectId),
     );
     const hasCompletedFindings = cells.some(
         (cell) => cell.status === "done" && Boolean(cell.content?.summary),
     );
 
     async function handleSaveExcelToMatter() {
+        if (taskOwnedReviewActionBlocked()) return;
         if (!projectId || !matterSourcesVerified) return;
 
         setSaveMemoToMatterStatus("idle");
@@ -752,13 +855,18 @@ export function TRView({ reviewId, projectId }: Props) {
             );
             setSaveExcelToMatterStatus("saved");
         } catch (error) {
-            console.error("Failed to save tabular review Excel to Matter", error);
+            console.error(
+                "Failed to save tabular review Excel to Matter",
+                error,
+            );
             setSaveExcelToMatterStatus("error");
         }
     }
 
     async function handleCreateWordMemo() {
-        if (!projectId || !matterSourcesVerified || !hasCompletedFindings) return;
+        if (taskOwnedReviewActionBlocked()) return;
+        if (!projectId || !matterSourcesVerified || !hasCompletedFindings)
+            return;
 
         setSaveExcelToMatterStatus("idle");
         setSaveMemoToMatterStatus("saving");
@@ -784,6 +892,165 @@ export function TRView({ reviewId, projectId }: Props) {
         } catch (error) {
             console.error("Failed to create Word memo in Matter", error);
             setSaveMemoToMatterStatus("error");
+        }
+    }
+
+    async function saveLitigationCellReview(
+        cell: TabularCell,
+        decision: "verified" | "unresolved",
+    ) {
+        if (
+            !activeLitigationReview ||
+            !litigationReviewActive ||
+            litigationReviewSavingCellId ||
+            cell.review_revision === undefined
+        ) {
+            return;
+        }
+        setLitigationReviewSavingCellId(cell.id);
+        setLitigationReviewError(null);
+        try {
+            const result = await reviewLitigationEvidenceCell(
+                reviewId,
+                cell.id,
+                {
+                    decision,
+                    expectedReviewRevision: cell.review_revision,
+                },
+            );
+            setCells((current) =>
+                current.map((candidate) => {
+                    if (candidate.id !== cell.id) return candidate;
+                    const status = result.cell.cell_status;
+                    return {
+                        ...candidate,
+                        ...(status === "pending" || status === "done"
+                            ? { status }
+                            : {}),
+                        review_status: result.cell.review_status,
+                        review_revision:
+                            result.cell.review_revision ??
+                            candidate.review_revision,
+                        reviewed_at: result.cell.reviewed_at,
+                    };
+                }),
+            );
+            setExpandedCell((current) =>
+                current?.id === cell.id
+                    ? {
+                          ...current,
+                          review_status: result.cell.review_status,
+                          review_revision:
+                              result.cell.review_revision ??
+                              current.review_revision,
+                          reviewed_at: result.cell.reviewed_at,
+                      }
+                    : current,
+            );
+            setLitigationReview((current) =>
+                current.kind === "active"
+                    ? {
+                          ...current,
+                          snapshot: {
+                              task_id: result.task_id,
+                              task_status: result.task_status,
+                              review_id: result.review_id,
+                              context: result.context,
+                              progress: result.progress,
+                          },
+                      }
+                    : current,
+            );
+        } catch (error) {
+            setLitigationReviewError(
+                error instanceof Error
+                    ? error.message
+                    : "The lawyer review decision could not be saved.",
+            );
+        } finally {
+            setLitigationReviewSavingCellId(null);
+        }
+    }
+
+    function openFirstIncompleteLitigationCell() {
+        const cellId = litigationProgress?.first_incomplete_cell_id;
+        if (!cellId) return;
+        const cell = cells.find((candidate) => candidate.id === cellId);
+        if (!cell) return;
+        const documentIndex = documents.findIndex(
+            (document) => document.id === cell.document_id,
+        );
+        const columnIndex = [...columns]
+            .sort((left, right) => left.index - right.index)
+            .findIndex((column) => column.index === cell.column_index);
+        if (documentIndex < 0 || columnIndex < 0) return;
+        setSearch("");
+        setExpandedCell(cell);
+        setExpandedCellCitation(undefined);
+        window.requestAnimationFrame(() => {
+            tableRef.current?.scrollToCell(columnIndex, documentIndex);
+        });
+    }
+
+    async function reloadLitigationReviewAndFocusFirstIncomplete() {
+        const [progress, detail] = await Promise.all([
+            getLitigationEvidenceReviewProgress(reviewId),
+            getTabularReview(reviewId),
+        ]);
+        setLitigationReview({ kind: "active", snapshot: progress });
+        setReview(detail.review);
+        setCells(detail.cells);
+        setDocuments(detail.documents);
+        setColumns(detail.review.columns_config || []);
+
+        const firstCellId = progress.progress.first_incomplete_cell_id;
+        const firstCell = detail.cells.find(
+            (candidate) => candidate.id === firstCellId,
+        );
+        if (!firstCell) return;
+        const documentIndex = detail.documents.findIndex(
+            (document) => document.id === firstCell.document_id,
+        );
+        const columnIndex = [...(detail.review.columns_config || [])]
+            .sort((left, right) => left.index - right.index)
+            .findIndex((column) => column.index === firstCell.column_index);
+        if (documentIndex < 0 || columnIndex < 0) return;
+        setSearch("");
+        setExpandedCell(firstCell);
+        setExpandedCellCitation(undefined);
+        window.requestAnimationFrame(() => {
+            tableRef.current?.scrollToCell(columnIndex, documentIndex);
+        });
+    }
+
+    async function completeLitigationEvidenceReview() {
+        if (!activeLitigationReview || !litigationReviewCanComplete) return;
+        setLitigationCompletionSubmitting(true);
+        setLitigationCompletionError(null);
+        try {
+            await submitAgentTaskInput(
+                activeLitigationReview.snapshot.task_id,
+                {
+                    responses: evidenceInventoryReviewCompleteResponse(),
+                },
+            );
+            router.push(
+                `/agent-tasks/${activeLitigationReview.snapshot.task_id}?restore=1`,
+            );
+        } catch (error) {
+            try {
+                await reloadLitigationReviewAndFocusFirstIncomplete();
+            } catch {
+                // Preserve the server error below when its current progress
+                // cannot be read again (for example, a transient outage).
+            }
+            setLitigationCompletionError(
+                error instanceof Error
+                    ? error.message
+                    : "The Task could not continue after this review.",
+            );
+        } finally {
+            setLitigationCompletionSubmitting(false);
         }
     }
 
@@ -874,7 +1141,8 @@ export function TRView({ reviewId, projectId }: Props) {
                             !projectId
                                 ? {
                                       onClick: () => setPeopleModalOpen(true),
-                                      disabled: loading,
+                                      disabled:
+                                          taskOwnedReviewLocked || loading,
                                       iconOnly: true,
                                       title: "People with access",
                                       icon: <Users className="h-4 w-4" />,
@@ -907,99 +1175,109 @@ export function TRView({ reviewId, projectId }: Props) {
                                                     saveExcelToMatterMessage}
                                             </span>
                                         )}
-                                        <HeaderActionsMenu
-                                            items={[
-                                                {
-                                                    label: "Edit details",
-                                                    icon: Pencil,
-                                                    onSelect:
-                                                        requestReviewDetails,
-                                                },
-                                                {
-                                                    label: "Apply workflow",
-                                                    icon: WandSparkles,
-                                                    onSelect: requestWorkflow,
-                                                },
-                                                {
-                                                    label: "Export",
-                                                    icon: Download,
-                                                    onSelect: () =>
-                                                        exportTabularReviewToExcel(
-                                                            {
-                                                                reviewTitle:
-                                                                    review?.title ||
-                                                                    "Tabular Review",
-                                                                columns,
-                                                                documents,
-                                                                cells,
-                                                            },
-                                                        ),
-                                                    disabled:
-                                                        columns.length === 0 ||
-                                                        documents.length === 0,
-                                                },
-                                                ...(projectId
-                                                    ? [
-                                                          {
-                                                              label: matterSourcesVerified
-                                                                  ? !hasCompletedFindings
-                                                                      ? "Memo unavailable — complete review"
-                                                                      : saveMemoToMatterStatus ===
-                                                                          "saving"
-                                                                        ? "Creating Word memo…"
-                                                                        : "Create Word memo"
-                                                                  : "Memo unavailable — verify Matter sources",
-                                                              icon: FileText,
-                                                              onSelect:
-                                                                  handleCreateWordMemo,
-                                                              disabled:
-                                                                  !matterSourcesVerified ||
-                                                                  saveMemoToMatterStatus ===
-                                                                      "saving" ||
-                                                                  columns.length === 0 ||
-                                                                  documents.length === 0 ||
-                                                                  !hasCompletedFindings,
-                                                          },
-                                                          {
-                                                              label: matterSourcesVerified
-                                                                  ? saveExcelToMatterStatus ===
-                                                                    "saving"
-                                                                      ? "Saving Excel to Matter…"
-                                                                      : "Save Excel to Matter"
-                                                                  : "Save unavailable — verify Matter sources",
-                                                              icon: Upload,
-                                                              onSelect:
-                                                                  handleSaveExcelToMatter,
-                                                              disabled:
-                                                                  !matterSourcesVerified ||
-                                                                  saveExcelToMatterStatus ===
-                                                                      "saving",
-                                                          },
-                                                      ]
-                                                    : []),
-                                                {
-                                                    label: "Clear results",
-                                                    icon: X,
-                                                    onSelect:
-                                                        handleClearAllResults,
-                                                    disabled:
-                                                        documents.length === 0,
-                                                },
-                                                {
-                                                    label: "Delete",
-                                                    icon: Trash2,
-                                                    onSelect:
-                                                        requestReviewDelete,
-                                                    variant: "danger",
-                                                },
-                                            ]}
-                                        />
+                                        {!taskOwnedReviewLocked && (
+                                            <HeaderActionsMenu
+                                                items={[
+                                                    {
+                                                        label: "Edit details",
+                                                        icon: Pencil,
+                                                        onSelect:
+                                                            requestReviewDetails,
+                                                    },
+                                                    {
+                                                        label: "Apply workflow",
+                                                        icon: WandSparkles,
+                                                        onSelect:
+                                                            requestWorkflow,
+                                                    },
+                                                    {
+                                                        label: "Export",
+                                                        icon: Download,
+                                                        onSelect: () =>
+                                                            exportTabularReviewToExcel(
+                                                                {
+                                                                    reviewTitle:
+                                                                        review?.title ||
+                                                                        "Tabular Review",
+                                                                    columns,
+                                                                    documents,
+                                                                    cells,
+                                                                },
+                                                            ),
+                                                        disabled:
+                                                            columns.length ===
+                                                                0 ||
+                                                            documents.length ===
+                                                                0,
+                                                    },
+                                                    ...(projectId
+                                                        ? [
+                                                              {
+                                                                  label: matterSourcesVerified
+                                                                      ? !hasCompletedFindings
+                                                                          ? "Memo unavailable — complete review"
+                                                                          : saveMemoToMatterStatus ===
+                                                                              "saving"
+                                                                            ? "Creating Word memo…"
+                                                                            : "Create Word memo"
+                                                                      : "Memo unavailable — verify Matter sources",
+                                                                  icon: FileText,
+                                                                  onSelect:
+                                                                      handleCreateWordMemo,
+                                                                  disabled:
+                                                                      !matterSourcesVerified ||
+                                                                      saveMemoToMatterStatus ===
+                                                                          "saving" ||
+                                                                      columns.length ===
+                                                                          0 ||
+                                                                      documents.length ===
+                                                                          0 ||
+                                                                      !hasCompletedFindings,
+                                                              },
+                                                              {
+                                                                  label: matterSourcesVerified
+                                                                      ? saveExcelToMatterStatus ===
+                                                                        "saving"
+                                                                          ? "Saving Excel to Matter…"
+                                                                          : "Save Excel to Matter"
+                                                                      : "Save unavailable — verify Matter sources",
+                                                                  icon: Upload,
+                                                                  onSelect:
+                                                                      handleSaveExcelToMatter,
+                                                                  disabled:
+                                                                      !matterSourcesVerified ||
+                                                                      saveExcelToMatterStatus ===
+                                                                          "saving",
+                                                              },
+                                                          ]
+                                                        : []),
+                                                    {
+                                                        label: "Clear results",
+                                                        icon: X,
+                                                        onSelect:
+                                                            handleClearAllResults,
+                                                        disabled:
+                                                            documents.length ===
+                                                            0,
+                                                    },
+                                                    {
+                                                        label: "Delete",
+                                                        icon: Trash2,
+                                                        onSelect:
+                                                            requestReviewDelete,
+                                                        variant: "danger",
+                                                    },
+                                                ]}
+                                            />
+                                        )}
                                     </div>
                                 ),
                             },
                         ],
                         {
-                            actions: [
+                            actions: taskOwnedReviewLocked
+                                ? []
+                                : [
                                 {
                                     onClick: () => setAddDocsOpen(true),
                                     disabled: loading || savingColumnsConfig,
@@ -1014,7 +1292,9 @@ export function TRView({ reviewId, projectId }: Props) {
                             ],
                         },
                         {
-                            actions: [
+                            actions: taskOwnedReviewLocked
+                                ? []
+                                : [
                                 {
                                     onClick: handleGenerate,
                                     disabled:
@@ -1036,7 +1316,9 @@ export function TRView({ reviewId, projectId }: Props) {
                             ],
                         },
                         {
-                            actions: [
+                            actions: taskOwnedReviewLocked
+                                ? []
+                                : [
                                 {
                                     onClick: () => {
                                         if (!chatOpen) setSidebarOpen(false);
@@ -1083,60 +1365,64 @@ export function TRView({ reviewId, projectId }: Props) {
                                     {loading ? (
                                         <div className="h-3 w-24 rounded bg-gray-100 animate-pulse" />
                                     ) : null}
-                                    {!loading && selectedDocIds.length > 0 && (
-                                        <>
-                                            {/* Desktop: compact Actions menu */}
-                                            <div
-                                                ref={actionsRef}
-                                                className="relative max-md:hidden"
-                                            >
-                                                <TabPillButton
-                                                    onClick={() =>
-                                                        setActionsOpen(
-                                                            (v) => !v,
-                                                        )
-                                                    }
+                                    {!taskOwnedReviewLocked &&
+                                        !loading &&
+                                        selectedDocIds.length > 0 && (
+                                            <>
+                                                {/* Desktop: compact Actions menu */}
+                                                <div
+                                                    ref={actionsRef}
+                                                    className="relative max-md:hidden"
                                                 >
-                                                    Actions
-                                                    <ChevronDown className="h-3.5 w-3.5" />
+                                                    <TabPillButton
+                                                        onClick={() =>
+                                                            setActionsOpen(
+                                                                (v) => !v,
+                                                            )
+                                                        }
+                                                    >
+                                                        Actions
+                                                        <ChevronDown className="h-3.5 w-3.5" />
+                                                    </TabPillButton>
+                                                    {actionsOpen && (
+                                                        <div className="absolute top-full right-0 mt-1 w-36 rounded-lg border border-gray-100 bg-white shadow-lg z-50 overflow-hidden">
+                                                            <button
+                                                                onClick={
+                                                                    handleClearResults
+                                                                }
+                                                                className="w-full px-3 py-1.5 text-left text-xs text-gray-700 hover:bg-gray-50 transition-colors"
+                                                            >
+                                                                Clear results
+                                                            </button>
+                                                            <button
+                                                                onClick={
+                                                                    handleDeleteDocuments
+                                                                }
+                                                                className="w-full px-3 py-1.5 text-left text-xs text-red-600 hover:bg-red-50 transition-colors"
+                                                            >
+                                                                Delete
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                {/* Mobile (toolbar dropdown): flattened entries */}
+                                                <TabPillButton
+                                                    onClick={handleClearResults}
+                                                    className="md:hidden"
+                                                >
+                                                    Clear results
                                                 </TabPillButton>
-                                                {actionsOpen && (
-                                                    <div className="absolute top-full right-0 mt-1 w-36 rounded-lg border border-gray-100 bg-white shadow-lg z-50 overflow-hidden">
-                                                        <button
-                                                            onClick={
-                                                                handleClearResults
-                                                            }
-                                                            className="w-full px-3 py-1.5 text-left text-xs text-gray-700 hover:bg-gray-50 transition-colors"
-                                                        >
-                                                            Clear results
-                                                        </button>
-                                                        <button
-                                                            onClick={
-                                                                handleDeleteDocuments
-                                                            }
-                                                            className="w-full px-3 py-1.5 text-left text-xs text-red-600 hover:bg-red-50 transition-colors"
-                                                        >
-                                                            Delete
-                                                        </button>
-                                                    </div>
-                                                )}
-                                            </div>
-                                            {/* Mobile (toolbar dropdown): flattened entries */}
-                                            <TabPillButton
-                                                onClick={handleClearResults}
-                                                className="md:hidden"
-                                            >
-                                                Clear results
-                                            </TabPillButton>
-                                            <TabPillButton
-                                                onClick={handleDeleteDocuments}
-                                                className="md:hidden text-red-600"
-                                            >
-                                                Delete
-                                            </TabPillButton>
-                                        </>
-                                    )}
-                                    {!loading && (
+                                                <TabPillButton
+                                                    onClick={
+                                                        handleDeleteDocuments
+                                                    }
+                                                    className="md:hidden text-red-600"
+                                                >
+                                                    Delete
+                                                </TabPillButton>
+                                            </>
+                                        )}
+                                    {!taskOwnedReviewLocked && !loading && (
                                         <TabPillButton
                                             onClick={() => setAddColOpen(true)}
                                             disabled={
@@ -1154,12 +1440,14 @@ export function TRView({ reviewId, projectId }: Props) {
                         <div
                             className="relative flex flex-1 overflow-hidden"
                             onDragOver={(e) => {
+                                if (taskOwnedReviewLocked) return;
                                 if (!hasFilePayload(e.dataTransfer)) return;
                                 e.preventDefault();
                                 e.dataTransfer.dropEffect = "copy";
                                 setDragOverReviewFiles(true);
                             }}
                             onDragLeave={(e) => {
+                                if (taskOwnedReviewLocked) return;
                                 if (
                                     !e.currentTarget.contains(
                                         e.relatedTarget as Node,
@@ -1169,6 +1457,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                 }
                             }}
                             onDrop={(e) => {
+                                if (taskOwnedReviewLocked) return;
                                 if (!hasFilePayload(e.dataTransfer)) return;
                                 e.preventDefault();
                                 e.stopPropagation();
@@ -1187,6 +1476,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                 highlightedCell={highlightedCell}
                                 savingColumn={savingColumn}
                                 savingColumnsConfig={savingColumnsConfig}
+                                readOnly={taskOwnedReviewLocked}
                                 selectedDocIds={selectedDocIds}
                                 uploadingFilenames={uploadingDroppedFilenames}
                                 dragOverFiles={dragOverReviewFiles}
@@ -1236,6 +1526,92 @@ export function TRView({ reviewId, projectId }: Props) {
                         />
                     )}
                 </div>
+                {activeLitigationReview && litigationProgress && (
+                    <section
+                        aria-label="Evidence Inventory source review"
+                        className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-gray-900/[0.08] bg-white/70 px-4 py-3 backdrop-blur-sm"
+                    >
+                        <div className="min-w-0">
+                            <p className="text-xs font-medium text-gray-900">
+                                Lawyer source review
+                            </p>
+                            <p className="mt-0.5 text-[11px] leading-4 text-gray-600">
+                                <span className="tabular-nums">
+                                    {litigationProgress.verified +
+                                        litigationProgress.unresolved}
+                                    {" of "}
+                                    {litigationProgress.total}
+                                </span>{" "}
+                                findings have a lawyer disposition.
+                                {!litigationReviewActive
+                                    ? " This Task is no longer awaiting this review."
+                                    : litigationProgress.remaining > 0
+                                      ? " Open the next finding to verify it against its fixed source or keep it unresolved."
+                                      : " All findings are ready to return to the Work Task."}
+                            </p>
+                            {litigationCompletionError && (
+                                <p
+                                    role="alert"
+                                    className="mt-1 text-[11px] leading-4 text-red-700"
+                                >
+                                    {litigationCompletionError}
+                                </p>
+                            )}
+                        </div>
+                        <div className="flex shrink-0 flex-wrap items-center gap-2">
+                            {litigationReviewActive &&
+                                litigationProgress.remaining > 0 && (
+                                    <button
+                                        type="button"
+                                        onClick={
+                                            openFirstIncompleteLitigationCell
+                                        }
+                                        className="inline-flex h-8 items-center rounded-full bg-white px-3 text-xs font-medium text-gray-700 shadow-sm outline-none transition-colors hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2"
+                                    >
+                                        Review next finding
+                                    </button>
+                                )}
+                            {litigationProgress.remaining === 0 &&
+                                litigationReviewActive && (
+                                    <button
+                                        type="button"
+                                        onClick={() =>
+                                            void completeLitigationEvidenceReview()
+                                        }
+                                        disabled={!litigationReviewCanComplete}
+                                        className="inline-flex h-9 items-center rounded-full bg-gray-950 px-4 text-xs font-medium text-white shadow-sm outline-none transition-colors hover:bg-black focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 disabled:cursor-default disabled:opacity-40"
+                                    >
+                                        {litigationCompletionSubmitting
+                                            ? "Returning to Work Task…"
+                                            : "Complete review and return to Task"}
+                                    </button>
+                                )}
+                            {!litigationReviewActive && (
+                                <button
+                                    type="button"
+                                    onClick={() =>
+                                        router.push(
+                                            `/agent-tasks/${activeLitigationReview.snapshot.task_id}?restore=1`,
+                                        )
+                                    }
+                                    className="inline-flex h-9 items-center rounded-full bg-gray-950 px-4 text-xs font-medium text-white shadow-sm outline-none transition-colors hover:bg-black focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2"
+                                >
+                                    Return to Task
+                                </button>
+                            )}
+                        </div>
+                    </section>
+                )}
+                {litigationReview.kind === "unavailable" && (
+                    <p
+                        role="alert"
+                        className="shrink-0 border-t border-amber-900/[0.1] bg-amber-50 px-4 py-2 text-[11px] leading-4 text-amber-900"
+                    >
+                        Evidence Inventory actions are locked until the server
+                        can confirm this Task-owned Review:{" "}
+                        {litigationReview.detail}
+                    </p>
+                )}
             </div>
 
             {/* Cell detail side panel */}
@@ -1253,6 +1629,7 @@ export function TRView({ reviewId, projectId }: Props) {
                             cell={expandedCell}
                             document={expandedDoc}
                             documents={filteredDocuments}
+                            sourceDocuments={documents}
                             column={expandedCol}
                             columns={columns}
                             onClose={() => {
@@ -1262,8 +1639,7 @@ export function TRView({ reviewId, projectId }: Props) {
                             onNavigate={(documentId, columnIndex) => {
                                 const nextCell = cells.find(
                                     (candidate) =>
-                                        candidate.document_id ===
-                                            documentId &&
+                                        candidate.document_id === documentId &&
                                         candidate.column_index === columnIndex,
                                 );
                                 if (nextCell) {
@@ -1271,11 +1647,14 @@ export function TRView({ reviewId, projectId }: Props) {
                                     setExpandedCellCitation(undefined);
                                 }
                             }}
-                            onRegenerate={() =>
-                                handleRegenerateCell(
-                                    expandedCell.document_id,
-                                    expandedCell.column_index,
-                                )
+                            onRegenerate={
+                                taskOwnedReviewLocked
+                                    ? undefined
+                                    : () =>
+                                          handleRegenerateCell(
+                                              expandedCell.document_id,
+                                              expandedCell.column_index,
+                                          )
                             }
                             displayDocument={expandedCellCitation !== undefined}
                             citationQuote={expandedCellCitation?.quote}
@@ -1283,6 +1662,36 @@ export function TRView({ reviewId, projectId }: Props) {
                             citationSheet={expandedCellCitation?.sheet}
                             citationCell={expandedCellCitation?.cell}
                             citationRef={expandedCellCitation?.citationRef}
+                            litigationEvidence={
+                                activeLitigationReview
+                                    ? {
+                                          stageLabel:
+                                              litigationEvidenceStageLabel(
+                                                  activeLitigationReview
+                                                      .snapshot.context,
+                                              ),
+                                          representedSideLabel:
+                                              litigationEvidenceSideLabel(
+                                                  activeLitigationReview
+                                                      .snapshot.context,
+                                              ),
+                                          citations:
+                                              expandedCell.citations ?? [],
+                                          reviewStatus:
+                                              expandedCell.review_status,
+                                          reviewActive: litigationReviewActive,
+                                          saving:
+                                              litigationReviewSavingCellId ===
+                                              expandedCell.id,
+                                          error: litigationReviewError,
+                                          onReview: (decision) =>
+                                              saveLitigationCellReview(
+                                                  expandedCell,
+                                                  decision,
+                                              ),
+                                      }
+                                    : undefined
+                            }
                         />
                     );
                 })()}
@@ -1349,7 +1758,7 @@ export function TRView({ reviewId, projectId }: Props) {
                 // Only the review owner may modify the member list. PeopleModal
                 // hides the add/remove controls when this prop is undefined.
                 onSharedWithChange={
-                    review?.is_owner === false
+                    taskOwnedReviewLocked || review?.is_owner === false
                         ? undefined
                         : async (next) => {
                               const updated = await updateTabularReview(

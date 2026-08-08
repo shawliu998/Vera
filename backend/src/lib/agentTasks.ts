@@ -12,7 +12,6 @@ import {
   deriveAgentReviewStatus,
   getAgentReviewVersionState,
 } from "./agentTaskReviewVersions";
-import type { ApprovedArtifactSnapshot } from "./agentTaskReviews";
 import {
   mergeAgentTaskProviderPauseCheckpoint,
   type AgentTaskExecutionPauseClassification,
@@ -643,25 +642,23 @@ export async function listAgentTasks(
     string,
     {
       status: AgentReviewDecision["status"];
-      artifactSnapshot: ApprovedArtifactSnapshot[];
+      artifactSnapshot: unknown[];
     }
   >();
   for (const decision of reviewDecisions ?? []) {
     reviewByTask.set(decision.task_id as string, {
       status: decision.status as AgentReviewDecision["status"],
       artifactSnapshot: Array.isArray(decision.artifact_snapshot)
-        ? (decision.artifact_snapshot as ApprovedArtifactSnapshot[])
+        ? decision.artifact_snapshot
         : [],
     });
   }
 
   const approvedCurrentVersionPairs = [...reviewByTask.values()]
     .filter((review) => review.status === "approved")
-    .flatMap((review) => review.artifactSnapshot)
-    .map((artifact) => ({
-      documentId: artifact.document_id,
-      approvedVersionId: artifact.version_id,
-    }));
+    .flatMap((review) =>
+      approvedDocumentVersionPairs(review.artifactSnapshot),
+    );
   const { data: approvedDocuments, error: documentError } =
     approvedCurrentVersionPairs.length
       ? await db
@@ -691,10 +688,10 @@ export async function listAgentTasks(
       const review = reviewByTask.get(task.id);
       const changedAfterApproval =
         review?.status === "approved" &&
-        review.artifactSnapshot.some(
+        approvedDocumentVersionPairs(review.artifactSnapshot).some(
           (artifact) =>
-            currentVersionByDocument.get(artifact.document_id) !==
-            artifact.version_id,
+            currentVersionByDocument.get(artifact.documentId) !==
+            artifact.approvedVersionId,
         );
       return changedAfterApproval
         ? "review_required"
@@ -705,6 +702,35 @@ export async function listAgentTasks(
       ({ position: _position, ...step }) => step,
     ),
   }));
+}
+
+/**
+ * Approved review snapshots can contain both Document-backed outputs and
+ * Tabular Reviews. Only the former participate in DocumentVersion drift
+ * checks. Treating a Review id as a document id makes one historical approval
+ * break the entire Work Tasks list with an invalid UUID query.
+ */
+export function approvedDocumentVersionPairs(snapshot: unknown): Array<{
+  documentId: string;
+  approvedVersionId: string;
+}> {
+  if (!Array.isArray(snapshot)) return [];
+  return snapshot.flatMap((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const artifact = value as Record<string, unknown>;
+    if (artifact.artifact_type === "tabular_review") return [];
+    const documentId =
+      typeof artifact.document_id === "string"
+        ? artifact.document_id.trim()
+        : "";
+    const approvedVersionId =
+      typeof artifact.version_id === "string"
+        ? artifact.version_id.trim()
+        : "";
+    return documentId && approvedVersionId
+      ? [{ documentId, approvedVersionId }]
+      : [];
+  });
 }
 
 export async function addAgentArtifactLinks(

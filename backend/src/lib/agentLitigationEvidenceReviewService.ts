@@ -137,6 +137,10 @@ export async function getLitigationEvidenceReviewProgress(input: {
     task_id: ownership.task.id as string,
     task_status: ownership.task.status as string,
     review_id: ownership.receipt.review_id,
+    context: {
+      procedural_stage: ownership.receipt.procedural_stage,
+      represented_side: ownership.receipt.represented_side,
+    },
     progress: inspection.progress,
   };
 }
