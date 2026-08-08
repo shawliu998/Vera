@@ -1,4 +1,5 @@
 import { readAgentStepEffectReceipts } from "../effects/stepEffect";
+import { readAgentStepTabularEffectReceipts } from "../effects/tabularEffect";
 
 export type AgentTaskStateAuditTask = {
   id: string;
@@ -261,7 +262,11 @@ export function auditAgentTaskState(
 
     for (const step of plan) {
       try {
-        for (const receipt of readAgentStepEffectReceipts(step.result_data)) {
+        const receipts = [
+          ...readAgentStepEffectReceipts(step.result_data),
+          ...readAgentStepTabularEffectReceipts(step.result_data),
+        ];
+        for (const receipt of receipts) {
           if (receipt.step_id !== step.id || receipt.attempt > step.attempt) {
             issues.push(
               issue(

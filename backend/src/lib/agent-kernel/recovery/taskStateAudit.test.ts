@@ -122,6 +122,21 @@ test("fails closed for malformed effect receipts", () => {
     ],
   );
   assert.equal(malformed.issue_counts.effect_receipt_malformed, 1);
+
+  const malformedTabular = auditAgentTaskState(
+    [{ id: "tabular", status: "verifying", current_step: "s2" }],
+    [
+      {
+        id: "s2",
+        task_id: "tabular",
+        position: 0,
+        status: "running",
+        attempt: 1,
+        result_data: { tabular_effect_receipts: [] },
+      },
+    ],
+  );
+  assert.equal(malformedTabular.issue_counts.effect_receipt_malformed, 1);
 });
 
 test("the inventory command exposes no database mutation or RPC path", async () => {

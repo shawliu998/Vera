@@ -57,6 +57,7 @@ import {
   isAgentStepEffectTransitionError,
   readAgentStepEffectReceipts,
 } from "./agent-kernel/effects/stepEffect";
+import { readAgentStepTabularEffectReceipts } from "./agent-kernel/effects/tabularEffect";
 import {
   AgentTaskLeaseBusyError,
   type AgentTaskLeaseGuard,
@@ -150,19 +151,36 @@ async function buildCurrentStepReceipt(
     if (artifact) {
       artifactIds.push(artifact.artifact_id);
       satisfied.add("artifact_created");
-      const { data: document, error } = await db
-        .from("documents")
-        .select("id,project_id,current_version_id")
-        .eq("id", artifact.artifact_id)
-        .maybeSingle();
-      if (error) throw new Error(error.message);
-      if (
-        document &&
-        document.project_id === snapshot.task.matter_id &&
-        typeof document.current_version_id === "string" &&
-        document.current_version_id
-      ) {
-        satisfied.add("artifact_current_version");
+      if (artifact.artifact_type === "tabular_review") {
+        const { data: review, error } = await db
+          .from("tabular_reviews")
+          .select("id,project_id,user_id,row_protocol")
+          .eq("id", artifact.artifact_id)
+          .maybeSingle();
+        if (error) throw new Error(error.message);
+        if (
+          review &&
+          review.project_id === snapshot.task.matter_id &&
+          review.user_id === snapshot.task.user_id &&
+          review.row_protocol === "document_rows"
+        ) {
+          satisfied.add("artifact_current_version");
+        }
+      } else {
+        const { data: document, error } = await db
+          .from("documents")
+          .select("id,project_id,current_version_id")
+          .eq("id", artifact.artifact_id)
+          .maybeSingle();
+        if (error) throw new Error(error.message);
+        if (
+          document &&
+          document.project_id === snapshot.task.matter_id &&
+          typeof document.current_version_id === "string" &&
+          document.current_version_id
+        ) {
+          satisfied.add("artifact_current_version");
+        }
       }
     }
   }
@@ -254,21 +272,50 @@ export function recoverCommittedStepEffectArtifact(
   if (!contract || contract.output_expectation.kind !== "artifact") return null;
   const expectation = contract.output_expectation;
 
-  let receipts;
+  let candidates: Array<{
+    attempt: number;
+    artifactType: "draft" | "tabular_review";
+    artifactId: string;
+    versionId: string | null;
+  }>;
   try {
-    receipts = readAgentStepEffectReceipts(step.result_data);
+    candidates =
+      expectation.artifact_type === "tabular_review"
+        ? readAgentStepTabularEffectReceipts(step.result_data)
+            .filter(
+              (receipt) =>
+                receipt.status === "committed" &&
+                receipt.step_id === step.id &&
+                (options?.includePriorAttempt
+                  ? receipt.attempt <= step.attempt
+                  : receipt.attempt === step.attempt) &&
+                receipt.effect?.artifact_type === "tabular_review",
+            )
+            .map((receipt) => ({
+              attempt: receipt.attempt,
+              artifactType: "tabular_review" as const,
+              artifactId: receipt.effect!.review_id,
+              versionId: null,
+            }))
+        : readAgentStepEffectReceipts(step.result_data)
+            .filter(
+              (receipt) =>
+                receipt.status === "committed" &&
+                receipt.step_id === step.id &&
+                (options?.includePriorAttempt
+                  ? receipt.attempt <= step.attempt
+                  : receipt.attempt === step.attempt) &&
+                receipt.effect?.artifact_type === expectation.artifact_type,
+            )
+            .map((receipt) => ({
+              attempt: receipt.attempt,
+              artifactType: "draft" as const,
+              artifactId: receipt.effect!.document_id,
+              versionId: receipt.effect!.version_id,
+            }));
   } catch {
     return null;
   }
-  const candidates = receipts.filter(
-    (receipt) =>
-      receipt.status === "committed" &&
-      receipt.step_id === step.id &&
-      (options?.includePriorAttempt
-        ? receipt.attempt <= step.attempt
-        : receipt.attempt === step.attempt) &&
-      receipt.effect?.artifact_type === expectation.artifact_type,
-  );
   const recoveredAttempt = candidates.reduce(
     (latest, receipt) => Math.max(latest, receipt.attempt),
     0,
@@ -276,7 +323,7 @@ export function recoverCommittedStepEffectArtifact(
   const committed = candidates.filter(
     (receipt) => receipt.attempt === recoveredAttempt,
   );
-  if (committed.length !== 1 || !committed[0].effect) return null;
+  if (committed.length !== 1) return null;
 
   const deliverable = requiredTaskDeliverables(snapshot.task).find(
     (candidate) => candidate.key === expectation.deliverable_key,
@@ -285,17 +332,17 @@ export function recoverCommittedStepEffectArtifact(
 
   return {
     summary:
-      "The declared Artifact was created and preserved. A later duplicate mutation request in the same Step was rejected by the idempotency fence; the preserved current Version will continue to deterministic verification and lawyer review.",
+      "The declared Artifact was created and preserved. A later duplicate mutation request in the same Step was rejected by the idempotency fence; the preserved Artifact will continue to deterministic verification and lawyer review.",
     artifacts: [
       {
-        artifact_type: committed[0].effect.artifact_type,
-        artifact_id: committed[0].effect.document_id,
+        artifact_type: committed[0].artifactType,
+        artifact_id: committed[0].artifactId,
         purpose: taskDeliverablePurpose(deliverable),
       },
     ],
     waitingForInput: false,
     citationCheck: { total: 0, relocatable: 0, missing: 0 },
-    committedVersionId: committed[0].effect.version_id,
+    committedVersionId: committed[0].versionId,
     receiptAttempt: committed[0].attempt,
   };
 }
@@ -306,6 +353,20 @@ async function committedStepEffectIsCurrent(
   recovered: NonNullable<ReturnType<typeof recoverCommittedStepEffectArtifact>>,
 ) {
   const artifact = recovered.artifacts[0];
+  if (artifact.artifact_type === "tabular_review") {
+    const { data, error } = await db
+      .from("tabular_reviews")
+      .select("id,project_id,user_id,row_protocol")
+      .eq("id", artifact.artifact_id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return Boolean(
+      data &&
+      data.project_id === snapshot.task.matter_id &&
+      data.user_id === snapshot.task.user_id &&
+      data.row_protocol === "document_rows",
+    );
+  }
   const { data, error } = await db
     .from("documents")
     .select("id,project_id,status,current_version_id")

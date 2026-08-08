@@ -162,6 +162,55 @@ function snapshot(input?: { status?: string; fingerprint?: string }) {
   };
 }
 
+function tabularSnapshot() {
+  const value = snapshot() as ReturnType<typeof snapshot>;
+  const step = value.task.current_plan[1];
+  const reviewId = "a7ad52b8-698e-4af5-b72a-7031064cf79f";
+  value.task.deliverables = [
+    {
+      key: "evidence-inventory",
+      title: "Evidence Inventory",
+      artifact_type: "tabular_review",
+      required: true,
+    },
+  ];
+  value.task.latest_checkpoint.contract.goal_spec.deliverable_keys = [
+    "evidence-inventory",
+  ];
+  value.task.latest_checkpoint.contract.step_contracts.steps[1].operation =
+    "table.create";
+  value.task.latest_checkpoint.contract.step_contracts.steps[1].capability =
+    "create_tabular";
+  value.task.latest_checkpoint.contract.step_contracts.steps[1].output_expectation =
+    {
+      kind: "artifact",
+      artifact_type: "tabular_review",
+      deliverable_key: "evidence-inventory",
+    };
+  step.result_data = {
+    tabular_effect_receipts: {
+      [`agent-step:${step.id}:attempt:1:create_tabular_review`]: {
+        kind: "agent_step_tabular_effect_v1",
+        effect_key: `agent-step:${step.id}:attempt:1:create_tabular_review`,
+        step_id: step.id,
+        attempt: 1,
+        operation: "create_tabular_review",
+        input_fingerprint:
+          "95a1cb8be3eeb4706e28ce29e290cd94e4c1c6dcefc6e73a29cbb4f1712a8dde",
+        status: "committed",
+        target: { review_id: reviewId },
+        effect: {
+          review_id: reviewId,
+          artifact_type: "tabular_review",
+        },
+        created_at: "2026-08-08T08:00:00.000Z",
+        committed_at: "2026-08-08T08:00:01.000Z",
+      },
+    },
+  };
+  return value;
+}
+
 test("recovers one committed fixed Artifact after a duplicate mutation conflict", () => {
   const recovered = recoverCommittedStepEffectArtifact(snapshot() as never);
   assert.deepEqual(recovered?.artifacts, [
@@ -172,6 +221,27 @@ test("recovers one committed fixed Artifact after a duplicate mutation conflict"
     },
   ]);
   assert.match(recovered?.summary ?? "", /idempotency fence/i);
+});
+
+test("recovers a real Tabular Review from its separate effect receipt", () => {
+  const recovered = recoverCommittedStepEffectArtifact(
+    tabularSnapshot() as never,
+  );
+  assert.deepEqual(recovered?.artifacts, [
+    {
+      artifact_type: "tabular_review",
+      artifact_id: "a7ad52b8-698e-4af5-b72a-7031064cf79f",
+      purpose: "Evidence Inventory",
+    },
+  ]);
+  assert.equal(recovered?.committedVersionId, null);
+});
+
+test("does not accept a legacy spreadsheet Document as a Tabular Review", () => {
+  const value = tabularSnapshot();
+  value.task.current_plan[1].result_data =
+    snapshot().task.current_plan[1].result_data;
+  assert.equal(recoverCommittedStepEffectArtifact(value as never), null);
 });
 
 test("does not recover without one running Step", () => {

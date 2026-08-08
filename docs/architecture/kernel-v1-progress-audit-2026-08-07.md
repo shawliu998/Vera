@@ -275,6 +275,38 @@ publish the fixed layout through the existing Task-owned Tabular Review and an
 idempotent Kernel effect, then connect a bounded provider adapter and the
 current lawyer review surface.
 
+## Litigation Tabular Review effect foundation — 2026-08-08
+
+The next application slice now establishes the publication boundary without
+turning an XLSX Document into a fake Review:
+
+- a separate lease- and attempt-fenced Kernel effect reserves and commits one
+  stable, Matter-owned `tabular_reviews` identity under the existing running
+  Task and Step;
+- the commit RPC accepts only a Review owned by the same Matter and user with
+  the existing `document_rows` protocol, is executable only by `service_role`,
+  and preserves unrelated Step result data;
+- the application service maps the pure Litigation receipt to the existing
+  Tabular Review and Tabular Cell contracts, with one fixed column per semantic
+  axis and one deterministic pending cell per fixed record source and field;
+- publication is idempotent and fails closed if a raced or pre-existing Review
+  or Cell differs from the fixed Task layout; fixed source Documents must still
+  point to the exact bound Versions;
+- Step postconditions, duplicate-effect recovery and the read-only Task-state
+  audit now distinguish a real Tabular Review from a generated spreadsheet
+  Document. Legacy `generate_excel` receipts can no longer satisfy recovery for
+  a `tabular_review` deliverable;
+- mirrored migration tests and a transactional PostgreSQL smoke test cover the
+  lease fence, reservation replay, missing-artifact rejection, Matter/owner
+  binding, preservation of unrelated result data and denial to the
+  `authenticated` role.
+
+This is a publication foundation, not yet a user-complete Litigation workflow.
+It deliberately does not let an empty pending Review complete the Step. The
+next slice must bind bounded provider generation to each pending cell, preserve
+completed cells on an exhausted source-bound attempt, then require the existing
+lawyer review decisions before the same Task proceeds to Word deliverables.
+
 ## Legacy cleanup rule
 
 The earlier Aletheia civil-litigation workbench, dedicated routes and local
@@ -296,11 +328,12 @@ preserved release capabilities.
 
 ## Next execution order
 
-1. Extract the Litigation Pack field/row contracts and per-cell reviewable-gap
-   outcome; integrate one Task-owned Evidence Inventory through the existing
-   Tabular Review surface.
-2. Run the litigation gold workflow, including direct source navigation and an
-   exhausted-cell recovery, before removing any legacy litigation slice.
+1. Connect bounded, source-bound generation and existing lawyer dispositions to
+   the fixed Task-owned Evidence Inventory; never complete the create Step while
+   cells remain pending or unreviewed.
+2. Run the litigation gold workflow, including direct source navigation,
+   selected-object synchronization and an exhausted-cell recovery, before
+   removing any legacy litigation slice.
 3. Run the current-user EPO OPS success gate when credentials are available,
    from search through selected import and downstream Word verification.
 4. When Word is closed, complete Batch 7 Host activation and visual acceptance.

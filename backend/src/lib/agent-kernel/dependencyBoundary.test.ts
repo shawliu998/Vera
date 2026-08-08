@@ -74,6 +74,7 @@ test("direct Supabase coupling is frozen to the current extraction adapters", as
   assert.deepEqual(coupled, [
     "context/matterContextRepository.ts",
     "effects/stepEffect.ts",
+    "effects/tabularEffect.ts",
     "execution/taskLease.ts",
     "execution/taskTransition.ts",
     "verification/artifactReverification.ts",
