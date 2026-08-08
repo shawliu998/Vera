@@ -18,7 +18,10 @@ export async function recordAgentTaskExecutionCheckpoint(
     step: { id: string; attempt: number };
     previousCheckpoint: unknown;
     summary: string;
-    checkpointValues: { source_acquisition: unknown };
+    checkpointValues: Record<string, unknown> & {
+      source_acquisition: unknown;
+    };
+    sourceDocumentIds?: string[];
   },
 ) {
   const createdAt = new Date().toISOString();
@@ -48,6 +51,7 @@ export async function recordAgentTaskExecutionCheckpoint(
         ...input.checkpointValues,
       },
     ),
+    sourceDocumentIds: input.sourceDocumentIds ?? [],
   };
   const committed = await commitAgentTaskCheckpointTransition(db, transition);
   if (committed.outcome === "recorded") return true;

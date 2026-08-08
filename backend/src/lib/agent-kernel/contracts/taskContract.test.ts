@@ -171,6 +171,18 @@ test("required input may append fixed sources but cannot replace them", () => {
       created_at: "2026-08-07T01:00:00.000Z",
     },
   ]);
+  const acquired = extendAgentTaskContractContext({
+    checkpoint: task.latest_checkpoint,
+    previousContext: previous,
+    nextContext: next,
+    reason: "source_acquisition",
+    requestId: "selection_fixture",
+    createdAt: "2026-08-07T01:00:00.000Z",
+  });
+  assert.equal(
+    (acquired.assignment_revisions as Array<{ reason: string }>)[0]?.reason,
+    "source_acquisition",
+  );
 
   const replaced = structuredClone(next);
   replaced.sources[0]!.version_id = "version-drifted";

@@ -62,6 +62,7 @@ export type AgentTaskCheckpointTransitionInput = {
   stepId: string;
   expectedStepAttempt: number;
   latestCheckpoint: unknown;
+  sourceDocumentIds: string[];
 };
 
 export type AgentTaskReviewDecisionTransitionInput = {
@@ -333,6 +334,7 @@ export async function commitAgentTaskCheckpointTransition(
     p_step_id: input.stepId,
     p_expected_step_attempt: input.expectedStepAttempt,
     p_latest_checkpoint: input.latestCheckpoint,
+    p_source_document_ids: input.sourceDocumentIds,
   });
   if (error) {
     throw transitionError(

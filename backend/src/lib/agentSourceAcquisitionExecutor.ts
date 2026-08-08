@@ -72,7 +72,7 @@ function executionResult(
     artifacts: imports.map((receipt) => ({
       artifact_type: "document" as const,
       artifact_id: receipt.document_id,
-      purpose: "Acquired source document",
+      purpose: "Source document",
     })),
     waitingForInput: state.phase !== "completed",
     requiredInput: null,

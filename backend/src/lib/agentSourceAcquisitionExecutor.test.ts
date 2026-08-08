@@ -390,7 +390,7 @@ test("lawyer selection resumes only selected reads and completes imported curren
     {
       artifact_type: "document",
       artifact_id: "66666666-6666-4666-8666-666666666666",
-      purpose: "Acquired source document",
+      purpose: "Source document",
     },
   ]);
   assert.equal(

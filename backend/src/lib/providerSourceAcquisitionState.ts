@@ -19,6 +19,32 @@ export const PROVIDER_SOURCE_ACQUISITION_CHECKPOINT_KEY =
   "source_acquisition" as const;
 export const PROVIDER_SOURCE_ACQUISITION_STATE_VERSION =
   "provider_source_acquisition_state_v1" as const;
+export const PROVIDER_SOURCE_SELECTION_CHECKPOINT_VERSION =
+  "provider_source_selection_v1" as const;
+
+export const providerSourceSelectionCheckpointSchema = z
+  .object({
+    schema_version: z.literal(PROVIDER_SOURCE_SELECTION_CHECKPOINT_VERSION),
+    submission_id: z.string().trim().min(1).max(200),
+    selected_discovery_refs: z
+      .array(z.string().trim().min(1).max(160))
+      .min(1)
+      .max(20),
+    submitted_at: z.string().datetime(),
+  })
+  .strict()
+  .superRefine((selection, context) => {
+    if (
+      new Set(selection.selected_discovery_refs).size !==
+      selection.selected_discovery_refs.length
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["selected_discovery_refs"],
+        message: "Selected discovery refs must be unique",
+      });
+    }
+  });
 
 const issueSchema = z
   .object({
@@ -44,9 +70,7 @@ export const providerSourceAcquisitionStateSchema = z
     ]),
     next_page: z.number().int().min(1).max(100).nullable(),
     discoveries: z.array(readOnlySourceDiscoverySchema).max(200),
-    selected_discovery_refs: z
-      .array(z.string().trim().min(1).max(160))
-      .max(20),
+    selected_discovery_refs: z.array(z.string().trim().min(1).max(160)).max(20),
     search_receipts: z.array(readOnlySourceReceiptSchema).max(100),
     search_coverage: z.array(readOnlySourceCoverageSchema).max(100),
     read_receipts: z.array(readOnlySourceReceiptSchema).max(20),
@@ -86,18 +110,14 @@ export const providerSourceAcquisitionStateSchema = z
         message: "A selection must bind an existing discovery",
       });
     }
-    if (
-      state.selected_discovery_refs.length > state.spec.maximum_selections
-    ) {
+    if (state.selected_discovery_refs.length > state.spec.maximum_selections) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["selected_discovery_refs"],
         message: "Selections exceed the fixed acquisition scope",
       });
     }
-    if (
-      (state.phase === "search_pending") !== (state.next_page !== null)
-    ) {
+    if ((state.phase === "search_pending") !== (state.next_page !== null)) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["next_page"],
@@ -251,7 +271,9 @@ export function appendProviderSourceSearchPage(input: {
     input.outcome.receipt.request_ref !== request.request_ref ||
     input.outcome.coverage.request_ref !== request.request_ref
   ) {
-    throw new Error("Provider source search outcome does not match its request");
+    throw new Error(
+      "Provider source search outcome does not match its request",
+    );
   }
   const returnedRefs = input.outcome.discoveries.map(
     (discovery) => discovery.discovery_ref,
@@ -261,13 +283,12 @@ export function appendProviderSourceSearchPage(input: {
       JSON.stringify(returnedRefs) ||
     input.outcome.receipt.returned_snapshot_refs.length !== 0
   ) {
-    throw new Error("Provider source search receipt does not match discoveries");
+    throw new Error(
+      "Provider source search receipt does not match discoveries",
+    );
   }
   const byRef = new Map(
-    state.discoveries.map((discovery) => [
-      discovery.discovery_ref,
-      discovery,
-    ]),
+    state.discoveries.map((discovery) => [discovery.discovery_ref, discovery]),
   );
   for (const discovery of input.outcome.discoveries) {
     const normalized = readOnlySourceDiscoverySchema.parse(discovery);
@@ -314,7 +335,8 @@ export function appendProviderSourceSearchPage(input: {
             ...issues,
             {
               code: "no_results" as const,
-              detail: "The fixed provider search returned no selectable results.",
+              detail:
+                "The fixed provider search returned no selectable results.",
             },
           ],
   });

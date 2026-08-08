@@ -43,12 +43,17 @@ test("records progress under the exact Task lease while preserving immutable ass
       };
     },
   };
+  const sourceDocumentIds = ["33333333-3333-4333-8333-333333333333"];
   assert.equal(
-    await recordAgentTaskExecutionCheckpoint(db as never, input),
+    await recordAgentTaskExecutionCheckpoint(db as never, {
+      ...input,
+      sourceDocumentIds,
+    }),
     true,
   );
   assert.equal(args?.p_lease_owner, input.leaseOwner);
   assert.equal(args?.p_expected_step_attempt, input.step.attempt);
+  assert.deepEqual(args?.p_source_document_ids, sourceDocumentIds);
   const checkpoint = args?.p_latest_checkpoint as Record<string, unknown>;
   assert.deepEqual(checkpoint.contract, input.previousCheckpoint.contract);
   assert.deepEqual(

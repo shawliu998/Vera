@@ -29,6 +29,7 @@ import {
   verifyTaskCitationLinks,
 } from "./agentStepExecutor";
 import { executeAgentSourceAcquisitionStep } from "./agentSourceAcquisitionExecutor";
+import { compileCompletedAgentSourceContext } from "./agentSourceAcquisitionContext";
 import { createServerSupabase } from "./supabase";
 import { assertAgentTaskAssignmentContract } from "./agent-kernel/contracts/taskContract";
 import {
@@ -639,27 +640,50 @@ export async function advanceAgentTaskExecution(input: {
         shouldContinue,
         dependencies: {
           recordProgress: (state) =>
-            recordAgentTaskExecutionCheckpoint(db, {
-              taskId,
-              userId,
-              leaseOwner: input.leaseGuard!.ownerToken,
-              expectedTaskStatus: current.task.status as
-                | "running"
-                | "verifying",
-              step: runningStep,
-              previousCheckpoint: current.task.latest_checkpoint,
-              summary:
-                state.phase === "search_pending"
-                  ? `Source search page committed; continuing page ${state.next_page}.`
-                  : state.phase === "selection_required"
-                    ? `Source search completed with ${state.discoveries.length} bounded result${state.discoveries.length === 1 ? "" : "s"}; waiting for lawyer selection.`
-                    : state.phase === "read_pending"
-                      ? `Imported ${state.import_receipts.length} of ${state.selected_discovery_refs.length} selected provider sources.`
-                      : state.phase === "completed"
-                        ? `Imported all ${state.import_receipts.length} selected provider sources.`
-                        : "Source acquisition preserved for lawyer review.",
-              checkpointValues: { source_acquisition: state },
-            }),
+            (async () => {
+              let checkpointValues: Record<string, unknown> & {
+                source_acquisition: unknown;
+              } = { source_acquisition: state };
+              let sourceDocumentIds: string[] = [];
+              if (state.phase === "completed") {
+                if (!fixedMatterContext) {
+                  throw new Error(
+                    "Completed source acquisition has no fixed Matter context",
+                  );
+                }
+                const completedContext =
+                  await compileCompletedAgentSourceContext({
+                    db,
+                    previousCheckpoint: current.task.latest_checkpoint,
+                    previousContext: fixedMatterContext,
+                    acquisitionState: state,
+                  });
+                sourceDocumentIds = completedContext.sourceDocumentIds;
+                checkpointValues = completedContext.checkpointValues;
+              }
+              return recordAgentTaskExecutionCheckpoint(db, {
+                taskId,
+                userId,
+                leaseOwner: input.leaseGuard!.ownerToken,
+                expectedTaskStatus: current.task.status as
+                  | "running"
+                  | "verifying",
+                step: runningStep,
+                previousCheckpoint: current.task.latest_checkpoint,
+                summary:
+                  state.phase === "search_pending"
+                    ? `Source search page committed; continuing page ${state.next_page}.`
+                    : state.phase === "selection_required"
+                      ? `Source search completed with ${state.discoveries.length} bounded result${state.discoveries.length === 1 ? "" : "s"}; waiting for lawyer selection.`
+                      : state.phase === "read_pending"
+                        ? `Imported ${state.import_receipts.length} of ${state.selected_discovery_refs.length} selected provider sources.`
+                        : state.phase === "completed"
+                          ? `Imported all ${state.import_receipts.length} selected provider sources.`
+                          : "Source acquisition preserved for lawyer review.",
+                checkpointValues,
+                sourceDocumentIds,
+              });
+            })(),
         },
       });
       if (acquisition.kind === "provider_pause") {

@@ -432,6 +432,7 @@ test("maps in-flight Step progress to one lease-fenced checkpoint RPC", async ()
     stepId: input.stepId,
     expectedStepAttempt: 2,
     latestCheckpoint: { source_acquisition: { phase: "read_pending" } },
+    sourceDocumentIds: [],
   };
   assert.equal(
     (await commitAgentTaskCheckpointTransition(db as never, checkpoint))
@@ -447,20 +448,21 @@ test("maps in-flight Step progress to one lease-fenced checkpoint RPC", async ()
     p_step_id: checkpoint.stepId,
     p_expected_step_attempt: checkpoint.expectedStepAttempt,
     p_latest_checkpoint: checkpoint.latestCheckpoint,
+    p_source_document_ids: checkpoint.sourceDocumentIds,
   });
 });
 
 test("keeps atomic checkpoint migrations mirrored and fenced to one live Step lease", async () => {
   const backend = await readFile(
     new URL(
-      "../../../../migrations/20260808_06_agent_task_atomic_checkpoint.sql",
+      "../../../../migrations/20260808_07_agent_task_source_checkpoint.sql",
       import.meta.url,
     ),
     "utf8",
   );
   const supabase = await readFile(
     new URL(
-      "../../../../../supabase/migrations/20260808000006_agent_task_atomic_checkpoint.sql",
+      "../../../../../supabase/migrations/20260808000007_agent_task_source_checkpoint.sql",
       import.meta.url,
     ),
     "utf8",
@@ -473,6 +475,12 @@ test("keeps atomic checkpoint migrations mirrored and fenced to one live Step le
   assert.match(backend, /v_step\.attempt <> p_expected_step_attempt/i);
   assert.match(backend, /v_running_count <> 1/i);
   assert.match(backend, /latest_checkpoint = p_latest_checkpoint/i);
+  assert.match(backend, /p_source_document_ids uuid\[\]/i);
+  assert.match(
+    backend,
+    /drop function if exists[\s\S]*uuid, text, text, text, uuid, integer, jsonb/i,
+  );
+  assert.match(backend, /purpose\s*\)[\s\S]*'Source document'/i);
   assert.match(backend, /from public, anon, authenticated/i);
   assert.match(backend, /to service_role/i);
 });

@@ -17,6 +17,7 @@ import {
 } from "./agentTasks";
 import {
   PROVIDER_SOURCE_ACQUISITION_CHECKPOINT_KEY,
+  providerSourceSelectionCheckpointSchema,
   providerSourceAcquisitionStateSchema,
   selectProviderSourceDiscoveries,
 } from "./providerSourceAcquisitionState";
@@ -113,12 +114,12 @@ export function prepareAgentTaskSourceSelectionTransition(
       summary: userInput.message,
       created_at: submittedAt,
       user_input: userInput,
-      source_selection: {
-        schema_version: "provider_source_selection_v1" as const,
+      source_selection: providerSourceSelectionCheckpointSchema.parse({
+        schema_version: "provider_source_selection_v1",
         submission_id: submissionId,
         selected_discovery_refs: selectedRefs,
         submitted_at: submittedAt,
-      },
+      }),
       [PROVIDER_SOURCE_ACQUISITION_CHECKPOINT_KEY]: state,
     },
   };

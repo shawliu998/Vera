@@ -256,6 +256,7 @@ export function extendAgentTaskContractContext(input: {
   checkpoint: Record<string, unknown>;
   previousContext: MatterContextManifestV1;
   nextContext: MatterContextManifestV1;
+  reason?: "required_input" | "source_acquisition";
   requestId?: string | null;
   createdAt?: string;
 }) {
@@ -307,7 +308,7 @@ export function extendAgentTaskContractContext(input: {
       ...priorRevisions,
       {
         kind: "agent_assignment_context_revision_v1",
-        reason: "required_input",
+        reason: input.reason ?? "required_input",
         request_id: input.requestId ?? null,
         previous_compiled_at: previous.compiled_at,
         next_compiled_at: next.compiled_at,
