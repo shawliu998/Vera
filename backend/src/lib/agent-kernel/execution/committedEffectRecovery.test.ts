@@ -223,18 +223,11 @@ test("recovers one committed fixed Artifact after a duplicate mutation conflict"
   assert.match(recovered?.summary ?? "", /idempotency fence/i);
 });
 
-test("recovers a real Tabular Review from its separate effect receipt", () => {
-  const recovered = recoverCommittedStepEffectArtifact(
-    tabularSnapshot() as never,
+test("does not treat a committed Tabular publication as a completed Step", () => {
+  assert.equal(
+    recoverCommittedStepEffectArtifact(tabularSnapshot() as never),
+    null,
   );
-  assert.deepEqual(recovered?.artifacts, [
-    {
-      artifact_type: "tabular_review",
-      artifact_id: "a7ad52b8-698e-4af5-b72a-7031064cf79f",
-      purpose: "Evidence Inventory",
-    },
-  ]);
-  assert.equal(recovered?.committedVersionId, null);
 });
 
 test("does not accept a legacy spreadsheet Document as a Tabular Review", () => {

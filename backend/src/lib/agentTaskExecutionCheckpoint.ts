@@ -18,9 +18,7 @@ export async function recordAgentTaskExecutionCheckpoint(
     step: { id: string; attempt: number };
     previousCheckpoint: unknown;
     summary: string;
-    checkpointValues: Record<string, unknown> & {
-      source_acquisition: unknown;
-    };
+    checkpointValues: Record<string, unknown>;
     sourceDocumentIds?: string[];
   },
 ) {
@@ -64,7 +62,7 @@ export async function recordAgentTaskExecutionCheckpoint(
   }
   throw new AgentTaskStateTransitionError(
     "task_state_transition_conflict",
-    "The Agent Task acquisition checkpoint was rejected.",
+    "The Agent Task execution checkpoint was rejected.",
     {
       task_id: input.taskId,
       step_id: input.step.id,

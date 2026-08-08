@@ -103,7 +103,7 @@ export async function getReviewBlockers(
     );
   }
 
-  const deliverables = await evaluateTaskDeliverables(db, snapshot);
+  const deliverables = await evaluateTaskDeliverables(db, snapshot, { userId });
   for (const title of deliverables.missing) {
     blockers.push(`The required ${title} is missing.`);
   }

@@ -68,6 +68,16 @@ const ITEM_IDS = {
   language: "litigation-output-language",
 } as const;
 
+export function isLitigationEvidenceInventoryContextRequiredInput(value: {
+  items?: Array<{ id?: unknown }>;
+}) {
+  const ids = value.items?.map((item) => item.id) ?? [];
+  const expected = Object.values(ITEM_IDS);
+  return (
+    ids.length === expected.length && expected.every((id) => ids.includes(id))
+  );
+}
+
 function fixedRecordSources(matter: MatterContextManifestV1) {
   return matter.sources.filter((source) => source.role === "source");
 }

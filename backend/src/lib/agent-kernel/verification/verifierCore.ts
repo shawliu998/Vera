@@ -102,6 +102,26 @@ const deterministicIssueSchema = z.discriminatedUnion("code", [
     .strict(),
   z
     .object({
+      code: z.literal("tabular_review_invalid"),
+      deliverable_key: z.string().trim().min(1).max(120),
+      review_id: z.string().uuid(),
+      reason: z
+        .enum(["row_protocol", "layout", "source_scope", "cell_coordinate"])
+        .describe("The server-owned Tabular Review integrity classification."),
+      total_cells: z.number().int().min(0).max(50_000),
+    })
+    .strict(),
+  z
+    .object({
+      code: z.literal("tabular_review_incomplete"),
+      deliverable_key: z.string().trim().min(1).max(120),
+      review_id: z.string().uuid(),
+      total_cells: z.number().int().min(0).max(50_000),
+      incomplete_cells: z.number().int().min(1).max(50_000),
+    })
+    .strict(),
+  z
+    .object({
       code: z.literal("pack_check_gap"),
       profile_id: z.string().trim().min(1).max(160),
       check_code: z.string().trim().min(1).max(160),
@@ -172,11 +192,20 @@ const deliverableSchema = z
     const hasCompleteIdentity = identityFields.every((value) => value !== null);
     const hasAcceptedHash = deliverable.accepted_view_sha256 !== null;
     const hasAcceptedText = deliverable.accepted_view_text !== null;
+    const acceptedViewRequiresDocument = deliverable.artifact_type === "draft";
+    const invalidDraftIdentity =
+      acceptedViewRequiresDocument && hasIdentity && !hasCompleteIdentity;
+    const invalidTabularIdentity = !acceptedViewRequiresDocument && hasIdentity;
+    const invalidAcceptedViewIdentity = acceptedViewRequiresDocument
+      ? (hasAcceptedHash || hasAcceptedText) && !hasCompleteIdentity
+      : deliverable.artifact_id === null &&
+        (hasAcceptedHash || hasAcceptedText);
     if (
       (deliverable.artifact_id === null &&
         (hasIdentity || hasAcceptedHash || hasAcceptedText)) ||
-      (hasIdentity && !hasCompleteIdentity) ||
-      ((hasAcceptedHash || hasAcceptedText) && !hasCompleteIdentity) ||
+      invalidDraftIdentity ||
+      invalidTabularIdentity ||
+      invalidAcceptedViewIdentity ||
       (deliverable.accepted_view_complete &&
         (!hasAcceptedHash || !hasAcceptedText)) ||
       (!deliverable.accepted_view_complete &&
@@ -187,7 +216,7 @@ const deliverableSchema = z
         code: z.ZodIssueCode.custom,
         path: ["document_id"],
         message:
-          "Current document identity and any accepted view must be complete",
+          "A draft needs a complete current document identity; a Tabular Review uses its Artifact identity and must not impersonate a Document",
       });
     }
   });

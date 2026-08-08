@@ -57,6 +57,23 @@ export function buildLitigationEvidenceEffectLayout(
   };
 }
 
+export function buildLitigationEvidenceInventoryArtifact(input: {
+  reviewId: string;
+  declaredTaskDeliverablePurpose: string;
+}) {
+  const purpose = input.declaredTaskDeliverablePurpose.trim();
+  if (!purpose) {
+    throw new Error(
+      "Litigation Evidence Inventory publication requires a declared Task deliverable purpose",
+    );
+  }
+  return {
+    artifact_type: "tabular_review" as const,
+    artifact_id: input.reviewId,
+    purpose,
+  };
+}
+
 function canonical(value: unknown): string {
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value ?? null);
@@ -234,6 +251,7 @@ export async function executeLitigationEvidenceInventoryPublication(input: {
   userId: string;
   leaseOwner: string;
   context: LitigationEvidenceInventoryContextV1;
+  declaredTaskDeliverablePurpose: string;
 }) {
   const receipt = compileLitigationEvidenceInventoryReceipt({
     taskId: input.taskId,
@@ -281,10 +299,9 @@ export async function executeLitigationEvidenceInventoryPublication(input: {
   return {
     receipt,
     effect: committed,
-    artifact: {
-      artifact_type: "tabular_review" as const,
-      artifact_id: spec.id,
-      purpose: "Evidence inventory",
-    },
+    artifact: buildLitigationEvidenceInventoryArtifact({
+      reviewId: spec.id,
+      declaredTaskDeliverablePurpose: input.declaredTaskDeliverablePurpose,
+    }),
   };
 }

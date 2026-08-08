@@ -73,9 +73,12 @@ import {
   LitigationEvidenceInventoryContextError,
   compileLitigationEvidenceInventoryContext,
   createLitigationEvidenceInventoryContextRequiredInput,
+  isLitigationEvidenceInventoryContextRequiredInput,
   parseLitigationEvidenceInventoryContextRequiredInput,
   readLitigationEvidenceInventoryContext,
 } from "../lib/agent-packs/litigation/litigationEvidenceInventoryContext";
+import { litigationEvidenceInventoryReceiptSchema } from "../lib/agent-packs/litigation/litigationEvidenceInventoryPack";
+import { getLitigationEvidenceReviewProgress } from "../lib/agentLitigationEvidenceReviewService";
 
 export const agentTasksRouter = Router();
 
@@ -686,6 +689,43 @@ agentTasksRouter.post("/:taskId/input", requireAuth, async (req, res) => {
     const activeRequiredInput = readAgentRequiredInput(
       checkpoint.required_input,
     );
+    const evidenceReviewResponse = responses?.find(
+      (response) =>
+        response.kind === "choice" &&
+        response.id === "evidence-inventory-reviewed" &&
+        response.answer === "review_complete",
+    );
+    if (
+      activeRequiredInput?.items.some(
+        (item) =>
+          item.kind === "choice" && item.id === "evidence-inventory-reviewed",
+      ) &&
+      evidenceReviewResponse
+    ) {
+      const receipt = litigationEvidenceInventoryReceiptSchema.safeParse(
+        checkpoint.litigation_evidence_inventory_receipt,
+      );
+      if (!receipt.success) {
+        return void res.status(409).json({
+          detail:
+            "The active Evidence Inventory review receipt is missing or invalid.",
+        });
+      }
+      const review = await getLitigationEvidenceReviewProgress({
+        db,
+        reviewId: receipt.data.review_id,
+        userId,
+      });
+      if (
+        review.task_id !== snapshot.task.id ||
+        review.progress.remaining > 0
+      ) {
+        return void res.status(409).json({
+          detail: `Complete the remaining ${review.progress.remaining} Evidence Inventory review decision(s) before continuing.`,
+          progress: review.progress,
+        });
+      }
+    }
     let serverCheckpointValues: Record<string, unknown> | undefined;
     if (
       fixedMatterContext?.workflow?.id === CONTRACT_PLAYBOOK_WORKFLOW_ID &&
@@ -717,6 +757,7 @@ agentTasksRouter.post("/:taskId/input", requireAuth, async (req, res) => {
         checkpoint.litigation_evidence_inventory_context,
       ) &&
       activeRequiredInput &&
+      isLitigationEvidenceInventoryContextRequiredInput(activeRequiredInput) &&
       responses?.length
     ) {
       const expected = createLitigationEvidenceInventoryContextRequiredInput({

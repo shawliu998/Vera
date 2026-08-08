@@ -43,6 +43,12 @@ import {
     queryTabularColumns,
 } from "../lib/tabularModelGeneration";
 import { extractTabularDocumentText } from "../lib/tabularDocumentText";
+import {
+    applyLitigationEvidenceLawyerReview,
+    getLitigationEvidenceReviewProgress,
+    LitigationEvidenceReviewAccessError,
+} from "../lib/agentLitigationEvidenceReviewService";
+import { isAgentStepEffectTransitionError } from "../lib/agent-kernel/effects/stepEffect";
 
 const TABULAR_DOCUMENT_CONCURRENCY = 2;
 const TABULAR_CELL_RECOVERY_LIMIT = 2;
@@ -66,6 +72,30 @@ function missingModelApiKey(model: string, apiKeys: UserApiKeys) {
         model,
         detail: `${providerLabel(provider)} API key is required to use ${model}. Add an API key or select a different tabular review model.`,
     };
+}
+
+async function isTaskOwnedTabularReview(
+    db: ReturnType<typeof createServerSupabase>,
+    reviewId: string,
+) {
+    const { data, error } = await db
+        .from("agent_artifact_links")
+        .select("task_id")
+        .eq("artifact_type", "tabular_review")
+        .eq("artifact_id", reviewId)
+        .limit(1);
+    if (error) throw new Error(error.message);
+    return Boolean(data?.length);
+}
+
+function taskOwnedReviewLocked(
+    res: Parameters<Parameters<typeof tabularRouter.get>[1]>[1],
+) {
+    return void res.status(409).json({
+        code: "task_owned_review_locked",
+        detail:
+            "This task-owned Review has a fixed source and Cell layout. Use its lawyer-review actions instead.",
+    });
 }
 
 // GET /tabular-review
@@ -273,6 +303,86 @@ tabularRouter.get("/:reviewId", requireAuth, async (req, res) => {
     });
 });
 
+// GET /tabular-review/:reviewId/litigation-review-progress
+tabularRouter.get(
+    "/:reviewId/litigation-review-progress",
+    requireAuth,
+    async (req, res) => {
+        try {
+            const result = await getLitigationEvidenceReviewProgress({
+                db: createServerSupabase(),
+                reviewId: req.params.reviewId,
+                userId: res.locals.userId as string,
+            });
+            res.json(result);
+        } catch (error) {
+            if (error instanceof LitigationEvidenceReviewAccessError) {
+                return void res
+                    .status(error.code === "not_found" ? 404 : 409)
+                    .json({ detail: error.message, code: error.code });
+            }
+            return void res.status(500).json({
+                detail: safeErrorMessage(
+                    error,
+                    "Failed to load Evidence Inventory review progress",
+                ),
+            });
+        }
+    },
+);
+
+// PATCH /tabular-review/:reviewId/cells/:cellId/lawyer-review
+tabularRouter.patch(
+    "/:reviewId/cells/:cellId/lawyer-review",
+    requireAuth,
+    async (req, res) => {
+        const decision = req.body?.decision;
+        const expectedRevision = req.body?.expected_review_revision;
+        if (
+            !["verified", "unresolved", "needs_correction"].includes(
+                decision,
+            ) ||
+            !Number.isInteger(expectedRevision) ||
+            expectedRevision < 0
+        ) {
+            return void res.status(400).json({
+                detail:
+                    "decision and non-negative expected_review_revision are required",
+            });
+        }
+        try {
+            const result = await applyLitigationEvidenceLawyerReview({
+                db: createServerSupabase(),
+                reviewId: req.params.reviewId,
+                cellId: req.params.cellId,
+                userId: res.locals.userId as string,
+                expectedRevision,
+                decision,
+            });
+            res.json(result);
+        } catch (error) {
+            if (error instanceof LitigationEvidenceReviewAccessError) {
+                return void res
+                    .status(error.code === "not_found" ? 404 : 409)
+                    .json({ detail: error.message, code: error.code });
+            }
+            if (isAgentStepEffectTransitionError(error)) {
+                return void res.status(409).json({
+                    detail:
+                        "The Cell changed after this page loaded. Refresh the Review and try again.",
+                    code: error.outcome,
+                });
+            }
+            return void res.status(500).json({
+                detail: safeErrorMessage(
+                    error,
+                    "Failed to save Evidence Inventory lawyer review",
+                ),
+            });
+        }
+    },
+);
+
 // GET /tabular-review/:reviewId/people
 // Owner email + display_name plus member display_names — the analog of
 // /projects/:id/people. Used by the standalone TR detail page's People
@@ -362,6 +472,9 @@ tabularRouter.patch("/:reviewId", requireAuth, async (req, res) => {
     updates.updated_at = new Date().toISOString();
 
     const db = createServerSupabase();
+    if (await isTaskOwnedTabularReview(db, reviewId)) {
+        return taskOwnedReviewLocked(res);
+    }
     const { data: existingReview, error: reviewError } = await db
         .from("tabular_reviews")
         .select("*")
@@ -551,6 +664,9 @@ tabularRouter.delete("/:reviewId", requireAuth, async (req, res) => {
     const userId = res.locals.userId as string;
     const { reviewId } = req.params;
     const db = createServerSupabase();
+    if (await isTaskOwnedTabularReview(db, reviewId)) {
+        return taskOwnedReviewLocked(res);
+    }
     const { error } = await db
         .from("tabular_reviews")
         .delete()
@@ -575,6 +691,9 @@ tabularRouter.post("/:reviewId/clear-cells", requireAuth, async (req, res) => {
             .json({ detail: "document_ids is required" });
 
     const db = createServerSupabase();
+    if (await isTaskOwnedTabularReview(db, reviewId)) {
+        return taskOwnedReviewLocked(res);
+    }
     const { data: review, error: reviewError } = await db
         .from("tabular_reviews")
         .select("id, user_id, project_id")
@@ -614,6 +733,9 @@ tabularRouter.post(
                 .json({ detail: "document_id and column_index are required" });
 
         const db = createServerSupabase();
+        if (await isTaskOwnedTabularReview(db, reviewId)) {
+            return taskOwnedReviewLocked(res);
+        }
         const { data: review, error: reviewError } = await db
             .from("tabular_reviews")
             .select("*")
@@ -731,6 +853,9 @@ tabularRouter.post("/:reviewId/generate", requireAuth, async (req, res) => {
     const userEmail = res.locals.userEmail as string | undefined;
     const { reviewId } = req.params;
     const db = createServerSupabase();
+    if (await isTaskOwnedTabularReview(db, reviewId)) {
+        return taskOwnedReviewLocked(res);
+    }
 
     const { data: review, error: reviewError } = await db
         .from("tabular_reviews")

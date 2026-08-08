@@ -105,3 +105,27 @@ test("keeps mirrored Tabular-effect migrations lease-fenced and service-only", a
   assert.match(backend, /from public, anon, authenticated/i);
   assert.match(backend, /to service_role/i);
 });
+
+test("keeps the latest Tabular effect fence compatible with fixed completed cells", async () => {
+  const backend = await readFile(
+    new URL(
+      "../../../../migrations/20260808_11_agent_step_tabular_effect_resume.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const supabase = await readFile(
+    new URL(
+      "../../../../../supabase/migrations/20260808000011_agent_step_tabular_effect_resume.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.equal(backend, supabase);
+  assert.match(backend, /cell\.status in \('pending', 'done'\)/i);
+  assert.match(
+    backend,
+    /execution_lease_owner is distinct from p_lease_owner/i,
+  );
+  assert.match(backend, /to service_role/i);
+});

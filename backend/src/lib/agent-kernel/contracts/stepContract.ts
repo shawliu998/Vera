@@ -273,9 +273,7 @@ export function compileAgentStepContracts(input: {
         ? []
         : (["source_versions_recorded"] as const)),
       ...(artifact
-        ? artifact.artifact_type === "draft"
-          ? (["artifact_created", "artifact_current_version"] as const)
-          : (["artifact_created"] as const)
+        ? (["artifact_created", "artifact_current_version"] as const)
         : []),
       ...(step.capability === "verify"
         ? ([

@@ -127,6 +127,11 @@ test("server compiles one fixed Step and capability grant per Artifact", () => {
       ),
     ["risk-matrix", "review-memo"],
   );
+  assert.ok(
+    steps.contracts[2]?.deterministic_postconditions.includes(
+      "artifact_current_version",
+    ),
+  );
   assert.deepEqual(grants.grants[1]?.allowed_tool_names, [
     "ask_inputs",
     "read_document",

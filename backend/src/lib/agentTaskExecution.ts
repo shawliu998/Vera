@@ -23,6 +23,7 @@ import {
 } from "./agentTaskDeliverables";
 import {
   AgentModelRequestTimeoutError,
+  completeAgentTextWithQueueRetry,
   executeAgentStep,
   isAgentTaskExecutionInterrupted,
   isTransientModelError,
@@ -57,7 +58,6 @@ import {
   isAgentStepEffectTransitionError,
   readAgentStepEffectReceipts,
 } from "./agent-kernel/effects/stepEffect";
-import { readAgentStepTabularEffectReceipts } from "./agent-kernel/effects/tabularEffect";
 import {
   AgentTaskLeaseBusyError,
   type AgentTaskLeaseGuard,
@@ -70,6 +70,14 @@ import {
 import { AgentVerifierStructuredOutputError } from "./agent-kernel/verification/verifierCore";
 import { ContractPlaybookStructuredOutputError } from "./agent-packs/contract/contractPlaybookPack";
 import { ContractPlaybookWordMaterializationError } from "./agentContractPlaybookWordMaterializer";
+import { classifyAgentTaskProviderProtocolError } from "./agentTaskRetryPolicy";
+import {
+  executeLitigationEvidenceInventoryStep,
+  isLitigationEvidenceInventoryCreationStep,
+} from "./agentLitigationEvidenceInventoryStepExecutor";
+import { readLitigationEvidenceInventoryContext } from "./agent-packs/litigation/litigationEvidenceInventoryContext";
+import { getUserModelSettings } from "./userSettings";
+import { DEFAULT_MAIN_MODEL } from "./llm";
 
 type Db = ReturnType<typeof createServerSupabase>;
 type Snapshot = NonNullable<Awaited<ReturnType<typeof getAgentTaskSnapshot>>>;
@@ -272,47 +280,35 @@ export function recoverCommittedStepEffectArtifact(
   if (!contract || contract.output_expectation.kind !== "artifact") return null;
   const expectation = contract.output_expectation;
 
+  // A committed Tabular effect only establishes the fixed task-owned Review.
+  // It is not the completed legal work in that Review, so it cannot advance
+  // the Step through generic committed-effect recovery. Word effects remain
+  // recoverable as before.
+  if (expectation.artifact_type === "tabular_review") return null;
+
   let candidates: Array<{
     attempt: number;
-    artifactType: "draft" | "tabular_review";
+    artifactType: "draft";
     artifactId: string;
     versionId: string | null;
   }>;
   try {
-    candidates =
-      expectation.artifact_type === "tabular_review"
-        ? readAgentStepTabularEffectReceipts(step.result_data)
-            .filter(
-              (receipt) =>
-                receipt.status === "committed" &&
-                receipt.step_id === step.id &&
-                (options?.includePriorAttempt
-                  ? receipt.attempt <= step.attempt
-                  : receipt.attempt === step.attempt) &&
-                receipt.effect?.artifact_type === "tabular_review",
-            )
-            .map((receipt) => ({
-              attempt: receipt.attempt,
-              artifactType: "tabular_review" as const,
-              artifactId: receipt.effect!.review_id,
-              versionId: null,
-            }))
-        : readAgentStepEffectReceipts(step.result_data)
-            .filter(
-              (receipt) =>
-                receipt.status === "committed" &&
-                receipt.step_id === step.id &&
-                (options?.includePriorAttempt
-                  ? receipt.attempt <= step.attempt
-                  : receipt.attempt === step.attempt) &&
-                receipt.effect?.artifact_type === expectation.artifact_type,
-            )
-            .map((receipt) => ({
-              attempt: receipt.attempt,
-              artifactType: "draft" as const,
-              artifactId: receipt.effect!.document_id,
-              versionId: receipt.effect!.version_id,
-            }));
+    candidates = readAgentStepEffectReceipts(step.result_data)
+      .filter(
+        (receipt) =>
+          receipt.status === "committed" &&
+          receipt.step_id === step.id &&
+          (options?.includePriorAttempt
+            ? receipt.attempt <= step.attempt
+            : receipt.attempt === step.attempt) &&
+          receipt.effect?.artifact_type === expectation.artifact_type,
+      )
+      .map((receipt) => ({
+        attempt: receipt.attempt,
+        artifactType: "draft" as const,
+        artifactId: receipt.effect!.document_id,
+        versionId: receipt.effect!.version_id,
+      }));
   } catch {
     return null;
   }
@@ -353,20 +349,6 @@ async function committedStepEffectIsCurrent(
   recovered: NonNullable<ReturnType<typeof recoverCommittedStepEffectArtifact>>,
 ) {
   const artifact = recovered.artifacts[0];
-  if (artifact.artifact_type === "tabular_review") {
-    const { data, error } = await db
-      .from("tabular_reviews")
-      .select("id,project_id,user_id,row_protocol")
-      .eq("id", artifact.artifact_id)
-      .maybeSingle();
-    if (error) throw new Error(error.message);
-    return Boolean(
-      data &&
-      data.project_id === snapshot.task.matter_id &&
-      data.user_id === snapshot.task.user_id &&
-      data.row_protocol === "document_rows",
-    );
-  }
   const { data, error } = await db
     .from("documents")
     .select("id,project_id,status,current_version_id")
@@ -691,6 +673,14 @@ export async function advanceAgentTaskExecution(input: {
         : undefined;
     const grant =
       grantRead.state === "valid" ? grantRead.grants[stepIndex] : undefined;
+    const litigationEvidenceContext = readLitigationEvidenceInventoryContext(
+      current.task.latest_checkpoint &&
+        typeof current.task.latest_checkpoint === "object" &&
+        !Array.isArray(current.task.latest_checkpoint)
+        ? (current.task.latest_checkpoint as Record<string, unknown>)
+            .litigation_evidence_inventory_context
+        : undefined,
+    );
     if (contract?.operation === "source.acquire") {
       if (!runningStep || !grant) {
         throw new Error(
@@ -765,6 +755,74 @@ export async function advanceAgentTaskExecution(input: {
         });
       }
       execution = acquisition.result;
+    } else if (
+      isLitigationEvidenceInventoryCreationStep({
+        workflowId: fixedMatterContext?.workflow?.id,
+        contract,
+      }) &&
+      litigationEvidenceContext
+    ) {
+      if (
+        !runningStep ||
+        !contract ||
+        contract.output_expectation.kind !== "artifact"
+      ) {
+        throw new Error(
+          "Litigation Evidence Inventory Step is missing its fixed execution contract",
+        );
+      }
+      const deliverableKey = contract.output_expectation.deliverable_key;
+      const deliverable = requiredTaskDeliverables(current.task).find(
+        (candidate) => candidate.key === deliverableKey,
+      );
+      if (!deliverable) {
+        throw new Error(
+          "Litigation Evidence Inventory has no unique declared deliverable",
+        );
+      }
+      const { api_keys: apiKeys } = await getUserModelSettings(userId, db);
+      const model =
+        typeof current.task.execution_model === "string" &&
+        current.task.execution_model
+          ? current.task.execution_model
+          : DEFAULT_MAIN_MODEL;
+      const litigation = await executeLitigationEvidenceInventoryStep({
+        db,
+        snapshot: current,
+        userId,
+        leaseOwner: input.leaseGuard.ownerToken,
+        step: runningStep,
+        context: litigationEvidenceContext,
+        declaredTaskDeliverablePurpose: taskDeliverablePurpose(deliverable),
+        model,
+        apiKeys,
+        complete: (request) =>
+          completeAgentTextWithQueueRetry({
+            ...request,
+            shouldContinue,
+          }),
+        shouldContinue,
+        recordPublicationCheckpoint: async ({ receipt, artifact }) => {
+          const recorded = await recordAgentTaskExecutionCheckpoint(db, {
+            taskId,
+            userId,
+            leaseOwner: input.leaseGuard!.ownerToken,
+            expectedTaskStatus: "running",
+            step: runningStep,
+            previousCheckpoint: current.task.latest_checkpoint,
+            summary:
+              "Published the fixed task-owned Evidence Inventory and preserved its source-bound generation receipt.",
+            checkpointValues: {
+              litigation_evidence_inventory_receipt: receipt,
+            },
+          });
+          if (recorded) {
+            await linkAgentTaskArtifacts(db, taskId, userId, [artifact]);
+          }
+          return recorded;
+        },
+      });
+      execution = litigation.result;
     } else {
       execution = await executeAgentStep({
         db,
@@ -867,6 +925,24 @@ export async function advanceAgentTaskExecution(input: {
         },
       );
     }
+    const providerProtocol = classifyAgentTaskProviderProtocolError(error);
+    if (
+      providerProtocol?.classification === "provider_configuration" ||
+      providerProtocol?.classification === "provider_protocol"
+    ) {
+      return deferAgentTaskForProvider(
+        db,
+        taskId,
+        userId,
+        providerProtocol.classification === "provider_configuration"
+          ? "The selected provider rejected the configured credentials, balance, billing state, or model access. Existing work was preserved; update the provider configuration or choose another configured model, then resume."
+          : "The selected provider did not satisfy the required request protocol. Existing work was preserved; resume with a compatible configured model.",
+        {
+          classification: providerProtocol.classification,
+          leaseOwner: input.leaseGuard.ownerToken,
+        },
+      );
+    }
     if (isTransientModelError(error)) throw error;
     return stopAgentTask(db, taskId, userId, {
       status: "failed",
@@ -878,6 +954,7 @@ export async function advanceAgentTaskExecution(input: {
   const afterExecution = await executionCanContinue();
   if (!afterExecution.active) return afterExecution.snapshot;
   if (execution.waitingForInput) {
+    await linkAgentTaskArtifacts(db, taskId, userId, execution.artifacts);
     return stopAgentTask(db, taskId, userId, {
       status: "waiting_input",
       summary: execution.summary,

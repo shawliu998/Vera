@@ -5,6 +5,7 @@ import type { MatterContextManifestV1 } from "../../agent-kernel/context/matterC
 import {
   compileLitigationEvidenceInventoryContext,
   createLitigationEvidenceInventoryContextRequiredInput,
+  isLitigationEvidenceInventoryContextRequiredInput,
   parseLitigationEvidenceInventoryContextRequiredInput,
 } from "./litigationEvidenceInventoryContext";
 
@@ -44,6 +45,10 @@ test("requires first-instance stage, represented side and output language", () =
     stepId: "66666666-6666-4666-8666-666666666666",
     createdAt: "2026-08-08T00:00:00.000Z",
   });
+  assert.equal(
+    isLitigationEvidenceInventoryContextRequiredInput(required),
+    true,
+  );
   const parsed = parseLitigationEvidenceInventoryContextRequiredInput({
     matter,
     requiredInput: required,
@@ -66,6 +71,15 @@ test("requires first-instance stage, represented side and output language", () =
     represented_side: "claimant_plaintiff",
     output_language: "zh",
   });
+});
+
+test("does not misclassify an unrelated missing-source request as Litigation choices", () => {
+  assert.equal(
+    isLitigationEvidenceInventoryContextRequiredInput({
+      items: [{ id: "missing-source-documents" }],
+    }),
+    false,
+  );
 });
 
 test("binds only fixed case-record sources and keeps authority out of evidence rows", () => {

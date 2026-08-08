@@ -178,7 +178,7 @@ export function classifyAgentCitationRelocation(input: {
   };
 }
 
-async function extractVersionContent(version: {
+export async function extractVersionContent(version: {
   storage_path: string | null;
   file_type: string | null;
 }): Promise<ExtractedVersionContent | null> {

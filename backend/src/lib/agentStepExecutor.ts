@@ -16,7 +16,12 @@ import {
 } from "./agentTasks";
 import { createServerSupabase } from "./supabase";
 import { getUserModelSettings } from "./userSettings";
-import { DEFAULT_MAIN_MODEL, providerForModel } from "./llm";
+import {
+  DEFAULT_MAIN_MODEL,
+  providerForModel,
+  streamChatWithTools,
+  type UserApiKeys,
+} from "./llm";
 import {
   findDeliverableArtifact,
   requiredTaskDeliverables,
@@ -443,6 +448,62 @@ async function runStepWithQueueRetry(
       // repeats the same expensive request. Preserve the Step and let the
       // user resume or choose another model instead of silently multiplying
       // the wait by every queue-retry attempt.
+      if (normalized instanceof AgentModelRequestTimeoutError) {
+        throw normalized;
+      }
+      if (!shouldRetryAgentStepModelError(normalized)) throw normalized;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Provider-neutral bounded text request for server-owned structured Pack
+ * execution. It deliberately exposes no tools, aborts the in-flight provider
+ * stream at the same deadline as ordinary Work Task execution, and never
+ * retries a timed-out request in the background.
+ */
+export async function completeAgentTextWithQueueRetry(input: {
+  model: string;
+  systemPrompt: string;
+  user: string;
+  maxTokens: number;
+  apiKeys?: UserApiKeys;
+  shouldContinue?: () => Promise<boolean>;
+}) {
+  const attempts = queueRetryAttempts(input.model);
+  let lastError: unknown;
+  for (const attempt of attempts) {
+    if (input.shouldContinue && !(await input.shouldContinue())) {
+      throw new AgentTaskExecutionInterruptedError();
+    }
+    if (attempt.waitMs) {
+      await new Promise((resolve) => setTimeout(resolve, attempt.waitMs));
+      if (input.shouldContinue && !(await input.shouldContinue())) {
+        throw new AgentTaskExecutionInterruptedError();
+      }
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 70_000);
+    try {
+      const result = await streamChatWithTools({
+        model: attempt.model,
+        systemPrompt: input.systemPrompt,
+        messages: [{ role: "user", content: input.user }],
+        tools: [],
+        maxIterations: 1,
+        apiKeys: input.apiKeys,
+        enableThinking: false,
+        abortSignal: controller.signal,
+      });
+      return result.fullText;
+    } catch (error) {
+      const normalized = controller.signal.aborted
+        ? new AgentModelRequestTimeoutError(attempt.model)
+        : error;
+      lastError = normalized;
       if (normalized instanceof AgentModelRequestTimeoutError) {
         throw normalized;
       }

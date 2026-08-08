@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { compileLitigationEvidenceInventoryReceipt } from "./agent-packs/litigation/litigationEvidenceInventoryPack";
 import {
+  buildLitigationEvidenceInventoryArtifact,
   buildLitigationEvidenceEffectLayout,
   buildLitigationEvidenceReviewSpec,
 } from "./agentLitigationEvidenceInventoryExecutor";
@@ -47,4 +48,26 @@ test("maps the fixed Litigation receipt to one existing document-row Review layo
       column_index: cell.column_index,
     })),
   });
+});
+
+test("uses the caller's declared Task deliverable purpose for the linked Review", () => {
+  assert.deepEqual(
+    buildLitigationEvidenceInventoryArtifact({
+      reviewId: "44444444-4444-4444-8444-444444444444",
+      declaredTaskDeliverablePurpose: "Fixed evidence inventory deliverable",
+    }),
+    {
+      artifact_type: "tabular_review",
+      artifact_id: "44444444-4444-4444-8444-444444444444",
+      purpose: "Fixed evidence inventory deliverable",
+    },
+  );
+  assert.throws(
+    () =>
+      buildLitigationEvidenceInventoryArtifact({
+        reviewId: "44444444-4444-4444-8444-444444444444",
+        declaredTaskDeliverablePurpose: "  ",
+      }),
+    /declared Task deliverable purpose/,
+  );
 });
