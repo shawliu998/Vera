@@ -307,6 +307,15 @@ next slice must bind bounded provider generation to each pending cell, preserve
 completed cells on an exhausted source-bound attempt, then require the existing
 lawyer review decisions before the same Task proceeds to Word deliverables.
 
+The provider contract for that next slice is now deliberately narrower than
+the preserved legacy experiment. A model returns only the selected semantic
+field values, its reasoning, and continuous source quotations. It does not
+author Review, Cell, Document, Version, citation, status, retry, or lawyer-review
+identities. The pure Litigation Pack validates the field-specific shape, binds
+all fixed identities server-side, deduplicates quotations into deterministic
+citation ids, and leaves every compiled candidate `unverified`. This removes
+protocol work from the model without weakening the fixed-source boundary.
+
 ## Legacy cleanup rule
 
 The earlier Aletheia civil-litigation workbench, dedicated routes and local

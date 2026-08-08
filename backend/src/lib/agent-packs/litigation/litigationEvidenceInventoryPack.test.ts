@@ -9,6 +9,10 @@ import {
   parseLitigationEvidenceCellCandidate,
   preserveLitigationEvidenceCellGap,
 } from "./litigationEvidenceInventoryPack";
+import {
+  compileLitigationEvidenceCellProviderDraft,
+  parseLitigationEvidenceCellProviderDraft,
+} from "./litigationEvidenceInventoryProviderContract";
 
 const ids = {
   task: "11111111-1111-4111-8111-111111111111",
@@ -68,6 +72,33 @@ function candidate() {
   });
 }
 
+function providerDraft() {
+  const citation = {
+    locator: { kind: "paragraph" as const, value: "heading" },
+    quote: "BLUEWATER SUPPLY AGREEMENT",
+  };
+  return parseLitigationEvidenceCellProviderDraft(
+    JSON.stringify({
+      result: {
+        field: "evidence_item",
+        values: {
+          name_or_title: {
+            value: "Bluewater supply agreement",
+            citations: [citation],
+          },
+          document_type: { value: "Agreement", citations: [citation] },
+          date: { value: null, citations: [] },
+          author_issuer_sender: { value: null, citations: [] },
+          recipient_counterparty: { value: null, citations: [] },
+          offering_party: { value: null, citations: [] },
+        },
+      },
+      reasoning: "The pinned record identifies the agreement by title.",
+      reasoning_citations: [citation],
+    }),
+  );
+}
+
 test("fixes five distinct Evidence Inventory semantic axes", () => {
   assert.deepEqual(
     LITIGATION_EVIDENCE_FIELDS.map((field) => field.id),
@@ -123,6 +154,63 @@ test("requires every stated value and reasoning to use the fixed record citation
         },
       }),
     /stated value requires a source citation/i,
+  );
+});
+
+test("keeps server identities out of provider output and binds them deterministically", () => {
+  const fixed = receipt().cells[0]!;
+  const compiled = compileLitigationEvidenceCellProviderDraft({
+    receipt: receipt(),
+    cellId: fixed.cell_id,
+    draft: providerDraft(),
+  });
+  assert.equal(compiled.cell_id, fixed.cell_id);
+  assert.equal(compiled.document_id, ids.document);
+  assert.equal(compiled.version_id, ids.version);
+  assert.equal(compiled.lawyer_review_status, "unverified");
+  assert.equal(compiled.citations.length, 1);
+  assert.match(compiled.citations[0]!.citation_id, /^citation-[a-f0-9]{24}$/);
+  assert.deepEqual(
+    compileLitigationEvidenceCellProviderDraft({
+      receipt: receipt(2),
+      cellId: fixed.cell_id,
+      draft: providerDraft(),
+    }),
+    compiled,
+  );
+});
+
+test("provider output cannot cite an unknown value or cross a semantic field", () => {
+  const invalid = providerDraft();
+  if (invalid.result.field !== "evidence_item")
+    throw new Error("fixture drift");
+  assert.throws(
+    () =>
+      parseLitigationEvidenceCellProviderDraft(
+        JSON.stringify({
+          ...invalid,
+          result: {
+            ...invalid.result,
+            values: {
+              ...invalid.result.values,
+              date: {
+                value: null,
+                citations: [invalid.reasoning_citations[0]],
+              },
+            },
+          },
+        }),
+      ),
+    /invalid structured cell/i,
+  );
+  assert.throws(
+    () =>
+      compileLitigationEvidenceCellProviderDraft({
+        receipt: receipt(),
+        cellId: receipt().cells[1]!.cell_id,
+        draft: providerDraft(),
+      }),
+    /field boundary/i,
   );
 });
 
