@@ -84,6 +84,25 @@ export interface ApplyTrackedEditsResult {
     errors: EditError[];
 }
 
+export interface DocxCommentInput {
+    anchor: string;
+    comment: string;
+    reason?: string;
+}
+
+export interface AppliedDocxComment {
+    id: string;
+    anchorText: string;
+    comment: string;
+    reason?: string;
+}
+
+export interface ApplyDocxCommentsResult {
+    bytes: Buffer;
+    comments: AppliedDocxComment[];
+    errors: EditError[];
+}
+
 export interface DocxRevisionMarkup {
     kind: "insertion" | "deletion";
     id: string | null;
@@ -114,6 +133,36 @@ export interface DocxReviewMarkupResult {
     /** Accepted/final text, byte-for-byte equivalent to extractDocxBodyText. */
     finalText: string;
     items: DocxReviewMarkupItem[];
+}
+
+/**
+ * The current review UI and verifier deliberately model markup in the main
+ * document story only. A generated clean contract must never claim to have
+ * resolved markup in headers, footers, footnotes, or endnotes that those
+ * surfaces cannot yet verify. This is a narrow preflight for the Contract
+ * Playbook clean-copy bridge, not a second DOCX review model.
+ */
+export async function docxReviewMarkupOutsideMainStory(
+    bytes: Buffer,
+): Promise<string[]> {
+    const zip = await JSZip.loadAsync(bytes);
+    const storyPaths = Object.keys(zip.files).filter((path) =>
+        /^word\/(?:header\d+|footer\d+|footnotes|endnotes)\.xml$/i.test(
+            path.replace(/\\/g, "/"),
+        ),
+    );
+    const markup = /<w:(?:ins|del|commentRangeStart|commentRangeEnd|commentReference)\b/i;
+    const affected: string[] = [];
+    for (const path of storyPaths) {
+        const entry = zip.file(path);
+        if (!entry) {
+            throw new Error(`DOCX review story is unavailable: ${path}`);
+        }
+        if (markup.test(await entry.async("string"))) {
+            affected.push(path.replace(/\\/g, "/"));
+        }
+    }
+    return affected.sort();
 }
 
 // ---------------------------------------------------------------------------
@@ -1267,6 +1316,353 @@ export async function applyTrackedEdits(
     return { bytes: outBuf, changes: appliedChanges, errors };
 }
 
+interface PlannedComment {
+    inputIndex: number;
+    start: number;
+    end: number;
+    id: string;
+    anchorText: string;
+    comment: string;
+    reason?: string;
+}
+
+function reconstructParagraphWithComments(paraChildren: XNode[], flat: Flattened, plans: PlannedComment[]): XNode[] {
+    if (!plans.length) return paraChildren;
+    let firstRunIdx = flat.runs.length;
+    let lastRunIdx = -1;
+    for (const plan of plans) {
+        for (let pos = plan.start; pos < plan.end; pos++) {
+            const run = flat.charRun[pos];
+            if (run < firstRunIdx) firstRunIdx = run;
+            if (run > lastRunIdx) lastRunIdx = run;
+        }
+    }
+    if (firstRunIdx > lastRunIdx) return paraChildren;
+
+    const startChildIdx = flat.runs[firstRunIdx].childIndex;
+    const endChildIdx = flat.runs[lastRunIdx].childIndex;
+    const firstRun = flat.runs[firstRunIdx];
+    const lastRun = flat.runs[lastRunIdx];
+    const spanStart = firstRun.textNodes[0]?.paraStart ?? 0;
+    const spanEnd = lastRun.textNodes[lastRun.textNodes.length - 1]?.paraEnd ?? spanStart;
+    const newRunGroup: XNode[] = [];
+    const emitNormal = (start: number, end: number) => {
+        let cursor = start;
+        while (cursor < end) {
+            const runIndex = flat.charRun[cursor];
+            const textNodeIndex = flat.charTextNode[cursor];
+            let next = cursor + 1;
+            while (next < end && flat.charRun[next] === runIndex && flat.charTextNode[next] === textNodeIndex) {
+                next += 1;
+            }
+            const slot = flat.runs[runIndex];
+            newRunGroup.push(buildRun(slot.rPr, flat.paraText.slice(cursor, next), "w:t"));
+            cursor = next;
+        }
+    };
+
+    let cursor = spanStart;
+    for (const plan of plans) {
+        emitNormal(cursor, plan.start);
+        newRunGroup.push(makeEl("w:commentRangeStart", [], { "w:id": plan.id }));
+        emitNormal(plan.start, plan.end);
+        newRunGroup.push(makeEl("w:commentRangeEnd", [], { "w:id": plan.id }), makeEl("w:commentReference", [], { "w:id": plan.id }));
+        cursor = plan.end;
+    }
+    emitNormal(cursor, spanEnd);
+
+    const droppedChildIndices = new Set<number>();
+    for (let run = firstRunIdx; run <= lastRunIdx; run += 1) {
+        droppedChildIndices.add(flat.runs[run].childIndex);
+    }
+    const output: XNode[] = [];
+    for (let index = 0; index < paraChildren.length; index += 1) {
+        if (index === startChildIdx) output.push(...newRunGroup);
+        if (droppedChildIndices.has(index)) continue;
+        output.push(paraChildren[index]);
+    }
+    void endChildIdx;
+    return output;
+}
+
+function appendRootChild(tree: XNode[], rootName: string, child: XNode) {
+    const root = tree.find((node) => elName(node) === rootName);
+    if (!root) throw new Error(`${rootName} missing from OOXML part`);
+    const children = elChildren(root);
+    children.push(child);
+    setChildren(root, children);
+}
+
+function numericIds(tree: XNode[], elementNames: Set<string>) {
+    const ids: number[] = [];
+    const visit = (nodes: XNode[]) => {
+        for (const node of nodes) {
+            if (elementNames.has(elName(node) ?? "")) {
+                const value = Number.parseInt(elAttrs(node)["@_w:id"] ?? "", 10);
+                if (Number.isFinite(value) && value >= 0) ids.push(value);
+            }
+            visit(elChildren(node));
+        }
+    };
+    visit(tree);
+    return ids;
+}
+
+/**
+ * Add classic Word comments to unique, continuous exact spans in the main
+ * document story. The function deliberately rejects ambiguous, overlapping,
+ * or already-reviewed anchors. It never guesses a paragraph or comments on
+ * text inside a pending insertion.
+ */
+export async function applyDocxComments(bytes: Buffer, comments: DocxCommentInput[], opts?: { author?: string; initials?: string; date?: string }): Promise<ApplyDocxCommentsResult> {
+    if (!comments.length) {
+        return { bytes, comments: [], errors: [] };
+    }
+    const author = opts?.author?.trim() || "Vera";
+    const initials = opts?.initials?.trim() || "V";
+    const date = opts?.date ?? new Date().toISOString();
+    if (!Number.isFinite(Date.parse(date))) {
+        throw new Error("DOCX comment date must be an ISO timestamp");
+    }
+
+    const zip = await JSZip.loadAsync(bytes);
+    const documentFile = getZipEntry(zip, "word/document.xml");
+    if (!documentFile) throw new Error("document.xml missing from docx");
+    const parser = createParser();
+    const builder = createBuilder();
+    const documentTree = parser.parse(await documentFile.async("string")) as XNode[];
+    const bodyChildren = findBody(documentTree);
+    if (!bodyChildren) throw new Error("w:body missing from document.xml");
+
+    const paragraphs: ParagraphRef[] = [];
+    const collectParagraphs = (nodes: XNode[]) => {
+        for (const node of nodes) {
+            const name = elName(node);
+            if (name === "w:p") {
+                const children = elChildren(node);
+                paragraphs.push({
+                    paraNode: node,
+                    paraChildren: children,
+                    flat: flattenParagraph(children),
+                    globalStart: 0,
+                });
+            } else if (name === "w:tbl" || name === "w:tr" || name === "w:tc" || name === "w:sdt" || name === "w:sdtContent") {
+                collectParagraphs(elChildren(node));
+            }
+        }
+    };
+    collectParagraphs(bodyChildren);
+    const paragraphNorms = paragraphs.map((paragraph) => normalizeWs(paragraph.flat.paraText));
+
+    const existingCommentsFile = getZipEntry(zip, "word/comments.xml");
+    const commentsTree = existingCommentsFile
+        ? (parser.parse(await existingCommentsFile.async("string")) as XNode[])
+        : [
+              makeEl("w:comments", [], {
+                  "xmlns:w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+              }),
+          ];
+    const usedIds = [...numericIds(documentTree, new Set(["w:commentRangeStart", "w:commentRangeEnd"])), ...numericIds(commentsTree, new Set(["w:comment"]))];
+    let nextCommentId = (usedIds.length ? Math.max(...usedIds) : -1) + 1;
+    const plansByParagraph = new Map<number, PlannedComment[]>();
+    const applied: AppliedDocxComment[] = [];
+    const errors: EditError[] = [];
+
+    for (const [inputIndex, input] of comments.entries()) {
+        const anchor = input.anchor?.trim() ?? "";
+        const comment = input.comment?.trim() ?? "";
+        if (!anchor || !comment) {
+            errors.push({
+                index: inputIndex,
+                reason: "A DOCX comment requires a non-empty anchor and body.",
+            });
+            continue;
+        }
+        const anchorNorm = normalizeWs(anchor).norm;
+        const hits: Array<{ paragraphIndex: number; start: number; end: number }> = [];
+        let internallyAmbiguous = false;
+        for (const [paragraphIndex, paragraph] of paragraphs.entries()) {
+            const match = findUniqueAnchor(paragraphNorms[paragraphIndex].norm, anchorNorm, "", "");
+            if ("error" in match) {
+                if (match.error === "ambiguous") internallyAmbiguous = true;
+                continue;
+            }
+            const original = mapNormRangeToOriginal(paragraphNorms[paragraphIndex], paragraph.flat.paraText.length, match.start, match.end);
+            hits.push({
+                paragraphIndex,
+                start: original.start,
+                end: original.end,
+            });
+        }
+        if (internallyAmbiguous || hits.length !== 1) {
+            errors.push({
+                index: inputIndex,
+                reason: internallyAmbiguous || hits.length > 1 ? "Comment anchor is ambiguous in the document." : "Comment anchor was not found in the document.",
+            });
+            continue;
+        }
+        const hit = hits[0];
+        const paragraph = paragraphs[hit.paragraphIndex];
+        const touchedChildIndices = new Set<number>();
+        for (let position = hit.start; position < hit.end; position += 1) {
+            touchedChildIndices.add(paragraph.flat.runs[paragraph.flat.charRun[position]].childIndex);
+        }
+        const touchesPendingInsertion = [...touchedChildIndices].some((index) => elName(paragraph.paraChildren[index]) === "w:ins");
+        const firstChild = Math.min(...touchedChildIndices);
+        const lastChild = Math.max(...touchedChildIndices);
+        const touchesExistingComment = paragraph.paraChildren.slice(firstChild, lastChild + 1).some((node) => ["w:commentRangeStart", "w:commentRangeEnd", "w:commentReference"].includes(elName(node) ?? ""));
+        const existingPlans = plansByParagraph.get(hit.paragraphIndex) ?? [];
+        const overlaps = existingPlans.some((plan) => !(hit.end <= plan.start || hit.start >= plan.end));
+        if (touchesPendingInsertion || touchesExistingComment || overlaps) {
+            errors.push({
+                index: inputIndex,
+                reason: touchesPendingInsertion ? "Comment anchor touches a pending insertion." : touchesExistingComment ? "Comment anchor touches existing review markup." : "Comment anchor overlaps another planned comment.",
+            });
+            continue;
+        }
+        const id = String(nextCommentId++);
+        const plan: PlannedComment = {
+            inputIndex,
+            start: hit.start,
+            end: hit.end,
+            id,
+            anchorText: paragraph.flat.paraText.slice(hit.start, hit.end),
+            comment,
+            reason: input.reason,
+        };
+        existingPlans.push(plan);
+        existingPlans.sort((left, right) => left.start - right.start);
+        plansByParagraph.set(hit.paragraphIndex, existingPlans);
+        applied.push({
+            id,
+            anchorText: plan.anchorText,
+            comment,
+            reason: input.reason,
+        });
+    }
+
+    if (!applied.length) {
+        return { bytes, comments: [], errors };
+    }
+
+    for (const [paragraphIndex, plans] of plansByParagraph) {
+        const paragraph = paragraphs[paragraphIndex];
+        setChildren(paragraph.paraNode, reconstructParagraphWithComments(paragraph.paraChildren, paragraph.flat, plans));
+        for (const plan of plans) {
+            appendRootChild(
+                commentsTree,
+                "w:comments",
+                makeEl(
+                    "w:comment",
+                    [
+                        makeEl("w:p", [
+                            makeEl("w:r", [
+                                makeEl("w:t", [makeText(plan.comment)], {
+                                    "xml:space": "preserve",
+                                }),
+                            ]),
+                        ]),
+                    ],
+                    {
+                        "w:id": plan.id,
+                        "w:initials": initials,
+                        "w:author": author,
+                        "w:date": date,
+                    },
+                ),
+            );
+        }
+    }
+
+    setZipEntry(zip, "word/document.xml", ensureXmlDeclaration(builder.build(documentTree)));
+    setZipEntry(zip, "word/comments.xml", ensureXmlDeclaration(builder.build(commentsTree)));
+
+    const relationshipsPath = "word/_rels/document.xml.rels";
+    const relationshipsFile = getZipEntry(zip, relationshipsPath);
+    if (!relationshipsFile) {
+        throw new Error("document.xml.rels missing from docx");
+    }
+    const relationshipsTree = parser.parse(await relationshipsFile.async("string")) as XNode[];
+    const relationshipState = (() => {
+        let commentsTarget: string | null = null;
+        const ids = new Set<string>();
+        const visit = (nodes: XNode[]) => {
+            for (const node of nodes) {
+                if (elName(node) === "Relationship") {
+                    const attrs = elAttrs(node);
+                    if (attrs["@_Id"]) ids.add(attrs["@_Id"]);
+                    if (/\/comments$/i.test(attrs["@_Type"] ?? "")) {
+                        commentsTarget = attrs["@_Target"] ?? "";
+                    }
+                }
+                visit(elChildren(node));
+            }
+        };
+        visit(relationshipsTree);
+        return { commentsTarget, ids };
+    })();
+    if (relationshipState.commentsTarget !== null && !/(?:^|\/)comments\.xml$/i.test(relationshipState.commentsTarget)) {
+        throw new Error("Existing DOCX comments relationship does not target comments.xml");
+    }
+    if (relationshipState.commentsTarget === null) {
+        let relationshipId = "rIdVeraComments";
+        let suffix = 1;
+        while (relationshipState.ids.has(relationshipId)) {
+            relationshipId = `rIdVeraComments${suffix++}`;
+        }
+        appendRootChild(
+            relationshipsTree,
+            "Relationships",
+            makeEl("Relationship", [], {
+                Id: relationshipId,
+                Type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments",
+                Target: "comments.xml",
+            }),
+        );
+        setZipEntry(zip, relationshipsPath, ensureXmlDeclaration(builder.build(relationshipsTree)));
+    }
+
+    const contentTypesPath = "[Content_Types].xml";
+    const contentTypesFile = getZipEntry(zip, contentTypesPath);
+    if (!contentTypesFile) throw new Error("[Content_Types].xml missing from docx");
+    const contentTypesTree = parser.parse(await contentTypesFile.async("string")) as XNode[];
+    const hasCommentContentType = (() => {
+        let found = false;
+        const visit = (nodes: XNode[]) => {
+            for (const node of nodes) {
+                if (elName(node) === "Override" && /^\/word\/comments\.xml$/i.test(elAttrs(node)["@_PartName"] ?? "")) {
+                    found = true;
+                }
+                visit(elChildren(node));
+            }
+        };
+        visit(contentTypesTree);
+        return found;
+    })();
+    if (!hasCommentContentType) {
+        appendRootChild(
+            contentTypesTree,
+            "Types",
+            makeEl("Override", [], {
+                PartName: "/word/comments.xml",
+                ContentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+            }),
+        );
+        setZipEntry(zip, contentTypesPath, ensureXmlDeclaration(builder.build(contentTypesTree)));
+    }
+
+    return {
+        bytes: Buffer.from(
+            await zip.generateAsync({
+                type: "nodebuffer",
+                compression: "DEFLATE",
+            }),
+        ),
+        comments: applied,
+        errors,
+    };
+}
+
 // ---------------------------------------------------------------------------
 // Resolve a single tracked change (Accept or Reject)
 // ---------------------------------------------------------------------------
@@ -1380,6 +1776,124 @@ export async function resolveTrackedChange(
         compression: "DEFLATE",
     });
     return { bytes: out, found };
+}
+
+/**
+ * Produce the clean accepted view of a DOCX after a model-authored edit.
+ *
+ * This is intentionally narrower than a general Word cleanup pipeline: it
+ * accepts all tracked changes in the main document and removes Word comment
+ * anchors/parts. It is used only when a declared deliverable is itself
+ * required to be clean (for example, a Contract Playbook review opinion).
+ * Contract revisions never use this helper.
+ */
+export async function finalizeCleanDocx(bytes: Buffer): Promise<Buffer> {
+    const outsideMainStory = await docxReviewMarkupOutsideMainStory(bytes);
+    if (outsideMainStory.length) {
+        throw new Error(
+            `DOCX review markup exists outside the main story: ${outsideMainStory.join(", ")}`,
+        );
+    }
+    const trackedIds = Array.from(
+        new Set(
+            (await extractTrackedChangeIds(bytes)).map((item) => item.w_id),
+        ),
+    );
+    const accepted = trackedIds.length
+        ? (await resolveTrackedChange(bytes, trackedIds, "accept")).bytes
+        : bytes;
+    const zip = await JSZip.loadAsync(accepted);
+    const parser = createParser();
+    const builder = createBuilder();
+
+    const stripCommentMarkers = (nodes: XNode[]): XNode[] =>
+        nodes.flatMap((node) => {
+            const name = elName(node);
+            if (
+                name === "w:commentRangeStart" ||
+                name === "w:commentRangeEnd" ||
+                name === "w:commentReference"
+            ) {
+                return [];
+            }
+            if (name) {
+                setChildren(node, stripCommentMarkers(elChildren(node)));
+            }
+            return [node];
+        });
+
+    for (const path of Object.keys(zip.files)) {
+        const canonicalPath = path.replace(/\\/g, "/");
+        if (
+            !/^word\/(?:document|header\d+|footer\d+|footnotes|endnotes)\.xml$/i.test(
+                canonicalPath,
+            )
+        ) {
+            continue;
+        }
+        const entry = zip.file(path);
+        if (!entry) continue;
+        const tree = parser.parse(await entry.async("string")) as XNode[];
+        zip.file(
+            path,
+            ensureXmlDeclaration(
+                builder.build(stripCommentMarkers(tree)),
+            ),
+        );
+    }
+
+    const commentPartPattern =
+        /^word\/(?:comments(?:Extended|Ids)?|people)\.xml$/i;
+    for (const path of Object.keys(zip.files)) {
+        if (commentPartPattern.test(path.replace(/\\/g, "/"))) {
+            zip.remove(path);
+        }
+    }
+
+    const filterPackageReferences = async (
+        path: string,
+        shouldRemove: (attrs: Record<string, string>) => boolean,
+    ) => {
+        const entry = getZipEntry(zip, path);
+        if (!entry) return;
+        const filterTree = (nodes: XNode[]): XNode[] =>
+            nodes.flatMap((node) => {
+                if (shouldRemove(elAttrs(node))) return [];
+                const name = elName(node);
+                if (name) setChildren(node, filterTree(elChildren(node)));
+                return [node];
+            });
+        const tree = parser.parse(await entry.async("string")) as XNode[];
+        setZipEntry(
+            zip,
+            path,
+            ensureXmlDeclaration(builder.build(filterTree(tree))),
+        );
+    };
+
+    await filterPackageReferences(
+        "word/_rels/document.xml.rels",
+        (attrs) =>
+            typeof attrs["@_Type"] === "string" &&
+            /\/(?:comments|commentsExtended|commentsIds|people)$/i.test(
+                attrs["@_Type"],
+            ),
+    );
+    await filterPackageReferences(
+        "[Content_Types].xml",
+        (attrs) =>
+            typeof attrs["@_PartName"] === "string" &&
+            /^\/word\/(?:comments(?:Extended|Ids)?|people)\.xml$/i.test(
+                attrs["@_PartName"],
+            ),
+    );
+
+    return Buffer.from(
+        await zip.generateAsync({
+            type: "nodebuffer",
+            compression: "DEFLATE",
+        }),
+    );
 }
 
 // ---------------------------------------------------------------------------

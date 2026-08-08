@@ -41,7 +41,11 @@ export function createContractPlaybookDispositionRequiredInput(input: {
     items: unresolved.map((finding) => ({
       id: `${FINDING_ITEM_PREFIX}${finding.finding_id}`,
       kind: "choice" as const,
-      question: `${finding.rule_id} · ${finding.risk_level.toUpperCase()} · ${boundedText(finding.recommendation, 360)}`,
+      question: [
+        `${finding.rule_id} · ${finding.risk_level.toUpperCase()}`,
+        `Fixed source span: ${boundedText(finding.contract_quote, 360)}`,
+        `Recommendation: ${boundedText(finding.recommendation, 360)}`,
+      ].join("\n"),
       options: [
         ...(finding.proposed_text &&
         finding.contract_quote &&

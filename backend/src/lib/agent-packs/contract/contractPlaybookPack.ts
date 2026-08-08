@@ -466,7 +466,7 @@ function normalizedOpinion(value: string) {
   return value.normalize("NFKC").replace(/\s+/gu, " ").trim();
 }
 
-function decisionPhrases(
+export function contractPlaybookDecisionPhrases(
   finding: ContractPlaybookReceiptV1["findings"][number],
   language: ContractPlaybookReceiptV1["opinion_language"],
 ) {
@@ -543,7 +543,7 @@ export function verifyContractPlaybookPack(input: {
     }
     if (finding.lawyer_disposition === null) continue;
     if (
-      decisionPhrases(finding, receipt.opinion_language).some(
+      contractPlaybookDecisionPhrases(finding, receipt.opinion_language).some(
         (phrase) => !opinion.includes(normalizedOpinion(phrase)),
       )
     ) {

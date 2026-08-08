@@ -66,6 +66,11 @@ test("material findings expose exact accept, comment and skip meanings", () => {
     item.options.map((option) => option.value),
     ["accept", "comment", "skip"],
   );
+  assert.match(item.question, /Fixed source span: Supplier may change scope\./);
+  assert.match(
+    item.options[0]?.label ?? "",
+    /Accept fixed text: Scope changes require written agreement\./,
+  );
 });
 
 test("free-text Other is persisted as comment direction, never replacement text", () => {
