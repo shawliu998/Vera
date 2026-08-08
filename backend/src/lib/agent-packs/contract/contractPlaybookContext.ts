@@ -24,7 +24,7 @@ export const contractPlaybookContextInputSchema = z
     represented_side: bounded(120),
     negotiation_posture: z.enum(["assertive", "balanced", "protective"]),
     jurisdiction: bounded(200),
-    language: z.enum(["auto", "zh", "en", "bilingual"]),
+    language: z.enum(["zh", "en", "bilingual"]),
     background_facts: bounded(2_000),
   })
   .strict()
@@ -83,7 +83,7 @@ export const contractPlaybookContextSchema = z
         represented_side: bounded(120),
         negotiation_posture: z.enum(["assertive", "balanced", "protective"]),
         jurisdiction: bounded(200),
-        language: z.enum(["auto", "zh", "en", "bilingual"]),
+        language: z.enum(["zh", "en", "bilingual"]),
         background_facts: bounded(2_000),
       })
       .strict(),
@@ -273,7 +273,6 @@ export function createContractPlaybookContextRequiredInput(input: {
         kind: "choice",
         question: "Which language should the review outputs use?",
         options: [
-          { value: "auto", label: "Match the contract" },
           { value: "zh", label: "Chinese" },
           { value: "en", label: "English" },
           { value: "bilingual", label: "Bilingual Chinese / English" },

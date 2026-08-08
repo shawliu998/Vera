@@ -94,6 +94,13 @@ export type AgentRequiredInputResponseV1 = z.infer<
   typeof agentRequiredInputResponseSchema
 >[number];
 
+export class AgentRequiredInputSubmissionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentRequiredInputSubmissionError";
+  }
+}
+
 function normalized(value: string) {
   return value
     .normalize("NFKC")
@@ -243,27 +250,39 @@ export function validateRequiredInputSubmission(
 ) {
   const message = input.message?.trim() ?? "";
   const documentIds = input.documentIds ?? [];
-  const responses =
-    input.responses === undefined
-      ? null
-      : agentRequiredInputResponseSchema.parse(input.responses);
+  let responses: z.infer<typeof agentRequiredInputResponseSchema> | null = null;
+  if (input.responses !== undefined) {
+    const parsed = agentRequiredInputResponseSchema.safeParse(input.responses);
+    if (!parsed.success) {
+      throw new AgentRequiredInputSubmissionError(
+        "Required input responses are malformed",
+      );
+    }
+    responses = parsed.data;
+  }
   if (responses) {
     const byId = new Map(responses.map((response) => [response.id, response]));
     const submittedDocumentIds = new Set(documentIds);
     if (byId.size !== responses.length) {
-      throw new Error("Required input responses must be unique");
+      throw new AgentRequiredInputSubmissionError(
+        "Required input responses must be unique",
+      );
     }
     for (const item of required.items) {
       const response = byId.get(item.id);
       if (item.kind === "choice") {
         if (!response || response.kind !== "choice") {
-          throw new Error(`A structured choice is required for ${item.id}`);
+          throw new AgentRequiredInputSubmissionError(
+            `A structured choice is required for ${item.id}`,
+          );
         }
         const fixed = item.options.some(
           (option) => option.value === response.answer,
         );
         if (!fixed && !item.allow_other) {
-          throw new Error(`Choice ${item.id} is outside the fixed options`);
+          throw new AgentRequiredInputSubmissionError(
+            `Choice ${item.id} is outside the fixed options`,
+          );
         }
       } else {
         if (
@@ -272,7 +291,9 @@ export function validateRequiredInputSubmission(
             response.kind !== "documents" ||
             response.document_ids.length === 0)
         ) {
-          throw new Error(`Matter documents are required for ${item.id}`);
+          throw new AgentRequiredInputSubmissionError(
+            `Matter documents are required for ${item.id}`,
+          );
         }
         if (response?.kind === "documents") {
           const responseIds = new Set(response.document_ids);
@@ -281,7 +302,7 @@ export function validateRequiredInputSubmission(
             responseIds.size !== submittedDocumentIds.size ||
             [...responseIds].some((id) => !submittedDocumentIds.has(id))
           ) {
-            throw new Error(
+            throw new AgentRequiredInputSubmissionError(
               `Matter document response ${item.id} does not match the submitted documents`,
             );
           }
@@ -296,7 +317,9 @@ export function validateRequiredInputSubmission(
           ),
       )
     ) {
-      throw new Error("Required input contains an unknown response item");
+      throw new AgentRequiredInputSubmissionError(
+        "Required input contains an unknown response item",
+      );
     }
   }
   if (
@@ -304,14 +327,18 @@ export function validateRequiredInputSubmission(
     required.items.some((item) => item.kind === "documents" && item.required) &&
     documentIds.length === 0
   ) {
-    throw new Error("The requested Matter document is required to continue");
+    throw new AgentRequiredInputSubmissionError(
+      "The requested Matter document is required to continue",
+    );
   }
   if (
     !responses &&
     required.items.some((item) => item.kind === "choice") &&
     !message
   ) {
-    throw new Error("The requested lawyer choice is required to continue");
+    throw new AgentRequiredInputSubmissionError(
+      "The requested lawyer choice is required to continue",
+    );
   }
   return {
     requestId: required.request_id,

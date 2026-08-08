@@ -122,10 +122,7 @@ function validateFindingBoundary(
     });
   }
 
-  if (
-    value.contract_quote !== null &&
-    value.contract_anchor === null
-  ) {
+  if (value.contract_quote !== null && value.contract_anchor === null) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["contract_anchor"],
@@ -152,6 +149,42 @@ export const contractPlaybookAnalysisFindingSchema = z
 export type ContractPlaybookAnalysisFindingV1 = z.infer<
   typeof contractPlaybookAnalysisFindingSchema
 >;
+
+export const contractPlaybookAnalysisOutputSchema = z
+  .object({
+    kind: z.literal("contract_playbook_analysis_v1"),
+    findings: z.array(contractPlaybookAnalysisFindingSchema).max(80),
+  })
+  .strict();
+
+export type ContractPlaybookAnalysisOutputV1 = z.infer<
+  typeof contractPlaybookAnalysisOutputSchema
+>;
+
+export class ContractPlaybookStructuredOutputError extends Error {
+  constructor(
+    message = "Contract analysis returned an invalid structured result",
+  ) {
+    super(message);
+    this.name = "ContractPlaybookStructuredOutputError";
+  }
+}
+
+function unwrapSingleJsonFence(raw: string) {
+  const trimmed = raw.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return fenced ? fenced[1]!.trim() : trimmed;
+}
+
+export function parseContractPlaybookAnalysisOutput(raw: string) {
+  try {
+    return contractPlaybookAnalysisOutputSchema.parse(
+      JSON.parse(unwrapSingleJsonFence(raw)),
+    );
+  } catch {
+    throw new ContractPlaybookStructuredOutputError();
+  }
+}
 
 function normalizedIdentityText(value: string | null) {
   return value === null
@@ -196,9 +229,7 @@ const decisionSchema = z
 const persistedFindingSchema = z
   .object({
     ...findingShape,
-    finding_id: z
-      .string()
-      .regex(/^finding-[a-f0-9]{24}$/),
+    finding_id: z.string().regex(/^finding-[a-f0-9]{24}$/),
     lawyer_disposition: contractLawyerDispositionSchema.nullable(),
     lawyer_direction: nullableText(1_000),
   })
@@ -211,9 +242,8 @@ const persistedFindingSchema = z
       lawyer_direction: _lawyerDirection,
       ...analysisFields
     } = finding;
-    const analysis = contractPlaybookAnalysisFindingSchema.parse(
-      analysisFields,
-    );
+    const analysis =
+      contractPlaybookAnalysisFindingSchema.parse(analysisFields);
     if (finding.finding_id !== deriveContractPlaybookFindingId(analysis)) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
@@ -273,9 +303,7 @@ export const contractPlaybookReceiptSchema = z
     opinion_language: z.enum(["zh", "en", "bilingual"]),
     analyze_step_id: uuid,
     analyze_attempt: z.number().int().positive(),
-    contract: z
-      .object({ document_id: uuid, version_id: uuid })
-      .strict(),
+    contract: z.object({ document_id: uuid, version_id: uuid }).strict(),
     reference: z
       .object({
         role: z.enum(["playbook", "baseline"]),
@@ -379,9 +407,9 @@ export function compileContractPlaybookReceipt(input: {
     .array(contractPlaybookAnalysisFindingSchema)
     .max(80)
     .parse(input.findings);
-  const decisions = z.record(z.string(), decisionSchema).parse(
-    input.decisions ?? {},
-  );
+  const decisions = z
+    .record(z.string(), decisionSchema)
+    .parse(input.decisions ?? {});
   const findingIds = new Set(
     findings.map((finding) => deriveContractPlaybookFindingId(finding)),
   );

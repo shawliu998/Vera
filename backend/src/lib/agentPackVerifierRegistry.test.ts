@@ -10,9 +10,7 @@ import {
   resolveAgentVerifierProfile,
 } from "./agentPackVerifierRegistry";
 
-const profile = resolveAgentVerifierProfile(
-  "builtin-contract-playbook-review",
-);
+const profile = resolveAgentVerifierProfile("builtin-contract-playbook-review");
 
 test("workflow manifest selects the Contract Pack verifier profile", () => {
   assert.equal(profile.id, "work_task_contract_docx_v1");
@@ -28,14 +26,9 @@ test("missing structured receipt becomes one review gap and preserves artifacts"
   assert.equal(checks.length, 1);
   assert.equal(checks[0]?.status, "gap");
   assert.equal(checks[0]?.issue?.code, "pack_check_gap");
-  assert.deepEqual(
-    (checks[0]?.issue as { facts?: unknown })?.facts,
-    {
-      issues: [
-        { code: "receipt_missing", finding_id: null, rule_id: null },
-      ],
-    },
-  );
+  assert.deepEqual((checks[0]?.issue as { facts?: unknown })?.facts, {
+    issues: [{ code: "receipt_missing", finding_id: null, rule_id: null }],
+  });
 });
 
 test("registry passes a fixed receipt and matching current opinion", () => {
@@ -83,14 +76,15 @@ test("registry passes a fixed receipt and matching current opinion", () => {
     citationSnapshotArtifactId: ids[5]!,
     findings: [finding],
     decisions: {
-      [findingId]: { disposition: "comment", direction: "Narrow to disclosed project information." },
+      [findingId]: {
+        disposition: "comment",
+        direction: "Narrow to disclosed project information.",
+      },
     },
   });
   const checks = buildAgentPackDeterministicChecks({
     profile,
-    currentPlan: [
-      { result_data: { contract_playbook_pack_receipt: receipt } },
-    ],
+    currentPlan: [{ result_data: { contract_playbook_pack_receipt: receipt } }],
     deliverables: [
       {
         key: "review-opinion",
@@ -106,4 +100,27 @@ test("registry passes a fixed receipt and matching current opinion", () => {
     ],
   });
   assert.equal(checks[0]?.status, "pass");
+
+  const checkpointChecks = buildAgentPackDeterministicChecks({
+    profile,
+    currentPlan: [],
+    checkpoint: { contract_playbook_pack_receipt: receipt },
+    deliverables:
+      checks[0]?.status === "pass"
+        ? [
+            {
+              key: "review-opinion",
+              artifact_type: "draft",
+              artifact_id: ids[1]!,
+              document_id: ids[1]!,
+              current_version_id: ids[2]!,
+              accepted_view_sha256: `sha256:${"e".repeat(64)}`,
+              accepted_view_text:
+                "NDA-001 Lawyer decision: preserve the operative text and add a comment. Narrow to disclosed project information.",
+              accepted_view_complete: true,
+            },
+          ]
+        : [],
+  });
+  assert.equal(checkpointChecks[0]?.status, "pass");
 });

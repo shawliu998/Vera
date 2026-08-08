@@ -36,7 +36,7 @@ repository interfaces batch by batch, not to rewrite the execution system.
 
 | Domain | Gold workflow | Canonical outputs | Current evidence | Missing acceptance evidence |
 | --- | --- | --- | --- | --- |
-| Contract | `builtin-contract-playbook-review` | revision DOCX, clean DOCX, review opinion DOCX | Pinned first-party manifest and fixture digest; pure Contract Pack context and receipt schemas; exact contract/reference Version binding; stable server-derived finding ids; fixed `accept`/`comment`/`skip` semantics; deterministic current-opinion/disposition alignment; manifest-selected Pack verifier; structured `pack_check_gap` routed through existing lawyer review; server-issued structured Required Input with display labels and stable machine values; no model call before explicit contract/reference/mode/side/posture/jurisdiction/language/facts; fixed reference bytes hashed server-side; mechanically parsed base-plus-overlay count for checklist mode; 219-test backend and 16-test frontend Agent regressions | Connect structured analysis and finding-bound lawyer disposition receipts to document materialization; then run a fresh ordinary-user Task through UI, browser review/optional Word handoff, final verification and download without database or OOXML repair. |
+| Contract | `builtin-contract-playbook-review` | revision DOCX, clean DOCX, review opinion DOCX | Pinned first-party manifest and fixture digest; pure Contract Pack context and receipt schemas; exact contract/reference Version binding; stable server-derived finding ids; fixed `accept`/`comment`/`skip` semantics; deterministic current-opinion/disposition alignment; manifest-selected Pack verifier; structured `pack_check_gap` routed through existing lawyer review; server-issued structured Required Input with display labels and stable machine values; no model call before explicit contract/reference/mode/side/posture/jurisdiction/language/facts; fixed reference bytes hashed server-side; mechanically parsed base-plus-overlay count for checklist mode; bounded Contract analysis JSON with one correction attempt; exact finding citation-to-Document/Version/quote checks; durable checkpoint receipt consumed by final verification; material findings batched through exact `accept`/`comment`/`skip` decisions where free text is always a comment direction; 227-test backend and 16-test frontend Agent regressions | Materialize the fixed decisions through the shared Word/effect boundary, deriving clean contract and opinion without independent model drift; then run a fresh ordinary-user Task through UI, browser review/optional Word handoff, final verification and download without database or OOXML repair. |
 | Patent | `builtin-patentability-assessment` | feature-chart Tabular Review/XLSX and cited memo DOCX | Pinned first-party manifest and fixed two-artifact contract; deterministic synthetic target-claim and prior-art DOCX sources with continuous-quote expectations and explicit coverage gaps | Run the fixture as a fresh Task, then prove both outputs, source navigation and unresolved-gap preservation. |
 | Litigation | `builtin-litigation-hearing-preparation` | evidence inventory, objection opinion, hearing outline | Pinned first-party manifest, locked synthetic litigation DOCX, partial-cell recovery regression | Fresh first-instance, represented-side fixture import; all three outputs in one Task; direct source/page checks; exhausted-cell recovery; lawyer review and download. |
 
@@ -89,8 +89,23 @@ the exact reference Version, persists its SHA-256 digest, and in checklist mode
 accepts only a mechanically parsed base-plus-overlay rule count. The database
 and storage adapter lives outside `agent-packs/contract`; the Pack boundary test
 continues to forbid provider, route, storage and persistence dependencies.
-Structured analysis, finding-bound lawyer dispositions and shared Word
-materialization remain pending before the Contract gold flow can be claimed.
+Shared Word materialization and the live gold flow remain pending before the
+Contract workflow can be claimed complete.
+
+The structured analysis and disposition portions are now connected. The
+bounded analysis Step emits one versioned JSON object and receives one bounded
+correction attempt for mechanically provable schema or citation drift before
+raw JSON can be persisted; the ordinary UI receives only a concise finding
+summary. The server then requires
+contiguous citation refs, the exact fixed contract/reference Document and
+Version identities, one continuous exact contract quote, and no unused
+citations before compiling the receipt. Material findings pause the first draft
+Step in batches of eight. `accept` is offered only for a complete fixed source
+span plus fixed proposed text; `comment` and free-text Other preserve operative
+text and record direction; `skip` preserves text without a document action.
+The verifier reads the durable receipt from the existing Task checkpoint, with
+legacy Step `result_data` retained only as a compatible source. Shared Word
+materialization is the remaining Contract implementation boundary.
 
 ## Legacy cleanup rule
 
@@ -113,11 +128,11 @@ preserved release capabilities.
 
 ## Next execution order
 
-1. Compile the bounded Contract model analysis into the existing structured Pack
-   receipt, then collect each material finding's `accept`, `comment` or `skip`
-   disposition through the same server-owned Required Input contract.
-2. Materialize only those fixed decisions through the shared Word/effect
+1. Materialize only the fixed Contract decisions through the shared Word/effect
    boundary, preserving browser editing and the optional Word add-in handoff.
+2. Derive `contract-clean` from the revision's accepted view and build the
+   review opinion from the same fixed receipt; do not run three independent
+   drafting interpretations.
 3. Run the contract gold workflow through browser review and optional Word
    handoff, then repair only gaps demonstrated by that run.
 4. Extract the Litigation Pack field/row contracts and per-cell reviewable-gap

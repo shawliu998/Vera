@@ -50,6 +50,7 @@ import {
 } from "../lib/agentTaskWordArtifact";
 import { singleFileUpload } from "../lib/upload";
 import {
+  AgentRequiredInputSubmissionError,
   agentRequiredInputResponseSchema,
   readAgentRequiredInput,
 } from "../lib/agent-kernel/contracts/requiredInput";
@@ -60,6 +61,11 @@ import {
   readContractPlaybookContext,
 } from "../lib/agent-packs/contract/contractPlaybookContext";
 import { compileContractPlaybookContextFromRequiredInput } from "../lib/agentContractPlaybookContextRepository";
+import { contractPlaybookReceiptSchema } from "../lib/agent-packs/contract/contractPlaybookPack";
+import {
+  applyContractPlaybookDispositionResponses,
+  createContractPlaybookDispositionRequiredInput,
+} from "../lib/agent-packs/contract/contractPlaybookDisposition";
 
 export const agentTasksRouter = Router();
 
@@ -77,16 +83,18 @@ function routeError(
         : 409
       : error instanceof AgentTaskSourceAcquisitionInputError
         ? 400
-        : error instanceof MatterContextInvalidError
+        : error instanceof AgentRequiredInputSubmissionError
           ? 400
-          : error instanceof ContractPlaybookContextError
+          : error instanceof MatterContextInvalidError
             ? 400
-            : detail.startsWith("Only a") ||
-                /cannot continue safely|still closing|review state changed|no longer matches|only after task completion/i.test(
-                  detail,
-                )
-              ? 409
-              : 500;
+            : error instanceof ContractPlaybookContextError
+              ? 400
+              : detail.startsWith("Only a") ||
+                  /cannot continue safely|still closing|review state changed|no longer matches|only after task completion/i.test(
+                    detail,
+                  )
+                ? 409
+                : 500;
   res.status(status).json({ detail });
 }
 
@@ -626,6 +634,36 @@ agentTasksRouter.post("/:taskId/input", requireAuth, async (req, res) => {
             await compileContractPlaybookContextFromRequiredInput({
               db,
               matter: fixedMatterContext,
+              requiredInput: activeRequiredInput,
+              responses,
+            }),
+        };
+      }
+    }
+    const contractPlaybookReceipt =
+      checkpoint.contract_playbook_pack_receipt === undefined
+        ? null
+        : contractPlaybookReceiptSchema.parse(
+            checkpoint.contract_playbook_pack_receipt,
+          );
+    if (
+      fixedMatterContext?.workflow?.id === CONTRACT_PLAYBOOK_WORKFLOW_ID &&
+      readContractPlaybookContext(checkpoint.contract_playbook_context) &&
+      contractPlaybookReceipt &&
+      activeRequiredInput &&
+      responses?.length
+    ) {
+      const expected = createContractPlaybookDispositionRequiredInput({
+        receipt: contractPlaybookReceipt,
+        stepId: activeRequiredInput.step_id,
+        createdAt: activeRequiredInput.created_at,
+      });
+      if (expected?.request_id === activeRequiredInput.request_id) {
+        serverCheckpointValues = {
+          ...(serverCheckpointValues ?? {}),
+          contract_playbook_pack_receipt:
+            applyContractPlaybookDispositionResponses({
+              receipt: contractPlaybookReceipt,
               requiredInput: activeRequiredInput,
               responses,
             }),

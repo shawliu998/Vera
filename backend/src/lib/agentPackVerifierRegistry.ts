@@ -38,13 +38,26 @@ export function resolveAgentVerifierProfile(
   };
 }
 
-function contractPlaybookReceipt(currentPlan: PlanStep[]) {
-  const candidates = currentPlan.flatMap((step) => {
+function contractPlaybookReceipt(currentPlan: PlanStep[], checkpoint: unknown) {
+  const stepCandidates = currentPlan.flatMap((step) => {
     const result = record(step.result_data);
     return result && Object.hasOwn(result, "contract_playbook_pack_receipt")
       ? [result.contract_playbook_pack_receipt]
       : [];
   });
+  const checkpointRow = record(checkpoint);
+  const candidates = [
+    ...stepCandidates,
+    ...(checkpointRow &&
+    Object.hasOwn(checkpointRow, "contract_playbook_pack_receipt")
+      ? [checkpointRow.contract_playbook_pack_receipt]
+      : []),
+  ].filter(
+    (candidate, index, all) =>
+      all.findIndex(
+        (other) => JSON.stringify(other) === JSON.stringify(candidate),
+      ) === index,
+  );
   if (candidates.length === 0) return null;
   return candidates.length === 1 ? candidates[0] : candidates;
 }
@@ -52,6 +65,7 @@ function contractPlaybookReceipt(currentPlan: PlanStep[]) {
 export function buildAgentPackDeterministicChecks(input: {
   profile: AgentVerifierProfileV1;
   currentPlan: PlanStep[];
+  checkpoint?: unknown;
   deliverables: Deliverable[];
 }): DeterministicCheck[] {
   if (input.profile.id !== CONTRACT_PLAYBOOK_PACK_PROFILE_ID) return [];
@@ -60,7 +74,7 @@ export function buildAgentPackDeterministicChecks(input: {
   );
   const opinion = opinions.length === 1 ? opinions[0] : null;
   const result = verifyContractPlaybookPack({
-    receipt: contractPlaybookReceipt(input.currentPlan),
+    receipt: contractPlaybookReceipt(input.currentPlan, input.checkpoint),
     reviewOpinionText:
       opinion?.accepted_view_complete === true
         ? opinion.accepted_view_text

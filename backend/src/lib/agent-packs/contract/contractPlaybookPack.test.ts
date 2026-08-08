@@ -3,8 +3,10 @@ import test from "node:test";
 
 import {
   compileContractPlaybookReceipt,
+  ContractPlaybookStructuredOutputError,
   deriveContractPlaybookFindingId,
   verifyContractPlaybookPack,
+  parseContractPlaybookAnalysisOutput,
 } from "./contractPlaybookPack";
 
 const ids = {
@@ -67,7 +69,13 @@ test("server derives a stable finding id and binds only fixed decisions", () => 
   assert.equal(compiled.findings[0]?.finding_id, findingId);
   assert.equal(compiled.findings[0]?.lawyer_disposition, "accept");
   assert.throws(
-    () => receipt({ "finding-000000000000000000000000": { disposition: "skip", direction: null } }),
+    () =>
+      receipt({
+        "finding-000000000000000000000000": {
+          disposition: "skip",
+          direction: null,
+        },
+      }),
     /not bound/i,
   );
 });
@@ -104,21 +112,24 @@ test("accept requires one exact source span and fixed replacement text", () => {
 });
 
 test("a missing decision and unavailable opinion are review gaps, not parse failure", () => {
-  assert.deepEqual(verifyContractPlaybookPack({ receipt: receipt(), reviewOpinionText: null }), {
-    status: "gap",
-    issues: [
-      {
-        code: "material_disposition_missing",
-        finding_id: deriveContractPlaybookFindingId(acceptedFinding),
-        rule_id: acceptedFinding.rule_id,
-      },
-      {
-        code: "review_opinion_unavailable",
-        finding_id: null,
-        rule_id: null,
-      },
-    ],
-  });
+  assert.deepEqual(
+    verifyContractPlaybookPack({ receipt: receipt(), reviewOpinionText: null }),
+    {
+      status: "gap",
+      issues: [
+        {
+          code: "material_disposition_missing",
+          finding_id: deriveContractPlaybookFindingId(acceptedFinding),
+          rule_id: acceptedFinding.rule_id,
+        },
+        {
+          code: "review_opinion_unavailable",
+          finding_id: null,
+          rule_id: null,
+        },
+      ],
+    },
+  );
 });
 
 test("opinion verification rejects reversed disposition and missing adopted text", () => {
@@ -131,17 +142,19 @@ test("opinion verification rejects reversed disposition and missing adopted text
     reviewOpinionText:
       "PRC-NDA-001 律师决定：保留原文，不作修改。 This Agreement is governed by PRC law.",
   });
-  assert.deepEqual(reversed.issues.map((issue) => issue.code), [
-    "decision_mismatch",
-  ]);
+  assert.deepEqual(
+    reversed.issues.map((issue) => issue.code),
+    ["decision_mismatch"],
+  );
 
   const missingText = verifyContractPlaybookPack({
     receipt: fixed,
     reviewOpinionText: "PRC-NDA-001 律师决定：采纳建议文本并纳入修订稿。",
   });
-  assert.deepEqual(missingText.issues.map((issue) => issue.code), [
-    "adopted_text_missing",
-  ]);
+  assert.deepEqual(
+    missingText.issues.map((issue) => issue.code),
+    ["adopted_text_missing"],
+  );
 });
 
 test("opinion verification passes only when rule, decision, and adopted text align", () => {
@@ -180,5 +193,24 @@ test("checklist mode binds the fixed rule-set count", () => {
         findings: [acceptedFinding],
       }),
     /exactly one finding/i,
+  );
+});
+
+test("analysis output accepts only one exact versioned JSON object", () => {
+  assert.deepEqual(
+    parseContractPlaybookAnalysisOutput(
+      `\`\`\`json\n${JSON.stringify({
+        kind: "contract_playbook_analysis_v1",
+        findings: [acceptedFinding],
+      })}\n\`\`\``,
+    ).findings,
+    [acceptedFinding],
+  );
+  assert.throws(
+    () =>
+      parseContractPlaybookAnalysisOutput(
+        `${JSON.stringify({ kind: "contract_playbook_analysis_v1", findings: [] })}\ncommentary`,
+      ),
+    ContractPlaybookStructuredOutputError,
   );
 });

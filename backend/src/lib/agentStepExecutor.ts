@@ -2,6 +2,7 @@ import {
   buildDocContext,
   buildMessages,
   buildWorkflowStore,
+  CITATIONS_BLOCK_RE,
   runLLMStream,
   stripTransientAssistantEvents,
   type AssistantEvent,
@@ -70,6 +71,13 @@ import {
   createContractPlaybookContextRequiredInput,
   readContractPlaybookContext,
 } from "./agent-packs/contract/contractPlaybookContext";
+import {
+  contractPlaybookReceiptSchema,
+  ContractPlaybookStructuredOutputError,
+  parseContractPlaybookAnalysisOutput,
+} from "./agent-packs/contract/contractPlaybookPack";
+import { createContractPlaybookDispositionRequiredInput } from "./agent-packs/contract/contractPlaybookDisposition";
+import { compileContractPlaybookAnalysisReceipt } from "./agentContractPlaybookAnalysis";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -149,6 +157,12 @@ function taskPrompt(
   const contractPlaybookContext = readContractPlaybookContext(
     checkpoint.contract_playbook_context,
   );
+  const contractPlaybookReceipt =
+    checkpoint.contract_playbook_pack_receipt === undefined
+      ? null
+      : contractPlaybookReceiptSchema.parse(
+          checkpoint.contract_playbook_pack_receipt,
+        );
   return [
     `WORK TASK GOAL\n${snapshot.task.goal}`,
     `CURRENT STEP\n${currentStep?.title ?? "Complete the current step"}\nExpected output: ${currentStep?.expected_output ?? "Complete the requested work."}`,
@@ -159,6 +173,9 @@ function taskPrompt(
     sourceAcquisitionContext ?? "",
     contractPlaybookContext
       ? `FIXED CONTRACT PLAYBOOK CONTEXT\n${JSON.stringify(contractPlaybookContext)}`
+      : "",
+    contractPlaybookReceipt
+      ? `FIXED CONTRACT PLAYBOOK RECEIPT\n${JSON.stringify(contractPlaybookReceipt)}`
       : "",
     currentSupplement && contractPlaybookContext
       ? [
@@ -555,6 +572,36 @@ export async function executeAgentStep(input: {
       citationCheck: { total: 0, relocatable: 0, missing: 0 },
     };
   }
+  const contractPlaybookContext = readContractPlaybookContext(
+    checkpoint.contract_playbook_context,
+  );
+  const contractPlaybookReceipt =
+    checkpoint.contract_playbook_pack_receipt === undefined
+      ? null
+      : contractPlaybookReceiptSchema.parse(
+          checkpoint.contract_playbook_pack_receipt,
+        );
+  if (contractPlaybookContext && stepContract?.capability === "create_draft") {
+    if (!contractPlaybookReceipt) {
+      throw new ContractPlaybookStructuredOutputError(
+        "Contract drafting cannot start without a fixed analysis receipt",
+      );
+    }
+    const requiredInput = createContractPlaybookDispositionRequiredInput({
+      receipt: contractPlaybookReceipt,
+      stepId: currentStep.id,
+    });
+    if (requiredInput) {
+      return {
+        summary:
+          "Material Contract Playbook findings require lawyer disposition before document mutation.",
+        artifacts: [],
+        waitingForInput: true,
+        requiredInput,
+        citationCheck: { total: 0, relocatable: 0, missing: 0 },
+      };
+    }
+  }
   const selectedWorkflow = snapshot.artifacts.find(
     (artifact) =>
       artifact.artifact_type === "workflow_run" &&
@@ -660,6 +707,9 @@ export async function executeAgentStep(input: {
     (stepContract?.capability === "verify" ||
       snapshot.task.status === "verifying") &&
     !repairPass;
+  const contractAnalysisOnly = Boolean(
+    contractPlaybookContext && stepContract?.capability === "analyze",
+  );
   const verifierCitationCheck =
     verifierOnly && stepContract
       ? await verifyTaskCitationLinks(db, snapshot, userId)
@@ -693,6 +743,16 @@ export async function executeAgentStep(input: {
       "Report only a material goal omission. Every omission must name one declared deliverable_key and quote one exact, contiguous goal_excerpt from the fixed goal. Do not infer a requirement from a source, template, precedent, or your own legal judgment.",
       'Return exactly one JSON object and no commentary: {"kind":"agent_semantic_verifier_result_v1","goal_coverage":"pass","issues":[]}. For a real omission, goal_coverage is gap and each issue contains only code=semantic_goal_omission, deliverable_key, goal_excerpt, and detail.',
       `VERIFICATION PACKET\n${JSON.stringify(verificationPacket)}`,
+    ].join("\n\n");
+  } else if (contractAnalysisOnly) {
+    prompt = [
+      "Analyze only the fixed Contract Playbook context and the two fixed source Versions.",
+      "Return exactly one JSON object with kind=contract_playbook_analysis_v1 and findings. Do not add prose or a code fence. Then append the ordinary <CITATIONS> block required by the system prompt.",
+      "Each finding must contain exactly: material, rule_id, rule_version, rule_outcome, issue_type, risk_level, priority, confidence, target_position, fallback_position, walk_away_position, contract_anchor, contract_quote, contract_citation_refs, playbook_citation_refs, recommendation, proposed_text.",
+      "Use only compliant, deviation, missing, uncertain, or not_applicable for rule_outcome; critical, high, medium, low, or none for risk_level; must, should, could, or none for priority. Nullable fields must be explicit null.",
+      "Every non-missing contract quote must be one continuous exact quote and its contract citation ref must point to the fixed contract Version. Every Playbook/baseline ref must point to the fixed reference Version. Citation refs must be contiguous 1..N and every citation must be used by a finding.",
+      "Quick mode may contain only material findings. Checklist mode must return exactly one finding for every mechanically fixed rule. Compare mode uses the baseline as evidence, not a negotiating position.",
+      `FIXED CONTEXT\n${JSON.stringify(contractPlaybookContext)}`,
     ].join("\n\n");
   }
   const activeSourceFiles = verifierOnly ? [] : sourceFiles;
@@ -859,7 +919,7 @@ export async function executeAgentStep(input: {
     workflowStore,
     includeResearchTools: false,
     includeMcpTools: stepContract ? false : true,
-    disableTools: verifierOnly,
+    disableTools: verifierOnly || contractAnalysisOnly,
     ...(repairPass && repairDeliverable
       ? {
           allowedToolNames: resolveBoundedRepairToolNames({
@@ -920,6 +980,69 @@ export async function executeAgentStep(input: {
     executionModel,
     input.shouldContinue,
   );
+  const structuredText = (result: typeof streamResult) => {
+    const visible = result.events
+      .filter(
+        (event): event is Extract<typeof event, { type: "content" }> =>
+          event.type === "content",
+      )
+      .map((event) => event.text)
+      .join("\n")
+      .trim();
+    return visible || result.fullText.replace(CITATIONS_BLOCK_RE, "").trim();
+  };
+  let contractAnalysisText = contractAnalysisOnly
+    ? structuredText(streamResult)
+    : null;
+  const validateContractAnalysis = (result: typeof streamResult) => {
+    const rawOutput = structuredText(result);
+    parseContractPlaybookAnalysisOutput(rawOutput);
+    if (!contractPlaybookContext) {
+      throw new ContractPlaybookStructuredOutputError(
+        "Contract analysis has no fixed context",
+      );
+    }
+    compileContractPlaybookAnalysisReceipt({
+      context: contractPlaybookContext,
+      rawOutput,
+      citations: result.citations,
+      analyzeStepId: currentStep.id,
+      analyzeAttempt: currentStep.attempt,
+      // Validation happens before the assistant message exists. The final
+      // receipt is compiled again below with the persisted message id.
+      citationSnapshotArtifactId: currentStep.id,
+    });
+    return rawOutput;
+  };
+  if (contractAnalysisOnly) {
+    try {
+      contractAnalysisText = validateContractAnalysis(streamResult);
+    } catch (error) {
+      if (!(error instanceof ContractPlaybookStructuredOutputError)) {
+        throw error;
+      }
+      streamResult = await runStepWithQueueRetry(
+        {
+          ...streamArgs,
+          apiMessages: [
+            ...apiMessages,
+            { role: "assistant", content: contractAnalysisText },
+            {
+              role: "user",
+              content:
+                "The analysis or its citations did not match the fixed contract_playbook_analysis_v1 boundary. Return one corrected JSON object only, followed by the complete <CITATIONS> block. Correct only mechanically provable schema, citation-ref, fixed Document/Version, or exact-quote drift. Do not add, remove, merge, or change a legal finding merely to satisfy validation; preserve uncertain facts as uncertain.",
+            },
+          ],
+        },
+        executionModel,
+        input.shouldContinue,
+      );
+      contractAnalysisText = validateContractAnalysis(streamResult);
+    }
+  }
+  const contractAnalysisOutput = contractAnalysisText
+    ? parseContractPlaybookAnalysisOutput(contractAnalysisText)
+    : null;
   let semanticVerification = verificationPacket
     ? (() => {
         const text = streamResult.events
@@ -977,7 +1100,16 @@ export async function executeAgentStep(input: {
     );
   }
   const { fullText, events, citations } = streamResult;
-  const persistedEvents = stripTransientAssistantEvents(events);
+  const basePersistedEvents = stripTransientAssistantEvents(events);
+  const persistedEvents = contractAnalysisOutput
+    ? [
+        {
+          type: "content" as const,
+          text: `Contract analysis fixed ${contractAnalysisOutput.findings.length} finding${contractAnalysisOutput.findings.length === 1 ? "" : "s"}, including ${contractAnalysisOutput.findings.filter((finding) => finding.material).length} material finding${contractAnalysisOutput.findings.filter((finding) => finding.material).length === 1 ? "" : "s"} requiring the configured lawyer-review path.`,
+        },
+        ...basePersistedEvents.filter((event) => event.type !== "content"),
+      ]
+    : basePersistedEvents;
   const { data: assistantMessage, error: assistantError } = await db
     .from("chat_messages")
     .insert({
@@ -1068,6 +1200,17 @@ export async function executeAgentStep(input: {
         }),
       }
     : null;
+  const contractPlaybookAnalysisReceipt =
+    contractAnalysisOnly && contractPlaybookContext && contractAnalysisText
+      ? compileContractPlaybookAnalysisReceipt({
+          context: contractPlaybookContext,
+          rawOutput: contractAnalysisText,
+          citations,
+          analyzeStepId: currentStep.id,
+          analyzeAttempt: currentStep.attempt,
+          citationSnapshotArtifactId: assistantMessage.id as string,
+        })
+      : null;
   const summary = verification
     ? verification.result.outcome === "clean_pass"
       ? "Automated verification found no deterministic or fixed-goal gap. Lawyer review is still required before approval or export."
@@ -1106,5 +1249,12 @@ export async function executeAgentStep(input: {
       }).length,
     },
     verification,
+    ...(contractPlaybookAnalysisReceipt
+      ? {
+          checkpointValues: {
+            contract_playbook_pack_receipt: contractPlaybookAnalysisReceipt,
+          },
+        }
+      : {}),
   };
 }

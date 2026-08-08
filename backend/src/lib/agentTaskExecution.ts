@@ -66,6 +66,7 @@ import {
   isAgentTaskStateTransitionError,
 } from "./agent-kernel/execution/taskTransition";
 import { AgentVerifierStructuredOutputError } from "./agent-kernel/verification/verifierCore";
+import { ContractPlaybookStructuredOutputError } from "./agent-packs/contract/contractPlaybookPack";
 
 type Db = ReturnType<typeof createServerSupabase>;
 type Snapshot = NonNullable<Awaited<ReturnType<typeof getAgentTaskSnapshot>>>;
@@ -694,17 +695,11 @@ export async function advanceAgentTaskExecution(input: {
           providerId: grant.read_only_connector_pins[0]?.provider_id ?? "",
           classification: acquisition.classification,
         });
-        return deferAgentTaskForProvider(
-          db,
-          taskId,
-          userId,
-          summary,
-          {
-            classification: acquisition.classification,
-            leaseOwner: input.leaseGuard.ownerToken,
-            checkpointValues: acquisition.checkpointValues,
-          },
-        );
+        return deferAgentTaskForProvider(db, taskId, userId, summary, {
+          classification: acquisition.classification,
+          leaseOwner: input.leaseGuard.ownerToken,
+          checkpointValues: acquisition.checkpointValues,
+        });
       }
       execution = acquisition.result;
     } else {
@@ -764,12 +759,17 @@ export async function advanceAgentTaskExecution(input: {
         { leaseOwner: input.leaseGuard.ownerToken },
       );
     }
-    if (error instanceof AgentVerifierStructuredOutputError) {
+    if (
+      error instanceof AgentVerifierStructuredOutputError ||
+      error instanceof ContractPlaybookStructuredOutputError
+    ) {
       return deferAgentTaskForProvider(
         db,
         taskId,
         userId,
-        "The verifier response could not be mechanically validated. Existing deliverables were preserved and this Step can be resumed.",
+        error instanceof ContractPlaybookStructuredOutputError
+          ? "The Contract Playbook analysis could not be mechanically validated after one bounded correction. Existing work was preserved and this Step can be resumed."
+          : "The verifier response could not be mechanically validated. Existing deliverables were preserved and this Step can be resumed.",
         {
           classification: "provider_structured_output",
           leaseOwner: input.leaseGuard.ownerToken,

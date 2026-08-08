@@ -445,6 +445,7 @@ export async function buildCurrentAgentVerificationPacket(input: {
     ...buildAgentPackDeterministicChecks({
       profile: input.profile,
       currentPlan: input.snapshot.task.current_plan,
+      checkpoint: input.snapshot.task.latest_checkpoint,
       deliverables,
     }),
   );
