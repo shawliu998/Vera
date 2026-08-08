@@ -165,6 +165,8 @@ export function mergeImmutableAgentTaskCheckpoint(
       "source_acquisition",
       "contract_playbook_context",
       "contract_playbook_pack_receipt",
+      "litigation_evidence_inventory_context",
+      "litigation_evidence_inventory_receipt",
     ]) {
       if (Object.hasOwn(row, key)) retained[key] = row[key];
     }

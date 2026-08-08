@@ -68,6 +68,14 @@ import {
   createContractPlaybookDispositionRevisionIntent,
   createContractPlaybookDispositionRequiredInput,
 } from "../lib/agent-packs/contract/contractPlaybookDisposition";
+import {
+  LITIGATION_HEARING_PREPARATION_WORKFLOW_ID,
+  LitigationEvidenceInventoryContextError,
+  compileLitigationEvidenceInventoryContext,
+  createLitigationEvidenceInventoryContextRequiredInput,
+  parseLitigationEvidenceInventoryContextRequiredInput,
+  readLitigationEvidenceInventoryContext,
+} from "../lib/agent-packs/litigation/litigationEvidenceInventoryContext";
 
 export const agentTasksRouter = Router();
 
@@ -91,12 +99,14 @@ function routeError(
             ? 400
             : error instanceof ContractPlaybookContextError
               ? 400
-              : detail.startsWith("Only a") ||
-                  /cannot continue safely|still closing|review state changed|no longer matches|only after task completion/i.test(
-                    detail,
-                  )
-                ? 409
-                : 500;
+              : error instanceof LitigationEvidenceInventoryContextError
+                ? 400
+                : detail.startsWith("Only a") ||
+                    /cannot continue safely|still closing|review state changed|no longer matches|only after task completion/i.test(
+                      detail,
+                    )
+                  ? 409
+                  : 500;
   res.status(status).json({ detail });
 }
 
@@ -696,6 +706,35 @@ agentTasksRouter.post("/:taskId/input", requireAuth, async (req, res) => {
               matter: fixedMatterContext,
               requiredInput: activeRequiredInput,
               responses,
+            }),
+        };
+      }
+    }
+    if (
+      fixedMatterContext?.workflow?.id ===
+        LITIGATION_HEARING_PREPARATION_WORKFLOW_ID &&
+      !readLitigationEvidenceInventoryContext(
+        checkpoint.litigation_evidence_inventory_context,
+      ) &&
+      activeRequiredInput &&
+      responses?.length
+    ) {
+      const expected = createLitigationEvidenceInventoryContextRequiredInput({
+        matter: fixedMatterContext,
+        stepId: activeRequiredInput.step_id,
+        createdAt: activeRequiredInput.created_at,
+      });
+      if (expected.request_id === activeRequiredInput.request_id) {
+        serverCheckpointValues = {
+          ...(serverCheckpointValues ?? {}),
+          litigation_evidence_inventory_context:
+            compileLitigationEvidenceInventoryContext({
+              matter: fixedMatterContext,
+              packInput: parseLitigationEvidenceInventoryContextRequiredInput({
+                matter: fixedMatterContext,
+                requiredInput: activeRequiredInput,
+                responses,
+              }),
             }),
         };
       }

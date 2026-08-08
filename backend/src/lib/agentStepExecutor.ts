@@ -72,6 +72,11 @@ import {
   readContractPlaybookContext,
 } from "./agent-packs/contract/contractPlaybookContext";
 import {
+  LITIGATION_HEARING_PREPARATION_WORKFLOW_ID,
+  createLitigationEvidenceInventoryContextRequiredInput,
+  readLitigationEvidenceInventoryContext,
+} from "./agent-packs/litigation/litigationEvidenceInventoryContext";
+import {
   contractPlaybookReceiptSchema,
   ContractPlaybookStructuredOutputError,
   parseContractPlaybookAnalysisOutput,
@@ -170,6 +175,9 @@ function taskPrompt(
   const contractPlaybookContext = readContractPlaybookContext(
     checkpoint.contract_playbook_context,
   );
+  const litigationEvidenceContext = readLitigationEvidenceInventoryContext(
+    checkpoint.litigation_evidence_inventory_context,
+  );
   const contractPlaybookReceipt =
     checkpoint.contract_playbook_pack_receipt === undefined
       ? null
@@ -186,6 +194,9 @@ function taskPrompt(
     sourceAcquisitionContext ?? "",
     contractPlaybookContext
       ? `FIXED CONTRACT PLAYBOOK CONTEXT\n${JSON.stringify(contractPlaybookContext)}`
+      : "",
+    litigationEvidenceContext
+      ? `FIXED LITIGATION EVIDENCE CONTEXT\n${JSON.stringify(litigationEvidenceContext)}`
       : "",
     contractPlaybookReceipt
       ? `FIXED CONTRACT PLAYBOOK RECEIPT\n${JSON.stringify(contractPlaybookReceipt)}`
@@ -628,6 +639,38 @@ export async function executeAgentStep(input: {
         requiredInput.reason_code === "missing_source"
           ? "A fixed DOCX contract and distinct reference are required before analysis."
           : "Lawyer-controlled Contract Playbook context is required before analysis.",
+      artifacts: [],
+      waitingForInput: true,
+      requiredInput,
+      citationCheck: { total: 0, relocatable: 0, missing: 0 },
+    };
+  }
+  if (
+    fixedMatterContext?.workflow?.id ===
+      LITIGATION_HEARING_PREPARATION_WORKFLOW_ID &&
+    !readLitigationEvidenceInventoryContext(
+      checkpoint.litigation_evidence_inventory_context,
+    )
+  ) {
+    const recordSources = fixedMatterContext.sources.filter(
+      (source) => source.role === "source",
+    );
+    const requiredInput = !recordSources.length
+      ? createDocumentsRequiredInput({
+          stepId: currentStep.id,
+          prompt:
+            "Attach at least one fixed case-record document before first-instance hearing preparation.",
+          documentTypes: ["Case-record source"],
+        })
+      : createLitigationEvidenceInventoryContextRequiredInput({
+          matter: fixedMatterContext,
+          stepId: currentStep.id,
+        });
+    return {
+      summary:
+        requiredInput.reason_code === "missing_source"
+          ? "A fixed case-record source is required before litigation analysis."
+          : "Lawyer-controlled procedural stage and represented side are required before litigation analysis.",
       artifacts: [],
       waitingForInput: true,
       requiredInput,

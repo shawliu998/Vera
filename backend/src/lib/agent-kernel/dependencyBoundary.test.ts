@@ -145,3 +145,28 @@ test("Contract Packs remain pure domain contracts without persistence, routes, o
   }
   assert.deepEqual(violations, []);
 });
+
+test("Litigation Packs remain pure contracts without persistence, routes, providers, or legacy stores", async () => {
+  const litigationRoot = path.resolve(kernelRoot, "../agent-packs/litigation");
+  const violations: string[] = [];
+  for (const file of await productionFiles(litigationRoot)) {
+    const source = await readFile(file, "utf8");
+    for (const specifier of imports(source)) {
+      if (
+        /(?:^|\/)routes(?:\/|$)/.test(specifier) ||
+        /(?:^|\/)supabase$/.test(specifier) ||
+        /(?:^|\/)llm(?:\/|$)/.test(specifier) ||
+        /(?:^|\/)userSettings$/.test(specifier) ||
+        /(?:^|\/)storage$/.test(specifier) ||
+        /^\.\.\/\.\.\/litigationEvidenceInventory/.test(specifier)
+      ) {
+        violations.push(`${path.basename(file)} -> ${specifier}`);
+      }
+    }
+    const lines = source.split(/\r?\n/).length;
+    if (lines > 600) {
+      violations.push(`${path.basename(file)} has ${lines} lines`);
+    }
+  }
+  assert.deepEqual(violations, []);
+});

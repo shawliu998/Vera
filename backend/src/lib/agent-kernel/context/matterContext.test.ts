@@ -132,6 +132,12 @@ test("progress checkpoint replacement retains assignment and durable execution r
           schema_version: "provider_source_acquisition_state_v1",
           phase: "selection_required",
         },
+        litigation_evidence_inventory_context: {
+          kind: "litigation_evidence_inventory_context_v1",
+        },
+        litigation_evidence_inventory_receipt: {
+          kind: "litigation_evidence_inventory_receipt_v1",
+        },
         runner_retry: { attempt: 2 },
         user_input: { message: "transient" },
       },
@@ -151,6 +157,12 @@ test("progress checkpoint replacement retains assignment and durable execution r
       source_acquisition: {
         schema_version: "provider_source_acquisition_state_v1",
         phase: "selection_required",
+      },
+      litigation_evidence_inventory_context: {
+        kind: "litigation_evidence_inventory_context_v1",
+      },
+      litigation_evidence_inventory_receipt: {
+        kind: "litigation_evidence_inventory_receipt_v1",
       },
       step_id: "step-2",
       iteration: 1,
