@@ -111,6 +111,81 @@ function exactActionRanges(
   });
 }
 
+function mergeCoanchoredComments(
+  actions: ContractPlaybookMaterializationPlanV1["revision_actions"],
+) {
+  const replacements = actions.filter(
+    (action) => action.kind === "replace_exact_span",
+  );
+  const groups = new Map<
+    string,
+    Extract<
+      ContractPlaybookMaterializationPlanV1["revision_actions"][number],
+      { kind: "comment_exact_span" }
+    >[]
+  >();
+  for (const action of actions) {
+    if (action.kind !== "comment_exact_span") continue;
+    const key = normalizeWithMap(action.anchor).text;
+    groups.set(key, [...(groups.get(key) ?? []), action]);
+  }
+  const comments = [...groups.values()].map((items) => {
+    if (items.length === 1) return items[0]!;
+    return {
+      ...items[0]!,
+      finding_id: items.map((item) => item.finding_id).join(","),
+      rule_id: items.map((item) => item.rule_id).join(","),
+      comment: items
+        .map((item) => `[${item.rule_id}] ${item.comment}`)
+        .join("\n\n"),
+    };
+  });
+  return [...replacements, ...comments];
+}
+
+function mergeOverlappingCommentRanges(
+  body: string,
+  ranges: ReturnType<typeof exactActionRanges>,
+) {
+  const ordered = [...ranges].sort((left, right) => left.start - right.start);
+  const merged: typeof ordered = [];
+  for (const current of ordered) {
+    const previous = merged.at(-1);
+    if (!previous || current.start >= previous.end) {
+      merged.push(current);
+      continue;
+    }
+    if (
+      previous.action.kind !== "comment_exact_span" ||
+      current.action.kind !== "comment_exact_span"
+    ) {
+      throw new ContractPlaybookWordMaterializationError(
+        "action_anchor_overlap",
+        {
+          finding_ids: [previous.action.finding_id, current.action.finding_id],
+          rule_ids: [previous.action.rule_id, current.action.rule_id],
+        },
+      );
+    }
+    const start = Math.min(previous.start, current.start);
+    const end = Math.max(previous.end, current.end);
+    merged[merged.length - 1] = {
+      start,
+      end,
+      action: {
+        kind: "comment_exact_span",
+        finding_id: `${previous.action.finding_id},${current.action.finding_id}`,
+        rule_id: `${previous.action.rule_id},${current.action.rule_id}`,
+        anchor: body.slice(start, end),
+        comment: [previous.action, current.action]
+          .map((action) => `[${action.rule_id}] ${action.comment}`)
+          .join("\n\n"),
+      },
+    };
+  }
+  return merged;
+}
+
 /**
  * Materialize revision and clean-copy bytes from one server-owned plan. The
  * source contract is read-only. Existing main-story review markup remains in
@@ -147,27 +222,15 @@ export async function materializeContractPlaybookWordDocuments(input: {
     ? await finalizeCleanDocx(input.sourceBytes)
     : input.sourceBytes;
   const sourceBody = await extractDocxBodyText(workingBase);
-  const ranges = exactActionRanges(sourceBody, input.plan);
-  const ordered = [...ranges].sort((left, right) => left.start - right.start);
-  for (let index = 1; index < ordered.length; index += 1) {
-    if (ordered[index].start < ordered[index - 1].end) {
-      throw new ContractPlaybookWordMaterializationError(
-        "action_anchor_overlap",
-        {
-          finding_ids: [
-            ordered[index - 1].action.finding_id,
-            ordered[index].action.finding_id,
-          ],
-          rule_ids: [
-            ordered[index - 1].action.rule_id,
-            ordered[index].action.rule_id,
-          ],
-        },
-      );
-    }
-  }
+  const effectiveActions = mergeCoanchoredComments(input.plan.revision_actions);
+  const ranges = exactActionRanges(sourceBody, {
+    ...input.plan,
+    revision_actions: effectiveActions,
+  });
+  const ordered = mergeOverlappingCommentRanges(sourceBody, ranges);
+  const materializedActions = ordered.map((range) => range.action);
 
-  const commentActions = input.plan.revision_actions.filter(
+  const commentActions = materializedActions.filter(
     (action) => action.kind === "comment_exact_span",
   );
   const commented = await applyDocxComments(
@@ -192,7 +255,7 @@ export async function materializeContractPlaybookWordDocuments(input: {
     });
   }
 
-  const replacementActions = input.plan.revision_actions.filter(
+  const replacementActions = materializedActions.filter(
     (action) => action.kind === "replace_exact_span",
   );
   const revision = await applyTrackedEdits(

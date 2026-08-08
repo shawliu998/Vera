@@ -91,6 +91,8 @@ export async function generateDocx(
     landscape?: boolean;
     projectId?: string | null;
     mutationIdentity?: GeneratedMutationIdentity;
+    /** Keep a localized in-document title while fixing an ASCII filename. */
+    filenameTitle?: string;
   },
 ) {
   try {
@@ -509,7 +511,7 @@ export async function generateDocx(
       }
     }
     return persistGeneratedFile({
-      title,
+      title: options?.filenameTitle ?? title,
       extension: "docx",
       buffer: buf,
       userId,

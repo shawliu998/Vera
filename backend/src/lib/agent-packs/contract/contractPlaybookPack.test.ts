@@ -196,6 +196,33 @@ test("checklist mode binds the fixed rule-set count", () => {
   );
 });
 
+test("checklist mode rejects the right count with the wrong fixed rule identity", () => {
+  assert.throws(
+    () =>
+      compileContractPlaybookReceipt({
+        reviewMode: "checklist",
+        opinionLanguage: "en",
+        analyzeStepId: ids.step,
+        analyzeAttempt: 1,
+        contract: {
+          document_id: ids.contractDocument,
+          version_id: ids.contractVersion,
+        },
+        reference: {
+          role: "playbook",
+          document_id: ids.playbookDocument,
+          version_id: ids.playbookVersion,
+          rule_set_digest: `sha256:${"d".repeat(64)}`,
+          expected_rule_count: 1,
+          expected_rules: [{ rule_id: "PRC-NDA-999", rule_version: "1.0.0" }],
+        },
+        citationSnapshotArtifactId: ids.citationSnapshot,
+        findings: [acceptedFinding],
+      }),
+    /exactly one finding/i,
+  );
+});
+
 test("analysis output accepts only one exact versioned JSON object", () => {
   assert.deepEqual(
     parseContractPlaybookAnalysisOutput(

@@ -184,3 +184,44 @@ test("partially overlapping actions fail before any derived DOCX is returned", a
       error.issueCode === "action_anchor_overlap",
   );
 });
+
+test("co-anchored rule comments merge into one native Word comment", async () => {
+  const plan = compileContractPlaybookMaterializationPlan(fixedReceipt());
+  const original = plan.revision_actions[1];
+  assert.equal(original.kind, "comment_exact_span");
+  if (original.kind !== "comment_exact_span") return;
+  plan.revision_actions.push({
+    ...original,
+    finding_id: "finding-second-comment",
+    rule_id: "PRC-NDA-099",
+    comment: "Record the second rule-specific direction.",
+  });
+  const result = await materializeContractPlaybookWordDocuments({
+    sourceBytes: await sourceDocx(),
+    plan,
+  });
+  assert.equal(result.comments.length, 1);
+  assert.match(result.comments[0]!.comment, /PRC-NDA-002/);
+  assert.match(result.comments[0]!.comment, /PRC-NDA-099/);
+});
+
+test("partially overlapping comments merge while preserving both rule directions", async () => {
+  const plan = compileContractPlaybookMaterializationPlan(fixedReceipt());
+  const original = plan.revision_actions[1];
+  assert.equal(original.kind, "comment_exact_span");
+  if (original.kind !== "comment_exact_span") return;
+  plan.revision_actions.push({
+    ...original,
+    finding_id: "finding-overlapping-comment",
+    rule_id: "PRC-NDA-098",
+    anchor: "confidentiality obligations continue for one year",
+    comment: "Record the overlapping rule direction.",
+  });
+  const result = await materializeContractPlaybookWordDocuments({
+    sourceBytes: await sourceDocx(),
+    plan,
+  });
+  assert.equal(result.comments.length, 1);
+  assert.match(result.comments[0]!.comment, /PRC-NDA-002/);
+  assert.match(result.comments[0]!.comment, /PRC-NDA-098/);
+});

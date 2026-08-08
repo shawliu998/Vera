@@ -28,12 +28,13 @@ const ruleId = z
   .min(1)
   .max(120)
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
-const issueType = z
-  .string()
-  .trim()
-  .min(1)
-  .max(80)
-  .regex(/^[a-z][a-z0-9_-]*$/);
+const fixedRuleIdentitySchema = z
+  .object({
+    rule_id: ruleId,
+    rule_version: z.string().trim().min(1).max(120),
+  })
+  .strict();
+const issueType = z.string().trim().min(1).max(80);
 
 const findingShape = {
   material: z.boolean(),
@@ -49,7 +50,10 @@ const findingShape = {
   issue_type: issueType,
   risk_level: z.enum(["critical", "high", "medium", "low", "none"]),
   priority: z.enum(["must", "should", "could", "none"]),
-  confidence: z.number().finite().min(0).max(1),
+  // Provider confidence is an uncalibrated observation, not a legal or
+  // workflow gate. Preserve a bounded numeric observation when available,
+  // otherwise let the server persist null without rejecting the finding.
+  confidence: z.number().finite().min(0).max(1).nullable(),
   target_position: nullableText(2_000),
   fallback_position: nullableText(2_000),
   walk_away_position: nullableText(2_000),
@@ -311,6 +315,7 @@ export const contractPlaybookReceiptSchema = z
         version_id: uuid,
         rule_set_digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
         expected_rule_count: z.number().int().min(0).max(500),
+        expected_rules: z.array(fixedRuleIdentitySchema).max(500).default([]),
       })
       .strict(),
     citation_snapshot_artifact_id: uuid,
@@ -343,7 +348,13 @@ export const contractPlaybookReceiptSchema = z
     if (
       receipt.review_mode === "checklist" &&
       (receipt.findings.length !== receipt.reference.expected_rule_count ||
-        new Set(ruleKeys).size !== ruleKeys.length)
+        new Set(ruleKeys).size !== ruleKeys.length ||
+        (receipt.reference.expected_rules.length > 0 &&
+          (receipt.reference.expected_rules.length !== ruleKeys.length ||
+            receipt.reference.expected_rules.some(
+              (rule) =>
+                !ruleKeys.includes(`${rule.rule_id}\u0000${rule.rule_version}`),
+            ))))
     ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
@@ -398,6 +409,7 @@ export function compileContractPlaybookReceipt(input: {
     version_id: string;
     rule_set_digest: string;
     expected_rule_count: number;
+    expected_rules?: Array<{ rule_id: string; rule_version: string }>;
   };
   citationSnapshotArtifactId: string;
   findings: unknown;

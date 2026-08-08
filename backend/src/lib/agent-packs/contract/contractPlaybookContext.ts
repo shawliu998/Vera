@@ -13,6 +13,12 @@ export const CONTRACT_PLAYBOOK_WORKFLOW_ID =
 export const CONTRACT_PLAYBOOK_CONTEXT_VERSION = "1.0.0" as const;
 
 const bounded = (maximum: number) => z.string().trim().min(1).max(maximum);
+const fixedRuleIdentitySchema = z
+  .object({
+    rule_id: bounded(120).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+    rule_version: bounded(120),
+  })
+  .strict();
 
 export const contractPlaybookContextInputSchema = z
   .object({
@@ -74,6 +80,7 @@ export const contractPlaybookContextSchema = z
         file_type: bounded(80).nullable(),
         rule_set_digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
         expected_rule_count: z.number().int().min(0).max(500),
+        expected_rules: z.array(fixedRuleIdentitySchema).max(500).default([]),
       })
       .strict(),
     review: z
@@ -369,6 +376,7 @@ export function compileContractPlaybookContext(input: {
   referenceRuleSet: {
     digest: string;
     expectedRuleCount: number;
+    expectedRules?: Array<{ rule_id: string; rule_version: string }>;
   };
 }): ContractPlaybookContextV1 {
   const parsed = contractPlaybookContextInputSchema.safeParse(input.packInput);
@@ -422,6 +430,7 @@ export function compileContractPlaybookContext(input: {
     .object({
       digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
       expectedRuleCount: z.number().int().min(0).max(500),
+      expectedRules: z.array(fixedRuleIdentitySchema).max(500).default([]),
     })
     .strict()
     .safeParse(input.referenceRuleSet);
@@ -450,6 +459,7 @@ export function compileContractPlaybookContext(input: {
       file_type: reference.file_type,
       rule_set_digest: ruleSet.data.digest,
       expected_rule_count: ruleSet.data.expectedRuleCount,
+      expected_rules: ruleSet.data.expectedRules,
     },
     review: {
       mode: parsed.data.review_mode,

@@ -118,6 +118,7 @@ export function compileContractPlaybookAnalysisReceipt(input: {
       version_id: input.context.reference.version_id,
       rule_set_digest: input.context.reference.rule_set_digest,
       expected_rule_count: input.context.reference.expected_rule_count,
+      expected_rules: input.context.reference.expected_rules,
     },
     citationSnapshotArtifactId: input.citationSnapshotArtifactId,
     findings: analysis.findings,

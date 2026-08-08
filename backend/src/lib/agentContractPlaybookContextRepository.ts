@@ -14,6 +14,7 @@ import {
   ContractPlaybookContextError,
   parseContractPlaybookContextRequiredInput,
 } from "./agent-packs/contract/contractPlaybookContext";
+import { extractDocxBodyText } from "./docxTrackedChanges";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -49,14 +50,48 @@ const overlayByContractType: Record<string, string> = {
   employment_consulting: "prc-employment-consulting",
 };
 
-export function deriveContractPlaybookRuleSet(input: {
+type FixedRuleIdentity = {
+  rule_id: string;
+  rule_version: string;
+};
+
+function uniqueRuleIdentities(rules: FixedRuleIdentity[]) {
+  const identities = rules.map(
+    (rule) => `${rule.rule_id}\u0000${rule.rule_version}`,
+  );
+  return rules.length > 0 && new Set(identities).size === identities.length;
+}
+
+function parseDocxRuleIdentities(text: string, expectedOverlayId: string) {
+  const lines = text
+    .normalize("NFKC")
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const overlayMatches = lines.filter(
+    (line) => line === expectedOverlayId,
+  ).length;
+  if (overlayMatches !== 1) return [];
+
+  const rules: FixedRuleIdentity[] = [];
+  for (const line of lines) {
+    const match = line.match(
+      /^([A-Za-z0-9][A-Za-z0-9._:-]{0,119})@([A-Za-z0-9][A-Za-z0-9._:-]{0,119})(?:\s|·|$)/u,
+    );
+    if (!match) continue;
+    rules.push({ rule_id: match[1]!, rule_version: match[2]! });
+  }
+  return uniqueRuleIdentities(rules) ? rules : [];
+}
+
+export async function deriveContractPlaybookRuleSet(input: {
   bytes: Uint8Array;
   reviewMode: "quick" | "deep" | "checklist" | "compare";
   contractType: string;
 }) {
   const digest = `sha256:${createHash("sha256").update(input.bytes).digest("hex")}`;
   if (input.reviewMode === "compare") {
-    return { digest, expectedRuleCount: 0 };
+    return { digest, expectedRuleCount: 0, expectedRules: [] };
   }
   let decoded: unknown;
   try {
@@ -71,15 +106,22 @@ export function deriveContractPlaybookRuleSet(input: {
   const overlay = playbook.success
     ? playbook.data.packs.find((candidate) => candidate.pack_id === overlayId)
     : null;
-  const rules =
+  let rules: FixedRuleIdentity[] =
     playbook.success && overlay
-      ? [...playbook.data.base_rules, ...overlay.rules]
+      ? [...playbook.data.base_rules, ...overlay.rules].map((rule) => ({
+          rule_id: rule.rule_id,
+          rule_version: rule.rule_version,
+        }))
       : [];
-  const identities = rules.map(
-    (rule) => `${rule.rule_id}\u0000${rule.rule_version}`,
-  );
-  const mechanicallyBound =
-    rules.length > 0 && new Set(identities).size === identities.length;
+  if (!rules.length && overlayId) {
+    try {
+      const docxText = await extractDocxBodyText(Buffer.from(input.bytes));
+      rules = parseDocxRuleIdentities(docxText, overlayId);
+    } catch {
+      rules = [];
+    }
+  }
+  const mechanicallyBound = uniqueRuleIdentities(rules);
   if (input.reviewMode === "checklist" && !mechanicallyBound) {
     throw new ContractPlaybookContextError(
       "contract_playbook_rule_set_invalid",
@@ -94,6 +136,7 @@ export function deriveContractPlaybookRuleSet(input: {
   return {
     digest,
     expectedRuleCount: mechanicallyBound ? rules.length : 0,
+    expectedRules: mechanicallyBound ? rules : [],
   };
 }
 
@@ -150,7 +193,7 @@ export async function compileContractPlaybookContextFromRequiredInput(input: {
   return compileContractPlaybookContext({
     matter: input.matter,
     packInput,
-    referenceRuleSet: deriveContractPlaybookRuleSet({
+    referenceRuleSet: await deriveContractPlaybookRuleSet({
       bytes: new Uint8Array(raw),
       reviewMode: packInput.review_mode,
       contractType: packInput.contract_type,

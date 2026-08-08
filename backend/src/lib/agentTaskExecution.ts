@@ -22,6 +22,7 @@ import {
   taskDeliverablePurpose,
 } from "./agentTaskDeliverables";
 import {
+  AgentModelRequestTimeoutError,
   executeAgentStep,
   isAgentTaskExecutionInterrupted,
   isTransientModelError,
@@ -789,6 +790,18 @@ export async function advanceAgentTaskExecution(input: {
           : "The verifier response could not be mechanically validated. Existing deliverables were preserved and this Step can be resumed.",
         {
           classification: "provider_structured_output",
+          leaseOwner: input.leaseGuard.ownerToken,
+        },
+      );
+    }
+    if (error instanceof AgentModelRequestTimeoutError) {
+      return deferAgentTaskForProvider(
+        db,
+        taskId,
+        userId,
+        "The selected model exceeded the bounded request deadline. Existing work was preserved and this Step can be resumed or continued with another configured model.",
+        {
+          classification: "provider_timeout",
           leaseOwner: input.leaseGuard.ownerToken,
         },
       );

@@ -200,6 +200,8 @@ export async function runLLMStream(params: {
   buildCitations?: (fullText: string) => unknown[];
   model?: string;
   apiKeys?: import("../llm").UserApiKeys;
+  /** Disable provider reasoning for bounded mechanical/structured steps. */
+  enableThinking?: boolean;
   signal?: AbortSignal;
   beforeToolBatch?: () => Promise<void>;
   authorizeToolBatch?: (calls: ToolInvocation[]) => void | Promise<void>;
@@ -244,6 +246,7 @@ export async function runLLMStream(params: {
     buildCitations,
     model,
     apiKeys,
+    enableThinking = true,
     signal,
     beforeToolBatch,
     authorizeToolBatch,
@@ -408,7 +411,7 @@ export async function runLLMStream(params: {
       tools: activeTools as OpenAIToolSchema[],
       maxIterations: 10,
       apiKeys,
-      enableThinking: true,
+      enableThinking,
       abortSignal: signal,
       callbacks: {
         onContentDelta: (delta) => {

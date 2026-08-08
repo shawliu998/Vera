@@ -184,6 +184,31 @@ test("conflicting exact spans are removed from the mutation plan", () => {
   assert.equal(plan.unresolved_finding_ids.length, 2);
 });
 
+test("co-anchored comments remain safe while replacements stay unique", () => {
+  const secondComment = {
+    ...commentFinding,
+    rule_id: "PRC-NDA-099",
+    issue_type: "second_comment",
+    recommendation: "Record a second rule-specific direction.",
+    contract_citation_refs: [6],
+    playbook_citation_refs: [7],
+  };
+  const findings = [commentFinding, secondComment];
+  const fixed = receipt({
+    findings,
+    decisions: Object.fromEntries(
+      findings.map((finding) => [
+        deriveContractPlaybookFindingId(finding),
+        { disposition: "comment", direction: null },
+      ]),
+    ),
+  });
+  const plan = compileContractPlaybookMaterializationPlan(fixed);
+  assert.equal(plan.status, "ready");
+  assert.equal(plan.revision_actions.length, 2);
+  assert.deepEqual(plan.issues, []);
+});
+
 test("missing decisions and no-op replacements fail closed before DOCX writes", () => {
   const undecided = compileContractPlaybookMaterializationPlan(receipt());
   assert.equal(undecided.status, "review_required");

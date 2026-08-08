@@ -35,9 +35,9 @@ export type ContractPlaybookMaterializedDeliverableKey =
 export function isContractPlaybookMaterializedDeliverableKey(
   value: string,
 ): value is ContractPlaybookMaterializedDeliverableKey {
-  return (CONTRACT_PLAYBOOK_MATERIALIZED_DELIVERABLE_KEYS as readonly string[]).includes(
-    value,
-  );
+  return (
+    CONTRACT_PLAYBOOK_MATERIALIZED_DELIVERABLE_KEYS as readonly string[]
+  ).includes(value);
 }
 
 export function buildContractPlaybookMaterializationEffectInput(input: {
@@ -196,13 +196,14 @@ export async function executeContractPlaybookMaterializationStep(input: {
 }) {
   const plan = compileContractPlaybookMaterializationPlan(input.receipt);
   if (plan.status !== "ready") {
-    throw new ContractPlaybookWordMaterializationError(
-      "plan_review_required",
-      { issues: plan.issues },
-    );
+    throw new ContractPlaybookWordMaterializationError("plan_review_required", {
+      issues: plan.issues,
+    });
   }
   if (input.shouldContinue && !(await input.shouldContinue())) {
-    throw new Error("Contract materialization was interrupted before source read");
+    throw new Error(
+      "Contract materialization was interrupted before source read",
+    );
   }
   const sourceBytes = await loadFixedContractBytes(input);
   const documents = await materializeContractPlaybookWordDocuments({
@@ -228,7 +229,9 @@ export async function executeContractPlaybookMaterializationStep(input: {
     receipt: wanted,
   });
   if (input.shouldContinue && !(await input.shouldContinue())) {
-    throw new Error("Contract materialization was interrupted before publication");
+    throw new Error(
+      "Contract materialization was interrupted before publication",
+    );
   }
   const mutationIdentity = persistedIdentity({
     receipt: effect,
@@ -247,13 +250,18 @@ export async function executeContractPlaybookMaterializationStep(input: {
           await generateDocx(
             plan.opinion.title || title,
             sourceCondition
-              ? [plan.opinion.sections[0], sourceCondition, ...plan.opinion.sections.slice(1)]
+              ? [
+                  plan.opinion.sections[0],
+                  sourceCondition,
+                  ...plan.opinion.sections.slice(1),
+                ]
               : plan.opinion.sections,
             input.userId,
             input.db,
             {
               projectId: input.matterId,
               mutationIdentity,
+              filenameTitle: title,
             },
           ),
         )

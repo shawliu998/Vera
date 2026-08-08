@@ -231,7 +231,11 @@ export function compileContractPlaybookMaterializationPlan(
   const unresolved = new Set<string>();
   const spanOwners = new Map<
     string,
-    Array<{ finding_id: string; rule_id: string }>
+    Array<{
+      finding_id: string;
+      rule_id: string;
+      disposition: "accept" | "comment";
+    }>
   >();
 
   for (const finding of receipt.findings.filter((item) => item.material)) {
@@ -255,6 +259,7 @@ export function compileContractPlaybookMaterializationPlan(
     owners.push({
       finding_id: finding.finding_id,
       rule_id: finding.rule_id,
+      disposition: finding.lawyer_disposition,
     });
     spanOwners.set(spanKey, owners);
 
@@ -289,7 +294,14 @@ export function compileContractPlaybookMaterializationPlan(
 
   const conflictingSpans = new Set(
     [...spanOwners.entries()]
-      .filter(([, owners]) => owners.length > 1)
+      // Rule 39 requires a unique span for replacement text. Multiple
+      // comments may safely share one immutable span and are merged into one
+      // native Word comment by the materializer.
+      .filter(
+        ([, owners]) =>
+          owners.length > 1 &&
+          owners.some((owner) => owner.disposition === "accept"),
+      )
       .map(([span]) => span),
   );
   for (const span of conflictingSpans) {
