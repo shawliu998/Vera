@@ -64,6 +64,7 @@ import {
 } from "./agent-kernel/verification/verifierCore";
 import { buildCurrentAgentVerificationPacket } from "./agentTaskVerificationRepository";
 import { buildAgentSourceAcquisitionWorkProductContext } from "./agentSourceAcquisitionWorkProduct";
+import { resolveAgentVerifierProfile } from "./agentPackVerifierRegistry";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -610,13 +611,11 @@ export async function executeAgentStep(input: {
           userId,
           stepId: currentStep.id,
           stepAttempt: currentStep.attempt,
-          profile: {
-            kind: "agent_verifier_profile_v1",
-            id: "generic-current-artifact",
-            version: "1",
-            semantic_goal_check: true,
-            repair_policy: "none",
-          },
+          profile: resolveAgentVerifierProfile(
+            fixedMatterContext?.workflow?.id ??
+              selectedWorkflow?.artifact_id ??
+              null,
+          ),
           citationsRequired:
             stepContract?.source_requirement.citations_required ?? false,
           citationCoverage: verifierCitationCheck ?? {

@@ -237,3 +237,61 @@ test("oversized accepted views become bounded review projections, not failures",
     "verification_scope_exceeded",
   );
 });
+
+test("Contract Pack gaps are appended as structured deterministic checks", async () => {
+  const { reserved, snapshot } = fixture();
+  snapshot.task.deliverables[0]!.key = "review-opinion";
+  snapshot.task.deliverables[0]!.purpose = "Review opinion";
+  snapshot.artifacts[0]!.purpose = "Review opinion";
+  const db = fakeDb({
+    documents: [
+      {
+        id: reserved.target.document_id,
+        user_id: "user-1",
+        project_id: matterId,
+        current_version_id: reserved.target.version_id,
+      },
+    ],
+    versions: [
+      {
+        id: reserved.target.version_id,
+        document_id: reserved.target.document_id,
+        storage_path: "opinion.docx",
+        file_type: "docx",
+        deleted_at: null,
+      },
+    ],
+  });
+  const packet = await buildCurrentAgentVerificationPacket({
+    db: db as never,
+    snapshot,
+    userId: "user-1",
+    stepId: "step-verify",
+    stepAttempt: 1,
+    profile: {
+      kind: "agent_verifier_profile_v1",
+      id: "work_task_contract_docx_v1",
+      version: "1.0.0",
+      semantic_goal_check: true,
+      repair_policy: "none",
+    },
+    citationsRequired: false,
+    citationCoverage: { total: 0, relocatable: 0, missing: 0 },
+    loadAcceptedView: async () => "Current review opinion.",
+  });
+  const check = packet.deterministic_checks.find(
+    (candidate) => candidate.code === "contract-playbook-pack",
+  );
+  assert.equal(check?.status, "gap");
+  assert.equal(check?.issue?.code, "pack_check_gap");
+  assert.deepEqual(
+    check?.issue?.code === "pack_check_gap"
+      ? check.issue.facts
+      : null,
+    {
+      issues: [
+        { code: "receipt_missing", finding_id: null, rule_id: null },
+      ],
+    },
+  );
+});

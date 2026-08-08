@@ -18,6 +18,7 @@ import { extractDocxBodyText } from "./docxTrackedChanges";
 import { spreadsheetToLLMText } from "./spreadsheet";
 import { downloadFile } from "./storage";
 import type { createServerSupabase } from "./supabase";
+import { buildAgentPackDeterministicChecks } from "./agentPackVerifierRegistry";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -439,6 +440,14 @@ export async function buildCurrentAgentVerificationPacket(input: {
       );
     }
   }
+
+  checks.push(
+    ...buildAgentPackDeterministicChecks({
+      profile: input.profile,
+      currentPlan: input.snapshot.task.current_plan,
+      deliverables,
+    }),
+  );
 
   const context = readFixedMatterContext(input.snapshot.task);
   return buildAgentVerificationPacketV1({

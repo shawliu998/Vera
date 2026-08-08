@@ -24,7 +24,7 @@ repeated on the current branch.
 | 5. Effect boundary/lease/transitions | Implemented | effect, lease and atomic transition modules; SQL smoke and real Task recovery | Direct database coupling remains frozen migration debt in five adapter files. |
 | 6. Verifier/repair | Implemented | verifier core, marker repair, repair eligibility, Artifact re-verification | Gold-workflow semantic verifier acceptance remains pending. |
 | 7. Shared Word/Tabular | Partially implemented | exact Task Artifact Version binding; external-edit preservation; partial Tabular cell recovery; Word and Tabular tests | Mac Word manifest is parsed but absent from AppCommands. Clear the complete cache only after Word closes, then perform real Host and Mike/Vera acceptance. |
-| 8. Research connector | Legal and first patent adapter implemented; Task execution seam implemented | provider-neutral connector contract/execution; distinct server-only `source.acquire` Step operation; pin-bound acquisition specification and request compilers; Task-checkpoint search pagination, deduplicated discoveries, coverage/issues, exact selection, ordered selected reads, validated import receipts and idempotent replay; server-owned Step dispatch with no LLM tool sequence; lease- and attempt-fenced atomic progress checkpoints; bounded source-selection endpoint reusing the existing atomic input transition; non-citable discovery versus import-only snapshot separation; CourtListener and EPO OPS Pack adapters; body-consuming central pipeline; idempotent Matter `Document`/`DocumentVersion` importer; generic provenance migration and service-only atomic commit; encrypted current-user EPO OPS credential pair; exact runtime registry with current-user authorization and credential-free receipts; Task-aware current-user acquisition bridge; disconnected-provider resumable pause; unit and local database/storage smokes | Define one explicit Workflow and Task-creation compiler for its pin/spec/initial state, present selection in the existing Work Task surface, run a current-user EPO OPS product gate, decide whether PatSnap adds material licensed coverage, and then run the legal-research product gate before claiming completion. |
+| 8. Research connector | Explicit patent acquisition workflow and product recovery path implemented | provider-neutral connector contract/execution; distinct server-only `source.acquire` Step operation; pin-bound acquisition specification and request compilers; Task-checkpoint search pagination, deduplicated discoveries, coverage/issues, exact lawyer selection, ordered selected reads, validated import receipts and idempotent replay; server-owned Step dispatch with no LLM tool sequence; lease- and attempt-fenced atomic progress checkpoints; bounded source-selection endpoint reusing the existing atomic input transition; non-citable discovery versus import-only snapshot separation; CourtListener and EPO OPS Pack adapters; body-consuming central pipeline; idempotent Matter `Document`/`DocumentVersion` importer; generic provenance migration and service-only atomic commit; encrypted current-user EPO OPS credential pair; exact runtime registry with current-user authorization and credential-free receipts; Task-aware current-user acquisition bridge; explicit `builtin-patent-prior-art-acquisition` manifest and Task compiler; Mike-derived Work Task selection UI; structured missing-credential recovery action; real paused-Task/database idempotency evidence; backend 196-test and frontend 190-test regression gates | Run one current-user EPO OPS success product gate from search through selected import and downstream Word verification; then decide whether PatSnap adds material licensed coverage and run the legal-research product gate before claiming completion. |
 
 The new `dependencyBoundary.test.ts` prevents Kernel production code from
 importing routes, frontend code, or domain Packs. It also freezes the five
@@ -36,13 +36,51 @@ repository interfaces batch by batch, not to rewrite the execution system.
 
 | Domain | Gold workflow | Canonical outputs | Current evidence | Missing acceptance evidence |
 | --- | --- | --- | --- | --- |
-| Contract | `builtin-contract-playbook-review` | revision DOCX, clean DOCX, review opinion DOCX | Pinned first-party manifest, fixed fixture digest, contract verifier profile, Word revision/clean/opinion regressions | Fresh ordinary-user Task through UI; lawyer dispositions; browser review/optional Word handoff; final verification and download without database or OOXML repair. |
+| Contract | `builtin-contract-playbook-review` | revision DOCX, clean DOCX, review opinion DOCX | Pinned first-party manifest and fixture digest; pure Contract Pack context and receipt schemas; exact contract/reference Version binding; stable server-derived finding ids; fixed `accept`/`comment`/`skip` semantics; checklist rule-set binding; deterministic current-opinion/disposition alignment; manifest-selected Pack verifier; structured `pack_check_gap` routed through existing lawyer review; 211-test backend regression | Connect explicit Pack input and structured analysis/decision receipts to Task execution; then run a fresh ordinary-user Task through UI, browser review/optional Word handoff, final verification and download without database or OOXML repair. |
 | Patent | `builtin-patentability-assessment` | feature-chart Tabular Review/XLSX and cited memo DOCX | Pinned first-party manifest and fixed two-artifact contract; deterministic synthetic target-claim and prior-art DOCX sources with continuous-quote expectations and explicit coverage gaps | Run the fixture as a fresh Task, then prove both outputs, source navigation and unresolved-gap preservation. |
 | Litigation | `builtin-litigation-hearing-preparation` | evidence inventory, objection opinion, hearing outline | Pinned first-party manifest, locked synthetic litigation DOCX, partial-cell recovery regression | Fresh first-instance, represented-side fixture import; all three outputs in one Task; direct source/page checks; exhausted-cell recovery; lawyer review and download. |
 
 All three must execute through the same Matter, AgentTask/Step, ArtifactLink,
 Citation, Tabular Review, Review Decision, Word and export contracts. Passing a
 manifest build or a model call alone is not an end-to-end pass.
+
+## Contract and litigation Pack convergence audit
+
+Before this convergence slice, the clean integration branch contained provider
+Packs only. Contract and litigation manifests described strong domain rules,
+but those rules were not represented as server-owned Pack schemas and
+validators. The Contract gap is now partially closed below; Litigation remains
+prompt-only. A prompt can ask a model to preserve a disposition or evidence
+axis, but cannot prove that the persisted work product did so.
+
+A read-only inventory of the preserved dirty worktree found useful, untracked
+domain experiments. They are source evidence, not accepted implementation:
+
+| Candidate slice | Current classification | Migration rule |
+| --- | --- | --- |
+| `contractPlaybookDecisionReceipt.ts` | Extract, do not copy whole | Preserve its strict rule identity, version, outcome, citation and `accept`/`comment`/`skip` schemas. Separate pure Pack contracts from legacy Task checkpoint readers and compatibility parsing. |
+| `contractPlaybookOpinion.ts` | Extract deterministic validator | Preserve opinion-to-disposition alignment. Keep DOCX rendering in the shared Artifact materializer rather than the Pack contract. |
+| `contractPlaybookWordTask.ts` | Adapter evidence only | Reuse exact source-span, current-Version, Matter, idempotency and external-edit invariants through shared Word/effect interfaces. Do not import its database/storage orchestration into the Pack. |
+| `litigationEvidenceInventoryFields.ts` | Extract and normalize | Preserve single-axis field boundaries and exact citation validation. Replace prompt-only prohibitions with typed output schemas and deterministic issue codes. |
+| `litigationEvidenceInventory.ts` | Split Pack from adapter | Preserve one Task-owned Tabular Review, deterministic row identity, source pins and partial-cell recovery. Move persistence behind the existing Tabular/effect boundary. |
+| `litigationEvidenceInventoryGeneration.ts` | Bounded model adapter evidence | Preserve per-cell source-bound generation and reviewable gap outcome. Replace direct settings/provider/database coupling with Kernel execution inputs and structured outcomes. |
+| legacy litigation routes/pages/stores | Quarantine | Do not migrate. Shared Mike shell, Matter, Work Task, Tabular Review, Word and Artifact surfaces remain authoritative. |
+
+The first implementation slice is therefore a pure Contract Pack contract and
+deterministic disposition/opinion validator. It must import Kernel contracts or
+pure utilities only, create no route/table/page, and carry no provider or
+database dependency. The second slice applies the same boundary to Litigation.
+
+That first pure slice is now implemented under `agent-packs/contract`. The
+manifest verifier profile is resolved by a provider-neutral registry and the
+current verification packet receives one structured `pack_check_gap` when the
+receipt, lawyer disposition or opinion alignment is missing or invalid. The
+generic verifier cannot clear that gap; the existing Artifact remains current
+and the Task completes into the lawyer-review path. The explicit context
+compiler also proves the contract/reference roles and exact Versions without
+guessing from filenames. Task submission and analysis must still persist those
+structured inputs and the compiled receipt before the Contract gold flow can be
+claimed.
 
 ## Legacy cleanup rule
 
@@ -65,13 +103,18 @@ preserved release capabilities.
 
 ## Next execution order
 
-1. Compile one explicit patent source-acquisition Workflow into a fixed
-   connector pin, acquisition spec and initial Task checkpoint; keep ordinary
-   patent analysis Tasks offline and fixed-source-only.
-2. Run the acquisition flow with the current user's EPO OPS credentials and
-   database, then add its bounded selection state to the existing Work Task UI
-   using the Mike acceptance process.
-3. When Word is closed, complete Batch 7 Host activation and visual acceptance.
-4. Run fresh contract, patentability and litigation Tasks through the product
-   UI, then use that gold-flow evidence to remove legacy Aletheia slices
-   incrementally.
+1. Connect explicit Contract Pack input, rule-set binding, structured analysis
+   receipt and lawyer dispositions to the existing Task/Required Input flow.
+2. Run the contract gold workflow through browser review and optional Word
+   handoff, then repair only gaps demonstrated by that run.
+3. Extract the Litigation Pack field/row contracts and per-cell reviewable-gap
+   outcome; integrate one Task-owned Evidence Inventory through the existing
+   Tabular Review surface.
+4. Run the litigation gold workflow, including direct source navigation and an
+   exhausted-cell recovery, before removing any legacy litigation slice.
+5. Run the current-user EPO OPS success gate when credentials are available,
+   from search through selected import and downstream Word verification.
+6. When Word is closed, complete Batch 7 Host activation and visual acceptance.
+7. Reconcile the preserved dirty worktree only after each replacement slice has
+   passed its gold workflow; preserve browser Word, the Word add-in, Matter,
+   Artifact, Citation, Tabular Review and review/export capabilities.

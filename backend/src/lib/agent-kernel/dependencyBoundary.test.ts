@@ -121,3 +121,27 @@ test("Patent Packs stay outside persistence, routes, and the retired parallel su
   }
   assert.deepEqual(violations, []);
 });
+
+test("Contract Packs remain pure domain contracts without persistence, routes, or providers", async () => {
+  const contractRoot = path.resolve(kernelRoot, "../agent-packs/contract");
+  const violations: string[] = [];
+  for (const file of await productionFiles(contractRoot)) {
+    const source = await readFile(file, "utf8");
+    for (const specifier of imports(source)) {
+      if (
+        /(?:^|\/)routes(?:\/|$)/.test(specifier) ||
+        /(?:^|\/)supabase$/.test(specifier) ||
+        /(?:^|\/)llm(?:\/|$)/.test(specifier) ||
+        /(?:^|\/)userSettings$/.test(specifier) ||
+        /(?:^|\/)storage$/.test(specifier)
+      ) {
+        violations.push(`${path.basename(file)} -> ${specifier}`);
+      }
+    }
+    const lines = source.split(/\r?\n/).length;
+    if (lines > 600) {
+      violations.push(`${path.basename(file)} has ${lines} lines`);
+    }
+  }
+  assert.deepEqual(violations, []);
+});
