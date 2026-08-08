@@ -14,7 +14,12 @@ import {
   submitAgentTaskInput,
   updateAgentTaskExecutionModel,
 } from "../lib/agentTasks";
-import { submitAgentTaskSourceSelection } from "../lib/agentTaskSourceSelection";
+import {
+  AgentTaskSourceSelectionError,
+  submitAgentTaskSourceSelection,
+} from "../lib/agentTaskSourceSelection";
+import { AgentTaskSourceAcquisitionInputError } from "../lib/agentTaskSourceAcquisitionCompiler";
+import { compileAgentTaskCreationContract } from "../lib/agentTaskCreationCompiler";
 import {
   cancelAgentTaskRunner,
   wakeAgentTaskRunner,
@@ -22,10 +27,7 @@ import {
 import { createServerSupabase } from "../lib/supabase";
 import { requireAuth } from "../middleware/auth";
 import { DEFAULT_MAIN_MODEL, isSupportedModel } from "../lib/llm";
-import {
-  buildServerOwnedTaskPlan,
-  resolveAgentWorkflowConstraint,
-} from "../lib/agentTaskPlanner";
+import { resolveAgentWorkflowConstraint } from "../lib/agentTaskPlanner";
 import {
   captureApprovedArtifacts,
   getApprovalBlockers,
@@ -38,16 +40,6 @@ import { getAgentTaskEvidence } from "../lib/agentTaskEvidence";
 import { MatterContextInvalidError } from "../lib/agent-kernel/context/matterContext";
 import { isAgentTaskStateTransitionError } from "../lib/agent-kernel/execution/taskTransition";
 import { compileFixedMatterContext } from "../lib/agent-kernel/context/matterContextRepository";
-import {
-  buildAgentTaskContractCheckpoint,
-  compileAgentGoalSpec,
-  normalizeAgentTaskArtifactContracts,
-} from "../lib/agent-kernel/contracts/taskContract";
-import { compileAgentStepContracts } from "../lib/agent-kernel/contracts/stepContract";
-import {
-  resolveAgentStepCapabilityGrant,
-  WORK_TASK_HOST_TOOL_NAMES,
-} from "../lib/agent-kernel/capability/stepCapability";
 import {
   AgentTaskWordArtifactError,
   agentTaskWordArtifactErrorBody,
@@ -65,14 +57,20 @@ function routeError(
     error instanceof Error ? error.message : "Agent task request failed";
   const status = isAgentTaskStateTransitionError(error)
     ? 503
-    : error instanceof MatterContextInvalidError
+    : error instanceof AgentTaskSourceSelectionError
+      ? error.code === "source_selection_invalid"
+        ? 400
+        : 409
+    : error instanceof AgentTaskSourceAcquisitionInputError
       ? 400
-      : detail.startsWith("Only a") ||
-          /cannot continue safely|still closing|review state changed|no longer matches|only after task completion/i.test(
-            detail,
-          )
-        ? 409
-        : 500;
+      : error instanceof MatterContextInvalidError
+        ? 400
+        : detail.startsWith("Only a") ||
+            /cannot continue safely|still closing|review state changed|no longer matches|only after task completion/i.test(
+              detail,
+            )
+          ? 409
+          : 500;
   res.status(status).json({ detail });
 }
 
@@ -160,61 +158,21 @@ agentTasksRouter.post("/", requireAuth, async (req, res) => {
       documentIds,
       workflow,
     });
-    const serverPlan = buildServerOwnedTaskPlan({
+    const compiledTask = compileAgentTaskCreationContract({
       goal,
-      hasSources: documentIds.length > 0,
       workflowId: workflowId || undefined,
       workflowType: workflow?.type,
-    });
-    const artifactContracts = normalizeAgentTaskArtifactContracts(
-      serverPlan.plan.deliverables,
-    );
-    const goalSpec = compileAgentGoalSpec({
-      objective: goal,
-      taskFamily: serverPlan.taskFamily,
-      artifactContracts,
-      hasSources: documentIds.length > 0,
-      jurisdictions: serverPlan.manifest?.jurisdictions ?? [],
-      sourceStandard: serverPlan.manifest
-        ? {
-            material_claims_require_citations:
-              serverPlan.manifest.source_standard
-                .material_claims_require_citations,
-            authority_required:
-              serverPlan.manifest.source_standard.authority_required,
-            authority_as_of_required:
-              serverPlan.manifest.source_standard.authority_as_of_required,
-          }
-        : undefined,
-      mustAskWhen: serverPlan.manifest?.must_ask_when,
-      completionChecks: serverPlan.manifest?.completion_checks,
-    });
-    const stepContracts = compileAgentStepContracts({
-      steps: serverPlan.plan.steps,
-      goalSpec,
-      artifactContracts,
-      contextManifest: fixedMatterContext,
-    });
-    const capabilityGrants = stepContracts.steps.map((contract) =>
-      resolveAgentStepCapabilityGrant({
-        contract,
-        availableToolNames: WORK_TASK_HOST_TOOL_NAMES,
-      }),
-    );
-    const initialCheckpoint = buildAgentTaskContractCheckpoint({
-      goalSpec,
-      contextManifest: fixedMatterContext,
-      stepContracts,
-      capabilityGrants,
+      fixedMatterContext,
+      sourceAcquisitionRequest: req.body?.source_acquisition,
     });
     const snapshot = await createAgentTask(db, {
       userId,
       matterId,
       goal,
       executionModel: model,
-      plan: serverPlan.plan.steps,
-      deliverables: artifactContracts,
-      initialCheckpoint,
+      plan: compiledTask.plan.steps,
+      deliverables: compiledTask.artifactContracts,
+      initialCheckpoint: compiledTask.initialCheckpoint,
       initialArtifacts: [
         ...documentIds.map((documentId) => ({
           artifact_type: "document" as const,

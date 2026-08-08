@@ -63,6 +63,7 @@ import {
   type AgentVerificationResultV1,
 } from "./agent-kernel/verification/verifierCore";
 import { buildCurrentAgentVerificationPacket } from "./agentTaskVerificationRepository";
+import { buildAgentSourceAcquisitionWorkProductContext } from "./agentSourceAcquisitionWorkProduct";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -129,6 +130,10 @@ function taskPrompt(
       : creationKind === "draft"
         ? "Create exactly the declared Word deliverable for this step with generate_docx. Do not create a spreadsheet or any undeclared output."
         : "Read or analyze only for this step. Do not call document-generation tools and do not create artifacts; return a concise checkpoint for the next step.";
+  const sourceAcquisitionContext =
+    buildAgentSourceAcquisitionWorkProductContext(
+      snapshot.task.latest_checkpoint,
+    );
   return [
     `WORK TASK GOAL\n${snapshot.task.goal}`,
     `CURRENT STEP\n${currentStep?.title ?? "Complete the current step"}\nExpected output: ${currentStep?.expected_output ?? "Complete the requested work."}`,
@@ -136,6 +141,7 @@ function taskPrompt(
       ? `REQUIRED DELIVERABLES\n${deliverables.join("\n")}`
       : "REQUIRED DELIVERABLES\nNone declared.",
     workflowInstruction ? `SELECTED MIKE WORKFLOW\n${workflowInstruction}` : "",
+    sourceAcquisitionContext ?? "",
     currentSupplement
       ? [
           "USER SUPPLEMENTAL INPUT FOR THIS STEP",

@@ -17,8 +17,7 @@ const COLLECTIONS = [
   { key: "tabular", directory: "tabular-review-workflows" },
 ];
 const SKILL_MANIFEST_SCHEMA_VERSION = "skill_manifest_v1";
-const CONTRACT_PLAYBOOK_REVIEW_WORKFLOW_ID =
-  "builtin-contract-playbook-review";
+const CONTRACT_PLAYBOOK_REVIEW_WORKFLOW_ID = "builtin-contract-playbook-review";
 const LITIGATION_HEARING_PREPARATION_WORKFLOW_ID =
   "builtin-litigation-hearing-preparation";
 const LITIGATION_CASE_MAP_WORKFLOW_ID = "builtin-litigation-case-map";
@@ -29,11 +28,12 @@ const PATENT_CLAIM_COMPARISON_WORKFLOW_ID = "builtin-patent-claim-comparison";
 const PATENT_FTO_SCREENING_WORKFLOW_ID = "builtin-patent-fto-screening";
 const PATENT_INFRINGEMENT_ANALYSIS_WORKFLOW_ID =
   "builtin-patent-infringement-analysis";
-const PATENT_INVALIDITY_SEARCH_WORKFLOW_ID =
-  "builtin-patent-invalidity-search";
-const PATENTABILITY_ASSESSMENT_WORKFLOW_ID =
-  "builtin-patentability-assessment";
-const USPTO_OFFICE_ACTION_RESPONSE_WORKFLOW_ID = "builtin-uspto-office-action-response";
+const PATENT_INVALIDITY_SEARCH_WORKFLOW_ID = "builtin-patent-invalidity-search";
+const PATENT_PRIOR_ART_ACQUISITION_WORKFLOW_ID =
+  "builtin-patent-prior-art-acquisition";
+const PATENTABILITY_ASSESSMENT_WORKFLOW_ID = "builtin-patentability-assessment";
+const USPTO_OFFICE_ACTION_RESPONSE_WORKFLOW_ID =
+  "builtin-uspto-office-action-response";
 const KERNEL_CAPABILITIES = [
   "analyze",
   "create_draft",
@@ -88,13 +88,11 @@ const FORBIDDEN_SKILL_INSTRUCTIONS = [
   },
   {
     kind: "curl pipe shell",
-    pattern:
-      /\b(?:curl|wget)\b[^\n|]{0,500}\|\s*(?:ba)?sh\b/i,
+    pattern: /\b(?:curl|wget)\b[^\n|]{0,500}\|\s*(?:ba)?sh\b/i,
   },
   {
     kind: "chmod execution",
-    pattern:
-      /\bchmod\s+\+x\b[^\n]*(?:&&|;)\s*(?:\.{0,2}\/|~\/|\/)/i,
+    pattern: /\bchmod\s+\+x\b[^\n]*(?:&&|;)\s*(?:\.{0,2}\/|~\/|\/)/i,
   },
   {
     kind: "download chmod invoke",
@@ -200,7 +198,11 @@ function assertUniqueStringArray(value, label, { allowEmpty = false } = {}) {
   }
 }
 
-function assertRepositoryFixturePath(value, label, repositoryRoot = REPOSITORY_ROOT) {
+function assertRepositoryFixturePath(
+  value,
+  label,
+  repositoryRoot = REPOSITORY_ROOT,
+) {
   if (
     value !== value.trim() ||
     value.includes("\\") ||
@@ -270,8 +272,11 @@ function fixtureSha256(value, label, repositoryRoot = REPOSITORY_ROOT) {
   return sha256(
     entries
       .sort((left, right) =>
-        left.relativePath < right.relativePath ? -1 :
-        left.relativePath > right.relativePath ? 1 : 0,
+        left.relativePath < right.relativePath
+          ? -1
+          : left.relativePath > right.relativePath
+            ? 1
+            : 0,
       )
       .map(({ relativePath, digest }) => `${relativePath}\0${digest}`)
       .join("\n"),
@@ -663,6 +668,9 @@ function validateLock(lock) {
         "minimumDocuments",
         "provenance",
         "requiredCapabilities",
+        ...(profile.sourceAcquisition === undefined
+          ? []
+          : ["sourceAcquisition"]),
         "sourcePath",
         "sourceStandard",
         "taskFamily",
@@ -695,16 +703,26 @@ function validateLock(lock) {
     if (!/^\d+\.\d+\.\d+$/.test(profile.version ?? "")) {
       fail(`${label}.version must be a fixed semantic version`);
     }
-    if (!Number.isInteger(profile.minimumDocuments) || profile.minimumDocuments < 1) {
+    if (
+      !Number.isInteger(profile.minimumDocuments) ||
+      profile.minimumDocuments < 1
+    ) {
       fail(`${label}.minimumDocuments must be a positive integer`);
     }
     const expectedMinimumDocuments =
-      profile.id === PATENT_CLAIM_COMPARISON_WORKFLOW_ID ? 2 :
-      profile.id === PATENT_FTO_SCREENING_WORKFLOW_ID ? 2 :
-      profile.id === PATENT_INFRINGEMENT_ANALYSIS_WORKFLOW_ID ? 2 :
-      profile.id === PATENT_INVALIDITY_SEARCH_WORKFLOW_ID ? 2 :
-      profile.id === PATENTABILITY_ASSESSMENT_WORKFLOW_ID ? 2 :
-      profile.id === USPTO_OFFICE_ACTION_RESPONSE_WORKFLOW_ID ? 3 : 1;
+      profile.id === PATENT_CLAIM_COMPARISON_WORKFLOW_ID
+        ? 2
+        : profile.id === PATENT_FTO_SCREENING_WORKFLOW_ID
+          ? 2
+          : profile.id === PATENT_INFRINGEMENT_ANALYSIS_WORKFLOW_ID
+            ? 2
+            : profile.id === PATENT_INVALIDITY_SEARCH_WORKFLOW_ID
+              ? 2
+              : profile.id === PATENTABILITY_ASSESSMENT_WORKFLOW_ID
+                ? 2
+                : profile.id === USPTO_OFFICE_ACTION_RESPONSE_WORKFLOW_ID
+                  ? 3
+                  : 1;
     if (profile.minimumDocuments !== expectedMinimumDocuments) {
       fail(`${label}.minimumDocuments must match its fixed input contract`);
     }
@@ -771,7 +789,7 @@ function validateLock(lock) {
             ["contract-clean", "draft", "docx"],
             ["review-opinion", "draft", "docx"],
           ]
-          : profile.id === LITIGATION_HEARING_PREPARATION_WORKFLOW_ID
+        : profile.id === LITIGATION_HEARING_PREPARATION_WORKFLOW_ID
           ? [
               ["evidence-inventory", "tabular_review", "xlsx"],
               ["evidence-objection-opinion", "draft", "docx"],
@@ -782,29 +800,46 @@ function validateLock(lock) {
                 ["evidence-inventory", "tabular_review", "xlsx"],
                 ["first-instance-case-map", "draft", "docx"],
               ]
-          : profile.id === LITIGATION_JUDGMENT_APPEAL_ASSESSMENT_WORKFLOW_ID
-            ? [["judgment-appeal-assessment", "draft", "docx"]]
-          : profile.id === MATTER_TIMELINE_WORKFLOW_ID
-            ? [["matter-timeline", "tabular_review", "xlsx"]]
-          : profile.id === USPTO_OFFICE_ACTION_RESPONSE_WORKFLOW_ID
-            ? [["office-action-response", "draft", "docx"]]
-          : profile.id === PATENT_CLAIM_COMPARISON_WORKFLOW_ID
-            ? [["claim-comparison-chart", "draft", "docx"]]
-          : profile.id === PATENT_FTO_SCREENING_WORKFLOW_ID
-            ? [["fto-screening-report", "draft", "docx"]]
-          : profile.id === PATENT_INFRINGEMENT_ANALYSIS_WORKFLOW_ID
-            ? [["infringement-analysis-report", "draft", "docx"]]
-          : profile.id === PATENTABILITY_ASSESSMENT_WORKFLOW_ID
-            ? [
-                ["patentability-feature-chart", "tabular_review", "xlsx"],
-                ["patentability-memo", "draft", "docx"],
-              ]
-          : profile.id === PATENT_INVALIDITY_SEARCH_WORKFLOW_ID
-            ? [
-                ["invalidity-claim-chart", "tabular_review", "xlsx"],
-                ["invalidity-screening-memo", "draft", "docx"],
-              ]
-          : [["cited-research-memo", "draft", "docx"]];
+            : profile.id === LITIGATION_JUDGMENT_APPEAL_ASSESSMENT_WORKFLOW_ID
+              ? [["judgment-appeal-assessment", "draft", "docx"]]
+              : profile.id === MATTER_TIMELINE_WORKFLOW_ID
+                ? [["matter-timeline", "tabular_review", "xlsx"]]
+                : profile.id === USPTO_OFFICE_ACTION_RESPONSE_WORKFLOW_ID
+                  ? [["office-action-response", "draft", "docx"]]
+                  : profile.id === PATENT_CLAIM_COMPARISON_WORKFLOW_ID
+                    ? [["claim-comparison-chart", "draft", "docx"]]
+                    : profile.id === PATENT_FTO_SCREENING_WORKFLOW_ID
+                      ? [["fto-screening-report", "draft", "docx"]]
+                      : profile.id === PATENT_INFRINGEMENT_ANALYSIS_WORKFLOW_ID
+                        ? [["infringement-analysis-report", "draft", "docx"]]
+                        : profile.id === PATENTABILITY_ASSESSMENT_WORKFLOW_ID
+                          ? [
+                              [
+                                "patentability-feature-chart",
+                                "tabular_review",
+                                "xlsx",
+                              ],
+                              ["patentability-memo", "draft", "docx"],
+                            ]
+                          : profile.id === PATENT_INVALIDITY_SEARCH_WORKFLOW_ID
+                            ? [
+                                [
+                                  "invalidity-claim-chart",
+                                  "tabular_review",
+                                  "xlsx",
+                                ],
+                                ["invalidity-screening-memo", "draft", "docx"],
+                              ]
+                            : profile.id ===
+                                PATENT_PRIOR_ART_ACQUISITION_WORKFLOW_ID
+                              ? [
+                                  [
+                                    "prior-art-acquisition-record",
+                                    "draft",
+                                    "docx",
+                                  ],
+                                ]
+                              : [["cited-research-memo", "draft", "docx"]];
     if (profile.artifactContracts.length !== expectedContracts.length) {
       fail(`${label}.artifactContracts must declare the fixed deliverables`);
     }
@@ -889,6 +924,7 @@ function validateLock(lock) {
       profile.id !== PATENT_FTO_SCREENING_WORKFLOW_ID &&
       profile.id !== PATENT_INFRINGEMENT_ANALYSIS_WORKFLOW_ID &&
       profile.id !== PATENT_INVALIDITY_SEARCH_WORKFLOW_ID &&
+      profile.id !== PATENT_PRIOR_ART_ACQUISITION_WORKFLOW_ID &&
       profile.id !== PATENTABILITY_ASSESSMENT_WORKFLOW_ID &&
       profile.id !== USPTO_OFFICE_ACTION_RESPONSE_WORKFLOW_ID &&
       (profile.sourceStandard.authorityRequired !== true ||
@@ -905,12 +941,53 @@ function validateLock(lock) {
         profile.id === PATENT_FTO_SCREENING_WORKFLOW_ID ||
         profile.id === PATENT_INFRINGEMENT_ANALYSIS_WORKFLOW_ID ||
         profile.id === PATENT_INVALIDITY_SEARCH_WORKFLOW_ID ||
+        profile.id === PATENT_PRIOR_ART_ACQUISITION_WORKFLOW_ID ||
         profile.id === PATENTABILITY_ASSESSMENT_WORKFLOW_ID ||
         profile.id === USPTO_OFFICE_ACTION_RESPONSE_WORKFLOW_ID) &&
       (profile.sourceStandard.authorityRequired !== false ||
         profile.sourceStandard.authorityAsOfRequired !== false)
     ) {
-      fail(`${label}.sourceStandard must not imply unavailable authority research`);
+      fail(
+        `${label}.sourceStandard must not imply unavailable authority research`,
+      );
+    }
+    if (
+      (profile.id === PATENT_PRIOR_ART_ACQUISITION_WORKFLOW_ID) !==
+      (profile.sourceAcquisition !== undefined)
+    ) {
+      fail(
+        `${label}.sourceAcquisition is reserved for the prior-art acquisition Workflow`,
+      );
+    }
+    if (profile.sourceAcquisition !== undefined) {
+      assertExactObjectKeys(
+        profile.sourceAcquisition,
+        [
+          "connectorId",
+          "maximumPages",
+          "maximumSelections",
+          "pageSize",
+          "schemaVersion",
+        ],
+        `${label}.sourceAcquisition`,
+      );
+      if (
+        profile.sourceAcquisition.schemaVersion !==
+          "provider_source_acquisition_requirement_v1" ||
+        profile.sourceAcquisition.connectorId !==
+          "patent.epo-ops.publications" ||
+        profile.sourceAcquisition.maximumPages !== 3 ||
+        profile.sourceAcquisition.pageSize !== 25 ||
+        profile.sourceAcquisition.maximumSelections !== 10
+      ) {
+        fail(`${label}.sourceAcquisition must preserve the fixed EPO scope`);
+      }
+      if (
+        JSON.stringify(profile.requiredCapabilities) !==
+        JSON.stringify(["read_sources", "create_draft", "verify"])
+      ) {
+        fail(`${label}.requiredCapabilities must acquire, draft, then verify`);
+      }
     }
     assertUniqueStringArray(
       profile.completionChecks,
@@ -931,10 +1008,7 @@ function validateLock(lock) {
       allowEmpty: true,
     });
     profile.fixtures.forEach((fixture, index) =>
-      assertRepositoryFixturePath(
-        fixture,
-        `${label}.fixtures[${index}]`,
-      ),
+      assertRepositoryFixturePath(fixture, `${label}.fixtures[${index}]`),
     );
     if (
       !profile.fixtureSha256 ||
@@ -1039,7 +1113,9 @@ function validateLock(lock) {
   }
   for (const slug of selectedWorkflowTypes.keys()) {
     if (!Object.hasOwn(manifestPolicy.workflows, slug)) {
-      fail(`lock.skillManifest.workflows is missing selected workflow "${slug}"`);
+      fail(
+        `lock.skillManifest.workflows is missing selected workflow "${slug}"`,
+      );
     }
   }
   for (const slug of Object.keys(manifestPolicy.workflows)) {
@@ -1133,9 +1209,7 @@ function validateLock(lock) {
       );
     }
     const unrelatedCreationCapability =
-      expectedCapability === "create_draft"
-        ? "create_tabular"
-        : "create_draft";
+      expectedCapability === "create_draft" ? "create_tabular" : "create_draft";
     if (profile.requiredCapabilities.includes(unrelatedCreationCapability)) {
       fail(
         `${label}.requiredCapabilities cannot declare unrelated "${unrelatedCreationCapability}"`,
@@ -1358,7 +1432,10 @@ function readFirstPartyWorkflow(repositoryRoot, slug, profile) {
   }
   assertString(metadata.author, `${label}.metadata.author`);
   assertString(metadata.language, `${label}.metadata.language`);
-  assertString(metadata["vera-display-name"], `${label}.metadata.vera-display-name`);
+  assertString(
+    metadata["vera-display-name"],
+    `${label}.metadata.vera-display-name`,
+  );
   if (metadata["vera-type"] !== "assistant") {
     fail(`${label}.metadata.vera-type must be "assistant"`);
   }
@@ -1491,12 +1568,7 @@ function buildSkillManifestPayload(workflow, lock) {
       matter_scoped: true,
       minimum_documents: firstPartyProfile?.minimumDocuments ?? 1,
       pinned_document_versions_required: true,
-      accepted_document_roles: [
-        "source",
-        "template",
-        "precedent",
-        "authority",
-      ],
+      accepted_document_roles: ["source", "template", "precedent", "authority"],
       unfixed_client_content_allowed: false,
     },
     required_capabilities: [...profile.requiredCapabilities],
@@ -1522,6 +1594,18 @@ function buildSkillManifestPayload(workflow, lock) {
           ),
         }
       : {}),
+    ...(firstPartyProfile?.sourceAcquisition
+      ? {
+          source_acquisition: {
+            schema_version: firstPartyProfile.sourceAcquisition.schemaVersion,
+            connector_id: firstPartyProfile.sourceAcquisition.connectorId,
+            maximum_pages: firstPartyProfile.sourceAcquisition.maximumPages,
+            page_size: firstPartyProfile.sourceAcquisition.pageSize,
+            maximum_selections:
+              firstPartyProfile.sourceAcquisition.maximumSelections,
+          },
+        }
+      : {}),
     source_standard: {
       pinned_document_versions_required:
         firstPartyProfile?.sourceStandard.pinnedDocumentVersionsRequired ??
@@ -1538,9 +1622,7 @@ function buildSkillManifestPayload(workflow, lock) {
     completion_checks: [...profile.completionChecks],
     verifier_profile: profile.verifierProfile,
     fixtures: firstPartyProfile ? [...firstPartyProfile.fixtures] : [],
-    dependencies: firstPartyProfile
-      ? [...firstPartyProfile.dependencies]
-      : [],
+    dependencies: firstPartyProfile ? [...firstPartyProfile.dependencies] : [],
     deprecation: {
       deprecated: false,
       replacement_id: null,
@@ -1565,6 +1647,7 @@ function buildSkillManifest(workflow, lock) {
     capability_effect: payload.capability_effect,
     artifact_contract: payload.artifact_contract,
     artifact_contracts: payload.artifact_contracts,
+    source_acquisition: payload.source_acquisition,
     source_standard: payload.source_standard,
     must_ask_when: payload.must_ask_when,
     completion_checks: payload.completion_checks,
@@ -1598,7 +1681,7 @@ function buildArtifacts(activeWorkflows, manifestWorkflows, lock) {
   const skillManifests = manifestWorkflows.map((workflow) =>
     buildSkillManifest(workflow, lock),
   );
-  const backendText = `// This file is generated by scripts/build-workflows.js. Do not edit it directly.\n\nexport type SystemWorkflowContributor = {\n    name: string;\n    organisation: string | null;\n    role: string | null;\n    linkedin: string | null;\n};\n\nexport type SystemWorkflowMetadata = {\n    title: string;\n    description: string;\n    type: "assistant" | "tabular";\n    contributors: SystemWorkflowContributor[];\n    language: string;\n    version: string;\n    practice: string | null;\n    jurisdictions: string[] | null;\n};\n\nexport type SystemWorkflow = {\n    id: string;\n    user_id: null;\n    is_system: true;\n    created_at: string;\n    metadata: SystemWorkflowMetadata;\n    skill_md: string | null;\n    columns_config: { index: number; name: string; format?: string; prompt: string; tags?: string[] }[] | null;\n    execution_mode?: "work_task";\n};\n\nexport type SkillManifestCapability = "analyze" | "create_draft" | "create_tabular" | "read_sources" | "verify";\nexport type SkillManifestGoalProfile = "contract_review" | "compare" | "extract" | "draft" | "proofread" | "generic" | "research";\nexport type SkillManifestCompletionCheck = "deliverables_present" | "goal_covered" | "source_supported" | "citations_relocatable" | "steps_complete";\nexport type SkillManifestMustAskReason = "missing_source" | "missing_fact" | "evidence_conflict" | "legal_judgment" | "source_version_changed" | "material_scope_change" | "consequential_action";\n\nexport type SkillManifestV1 = {\n    schema_version: "skill_manifest_v1";\n    id: string;\n    version: string;\n    title: string;\n    license: "MIT" | "AGPL-3.0-only";\n    provenance:\n        | { repository: string; commit: string; path: string }\n        | { source: string; revision: string; path: string };\n    content_digest: \`sha256:\${string}\`;\n    task_families: SkillManifestGoalProfile[];\n    jurisdictions: string[];\n    input_contract: {\n        matter_scoped: true;\n        minimum_documents: number;\n        pinned_document_versions_required: true;\n        accepted_document_roles: ("source" | "template" | "precedent" | "authority")[];\n        unfixed_client_content_allowed: false;\n    };\n    required_capabilities: SkillManifestCapability[];\n    capability_effect: "requirements_only";\n    artifact_contract: {\n        artifact_type: "draft" | "tabular_review";\n        kind: "document";\n        format: "docx" | "xlsx";\n        operation: "create";\n        required: boolean;\n    };\n    artifact_contracts?: {\n        key: string;\n        artifact_type: "draft" | "tabular_review";\n        kind: "document";\n        format: "docx" | "xlsx";\n        operation: "create";\n        required: boolean;\n    }[];\n    source_standard: {\n        pinned_document_versions_required: true;\n        material_claims_require_citations: true;\n        authority_required: boolean;\n        authority_as_of_required: boolean;\n    };\n    must_ask_when: SkillManifestMustAskReason[];\n    completion_checks: SkillManifestCompletionCheck[];\n    verifier_profile: string;\n    fixtures: string[];\n    dependencies: string[];\n    deprecation: { deprecated: boolean; replacement_id: string | null };\n};\n\nexport const SYSTEM_WORKFLOWS: SystemWorkflow[] = ${formatTs(systemWorkflows)};\n\nexport const SYSTEM_WORKFLOW_IDS = new Set(SYSTEM_WORKFLOWS.map((wf) => wf.id));\n\nexport const SYSTEM_ASSISTANT_WORKFLOWS: { id: string; title: string; skill_md: string }[] = ${formatTs(systemAssistantWorkflows)};\n\n// Declarative requirements only. A Task-scoped resolver must intersect these with Kernel, Pack,\n// Provider, Connector, Matter/version, and consequential-action policy; this export grants nothing.\nexport const SYSTEM_SKILL_MANIFESTS: SkillManifestV1[] = ${formatTs(skillManifests)};\n\nexport const SYSTEM_SKILL_MANIFEST_BY_WORKFLOW_ID = new Map(\n    SYSTEM_SKILL_MANIFESTS.map((manifest) => [manifest.id, manifest] as const),\n);\n`;
+  const backendText = `// This file is generated by scripts/build-workflows.js. Do not edit it directly.\n\nexport type SystemWorkflowContributor = {\n    name: string;\n    organisation: string | null;\n    role: string | null;\n    linkedin: string | null;\n};\n\nexport type SystemWorkflowMetadata = {\n    title: string;\n    description: string;\n    type: "assistant" | "tabular";\n    contributors: SystemWorkflowContributor[];\n    language: string;\n    version: string;\n    practice: string | null;\n    jurisdictions: string[] | null;\n};\n\nexport type SystemWorkflow = {\n    id: string;\n    user_id: null;\n    is_system: true;\n    created_at: string;\n    metadata: SystemWorkflowMetadata;\n    skill_md: string | null;\n    columns_config: { index: number; name: string; format?: string; prompt: string; tags?: string[] }[] | null;\n    execution_mode?: "work_task";\n};\n\nexport type SkillManifestCapability = "analyze" | "create_draft" | "create_tabular" | "read_sources" | "verify";\nexport type SkillManifestGoalProfile = "contract_review" | "compare" | "extract" | "draft" | "proofread" | "generic" | "research";\nexport type SkillManifestCompletionCheck = "deliverables_present" | "goal_covered" | "source_supported" | "citations_relocatable" | "steps_complete";\nexport type SkillManifestMustAskReason = "missing_source" | "missing_fact" | "evidence_conflict" | "legal_judgment" | "source_version_changed" | "material_scope_change" | "consequential_action";\n\nexport type SkillManifestV1 = {\n    schema_version: "skill_manifest_v1";\n    id: string;\n    version: string;\n    title: string;\n    license: "MIT" | "AGPL-3.0-only";\n    provenance:\n        | { repository: string; commit: string; path: string }\n        | { source: string; revision: string; path: string };\n    content_digest: \`sha256:\${string}\`;\n    task_families: SkillManifestGoalProfile[];\n    jurisdictions: string[];\n    input_contract: {\n        matter_scoped: true;\n        minimum_documents: number;\n        pinned_document_versions_required: true;\n        accepted_document_roles: ("source" | "template" | "precedent" | "authority")[];\n        unfixed_client_content_allowed: false;\n    };\n    required_capabilities: SkillManifestCapability[];\n    capability_effect: "requirements_only";\n    artifact_contract: {\n        artifact_type: "draft" | "tabular_review";\n        kind: "document";\n        format: "docx" | "xlsx";\n        operation: "create";\n        required: boolean;\n    };\n    artifact_contracts?: {\n        key: string;\n        artifact_type: "draft" | "tabular_review";\n        kind: "document";\n        format: "docx" | "xlsx";\n        operation: "create";\n        required: boolean;\n    }[];\n    source_acquisition?: {\n        schema_version: "provider_source_acquisition_requirement_v1";\n        connector_id: string;\n        maximum_pages: number;\n        page_size: number;\n        maximum_selections: number;\n    };\n    source_standard: {\n        pinned_document_versions_required: true;\n        material_claims_require_citations: true;\n        authority_required: boolean;\n        authority_as_of_required: boolean;\n    };\n    must_ask_when: SkillManifestMustAskReason[];\n    completion_checks: SkillManifestCompletionCheck[];\n    verifier_profile: string;\n    fixtures: string[];\n    dependencies: string[];\n    deprecation: { deprecated: boolean; replacement_id: string | null };\n};\n\nexport const SYSTEM_WORKFLOWS: SystemWorkflow[] = ${formatTs(systemWorkflows)};\n\nexport const SYSTEM_WORKFLOW_IDS = new Set(SYSTEM_WORKFLOWS.map((wf) => wf.id));\n\nexport const SYSTEM_ASSISTANT_WORKFLOWS: { id: string; title: string; skill_md: string }[] = ${formatTs(systemAssistantWorkflows)};\n\n// Declarative requirements only. A Task-scoped resolver must intersect these with Kernel, Pack,\n// Provider, Connector, Matter/version, and consequential-action policy; this export grants nothing.\nexport const SYSTEM_SKILL_MANIFESTS: SkillManifestV1[] = ${formatTs(skillManifests)};\n\nexport const SYSTEM_SKILL_MANIFEST_BY_WORKFLOW_ID = new Map(\n    SYSTEM_SKILL_MANIFESTS.map((manifest) => [manifest.id, manifest] as const),\n);\n`;
   return {
     backendText,
     systemWorkflows,
@@ -1642,9 +1725,7 @@ function verifyArtifacts(artifacts, lock) {
   }
 
   const firstPartyIds = new Set(
-    lock.firstParty.selection.map(
-      (slug) => lock.firstParty.workflows[slug].id,
-    ),
+    lock.firstParty.selection.map((slug) => lock.firstParty.workflows[slug].id),
   );
   const mikeWorkflows = artifacts.systemWorkflows.filter(
     (workflow) => !firstPartyIds.has(workflow.id),
@@ -1687,8 +1768,7 @@ function verifyArtifacts(artifacts, lock) {
     );
   }
   if (
-    skillManifestSemanticSha256 !==
-    lock.expected.skillManifestSemanticSha256
+    skillManifestSemanticSha256 !== lock.expected.skillManifestSemanticSha256
   ) {
     fail(
       `Generated Skill manifests changed: expected ${lock.expected.skillManifestSemanticSha256}, received ${skillManifestSemanticSha256}`,

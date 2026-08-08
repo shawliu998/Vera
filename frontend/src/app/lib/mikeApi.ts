@@ -307,6 +307,41 @@ export async function saveApiKey(
     });
 }
 
+export interface EpoOpsCredentialStatus {
+    configured: boolean;
+    source: ApiKeySource;
+}
+
+export async function getEpoOpsCredentialStatus(): Promise<EpoOpsCredentialStatus> {
+    return apiRequest<EpoOpsCredentialStatus>(
+        "/user/source-credentials/epo-ops",
+    );
+}
+
+export async function saveEpoOpsCredentials(input: {
+    consumerKey: string;
+    consumerSecret: string;
+}): Promise<EpoOpsCredentialStatus> {
+    return apiRequest<EpoOpsCredentialStatus>(
+        "/user/source-credentials/epo-ops",
+        {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                consumer_key: input.consumerKey,
+                consumer_secret: input.consumerSecret,
+            }),
+        },
+    );
+}
+
+export async function removeEpoOpsCredentials(): Promise<EpoOpsCredentialStatus> {
+    return apiRequest<EpoOpsCredentialStatus>(
+        "/user/source-credentials/epo-ops",
+        { method: "DELETE" },
+    );
+}
+
 export interface McpToolSummary {
     id: string;
     toolName: string;

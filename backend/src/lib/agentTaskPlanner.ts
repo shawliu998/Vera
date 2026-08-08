@@ -12,7 +12,10 @@ import {
   type MatterContextManifestV1,
 } from "./agent-kernel/context/matterContext";
 import { assertFixedMatterContextCurrent } from "./agent-kernel/context/matterContextRepository";
-import type { AgentStepCapability } from "./agent-kernel/contracts/stepContract";
+import type {
+  AgentStepCapability,
+  AgentStepOperation,
+} from "./agent-kernel/contracts/stepContract";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -507,6 +510,7 @@ export function buildServerOwnedTaskPlan(input: {
       plan: buildGoalAwareFallbackPlan(input),
       manifest: null,
       taskFamily: inferGoalProfile(input.goal, input.workflowId),
+      stepOperations: [] as Array<AgentStepOperation | undefined>,
     };
   }
   const profiles = manifestArtifactContracts(manifest);
@@ -522,6 +526,15 @@ export function buildServerOwnedTaskPlan(input: {
   });
   const remaining = [...profiles];
   const steps = manifest.required_capabilities.flatMap((capability) => {
+    if (capability === "read_sources" && manifest.source_acquisition) {
+      return [
+        step(
+          capability,
+          "Acquire bounded prior art",
+          "Run the fixed provider search, pause for exact lawyer selection, and import only selected publications as Matter source Versions.",
+        ),
+      ];
+    }
     if (capability !== "create_draft" && capability !== "create_tabular") {
       return [manifestStep(capability)];
     }
@@ -549,6 +562,13 @@ export function buildServerOwnedTaskPlan(input: {
     plan,
     manifest,
     taskFamily: manifest.task_families[0] ?? "generic",
+    stepOperations: plan.steps.map((plannedStep, position) =>
+      manifest.source_acquisition &&
+      position === 0 &&
+      plannedStep.capability === "read_sources"
+        ? "source.acquire"
+        : undefined,
+    ) satisfies Array<AgentStepOperation | undefined>,
   };
 }
 

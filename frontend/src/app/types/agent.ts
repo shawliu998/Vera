@@ -40,6 +40,8 @@ export type AgentCheckpoint = {
     document_ids: string[];
   };
   required_input?: AgentRequiredInput;
+  execution_pause?: unknown;
+  source_acquisition?: unknown;
 };
 
 export type AgentRequiredInputChoice = {

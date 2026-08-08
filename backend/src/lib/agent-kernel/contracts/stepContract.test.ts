@@ -30,6 +30,7 @@ import {
 } from "./requiredInput";
 import { selectActiveTools } from "../../chat/streaming";
 import { buildServerOwnedTaskPlan } from "../../agentTaskPlanner";
+import { EPO_OPS_SOURCE_CONNECTOR_PIN } from "../../agent-packs/patent/epoOpsSourcePack";
 
 const context = buildMatterContextManifest({
   matterId: "matter-1",
@@ -167,6 +168,59 @@ test("Workflow Manifest fixes multi-Artifact contract and litigation plans witho
     ["evidence-inventory", "evidence-objection-opinion", "hearing-outline"],
   );
   assert.equal(litigation.plan.steps.length, 6);
+
+  const acquisition = buildServerOwnedTaskPlan({
+    goal: "Acquire bounded prior art and create the search record.",
+    hasSources: true,
+    workflowId: "builtin-patent-prior-art-acquisition",
+    workflowType: "assistant",
+  });
+  assert.deepEqual(
+    acquisition.plan.deliverables.map((item) => item.key),
+    ["prior-art-acquisition-record"],
+  );
+  assert.deepEqual(
+    acquisition.plan.steps.map((item) => item.capability),
+    ["read_sources", "create_draft", "verify"],
+  );
+  assert.equal(acquisition.plan.steps[0]?.title, "Acquire bounded prior art");
+  assert.deepEqual(acquisition.stepOperations, [
+    "source.acquire",
+    undefined,
+    undefined,
+  ]);
+
+  const acquisitionArtifacts = normalizeAgentTaskArtifactContracts(
+    acquisition.plan.deliverables,
+  );
+  const acquisitionGoal = compileAgentGoalSpec({
+    objective: "Acquire bounded prior art and create the search record.",
+    taskFamily: acquisition.taskFamily,
+    artifactContracts: acquisitionArtifacts,
+    hasSources: true,
+    jurisdictions: ["US"],
+    asOfDate: "2026-08-08",
+  });
+  const acquisitionContracts = compileAgentStepContracts({
+    steps: acquisition.plan.steps.map((plannedStep, position) => ({
+      ...plannedStep,
+      operation: acquisition.stepOperations[position],
+    })),
+    goalSpec: acquisitionGoal,
+    artifactContracts: acquisitionArtifacts,
+    contextManifest: context,
+  });
+  const acquisitionGrant = resolveAgentStepCapabilityGrant({
+    contract: acquisitionContracts.steps[0]!,
+    availableToolNames: WORK_TASK_HOST_TOOL_NAMES,
+    readOnlyConnectorPins: [EPO_OPS_SOURCE_CONNECTOR_PIN],
+  });
+  assert.equal(acquisitionContracts.steps[0]?.operation, "source.acquire");
+  assert.equal(acquisitionGrant.allowed_tool_names.length, 0);
+  assert.equal(acquisitionGrant.research_tools_allowed, true);
+  assert.deepEqual(acquisitionGrant.read_only_connector_pins, [
+    EPO_OPS_SOURCE_CONNECTOR_PIN,
+  ]);
 });
 
 test("capability intersection cannot widen tools, MCP, research, or consequence scope", () => {
@@ -308,10 +362,8 @@ test("malformed or missing versioned Step/grant contracts fail closed", () => {
 
   const incompleteV2 = structuredClone(versionedTask());
   delete (
-    incompleteV2.latest_checkpoint.contract.capability_grants[0] as unknown as Record<
-      string,
-      unknown
-    >
+    incompleteV2.latest_checkpoint.contract
+      .capability_grants[0] as unknown as Record<string, unknown>
   ).read_only_connector_pins;
   assert.equal(readAgentStepCapabilityGrants(incompleteV2).state, "invalid");
 

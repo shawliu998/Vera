@@ -35,6 +35,19 @@ export type AgentSourceAcquisitionExecutionOutcomeV1 =
       checkpointValues: { source_acquisition: unknown };
     };
 
+export function providerSourceAcquisitionPauseSummary(input: {
+  providerId: string;
+  classification: AgentTaskExecutionPauseClassification;
+}) {
+  if (
+    input.classification === "provider_configuration" &&
+    input.providerId === "epo-ops"
+  ) {
+    return "EPO OPS credentials are not configured for this user. Existing discovery and import progress was preserved; configure EPO OPS in Provider settings, then resume this Step.";
+  }
+  return "The source provider is temporarily unavailable or needs configuration. Completed discovery and import progress was preserved; resume this Step after the provider is available.";
+}
+
 function readState(snapshot: Snapshot) {
   const checkpoint =
     snapshot.task.latest_checkpoint &&

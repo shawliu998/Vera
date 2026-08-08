@@ -8,7 +8,13 @@ import {
     MfaVerificationPopup,
     needsMfaVerification,
 } from "@/app/components/popups/MfaVerificationPopup";
-import { isMfaRequiredError } from "@/app/lib/mikeApi";
+import {
+    getEpoOpsCredentialStatus,
+    isMfaRequiredError,
+    removeEpoOpsCredentials,
+    saveEpoOpsCredentials,
+    type EpoOpsCredentialStatus,
+} from "@/app/lib/mikeApi";
 import {
     accountGlassIconButtonClassName,
     accountGlassInputClassName,
@@ -122,6 +128,264 @@ export default function ApiKeysPage() {
                     />
                 ))}
             </AccountSection>
+
+            <AccountSection className="mt-8">
+                <EpoOpsCredentialField />
+            </AccountSection>
+        </div>
+    );
+}
+
+function EpoOpsCredentialField() {
+    const [status, setStatus] = useState<EpoOpsCredentialStatus | null>(null);
+    const [consumerKey, setConsumerKey] = useState("");
+    const [consumerSecret, setConsumerSecret] = useState("");
+    const [revealKey, setRevealKey] = useState(false);
+    const [revealSecret, setRevealSecret] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
+    const [saved, setSaved] = useState(false);
+    const [loadError, setLoadError] = useState(false);
+    const [pendingMfaAction, setPendingMfaAction] = useState<
+        "save" | "remove" | null
+    >(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        void getEpoOpsCredentialStatus()
+            .then((nextStatus) => {
+                if (!cancelled) setStatus(nextStatus);
+            })
+            .catch(() => {
+                if (!cancelled) setLoadError(true);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    const isServerConfigured = status?.source === "env";
+    const dirty =
+        consumerKey.trim().length > 0 && consumerSecret.trim().length > 0;
+
+    const handleSave = async () => {
+        setIsSaving(true);
+        try {
+            if (await needsMfaVerification()) {
+                setPendingMfaAction("save");
+                return;
+            }
+            const nextStatus = await saveEpoOpsCredentials({
+                consumerKey: consumerKey.trim(),
+                consumerSecret: consumerSecret.trim(),
+            });
+            setStatus(nextStatus);
+            setConsumerKey("");
+            setConsumerSecret("");
+            setSaved(true);
+            setTimeout(() => setSaved(false), 2000);
+        } catch (error) {
+            if (isMfaRequiredError(error)) {
+                setPendingMfaAction("save");
+            } else {
+                alert(
+                    error instanceof Error && error.message
+                        ? `Failed to save EPO OPS credentials: ${error.message}`
+                        : "Failed to save EPO OPS credentials.",
+                );
+            }
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    const handleRemove = async () => {
+        setIsSaving(true);
+        try {
+            if (await needsMfaVerification()) {
+                setPendingMfaAction("remove");
+                return;
+            }
+            setStatus(await removeEpoOpsCredentials());
+        } catch (error) {
+            if (isMfaRequiredError(error)) {
+                setPendingMfaAction("remove");
+            } else {
+                alert(
+                    error instanceof Error && error.message
+                        ? `Failed to remove EPO OPS credentials: ${error.message}`
+                        : "Failed to remove EPO OPS credentials.",
+                );
+            }
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    const handleMfaVerified = async () => {
+        const action = pendingMfaAction;
+        setPendingMfaAction(null);
+        if (action === "save") {
+            await handleSave();
+        } else if (action === "remove") {
+            await handleRemove();
+        }
+    };
+
+    return (
+        <>
+            <div className="px-4 py-5">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-sm font-medium text-gray-700">
+                        EPO Open Patent Services (OPS)
+                    </h3>
+                    {status?.configured && (
+                        <span className="text-xs text-emerald-700">
+                            {isServerConfigured
+                                ? "Configured by server"
+                                : "Credentials saved"}
+                        </span>
+                    )}
+                </div>
+                <p className="mb-3 text-sm leading-5 text-gray-500">
+                    Required for Patent Prior Art Acquisition. Vera sends only
+                    the Work Task&apos;s fixed query, jurisdiction, date and bounded
+                    pagination fields to EPO OPS.
+                </p>
+                {loadError ? (
+                    <p className="text-sm text-red-600">
+                        Could not load the EPO OPS credential status.
+                    </p>
+                ) : (
+                    <div className="space-y-3">
+                        <SecretCredentialInput
+                            id="epo-ops-consumer-key"
+                            label="Consumer key"
+                            value={consumerKey}
+                            onChange={setConsumerKey}
+                            reveal={revealKey}
+                            onRevealChange={setRevealKey}
+                            placeholder={
+                                isServerConfigured
+                                    ? "Server .env credentials configured"
+                                    : status?.configured
+                                      ? "Saved consumer key hidden"
+                                      : "EPO OPS consumer key"
+                            }
+                            disabled={isServerConfigured || status === null}
+                        />
+                        <SecretCredentialInput
+                            id="epo-ops-consumer-secret"
+                            label="Consumer secret"
+                            value={consumerSecret}
+                            onChange={setConsumerSecret}
+                            reveal={revealSecret}
+                            onRevealChange={setRevealSecret}
+                            placeholder={
+                                isServerConfigured
+                                    ? "Server .env credentials configured"
+                                    : status?.configured
+                                      ? "Saved consumer secret hidden"
+                                      : "EPO OPS consumer secret"
+                            }
+                            disabled={isServerConfigured || status === null}
+                        />
+                        <div className="flex flex-wrap justify-end gap-2">
+                            <button
+                                type="button"
+                                onClick={handleSave}
+                                disabled={
+                                    isServerConfigured ||
+                                    status === null ||
+                                    isSaving ||
+                                    !dirty ||
+                                    saved
+                                }
+                                className="text-xs font-medium text-gray-700 transition-colors hover:text-gray-950 disabled:cursor-not-allowed disabled:text-gray-400"
+                            >
+                                {isSaving
+                                    ? "Saving..."
+                                    : saved
+                                      ? "Saved"
+                                      : "Save"}
+                            </button>
+                            {status?.configured && !isServerConfigured && (
+                                <button
+                                    type="button"
+                                    onClick={handleRemove}
+                                    disabled={isSaving}
+                                    className="text-xs font-medium text-red-600 transition-colors hover:text-red-700 disabled:cursor-not-allowed disabled:text-red-300"
+                                >
+                                    Remove
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                )}
+            </div>
+            <MfaVerificationPopup
+                open={!!pendingMfaAction}
+                onCancel={() => setPendingMfaAction(null)}
+                onVerified={() => void handleMfaVerified()}
+            />
+        </>
+    );
+}
+
+function SecretCredentialInput({
+    id,
+    label,
+    value,
+    onChange,
+    reveal,
+    onRevealChange,
+    placeholder,
+    disabled,
+}: {
+    id: string;
+    label: string;
+    value: string;
+    onChange: (value: string) => void;
+    reveal: boolean;
+    onRevealChange: (reveal: boolean) => void;
+    placeholder: string;
+    disabled: boolean;
+}) {
+    return (
+        <div>
+            <label
+                htmlFor={id}
+                className="mb-2 block text-xs font-medium text-gray-600"
+            >
+                {label}
+            </label>
+            <div className="relative">
+                <Input
+                    id={id}
+                    type={reveal ? "text" : "password"}
+                    value={value}
+                    onChange={(event) => onChange(event.target.value)}
+                    placeholder={placeholder}
+                    className={`pr-10 ${accountGlassInputClassName}`}
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={disabled}
+                />
+                {value.length > 0 && (
+                    <button
+                        type="button"
+                        onClick={() => onRevealChange(!reveal)}
+                        disabled={disabled}
+                        className={`absolute inset-y-1 right-1.5 flex items-center ${accountGlassIconButtonClassName}`}
+                        aria-label={reveal ? `Hide ${label}` : `Show ${label}`}
+                    >
+                        {reveal ? (
+                            <EyeOff className="h-4 w-4" />
+                        ) : (
+                            <Eye className="h-4 w-4" />
+                        )}
+                    </button>
+                )}
+            </div>
         </div>
     );
 }

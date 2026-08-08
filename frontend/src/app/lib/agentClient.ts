@@ -4,6 +4,10 @@ import type {
   AgentTask,
   AgentTaskSnapshot,
 } from "@/app/types/agent";
+import {
+  buildAgentTaskCreationBody,
+  type AgentTaskCreationInput,
+} from "@/app/lib/agentTaskCreationRequest";
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
@@ -34,23 +38,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-export function createAgentTask(input: {
-  goal: string;
-  matterId: string;
-  model: string;
-  documentIds?: string[];
-  workflowId?: string;
-}) {
+export function createAgentTask(input: AgentTaskCreationInput) {
   return request<AgentTaskSnapshot>("/agent-tasks", {
     method: "POST",
-    body: JSON.stringify({
-      goal: input.goal,
-      matter_id: input.matterId,
-      model: input.model,
-      document_ids: input.documentIds ?? [],
-      ...(input.workflowId ? { workflow_id: input.workflowId } : {}),
-    }),
+    body: JSON.stringify(buildAgentTaskCreationBody(input)),
   });
+}
+
+export function submitAgentTaskSourceSelection(
+  taskId: string,
+  discoveryRefs: string[],
+) {
+  return request<AgentTaskSnapshot>(
+    `/agent-tasks/${encodeURIComponent(taskId)}/source-selection`,
+    {
+      method: "POST",
+      body: JSON.stringify({ discovery_refs: discoveryRefs }),
+    },
+  );
 }
 
 export function listAgentTasks(matterId?: string) {

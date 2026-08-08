@@ -144,6 +144,36 @@ export const providerSourceAcquisitionStateSchema = z
         message: "A pending read requires an exact lawyer selection",
       });
     }
+    const pagesExamined = state.search_coverage.reduce(
+      (sum, coverage) => sum + coverage.pages_examined,
+      0,
+    );
+    const itemsExamined = state.search_coverage.reduce(
+      (sum, coverage) => sum + coverage.items_examined,
+      0,
+    );
+    if (
+      ["selection_required", "read_pending", "completed"].includes(
+        state.phase,
+      ) &&
+      state.search_coverage.length === 0
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["search_coverage"],
+        message: "A completed search phase requires bounded coverage facts",
+      });
+    }
+    if (
+      pagesExamined > state.spec.maximum_pages ||
+      itemsExamined > state.spec.maximum_pages * state.spec.page_size
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["search_coverage"],
+        message: "Search coverage exceeds the fixed acquisition scope",
+      });
+    }
     const selectedExternalIds = new Set(
       state.discoveries
         .filter((discovery) =>

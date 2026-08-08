@@ -4,8 +4,10 @@ import test from "node:test";
 import type { Document } from "@/app/components/shared/types";
 import type { AgentTaskSnapshot } from "@/app/types/agent";
 import {
+  agentTaskWorkTitle,
   buildAgentTaskOutputRows,
   canRecoverAgentTaskExecution,
+  getAgentTaskProviderPause,
   getAgentTaskSourceDocuments,
   getAgentTaskStepArtifacts,
   latestApprovedArtifact,
@@ -193,4 +195,53 @@ test("selects source documents only through Task Artifact links", () => {
     ),
     ["source"],
   );
+});
+
+test("presents a paused running step as paused and reads its structured provider issue", () => {
+  const snapshot = snapshotFixture();
+  snapshot.task.status = "paused";
+  snapshot.task.current_plan[0].status = "running";
+  snapshot.task.latest_checkpoint = {
+    step_id: "step-1",
+    iteration: 1,
+    summary: "Existing progress was preserved.",
+    created_at: "2026-08-08T00:00:00.000Z",
+    execution_pause: {
+      kind: "agent_task_execution_pause_v1",
+      classification: "provider_configuration",
+      issue: {
+        kind: "agent_execution_issue_v1",
+        code: "provider_configuration_required",
+        category: "provider",
+        recoverable: true,
+      },
+    },
+    source_acquisition: {
+      spec: { connector_id: "patent.epo-ops.publications" },
+    },
+  };
+
+  assert.equal(agentTaskWorkTitle(snapshot), "Paused · Draft review memo");
+  assert.deepEqual(getAgentTaskProviderPause(snapshot.task.latest_checkpoint), {
+    classification: "provider_configuration",
+    issueCode: "provider_configuration_required",
+    connectorId: "patent.epo-ops.publications",
+  });
+});
+
+test("does not derive provider actions from malformed structured pause data", () => {
+  const snapshot = snapshotFixture();
+  snapshot.task.latest_checkpoint = {
+    step_id: "step-1",
+    iteration: 1,
+    summary: "Compatibility text must not authorize settings changes.",
+    created_at: "2026-08-08T00:00:00.000Z",
+    execution_pause: {
+      kind: "agent_task_execution_pause_v1",
+      classification: "provider_configuration",
+      issue: {},
+    },
+  };
+
+  assert.equal(getAgentTaskProviderPause(snapshot.task.latest_checkpoint), null);
 });

@@ -59,7 +59,17 @@ const completedState = providerSourceAcquisitionStateSchema.parse({
   discoveries: [discovery],
   selected_discovery_refs: [discovery.discovery_ref],
   search_receipts: [],
-  search_coverage: [],
+  search_coverage: [
+    {
+      schema_version: "read_only_source_coverage_v1",
+      request_ref: "search-1",
+      status: "complete",
+      pages_examined: 1,
+      items_examined: 1,
+      truncated: false,
+      gaps: [],
+    },
+  ],
   read_receipts: [],
   import_receipts: [
     {

@@ -19,6 +19,97 @@ export interface AgentTaskOutputRow {
   linkedArtifact: AgentArtifactLink | null;
 }
 
+export type AgentTaskProviderPause = {
+  classification:
+    | "provider_capacity"
+    | "provider_timeout"
+    | "provider_network"
+    | "provider_protocol"
+    | "provider_structured_output"
+    | "provider_configuration";
+  issueCode:
+    | "provider_capacity_exhausted"
+    | "provider_timeout_exhausted"
+    | "provider_network_exhausted"
+    | "provider_protocol_incompatible"
+    | "provider_structured_output_invalid"
+    | "provider_configuration_required";
+  connectorId: string | null;
+};
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+const PROVIDER_PAUSE_CODES = new Set([
+  "provider_capacity_exhausted",
+  "provider_timeout_exhausted",
+  "provider_network_exhausted",
+  "provider_protocol_incompatible",
+  "provider_structured_output_invalid",
+  "provider_configuration_required",
+]);
+
+const PROVIDER_PAUSE_CLASSIFICATIONS = new Set([
+  "provider_capacity",
+  "provider_timeout",
+  "provider_network",
+  "provider_protocol",
+  "provider_structured_output",
+  "provider_configuration",
+]);
+
+export function getAgentTaskProviderPause(
+  checkpoint: AgentTaskSnapshot["task"]["latest_checkpoint"],
+): AgentTaskProviderPause | null {
+  const pause = record(checkpoint?.execution_pause);
+  const issue = record(pause?.issue);
+  if (
+    pause?.kind !== "agent_task_execution_pause_v1" ||
+    !PROVIDER_PAUSE_CLASSIFICATIONS.has(String(pause.classification)) ||
+    issue?.kind !== "agent_execution_issue_v1" ||
+    issue.category !== "provider" ||
+    issue.recoverable !== true ||
+    !PROVIDER_PAUSE_CODES.has(String(issue.code))
+  ) {
+    return null;
+  }
+
+  const acquisition = record(checkpoint?.source_acquisition);
+  const spec = record(acquisition?.spec);
+  return {
+    classification: pause.classification as AgentTaskProviderPause["classification"],
+    issueCode: issue.code as AgentTaskProviderPause["issueCode"],
+    connectorId:
+      typeof spec?.connector_id === "string" ? spec.connector_id : null,
+  };
+}
+
+export function agentTaskWorkTitle(snapshot: AgentTaskSnapshot): string {
+  const { task } = snapshot;
+  const completedCount = task.current_plan.filter(
+    (step) => step.status === "completed",
+  ).length;
+  const recoveryBlocked =
+    ["paused", "failed", "waiting_input"].includes(task.status) &&
+    !canRecoverAgentTaskExecution(snapshot);
+  const current = task.current_plan.find((step) => step.status === "running");
+
+  if (task.status === "completed") {
+    return `Completed in ${completedCount} steps`;
+  }
+  if (recoveryBlocked) return "Work preserved · new task required";
+  if (task.status === "paused") {
+    return current ? `Paused · ${current.title}` : "Work paused";
+  }
+  if (task.status === "waiting_input") return "Input required";
+  if (task.status === "failed") return "Work stopped";
+  if (current) return `Working · ${current.title}`;
+  return "Ready to work";
+}
+
 export function canRecoverAgentTaskExecution(snapshot: AgentTaskSnapshot) {
   return snapshot.execution_recovery.allowed;
 }

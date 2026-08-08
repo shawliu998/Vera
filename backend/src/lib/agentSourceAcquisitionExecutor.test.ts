@@ -5,7 +5,10 @@ import { EPO_OPS_SOURCE_CONNECTOR_PIN } from "./agent-packs/patent/epoOpsSourceP
 import { resolveAgentStepCapabilityGrant } from "./agent-kernel/capability/stepCapability";
 import { buildMatterContextManifest } from "./agent-kernel/context/matterContext";
 import type { AgentStepContractV1 } from "./agent-kernel/contracts/stepContract";
-import { executeAgentSourceAcquisitionStep } from "./agentSourceAcquisitionExecutor";
+import {
+  executeAgentSourceAcquisitionStep,
+  providerSourceAcquisitionPauseSummary,
+} from "./agentSourceAcquisitionExecutor";
 import { prepareAgentTaskSourceSelectionTransition } from "./agentTaskSourceSelection";
 import {
   PROVIDER_SOURCE_ACQUISITION_SPEC_VERSION,
@@ -424,6 +427,23 @@ test("provider pauses preserve the exact resumable acquisition checkpoint", asyn
   if (result.kind !== "provider_pause") return;
   assert.equal(result.classification, "provider_capacity");
   assert.deepEqual(result.checkpointValues.source_acquisition, initial);
+});
+
+test("EPO configuration pauses name the exact recovery action", () => {
+  assert.equal(
+    providerSourceAcquisitionPauseSummary({
+      providerId: "epo-ops",
+      classification: "provider_configuration",
+    }),
+    "EPO OPS credentials are not configured for this user. Existing discovery and import progress was preserved; configure EPO OPS in Provider settings, then resume this Step.",
+  );
+  assert.match(
+    providerSourceAcquisitionPauseSummary({
+      providerId: "court-listener",
+      classification: "provider_capacity",
+    }),
+    /temporarily unavailable/,
+  );
 });
 
 test("a lost execution lease stops after the completed provider call instead of advancing uncheckpointed state", async () => {

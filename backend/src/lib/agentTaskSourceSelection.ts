@@ -25,6 +25,16 @@ import { createServerSupabase } from "./supabase";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
+export class AgentTaskSourceSelectionError extends Error {
+  constructor(
+    readonly code: "source_selection_invalid" | "source_selection_conflict",
+    message: string,
+  ) {
+    super(message);
+    this.name = "AgentTaskSourceSelectionError";
+  }
+}
+
 export function prepareAgentTaskSourceSelectionTransition(
   snapshot: {
     task: {
@@ -42,13 +52,19 @@ export function prepareAgentTaskSourceSelectionTransition(
   submissionId = randomUUID(),
 ) {
   if (snapshot.task.status !== "waiting_input") {
-    throw new Error("Only a task waiting for source selection can continue");
+    throw new AgentTaskSourceSelectionError(
+      "source_selection_conflict",
+      "Only a task waiting for source selection can continue",
+    );
   }
   const current = snapshot.task.current_plan.find(
     (step) => step.status === "blocked",
   );
   if (!current) {
-    throw new Error("Source-selection Task has no recoverable Step");
+    throw new AgentTaskSourceSelectionError(
+      "source_selection_conflict",
+      "Source-selection Task has no recoverable Step",
+    );
   }
   const position = snapshot.task.current_plan.findIndex(
     (step) => step.id === current.id,
@@ -66,7 +82,8 @@ export function prepareAgentTaskSourceSelectionTransition(
     grant?.operation !== "source.acquire" ||
     grant.step_position !== position
   ) {
-    throw new Error(
+    throw new AgentTaskSourceSelectionError(
+      "source_selection_conflict",
       "Only a fixed source.acquire Step can accept provider discoveries",
     );
   }
@@ -76,14 +93,29 @@ export function prepareAgentTaskSourceSelectionTransition(
     !Array.isArray(snapshot.task.latest_checkpoint)
       ? { ...(snapshot.task.latest_checkpoint as Record<string, unknown>) }
       : null;
-  if (!previous) throw new Error("Source acquisition checkpoint is missing");
+  if (!previous) {
+    throw new AgentTaskSourceSelectionError(
+      "source_selection_conflict",
+      "Source acquisition checkpoint is missing",
+    );
+  }
   const priorState = providerSourceAcquisitionStateSchema.parse(
     previous[PROVIDER_SOURCE_ACQUISITION_CHECKPOINT_KEY],
   );
-  const state = selectProviderSourceDiscoveries({
-    state: priorState,
-    discoveryRefs,
-  });
+  let state: ReturnType<typeof selectProviderSourceDiscoveries>;
+  try {
+    state = selectProviderSourceDiscoveries({
+      state: priorState,
+      discoveryRefs,
+    });
+  } catch (error) {
+    throw new AgentTaskSourceSelectionError(
+      "source_selection_invalid",
+      error instanceof Error
+        ? error.message
+        : "Provider source selection is invalid",
+    );
+  }
   const nextAttempt = current.attempt + 1;
   delete previous.runner_retry;
   delete previous.planner_request;

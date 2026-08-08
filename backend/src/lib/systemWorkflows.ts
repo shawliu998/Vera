@@ -70,6 +70,13 @@ export type SkillManifestV1 = {
         operation: "create";
         required: boolean;
     }[];
+    source_acquisition?: {
+        schema_version: "provider_source_acquisition_requirement_v1";
+        connector_id: string;
+        maximum_pages: number;
+        page_size: number;
+        maximum_selections: number;
+    };
     source_standard: {
         pinned_document_versions_required: true;
         material_claims_require_citations: true;
@@ -1605,6 +1612,34 @@ export const SYSTEM_WORKFLOWS: SystemWorkflow[] = [
         "user_id": null,
         "is_system": true,
         "created_at": "",
+        "id": "builtin-patent-prior-art-acquisition",
+        "metadata": {
+            "title": "Patent Prior Art Acquisition",
+            "description": "Run one bounded lawyer-controlled EPO prior-art acquisition and prepare an editable source-linked Word search record.",
+            "type": "assistant",
+            "contributors": [
+                {
+                    "name": "Vera",
+                    "organisation": null,
+                    "role": null,
+                    "linkedin": null
+                }
+            ],
+            "language": "English",
+            "version": "1.0.0",
+            "practice": "Patents",
+            "jurisdictions": [
+                "Matter-specified"
+            ]
+        },
+        "skill_md": "\n# Patent Prior Art Acquisition\n\nWork only within the current Matter, the fixed target DocumentVersions, and the server-compiled acquisition scope. This Workflow acquires possible prior-art publications for later lawyer analysis; it does not decide patentability, validity, infringement, freedom to operate, or claim construction.\n\nThe server owns the EPO connector, query boundary, jurisdiction, as-of date, pagination limit, page size, selection limit, current-user credentials, immutable import target, and recovery checkpoint. Do not ask a model to choose or invoke the connector. Search discoveries are not citable sources. Pause for the lawyer to select exact discoveries, then import only those selected publications as ordinary current Matter DocumentVersions. Preserve completed pages and imports across provider capacity, timeout, configuration, protocol, and structured-output interruptions.\n\nBefore acquisition, require at least one pinned target document containing the invention disclosure, target claim, or search brief. The Task request must provide the exact patent search expression, one supported publication jurisdiction, and an as-of date. Do not infer or silently broaden any of them. If the expression is incomplete, record the limitation in the final work product; do not invent synonyms, classifications, jurisdictions, date ranges, or non-patent-literature coverage.\n\nAfter the lawyer's selected publications are imported, create exactly one Matter-owned work product:\n\n- **Prior art acquisition record:** an editable Word document with standalone sections `Target and Search Purpose`, `Fixed Search Scope`, `Search Coverage`, `Lawyer-Selected Publications`, `Imported Source Versions`, `Coverage Gaps and Limitations`, and `Next Lawyer Action`.\n\nThe record must identify the exact query, jurisdiction, as-of date, bounded pages and result count examined, whether provider coverage was truncated or incomplete, every lawyer-selected discovery, every imported current DocumentVersion, and any unavailable or partial publication content. Link every material statement about an imported publication to that fixed source version and a relocatable locator or continuous exact quote when available. When an imported provider snapshot is not an official publication PDF, repeat its source notice and require verification against the linked official publication before substantive reliance.\n\nDo not describe the bounded result set as exhaustive. Do not treat a missing result as proof that no prior art exists. Do not convert provider availability or protocol errors into a failed legal result. Do not send, file, publish, approve, or export anything. Completion requires the current Word record, fixed imported source links, explicit coverage limitations, a named next lawyer action, completed Steps, and final Kernel verification. Any remaining content or citation gap preserves the Word Artifact and enters the existing lawyer-review path.",
+        "columns_config": null,
+        "execution_mode": "work_task"
+    },
+    {
+        "user_id": null,
+        "is_system": true,
+        "created_at": "",
         "id": "builtin-patentability-assessment",
         "metadata": {
             "title": "Patentability Assessment",
@@ -2186,6 +2221,11 @@ export const SYSTEM_ASSISTANT_WORKFLOWS: { id: string; title: string; skill_md: 
         "id": "builtin-patent-invalidity-search",
         "title": "Patent Invalidity Search",
         "skill_md": "# Patent Invalidity Search\n\nWork only within the current Matter and its pinned DocumentVersions. The required source set is: the exact challenged or asserted claim numbers and claim text, plus at least one pinned prior-art publication or record. A patent record obtained through an approved provider is in scope only after the lawyer selects it, imports it as an ordinary Matter DocumentVersion, and selects that exact version for this Task. This Workflow does not run a live patent-source search, silently import a result, expand the selected source set, imply that the selected references are exhaustive, or treat the generated work product as a final invalidity opinion.\n\nBefore analysis, confirm or request:\n\n- Challenged / asserted claim numbers and exact claim text.\n- Jurisdiction and applicable claim-construction framework.\n- Priority or critical date.\n- Search scope (publication types, date ranges, jurisdictions, non-patent literature if any).\n- Known references already pinned, if any.\n\nRead every pinned source before analysis. Preserve the exact claim language when quoting or splitting claims into elements. Keep four semantic axes separate throughout the work:\n\n1. **Source disclosure:** what the pinned reference actually discloses, with a relocatable locator and continuous quote.\n2. **Anticipation analysis:** whether a single reference discloses every claim element, arranged by element.\n3. **Combination / obviousness analysis:** whether a claimed combination is shown or suggested by the pinned references, with any explicit motivation or teaching away.\n4. **Lawyer judgment:** the provisional assessment, remaining gaps, and the next lawyer action.\n\nCreate exactly two Matter-owned work products:\n\n- **Invalidity claim-element chart:** an existing Tabular Review whose rows are the pinned prior-art references and whose columns are the challenged claim elements. Each responsive cell must state the disclosure assessment, a concise explanation, and a relocatable citation. Use `Disclosed`, `Partial`, `Not shown`, or `Unverified` as the assessment label; put explanation and qualification in the cell note, not the label. For PDF sources, include the page or printed paragraph locator and a continuous supporting quote. For DOCX sources, include the pinned version and a continuous quote without inventing a page number.\n- **Invalidity screening memorandum:** an editable Word document containing these standalone sections: `Scope and Limitations`, `Challenged Claims Reviewed`, `Prior Art Sources`, `Anticipation Analysis`, `Obviousness / Combination Analysis`, `Source Verification Notes`, and `Open Questions and Next Actions`.\n\nThe memorandum must identify the challenged claims, reviewed references, jurisdiction and priority cutoff, search-scope limitations, every missing non-patent-literature source, every unverified legal-status or translation item, unresolved claim-construction questions, and each material source-verification gap. When a source is an imported provider text snapshot rather than an official publication PDF, repeat its source notice and require verification against the linked patent publication for every material passage. Do not state that a claim is invalid, valid, infringed, or patentable as a final conclusion; describe only the bounded invalidity screening supported by the selected references.\n\nPause for Required Input instead of guessing when the challenged claims or exact claim text are missing or ambiguous, no prior-art source is pinned, the jurisdiction or priority/critical date is material but unclear, claim construction changes the result, a cited source version changes, references conflict, a requested action would expand beyond the pinned Matter scope, or a missing non-patent-literature, legal-status, translation, or claim-construction input would affect the analysis. Completion requires both current work products, relocatable citations for material propositions, explicit unresolved gaps, completed steps, and final Kernel verification. External filing, client delivery, and reliance remain lawyer-controlled actions."
+    },
+    {
+        "id": "builtin-patent-prior-art-acquisition",
+        "title": "Patent Prior Art Acquisition",
+        "skill_md": "\n# Patent Prior Art Acquisition\n\nWork only within the current Matter, the fixed target DocumentVersions, and the server-compiled acquisition scope. This Workflow acquires possible prior-art publications for later lawyer analysis; it does not decide patentability, validity, infringement, freedom to operate, or claim construction.\n\nThe server owns the EPO connector, query boundary, jurisdiction, as-of date, pagination limit, page size, selection limit, current-user credentials, immutable import target, and recovery checkpoint. Do not ask a model to choose or invoke the connector. Search discoveries are not citable sources. Pause for the lawyer to select exact discoveries, then import only those selected publications as ordinary current Matter DocumentVersions. Preserve completed pages and imports across provider capacity, timeout, configuration, protocol, and structured-output interruptions.\n\nBefore acquisition, require at least one pinned target document containing the invention disclosure, target claim, or search brief. The Task request must provide the exact patent search expression, one supported publication jurisdiction, and an as-of date. Do not infer or silently broaden any of them. If the expression is incomplete, record the limitation in the final work product; do not invent synonyms, classifications, jurisdictions, date ranges, or non-patent-literature coverage.\n\nAfter the lawyer's selected publications are imported, create exactly one Matter-owned work product:\n\n- **Prior art acquisition record:** an editable Word document with standalone sections `Target and Search Purpose`, `Fixed Search Scope`, `Search Coverage`, `Lawyer-Selected Publications`, `Imported Source Versions`, `Coverage Gaps and Limitations`, and `Next Lawyer Action`.\n\nThe record must identify the exact query, jurisdiction, as-of date, bounded pages and result count examined, whether provider coverage was truncated or incomplete, every lawyer-selected discovery, every imported current DocumentVersion, and any unavailable or partial publication content. Link every material statement about an imported publication to that fixed source version and a relocatable locator or continuous exact quote when available. When an imported provider snapshot is not an official publication PDF, repeat its source notice and require verification against the linked official publication before substantive reliance.\n\nDo not describe the bounded result set as exhaustive. Do not treat a missing result as proof that no prior art exists. Do not convert provider availability or protocol errors into a failed legal result. Do not send, file, publish, approve, or export anything. Completion requires the current Word record, fixed imported source links, explicit coverage limitations, a named next lawyer action, completed Steps, and final Kernel verification. Any remaining content or citation gap preserves the Word Artifact and enters the existing lawyer-review path."
     },
     {
         "id": "builtin-patentability-assessment",
@@ -4478,6 +4518,96 @@ export const SYSTEM_SKILL_MANIFESTS: SkillManifestV1[] = [
                 "required": true
             }
         ],
+        "source_standard": {
+            "pinned_document_versions_required": true,
+            "material_claims_require_citations": true,
+            "authority_required": false,
+            "authority_as_of_required": false
+        },
+        "must_ask_when": [
+            "missing_source",
+            "missing_fact",
+            "evidence_conflict",
+            "legal_judgment",
+            "source_version_changed",
+            "material_scope_change",
+            "consequential_action"
+        ],
+        "completion_checks": [
+            "deliverables_present",
+            "goal_covered",
+            "source_supported",
+            "citations_relocatable",
+            "steps_complete"
+        ],
+        "verifier_profile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "dependencies": [],
+        "deprecation": {
+            "deprecated": false,
+            "replacement_id": null
+        }
+    },
+    {
+        "schema_version": "skill_manifest_v1",
+        "id": "builtin-patent-prior-art-acquisition",
+        "version": "1.0.0",
+        "title": "Patent Prior Art Acquisition",
+        "license": "AGPL-3.0-only",
+        "provenance": {
+            "source": "Vera first-party repository source",
+            "revision": "sha256:5aff429e63cba7d11a3ca59f2f497db5955740f7be700847c0ad4aa5adb7d3d4",
+            "path": "scripts/vera-workflows/patent-prior-art-acquisition/SKILL.md"
+        },
+        "content_digest": "sha256:73cc67a1a3e021b1981fac74256983d51bd842e2c618fbf700681e70d6b0135c",
+        "task_families": [
+            "research"
+        ],
+        "jurisdictions": [
+            "Matter-specified"
+        ],
+        "input_contract": {
+            "matter_scoped": true,
+            "minimum_documents": 1,
+            "pinned_document_versions_required": true,
+            "accepted_document_roles": [
+                "source",
+                "template",
+                "precedent",
+                "authority"
+            ],
+            "unfixed_client_content_allowed": false
+        },
+        "required_capabilities": [
+            "read_sources",
+            "create_draft",
+            "verify"
+        ],
+        "capability_effect": "requirements_only",
+        "artifact_contract": {
+            "artifact_type": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+        },
+        "artifact_contracts": [
+            {
+                "key": "prior-art-acquisition-record",
+                "artifact_type": "draft",
+                "kind": "document",
+                "format": "docx",
+                "operation": "create",
+                "required": true
+            }
+        ],
+        "source_acquisition": {
+            "schema_version": "provider_source_acquisition_requirement_v1",
+            "connector_id": "patent.epo-ops.publications",
+            "maximum_pages": 3,
+            "page_size": 25,
+            "maximum_selections": 10
+        },
         "source_standard": {
             "pinned_document_versions_required": true,
             "material_claims_require_citations": true,

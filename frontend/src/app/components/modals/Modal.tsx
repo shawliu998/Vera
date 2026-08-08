@@ -61,6 +61,7 @@ export function Modal({
     // Portals can't render during SSR, so a keep-mounted modal only renders
     // (hidden) after the first client mount.
     const [hasMounted, setHasMounted] = useState(false);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => setHasMounted(true), []);
     const hasHeader = breadcrumbs?.length;
     const hasFooter =
@@ -75,7 +76,7 @@ export function Modal({
     return createPortal(
         <div
             className={cn(
-                "fixed inset-0 z-[200] flex items-center justify-center px-4",
+                "fixed inset-0 z-[200] flex items-center justify-center p-4",
                 "bg-white/10 backdrop-blur-[2px]",
                 !open && "hidden",
             )}
@@ -83,7 +84,7 @@ export function Modal({
         >
             <div
                 className={cn(
-                    "w-full rounded-3xl flex h-[600px] flex-col",
+                    "flex h-[600px] max-h-[calc(100dvh-2rem)] w-full flex-col rounded-3xl",
                     sizeClassName[size],
                     "border border-white/70 bg-gray-50/95 shadow-[0_14px_40px_rgba(15,23,42,0.101),0_5px_14px_rgba(15,23,42,0.067)] backdrop-blur-3xl",
                     className,

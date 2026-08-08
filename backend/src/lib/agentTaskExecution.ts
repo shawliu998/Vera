@@ -28,7 +28,10 @@ import {
   type AgentStepExecutionResult,
   verifyTaskCitationLinks,
 } from "./agentStepExecutor";
-import { executeAgentSourceAcquisitionStep } from "./agentSourceAcquisitionExecutor";
+import {
+  executeAgentSourceAcquisitionStep,
+  providerSourceAcquisitionPauseSummary,
+} from "./agentSourceAcquisitionExecutor";
 import { compileCompletedAgentSourceContext } from "./agentSourceAcquisitionContext";
 import { createServerSupabase } from "./supabase";
 import { assertAgentTaskAssignmentContract } from "./agent-kernel/contracts/taskContract";
@@ -687,11 +690,15 @@ export async function advanceAgentTaskExecution(input: {
         },
       });
       if (acquisition.kind === "provider_pause") {
+        const summary = providerSourceAcquisitionPauseSummary({
+          providerId: grant.read_only_connector_pins[0]?.provider_id ?? "",
+          classification: acquisition.classification,
+        });
         return deferAgentTaskForProvider(
           db,
           taskId,
           userId,
-          "The source provider is temporarily unavailable or needs configuration. Completed discovery and import progress was preserved; resume this Step after the provider is available.",
+          summary,
           {
             classification: acquisition.classification,
             leaseOwner: input.leaseGuard.ownerToken,

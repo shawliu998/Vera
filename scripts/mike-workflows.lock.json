@@ -45,6 +45,7 @@
       "patent-fto-screening",
       "patent-infringement-analysis",
       "patent-invalidity-search",
+      "patent-prior-art-acquisition",
       "patentability-assessment",
       "uspto-office-action-response"
     ],
@@ -666,6 +667,62 @@
         "fixtureSha256": {},
         "dependencies": []
       },
+      "patent-prior-art-acquisition": {
+        "id": "builtin-patent-prior-art-acquisition",
+        "workflowType": "assistant",
+        "sourcePath": "scripts/vera-workflows/patent-prior-art-acquisition/SKILL.md",
+        "contentSha256": "5aff429e63cba7d11a3ca59f2f497db5955740f7be700847c0ad4aa5adb7d3d4",
+        "version": "1.0.0",
+        "license": "AGPL-3.0-only",
+        "minimumDocuments": 1,
+        "provenance": {
+          "source": "Vera first-party repository source",
+          "revision": "sha256:5aff429e63cba7d11a3ca59f2f497db5955740f7be700847c0ad4aa5adb7d3d4"
+        },
+        "taskFamily": "research",
+        "requiredCapabilities": ["read_sources", "create_draft", "verify"],
+        "sourceAcquisition": {
+          "schemaVersion": "provider_source_acquisition_requirement_v1",
+          "connectorId": "patent.epo-ops.publications",
+          "maximumPages": 3,
+          "pageSize": 25,
+          "maximumSelections": 10
+        },
+        "artifactContract": {
+          "artifactType": "draft",
+          "kind": "document",
+          "format": "docx",
+          "operation": "create",
+          "required": true
+        },
+        "artifactContracts": [
+          {
+            "key": "prior-art-acquisition-record",
+            "artifactType": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+          }
+        ],
+        "sourceStandard": {
+          "pinnedDocumentVersionsRequired": true,
+          "materialClaimsRequireCitations": true,
+          "authorityRequired": false,
+          "authorityAsOfRequired": false
+        },
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
+        "verifierProfile": "work_task_source_citation_v1",
+        "fixtures": [],
+        "fixtureSha256": {},
+        "dependencies": []
+      },
       "patentability-assessment": {
         "id": "builtin-patentability-assessment",
         "workflowType": "assistant",
@@ -746,7 +803,12 @@
           "revision": "sha256:f9ec48e2092960d9e9a4ea76c4818934a6b3018bded2c63cf9b3432061f2b68a"
         },
         "taskFamily": "draft",
-        "requiredCapabilities": ["read_sources", "analyze", "create_draft", "verify"],
+        "requiredCapabilities": [
+          "read_sources",
+          "analyze",
+          "create_draft",
+          "verify"
+        ],
         "artifactContract": {
           "artifactType": "draft",
           "kind": "document",
@@ -754,21 +816,29 @@
           "operation": "create",
           "required": true
         },
-        "artifactContracts": [{
-          "key": "office-action-response",
-          "artifactType": "draft",
-          "kind": "document",
-          "format": "docx",
-          "operation": "create",
-          "required": true
-        }],
+        "artifactContracts": [
+          {
+            "key": "office-action-response",
+            "artifactType": "draft",
+            "kind": "document",
+            "format": "docx",
+            "operation": "create",
+            "required": true
+          }
+        ],
         "sourceStandard": {
           "pinnedDocumentVersionsRequired": true,
           "materialClaimsRequireCitations": true,
           "authorityRequired": false,
           "authorityAsOfRequired": false
         },
-        "completionChecks": ["deliverables_present", "goal_covered", "source_supported", "citations_relocatable", "steps_complete"],
+        "completionChecks": [
+          "deliverables_present",
+          "goal_covered",
+          "source_supported",
+          "citations_relocatable",
+          "steps_complete"
+        ],
         "verifierProfile": "work_task_source_citation_v1",
         "fixtures": [],
         "fixtureSha256": {},
@@ -1329,16 +1399,16 @@
     }
   },
   "expected": {
-    "activeWorkflowCount": 36,
-    "activeAssistantCount": 25,
+    "activeWorkflowCount": 37,
+    "activeAssistantCount": 26,
     "activeTabularCount": 11,
-    "workflowCount": 36,
-    "assistantCount": 25,
+    "workflowCount": 37,
+    "assistantCount": 26,
     "tabularCount": 11,
     "semanticSha256": "b9bfb16f3633c20c01991826a9aaf9904d64d985d0047c5e6c6d86d27d18366f",
-    "systemSemanticSha256": "2839438740033ecc40591fe540f451e081fc1c16cd29cd7705649b42abd41eba",
+    "systemSemanticSha256": "ee7b59eafa474511d2bf2b88d148393a4cd04d87bee47787df6a73c67fc47b7d",
     "mikeSkillManifestSemanticSha256": "48a5db161907efa194d962823e8af5dd5d11f06006aa4860606eb4fcbf285394",
-    "skillManifestSemanticSha256": "3e057b19c294b2fb2c3c95f83f9035ac1ce507d43e57c80702a2f4d241991067",
-    "generatedFileSha256": "67e73ddfd05edf6e071d0abd8c5a9170c44fd4da1c53c4766a9848d1748876c3"
+    "skillManifestSemanticSha256": "c1a702d2711a19f40721c6427a8be080f77658e90bd971ce7ae658594e43b465",
+    "generatedFileSha256": "57fa2998d732e313a7c02ebec9c1f3e216cd90c9694b699e5f1ea30514148f39"
   }
 }

@@ -35,6 +35,7 @@ import {
   retryAgentTask,
   reviseAgentTask,
   submitAgentTaskInput,
+  submitAgentTaskSourceSelection,
   updateAgentTaskModel,
 } from "@/app/lib/agentClient";
 import { cn } from "@/app/lib/utils";
@@ -55,8 +56,10 @@ import type {
 } from "@/app/types/agent";
 import type { Document, Project } from "@/app/components/shared/types";
 import {
+  agentTaskWorkTitle,
   buildAgentTaskOutputRows,
   canRecoverAgentTaskExecution,
+  getAgentTaskProviderPause,
   getAgentTaskSourceDocuments,
   getAgentTaskStepArtifacts,
   getAgentTaskSupportingArtifacts,
@@ -67,6 +70,8 @@ import { AgentTaskEvidenceCitationList } from "./AgentTaskEvidenceCitationList";
 import { AgentRequiredInputForm } from "./AgentRequiredInputForm";
 import { AgentTaskResult } from "./AgentTaskResult";
 import { getAgentRequiredInput } from "./agentRequiredInput";
+import { AgentSourceSelectionForm } from "./AgentSourceSelectionForm";
+import { getAgentSourceSelection } from "./agentSourceSelection";
 import { useAgentTaskSnapshot } from "./useAgentTaskSnapshot";
 
 const STATUS_LABELS: Record<AgentTaskStatus, string> = {
@@ -276,6 +281,25 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
         error instanceof Error
           ? error.message
           : "The task could not continue with this input.",
+      );
+    } finally {
+      setTaskInputSubmitting(false);
+    }
+  }
+
+  async function continueWithSourceSelection(discoveryRefs: string[]) {
+    if (!snapshot || taskInputSubmitting || discoveryRefs.length === 0) return;
+    setTaskInputSubmitting(true);
+    setTaskInputError(null);
+    try {
+      commitSnapshot(
+        await submitAgentTaskSourceSelection(taskId, discoveryRefs),
+      );
+    } catch (error) {
+      setTaskInputError(
+        error instanceof Error
+          ? error.message
+          : "The selected publications could not be imported.",
       );
     } finally {
       setTaskInputSubmitting(false);
@@ -672,6 +696,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
               if (taskInputError) setTaskInputError(null);
             }}
             onContinueInput={continueWithTaskInput}
+            onSourceSelection={continueWithSourceSelection}
             onAttachDocuments={() => setTaskInputModalOpen(true)}
             onOpenArtifact={openArtifact}
             evidenceByArtifact={evidenceByArtifact}
@@ -1074,6 +1099,7 @@ function WorkRecord({
   inputError,
   onInputMessageChange,
   onContinueInput,
+  onSourceSelection,
   onRetry,
   onAttachDocuments,
   onOpenArtifact,
@@ -1092,6 +1118,7 @@ function WorkRecord({
   inputError: string | null;
   onInputMessageChange: (value: string) => void;
   onContinueInput: (messageOverride?: string) => Promise<void>;
+  onSourceSelection: (discoveryRefs: string[]) => Promise<void>;
   onRetry: () => Promise<void>;
   onAttachDocuments: () => void;
   onOpenArtifact: (artifact: AgentTaskSnapshot["artifacts"][number]) => void;
@@ -1105,26 +1132,22 @@ function WorkRecord({
   const executionRecoveryBlocked =
     ["paused", "failed", "waiting_input"].includes(task.status) &&
     !canRecoverAgentTaskExecution(snapshot);
-  const current = task.current_plan.find((step) => step.status === "running");
   const completedCount = task.current_plan.filter(
     (step) => step.status === "completed",
   ).length;
-  const title =
-    task.status === "completed"
-      ? "Completed in " + completedCount + " steps"
-      : executionRecoveryBlocked
-        ? "Work preserved · new task required"
-        : current
-          ? "Working · " + current.title
-          : task.status === "paused"
-            ? "Work paused"
-            : task.status === "waiting_input"
-              ? "Input required"
-              : task.status === "failed"
-                ? "Work stopped"
-                : "Ready to work";
+  const title = agentTaskWorkTitle(snapshot);
+  const providerPause = getAgentTaskProviderPause(task.latest_checkpoint);
+  const needsProviderConfiguration =
+    task.status === "paused" &&
+    providerPause?.issueCode === "provider_configuration_required";
+  const pauseDetail =
+    needsProviderConfiguration &&
+    providerPause?.connectorId === "patent.epo-ops.publications"
+      ? "EPO OPS credentials are required for this user. Existing discovery and import progress is preserved; configure EPO OPS, return here, then resume this Step."
+      : task.latest_checkpoint?.summary;
   const supportingArtifacts = getAgentTaskSupportingArtifacts(snapshot);
   const requiredInput = getAgentRequiredInput(task.latest_checkpoint);
+  const sourceSelection = getAgentSourceSelection(task.latest_checkpoint);
 
   return (
     <section className="py-5" aria-live="polite">
@@ -1135,20 +1158,26 @@ function WorkRecord({
             {completedCount} of {task.current_plan.length} steps complete
           </p>
         </div>
-        {task.status === "failed" && !executionRecoveryBlocked && (
+        {((task.status === "failed" && !executionRecoveryBlocked) ||
+          needsProviderConfiguration) && (
           <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => void onRetry()}
-              className="inline-flex h-8 items-center rounded-full bg-gray-950 px-3.5 text-xs font-medium text-white shadow-sm outline-none hover:bg-black focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2"
-            >
-              Retry current step
-            </button>
+            {task.status === "failed" && (
+              <button
+                type="button"
+                onClick={() => void onRetry()}
+                className="inline-flex h-8 items-center rounded-full bg-gray-950 px-3.5 text-xs font-medium text-white shadow-sm outline-none hover:bg-black focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2"
+              >
+                Retry current step
+              </button>
+            )}
             <Link
               href="/account/api-keys"
               className="inline-flex h-8 items-center rounded-full bg-white px-3.5 text-xs font-medium text-gray-700 shadow-sm outline-none hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500/70"
             >
-              Model settings
+              {providerPause?.connectorId ===
+              "patent.epo-ops.publications"
+                ? "Configure EPO OPS"
+                : "Provider settings"}
             </Link>
           </div>
         )}
@@ -1156,6 +1185,7 @@ function WorkRecord({
 
       {(providerQueued ||
         executionRecoveryBlocked ||
+        task.status === "paused" ||
         task.status === "failed" ||
         task.status === "waiting_input" ||
         executionError) && (
@@ -1174,7 +1204,7 @@ function WorkRecord({
               (executionRecoveryBlocked
                 ? snapshot.execution_recovery.detail
                 : null) ||
-              task.latest_checkpoint?.summary ||
+              pauseDetail ||
               (providerQueued
                 ? "The provider is queued. Resume retries the current step."
                 : "More Matter documents are needed before work can continue.")}
@@ -1200,7 +1230,23 @@ function WorkRecord({
 
       {task.status === "waiting_input" &&
         !executionRecoveryBlocked &&
-        !requiredInput && (
+        !requiredInput &&
+        sourceSelection && (
+          <AgentSourceSelectionForm
+            key={sourceSelection.discoveries
+              .map((discovery) => discovery.discoveryRef)
+              .join("\n")}
+            selection={sourceSelection}
+            submitting={inputSubmitting}
+            error={inputError}
+            onSubmit={onSourceSelection}
+          />
+        )}
+
+      {task.status === "waiting_input" &&
+        !executionRecoveryBlocked &&
+        !requiredInput &&
+        !sourceSelection && (
           <form
             className="mt-3 border-y border-gray-900/[0.07] py-3"
             onSubmit={(event) => {
