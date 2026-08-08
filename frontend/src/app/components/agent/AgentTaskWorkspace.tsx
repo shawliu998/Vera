@@ -31,6 +31,7 @@ import {
   downloadApprovedAgentArtifact,
   getAgentTaskEvidence,
   pauseAgentTask,
+  reverifyAgentTask,
   resumeAgentTask,
   retryAgentTask,
   reviseAgentTask,
@@ -54,6 +55,7 @@ import type {
   AgentTaskSnapshot,
   AgentTaskStatus,
   ApprovedArtifactSnapshot,
+  ContractDispositionRevisionDecision,
 } from "@/app/types/agent";
 import type { Document, Project } from "@/app/components/shared/types";
 import {
@@ -115,6 +117,82 @@ const STEP_ICONS: Record<AgentStepStatus, typeof Circle> = {
   skipped: Circle,
 };
 
+type ContractDispositionReviewFinding = {
+  findingId: string;
+  ruleId: string;
+  riskLevel: string;
+  contractQuote: string | null;
+  recommendation: string | null;
+  proposedText: string | null;
+  canAccept: boolean;
+  disposition: ContractDispositionRevisionDecision["disposition"];
+  direction: string | null;
+};
+
+function contractDispositionReviewFindings(
+  snapshot: AgentTaskSnapshot,
+): ContractDispositionReviewFinding[] {
+  const receipt =
+    snapshot.task.latest_checkpoint?.contract_playbook_pack_receipt;
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
+    return [];
+  }
+  const findings = (receipt as { findings?: unknown }).findings;
+  if (!Array.isArray(findings)) return [];
+  return findings.flatMap((raw) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+    const finding = raw as Record<string, unknown>;
+    if (
+      finding.material !== true ||
+      typeof finding.finding_id !== "string" ||
+      typeof finding.rule_id !== "string" ||
+      !["accept", "comment", "skip"].includes(
+        String(finding.lawyer_disposition),
+      )
+    ) {
+      return [];
+    }
+    const text = (value: unknown) =>
+      typeof value === "string" && value.trim() ? value : null;
+    return [
+      {
+        findingId: finding.finding_id,
+        ruleId: finding.rule_id,
+        riskLevel:
+          typeof finding.risk_level === "string"
+            ? finding.risk_level
+            : "material",
+        contractQuote: text(finding.contract_quote),
+        recommendation: text(finding.recommendation),
+        proposedText: text(finding.proposed_text),
+        canAccept: Boolean(
+          text(finding.proposed_text) &&
+          text(finding.contract_quote) &&
+          text(finding.contract_anchor),
+        ),
+        disposition:
+          finding.lawyer_disposition as ContractDispositionRevisionDecision["disposition"],
+        direction: text(finding.lawyer_direction),
+      },
+    ];
+  });
+}
+
+function verifierRequiresReview(snapshot: AgentTaskSnapshot) {
+  const receipts = snapshot.task.latest_checkpoint?.step_receipts;
+  if (Array.isArray(receipts)) {
+    const latest = receipts.at(-1);
+    if (latest && typeof latest === "object" && !Array.isArray(latest)) {
+      const receipt = latest as Record<string, unknown>;
+      if (receipt.capability === "verify") {
+        return receipt.outcome === "review_required";
+      }
+    }
+  }
+  const summary = snapshot.task.current_plan.at(-1)?.result_summary ?? "";
+  return /\bGAP\b/i.test(summary) && !/\bno\b[^.]{0,80}\bgap\b/i.test(summary);
+}
+
 export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
   const router = useRouter();
   const { profile } = useUserProfile();
@@ -130,6 +208,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
   >(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [revisionStarting, setRevisionStarting] = useState(false);
+  const [reverificationStarting, setReverificationStarting] = useState(false);
   const [downloadingArtifact, setDownloadingArtifact] = useState<string | null>(
     null,
   );
@@ -235,6 +314,23 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
     }
   }
 
+  async function restartVerification() {
+    if (reverificationStarting) return;
+    setReverificationStarting(true);
+    setReviewError(null);
+    try {
+      commitSnapshot(await reverifyAgentTask(taskId));
+    } catch (error) {
+      setReviewError(
+        error instanceof Error
+          ? error.message
+          : "The verifier could not be restarted.",
+      );
+    } finally {
+      setReverificationStarting(false);
+    }
+  }
+
   function chooseTaskInputDocuments(documents: Document[]) {
     if (!snapshot || !matter) return;
     const linked = new Set(
@@ -335,6 +431,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
 
   async function submitReviewDecision(
     status: "approved" | "changes_requested",
+    contractDispositions?: ContractDispositionRevisionDecision[],
   ): Promise<boolean> {
     if (reviewSubmitting) return false;
     if (status === "changes_requested" && !reviewNote.trim()) {
@@ -347,6 +444,7 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
       const updated = await createAgentReviewDecision(taskId, {
         status,
         note: reviewNote.trim(),
+        contractDispositions,
       });
       commitSnapshot(updated);
       setReviewNote("");
@@ -678,10 +776,12 @@ export function AgentTaskWorkspace({ taskId }: { taskId: string }) {
               onNoteChange={setReviewNote}
               submitting={reviewSubmitting}
               revisionStarting={revisionStarting}
+              reverificationStarting={reverificationStarting}
               error={reviewError}
               downloadingArtifact={downloadingArtifact}
               onDecision={submitReviewDecision}
               onRevise={startRevision}
+              onReverify={restartVerification}
               onDownload={downloadApprovedArtifact}
               onOpenArtifact={openArtifact}
             />
@@ -745,10 +845,12 @@ function DeliverablesPanel({
   onNoteChange,
   submitting,
   revisionStarting,
+  reverificationStarting,
   error,
   downloadingArtifact,
   onDecision,
   onRevise,
+  onReverify,
   onDownload,
   onOpenArtifact,
 }: {
@@ -758,10 +860,15 @@ function DeliverablesPanel({
   onNoteChange: (value: string) => void;
   submitting: "approved" | "changes_requested" | null;
   revisionStarting: boolean;
+  reverificationStarting: boolean;
   error: string | null;
   downloadingArtifact: string | null;
-  onDecision: (status: "approved" | "changes_requested") => Promise<boolean>;
+  onDecision: (
+    status: "approved" | "changes_requested",
+    contractDispositions?: ContractDispositionRevisionDecision[],
+  ) => Promise<boolean>;
   onRevise: () => Promise<void>;
+  onReverify: () => Promise<void>;
   onDownload: (artifact: ApprovedArtifactSnapshot) => Promise<void>;
   onOpenArtifact: (
     artifact: AgentTaskSnapshot["artifacts"][number],
@@ -772,10 +879,66 @@ function DeliverablesPanel({
   const [reviewAction, setReviewAction] = useState<
     "approved" | "changes_requested" | null
   >(null);
+  const contractFindings = useMemo(
+    () => contractDispositionReviewFindings(snapshot),
+    [snapshot],
+  );
+  const [contractDecisions, setContractDecisions] = useState<
+    Record<string, ContractDispositionRevisionDecision>
+  >({});
+  const contractDecisionList = contractFindings.flatMap((finding) => {
+    const decision = contractDecisions[finding.findingId];
+    return decision ? [decision] : [];
+  });
+  const contractDecisionsComplete =
+    contractFindings.length === 0 ||
+    contractDecisionList.length === contractFindings.length;
+  const contractDecisionsChanged = contractFindings.some((finding) => {
+    const decision = contractDecisions[finding.findingId];
+    return Boolean(
+      decision &&
+      (decision.disposition !== finding.disposition ||
+        decision.direction !== finding.direction),
+    );
+  });
+
+  function beginChangesRequest() {
+    setContractDecisions(
+      Object.fromEntries(
+        contractFindings.map((finding) => [
+          finding.findingId,
+          {
+            finding_id: finding.findingId,
+            disposition: finding.disposition,
+            direction: finding.direction,
+          },
+        ]),
+      ),
+    );
+    setReviewAction("changes_requested");
+  }
+
+  function updateContractDecision(
+    finding: ContractDispositionReviewFinding,
+    disposition: ContractDispositionRevisionDecision["disposition"],
+  ) {
+    setContractDecisions((current) => ({
+      ...current,
+      [finding.findingId]: {
+        finding_id: finding.findingId,
+        disposition,
+        direction:
+          disposition === "comment"
+            ? (current[finding.findingId]?.direction ?? finding.direction)
+            : null,
+      },
+    }));
+  }
   const latestApprovedDecision = latestApprovedReviewDecision(snapshot);
   const outputRows = buildAgentTaskOutputRows(snapshot);
   const hasEditedVersions =
     snapshot.review.version_state.has_unapproved_changes;
+  const verifierReviewGap = verifierRequiresReview(snapshot);
   const releaseCopy =
     reviewStatus === "approved"
       ? "Approved versions are ready to export."
@@ -800,6 +963,28 @@ function DeliverablesPanel({
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
+              {verifierReviewGap && (
+                <button
+                  type="button"
+                  onClick={() => void onReverify()}
+                  disabled={
+                    reverificationStarting ||
+                    revisionStarting ||
+                    submitting !== null
+                  }
+                  title="Re-run only the fixed verifier against the current Artifact Versions"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-full bg-white px-3.5 text-xs font-medium text-gray-700 shadow-sm outline-none transition-colors hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 disabled:opacity-45"
+                >
+                  {reverificationStarting ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RotateCcw className="h-3.5 w-3.5" />
+                  )}
+                  {reverificationStarting
+                    ? "Restarting checks"
+                    : "Re-run verification"}
+                </button>
+              )}
               {reviewStatus === "changes_requested" && (
                 <button
                   type="button"
@@ -834,7 +1019,7 @@ function DeliverablesPanel({
               {reviewStatus !== "changes_requested" && (
                 <button
                   type="button"
-                  onClick={() => setReviewAction("changes_requested")}
+                  onClick={beginChangesRequest}
                   className="inline-flex h-8 items-center gap-1.5 rounded-full bg-white px-3.5 text-xs font-medium text-gray-700 shadow-sm outline-none transition-colors hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2"
                 >
                   <XCircle className="h-3.5 w-3.5" />
@@ -937,6 +1122,110 @@ function DeliverablesPanel({
                 Cancel
               </button>
             </div>
+            {reviewAction === "changes_requested" &&
+              contractFindings.length > 0 && (
+                <div className="mt-3 border-y border-gray-900/[0.07] py-3">
+                  <p className="text-[11px] leading-4 text-gray-600">
+                    Update the fixed lawyer decisions below. Vera will rebuild
+                    only the three current Contract outputs from the same source
+                    Versions, then rerun verification.
+                  </p>
+                  <div className="mt-3 space-y-3">
+                    {contractFindings.map((finding) => {
+                      const decision = contractDecisions[finding.findingId];
+                      return (
+                        <fieldset
+                          key={finding.findingId}
+                          disabled={submitting !== null}
+                          className="rounded-lg bg-gray-50 px-3 py-2.5"
+                        >
+                          <legend className="px-1 text-xs font-medium text-gray-900">
+                            {finding.ruleId} · {finding.riskLevel.toUpperCase()}
+                          </legend>
+                          {finding.contractQuote && (
+                            <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-gray-500">
+                              Source span: {finding.contractQuote}
+                            </p>
+                          )}
+                          {finding.recommendation && (
+                            <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-gray-600">
+                              Fixed recommendation: {finding.recommendation}
+                            </p>
+                          )}
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {(["accept", "comment", "skip"] as const).map(
+                              (disposition) => {
+                                if (
+                                  disposition === "accept" &&
+                                  !finding.canAccept
+                                ) {
+                                  return null;
+                                }
+                                const selected =
+                                  decision?.disposition === disposition;
+                                const label =
+                                  disposition === "accept"
+                                    ? "Accept fixed text"
+                                    : disposition === "comment"
+                                      ? "Keep text + comment"
+                                      : "Keep text · no action";
+                                return (
+                                  <button
+                                    key={disposition}
+                                    type="button"
+                                    onClick={() =>
+                                      updateContractDecision(
+                                        finding,
+                                        disposition,
+                                      )
+                                    }
+                                    aria-pressed={selected}
+                                    className={cn(
+                                      "h-7 rounded-full px-3 text-[10px] font-medium outline-none ring-1 focus-visible:ring-2 focus-visible:ring-blue-500/70",
+                                      selected
+                                        ? "bg-gray-950 text-white ring-gray-950"
+                                        : "bg-white text-gray-700 ring-gray-900/[0.1] hover:bg-gray-100",
+                                    )}
+                                  >
+                                    {label}
+                                  </button>
+                                );
+                              },
+                            )}
+                          </div>
+                          {decision?.disposition === "comment" && (
+                            <textarea
+                              aria-label={`${finding.ruleId} lawyer direction`}
+                              rows={2}
+                              maxLength={1000}
+                              value={decision.direction ?? ""}
+                              onChange={(event) =>
+                                setContractDecisions((current) => ({
+                                  ...current,
+                                  [finding.findingId]: {
+                                    ...decision,
+                                    direction: event.target.value.trim()
+                                      ? event.target.value
+                                      : null,
+                                  },
+                                }))
+                              }
+                              placeholder="Optional lawyer direction; blank keeps the fixed recommendation"
+                              className="mt-2 w-full resize-y rounded-md bg-white px-2.5 py-2 text-[10px] leading-4 text-gray-900 outline-none ring-1 ring-gray-900/[0.1] placeholder:text-gray-500 focus:ring-2 focus:ring-blue-500/70"
+                            />
+                          )}
+                        </fieldset>
+                      );
+                    })}
+                  </div>
+                  {!contractDecisionsChanged && (
+                    <p className="mt-2 text-[10px] leading-4 text-amber-700">
+                      Change at least one lawyer decision before requesting a
+                      Contract revision.
+                    </p>
+                  )}
+                </div>
+              )}
             <textarea
               id="review-note"
               aria-label="Review note"
@@ -961,11 +1250,24 @@ function DeliverablesPanel({
             <button
               type="button"
               onClick={async () => {
-                if (await onDecision(reviewAction)) {
+                if (
+                  await onDecision(
+                    reviewAction,
+                    reviewAction === "changes_requested" &&
+                      contractFindings.length > 0
+                      ? contractDecisionList
+                      : undefined,
+                  )
+                ) {
                   setReviewAction(null);
                 }
               }}
-              disabled={submitting !== null}
+              disabled={
+                submitting !== null ||
+                (reviewAction === "changes_requested" &&
+                  contractFindings.length > 0 &&
+                  (!contractDecisionsComplete || !contractDecisionsChanged))
+              }
               className={cn(
                 "mt-2 inline-flex h-8 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 disabled:opacity-45",
                 reviewAction === "approved"

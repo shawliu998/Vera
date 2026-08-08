@@ -4,11 +4,7 @@ import JSZip from "jszip";
 
 import { docxToPdf } from "./convert";
 import { createServerSupabase } from "./supabase";
-import {
-  downloadFile,
-  uploadFile,
-  versionStorageKey,
-} from "./storage";
+import { downloadFile, uploadFile, versionStorageKey } from "./storage";
 import { sameUuidIdentity } from "./uuidIdentity";
 
 type Db = ReturnType<typeof createServerSupabase>;
@@ -35,7 +31,7 @@ type InsertVersion = {
   document_id: string;
   storage_path: string;
   pdf_storage_path: string | null;
-  source: "user_upload";
+  source: "user_upload" | "assistant_edit" | "generated";
   version_number: number;
   filename: string;
   file_type: "docx";
@@ -255,10 +251,7 @@ async function assertStoredBytesMatch(
   digest: typeof semanticDocxDigest,
 ) {
   const bytes = await download(version.storage_path!);
-  if (
-    !bytes ||
-    (await digest(Buffer.from(bytes))) !== semanticHash
-  ) {
+  if (!bytes || (await digest(Buffer.from(bytes))) !== semanticHash) {
     throw new CurrentDocumentVersionMutationError(
       "mutation_conflict",
       "This Word mutation identity is already bound to different bytes.",
@@ -275,6 +268,7 @@ export async function appendCurrentDocxVersion(input: {
   mutationKey: string;
   filename: string;
   buffer: Buffer;
+  source?: "user_upload" | "assistant_edit" | "generated";
   beforeActivate?: () => Promise<void>;
   dependencies?: AppendCurrentDocxVersionDependencies;
 }): Promise<AppendedCurrentDocxVersion> {
@@ -354,7 +348,10 @@ export async function appendCurrentDocxVersion(input: {
       updatedAt: now(),
     });
     document = await repository.loadDocument(input.documentId);
-    if (!activated && !sameUuidIdentity(document?.current_version_id, target.id)) {
+    if (
+      !activated &&
+      !sameUuidIdentity(document?.current_version_id, target.id)
+    ) {
       throw new CurrentDocumentVersionMutationError(
         "version_conflict",
         "The Word artifact changed while its Version was being activated.",
@@ -412,7 +409,7 @@ export async function appendCurrentDocxVersion(input: {
     document_id: input.documentId,
     storage_path: storagePath,
     pdf_storage_path: pdfStoragePath,
-    source: "user_upload",
+    source: input.source ?? "user_upload",
     version_number: versionNumber,
     filename,
     file_type: "docx",
@@ -446,7 +443,10 @@ export async function appendCurrentDocxVersion(input: {
       updatedAt: now(),
     });
     document = await repository.loadDocument(input.documentId);
-    if (!activated && !sameUuidIdentity(document?.current_version_id, target.id)) {
+    if (
+      !activated &&
+      !sameUuidIdentity(document?.current_version_id, target.id)
+    ) {
       throw new CurrentDocumentVersionMutationError(
         "version_conflict",
         "The Word artifact changed while its new Version was being activated.",

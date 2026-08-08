@@ -4,6 +4,7 @@ import type { AgentArtifactLinkInput } from "./agentTasks";
 import { createServerSupabase } from "./supabase";
 import { downloadFile } from "./storage";
 import { evaluateTaskDeliverables } from "./agentTaskDeliverables";
+import { readAgentStepReceipts } from "./agent-kernel/contracts/stepContract";
 import {
   controlledAgentReviewArtifactLinks,
   getAgentReviewVersionState,
@@ -113,8 +114,20 @@ export async function getReviewBlockers(
   const verifier = snapshot.task.current_plan.at(-1);
   if (!verifier || verifier.status !== "completed") {
     blockers.push("The Verifier has not completed all required checks.");
-  } else if (/\bGAP\b/i.test(verifier.result_summary ?? "")) {
-    blockers.push("The Verifier reported one or more unresolved gaps.");
+  } else {
+    const verifierReceipt = readAgentStepReceipts(
+      (snapshot.task as { latest_checkpoint?: unknown }).latest_checkpoint,
+    ).at(-1);
+    if (verifierReceipt?.capability === "verify") {
+      if (verifierReceipt.outcome === "review_required") {
+        blockers.push("The Verifier reported one or more unresolved gaps.");
+      }
+    } else if (
+      /\bGAP\b/i.test(verifier.result_summary ?? "") &&
+      !/\bno\b[^.]{0,80}\bgap\b/i.test(verifier.result_summary ?? "")
+    ) {
+      blockers.push("The Verifier reported one or more unresolved gaps.");
+    }
   }
 
   const incomplete = snapshot.task.current_plan

@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  applyContractPlaybookDispositionRevisionIntent,
   applyContractPlaybookDispositionResponses,
+  createContractPlaybookDispositionRevisionIntent,
   createContractPlaybookDispositionRequiredInput,
 } from "./contractPlaybookDisposition";
 import {
@@ -99,6 +101,81 @@ test("free-text Other is persisted as comment direction, never replacement text"
     "Retain the clause but add a negotiation note.",
   );
   assert.equal(updated.findings[0]?.proposed_text, finding.proposed_text);
+});
+
+test("review correction binds the complete disposition set to the fixed receipt", () => {
+  const fixed = compileContractPlaybookReceipt({
+    ...receipt(),
+    reviewMode: "deep",
+    opinionLanguage: "zh",
+    analyzeStepId: "11111111-1111-4111-8111-111111111111",
+    analyzeAttempt: 1,
+    contract: receipt().contract,
+    reference: receipt().reference,
+    citationSnapshotArtifactId: receipt().citation_snapshot_artifact_id,
+    findings: [finding],
+    decisions: {
+      [deriveContractPlaybookFindingId(finding)]: {
+        disposition: "comment",
+        direction: null,
+      },
+    },
+  });
+  const findingId = fixed.findings[0]!.finding_id;
+  const intent = createContractPlaybookDispositionRevisionIntent({
+    receipt: fixed,
+    decisions: [
+      { finding_id: findingId, disposition: "skip", direction: null },
+    ],
+  });
+  assert.equal(intent.contract_version_id, fixed.contract.version_id);
+  const revised = applyContractPlaybookDispositionRevisionIntent({
+    receipt: fixed,
+    intent,
+  });
+  assert.equal(revised.findings[0]?.lawyer_disposition, "skip");
+  assert.equal(revised.findings[0]?.lawyer_direction, null);
+});
+
+test("review correction rejects no-op and incomplete disposition sets", () => {
+  const fixed = compileContractPlaybookReceipt({
+    reviewMode: "deep",
+    opinionLanguage: "zh",
+    analyzeStepId: "11111111-1111-4111-8111-111111111111",
+    analyzeAttempt: 1,
+    contract: receipt().contract,
+    reference: receipt().reference,
+    citationSnapshotArtifactId: receipt().citation_snapshot_artifact_id,
+    findings: [finding],
+    decisions: {
+      [deriveContractPlaybookFindingId(finding)]: {
+        disposition: "comment",
+        direction: null,
+      },
+    },
+  });
+  assert.throws(
+    () =>
+      createContractPlaybookDispositionRevisionIntent({
+        receipt: fixed,
+        decisions: [],
+      }),
+    /at least 1 element|must decide/i,
+  );
+  assert.throws(
+    () =>
+      createContractPlaybookDispositionRevisionIntent({
+        receipt: fixed,
+        decisions: [
+          {
+            finding_id: fixed.findings[0]!.finding_id,
+            disposition: "comment",
+            direction: null,
+          },
+        ],
+      }),
+    /change at least one lawyer decision/i,
+  );
 });
 
 test("accept is unavailable without a complete exact replacement boundary", () => {

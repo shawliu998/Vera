@@ -8,6 +8,7 @@ import {
   listAgentTasks,
   pauseAgentTask,
   recordAgentTaskReviewDecision,
+  reverifyCompletedAgentTask,
   reviseAgentTask,
   resumeAgentTask,
   retryAgentTask,
@@ -64,6 +65,7 @@ import { compileContractPlaybookContextFromRequiredInput } from "../lib/agentCon
 import { contractPlaybookReceiptSchema } from "../lib/agent-packs/contract/contractPlaybookPack";
 import {
   applyContractPlaybookDispositionResponses,
+  createContractPlaybookDispositionRevisionIntent,
   createContractPlaybookDispositionRequiredInput,
 } from "../lib/agent-packs/contract/contractPlaybookDisposition";
 
@@ -308,6 +310,42 @@ agentTasksRouter.post(
           });
         }
         artifactSnapshot = await captureApprovedArtifacts(db, snapshot);
+      } else {
+        const checkpoint =
+          snapshot.task.latest_checkpoint &&
+          typeof snapshot.task.latest_checkpoint === "object" &&
+          !Array.isArray(snapshot.task.latest_checkpoint)
+            ? (snapshot.task.latest_checkpoint as Record<string, unknown>)
+            : {};
+        const receipt =
+          checkpoint.contract_playbook_pack_receipt === undefined
+            ? null
+            : contractPlaybookReceiptSchema.parse(
+                checkpoint.contract_playbook_pack_receipt,
+              );
+        if (receipt) {
+          if (!Array.isArray(req.body?.contract_dispositions)) {
+            return void res.status(400).json({
+              detail:
+                "Contract output changes require one structured lawyer disposition for every material finding",
+            });
+          }
+          try {
+            artifactSnapshot = [
+              createContractPlaybookDispositionRevisionIntent({
+                receipt,
+                decisions: req.body.contract_dispositions,
+              }),
+            ];
+          } catch (error) {
+            return void res.status(400).json({
+              detail:
+                error instanceof Error
+                  ? error.message
+                  : "Contract lawyer dispositions are invalid",
+            });
+          }
+        }
       }
 
       const { data: profile } = await db
@@ -353,6 +391,28 @@ agentTasksRouter.post("/:taskId/revise", requireAuth, async (req, res) => {
     wakeAgentTaskRunner({
       taskId: req.params.taskId,
       userId: res.locals.userId as string,
+      userEmail: res.locals.userEmail as string | undefined,
+    });
+    res.json(snapshot);
+  } catch (error) {
+    routeError(res, error);
+  }
+});
+
+agentTasksRouter.post("/:taskId/reverify", requireAuth, async (req, res) => {
+  try {
+    const userId = res.locals.userId as string;
+    const snapshot = await reverifyCompletedAgentTask(
+      createServerSupabase(),
+      req.params.taskId,
+      userId,
+    );
+    if (!snapshot) {
+      return void res.status(404).json({ detail: "Agent task not found" });
+    }
+    wakeAgentTaskRunner({
+      taskId: req.params.taskId,
+      userId,
       userEmail: res.locals.userEmail as string | undefined,
     });
     res.json(snapshot);

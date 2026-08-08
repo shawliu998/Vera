@@ -937,9 +937,40 @@ test("keeps Artifact re-verification migrations mirrored and narrowly scoped", a
     ),
     "utf8",
   );
+  const backendForward = await readFile(
+    new URL(
+      "../../../../migrations/20260808_08_agent_task_contract_review_recovery.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const supabaseForward = await readFile(
+    new URL(
+      "../../../../../supabase/migrations/20260808000008_agent_task_contract_review_recovery.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
   assert.equal(backend, supabase);
+  assert.equal(backendForward, supabaseForward);
+  assert.match(
+    backendForward,
+    /create or replace function public\.record_agent_task_review_decision_v1/i,
+  );
+  assert.match(
+    backendForward,
+    /create or replace function public\.start_agent_task_artifact_reverification_v1/i,
+  );
   assert.match(backend, /artifact_type = 'draft'/i);
-  assert.match(backend, /capability is distinct from 'verify'/i);
+  assert.match(
+    backend,
+    /latest_checkpoint -> 'contract' -> 'step_contracts' -> 'steps'/i,
+  );
+  assert.match(
+    backend,
+    /v_verifier_contract ->> 'capability' is distinct from 'verify'/i,
+  );
+  assert.match(backend, /v_verifier_count <> 1/i);
   assert.match(backend, /status = 'running'[\s\S]*repair_attempt = 0/i);
   assert.match(backend, /result_summary = null[\s\S]*result_data = null/i);
   assert.match(backend, /status = 'verifying'/i);

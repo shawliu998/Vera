@@ -186,6 +186,58 @@ unresolved item. A localized in-document opinion title had also produced the
 generic filename `document.docx`; future materializations now preserve the
 localized title while using the stable filename `Contract Review Opinion.docx`.
 
+## Contract revision and release-gate gold run — 2026-08-08
+
+The same ordinary-user Task `d26f02d2-8c2a-4f05-bb10-56a32dff0f81` then
+completed the real lawyer revision, re-verification, approval, download, and
+browser Word handoff path. The run exposed six additional orchestration defects:
+
+1. `Request changes` collected prose but did not encode the lawyer's fixed
+   `accept`/`comment`/`skip` decisions. The UI now submits one complete decision
+   set, and the server binds it to the fixed Contract receipt and Versions before
+   recording one existing Review Decision revision intent.
+2. A disposition-only revision restarted model analysis. The server now resumes
+   at the first deterministic materialization Step and skips analysis only after
+   proving that the revised receipt exactly matches the bound revision intent.
+3. Revision materialization created duplicate Documents. A reserved Step effect
+   may now append one deterministic current Version to the same fixed deliverable
+   Document with Matter, owner, compare-and-swap, and idempotency checks.
+4. The generic verifier counted an unrelated earlier citation snapshot and
+   permanently blocked the Contract result. A valid Contract receipt now scopes
+   citation verification to its named authoritative snapshot; a missing or
+   inconsistent binding still fails closed.
+5. Re-verification selected a verifier from a nullable legacy database column.
+   It now resolves the authoritative capability from the immutable Step Contract
+   checkpoint, preserves the current Artifacts, and resumes only the existing
+   verifier Step.
+6. Both UI and approval code parsed the word `GAP` from a success summary and
+   treated “no deterministic gap” as failure. They now use the structured Step
+   receipt outcome and consult guarded text only for legacy rows where the
+   structured receipt is absent.
+
+The final canonical deliverables remained the same three Documents and advanced
+from V1 to V2:
+
+- Contract Revision V2 `7f5d5934-9775-94f4-a3b8-b46fdd5cc891` — 839,192 bytes,
+  five native review-markup items;
+- Contract Clean Copy V2 `234b05ba-4927-4232-449f-e2005c610bb7` — 835,596 bytes,
+  zero review markup;
+- Contract Review Opinion V2 `3b356943-89fd-d5f7-9360-bffcf8b65cde` — 85,076
+  bytes, zero review markup.
+
+Revision accepted view and Clean Copy body both produced SHA-256
+`4dddb8c82ffed2310aa9221ae2225ce81dcc164d76cf4665173b9591ae6c0a11`.
+The current approval Review Decision locked all three exact V2 ids and hashes.
+All three downloads were initiated from the ordinary UI, and the revision opened
+in browser Word with the exact Document and V2 in the handoff URL. One earlier
+defective revision had already created a second historical group of Documents;
+it is preserved rather than destructively deleted, is not the canonical current
+group, and is governed by the legacy cleanup rule below.
+
+This closes the Contract gold workflow. It does not prove the Litigation or
+Patent Packs, and no Contract-specific relaxation of Matter ownership, fixed
+Version, idempotency, review, approval, or export boundaries was introduced.
+
 ## Legacy cleanup rule
 
 The earlier Aletheia civil-litigation workbench, dedicated routes and local
@@ -207,17 +259,14 @@ preserved release capabilities.
 
 ## Next execution order
 
-1. Complete the current Contract review/revision path for the one no-anchor
-   item, then prove approval, download and optional real Word handoff without
-   bypassing current-Version gates.
-2. Extract the Litigation Pack field/row contracts and per-cell reviewable-gap
+1. Extract the Litigation Pack field/row contracts and per-cell reviewable-gap
    outcome; integrate one Task-owned Evidence Inventory through the existing
    Tabular Review surface.
-3. Run the litigation gold workflow, including direct source navigation and an
+2. Run the litigation gold workflow, including direct source navigation and an
    exhausted-cell recovery, before removing any legacy litigation slice.
-4. Run the current-user EPO OPS success gate when credentials are available,
+3. Run the current-user EPO OPS success gate when credentials are available,
    from search through selected import and downstream Word verification.
-5. When Word is closed, complete Batch 7 Host activation and visual acceptance.
-6. Reconcile the preserved dirty worktree only after each replacement slice has
+4. When Word is closed, complete Batch 7 Host activation and visual acceptance.
+5. Reconcile the preserved dirty worktree only after each replacement slice has
    passed its gold workflow; preserve browser Word, the Word add-in, Matter,
    Artifact, Citation, Tabular Review and review/export capabilities.

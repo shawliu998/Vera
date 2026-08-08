@@ -20,6 +20,7 @@ declare
   v_base_version public.document_versions%rowtype;
   v_version public.document_versions%rowtype;
   v_verifier public.agent_steps%rowtype;
+  v_verifier_contract jsonb;
   v_verifier_count integer;
   v_invalid_step_count integer;
   v_running_step_count integer;
@@ -119,7 +120,10 @@ begin
     or v_task.latest_checkpoint ->> 'schema_version'
       is distinct from 'agent_task_checkpoint_v1'
     or jsonb_typeof(v_task.latest_checkpoint -> 'contract')
-      is distinct from 'object' then
+      is distinct from 'object'
+    or jsonb_typeof(
+      v_task.latest_checkpoint -> 'contract' -> 'step_contracts' -> 'steps'
+    ) is distinct from 'array' then
     return query select 'contract_invalid'::text, v_task.status, v_task.current_step;
     return;
   end if;
@@ -136,9 +140,17 @@ begin
   order by position desc
   limit 1;
 
+  select contract.value into v_verifier_contract
+  from jsonb_array_elements(
+    v_task.latest_checkpoint -> 'contract' -> 'step_contracts' -> 'steps'
+  ) as contract(value)
+  where contract.value ->> 'position' = v_verifier.position::text
+  limit 1;
   select count(*) into v_verifier_count
-  from public.agent_steps
-  where task_id = p_task_id and capability = 'verify';
+  from jsonb_array_elements(
+    v_task.latest_checkpoint -> 'contract' -> 'step_contracts' -> 'steps'
+  ) as contract(value)
+  where contract.value ->> 'capability' = 'verify';
   select count(*) into v_invalid_step_count
   from public.agent_steps
   where task_id = p_task_id
@@ -148,7 +160,8 @@ begin
   where task_id = p_task_id and status = 'running';
 
   if v_verifier.id is null
-    or v_verifier.capability is distinct from 'verify'
+    or jsonb_typeof(v_verifier_contract) is distinct from 'object'
+    or v_verifier_contract ->> 'capability' is distinct from 'verify'
     or v_verifier.status <> 'completed'
     or v_verifier.attempt = 2147483647
     or v_verifier_count <> 1

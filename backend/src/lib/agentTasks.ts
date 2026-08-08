@@ -8,6 +8,7 @@ import type {
   GoalAwareTaskPlan,
 } from "./agentTaskPlanner";
 import {
+  controlledAgentReviewArtifactLinks,
   deriveAgentReviewStatus,
   getAgentReviewVersionState,
 } from "./agentTaskReviewVersions";
@@ -27,6 +28,11 @@ import {
 import { extendFixedMatterContext } from "./agent-kernel/context/matterContextRepository";
 import type { AgentTaskArtifactContractV1 } from "./agent-kernel/contracts/taskContract";
 import { extendAgentTaskContractContext } from "./agent-kernel/contracts/taskContract";
+import { contractPlaybookReceiptSchema } from "./agent-packs/contract/contractPlaybookPack";
+import {
+  applyContractPlaybookDispositionRevisionIntent,
+  contractPlaybookDispositionRevisionIntentSchema,
+} from "./agent-packs/contract/contractPlaybookDisposition";
 import {
   agentRequiredInputResponseSchema,
   readAgentRequiredInput,
@@ -70,6 +76,7 @@ import {
   type AgentTaskStateTransitionInput,
   type AgentTaskStopTransitionInput,
 } from "./agent-kernel/execution/taskTransition";
+import { startAgentTaskArtifactReverification } from "./agent-kernel/verification/artifactReverification";
 
 export type {
   AgentTaskExecutionPauseClassification,
@@ -86,11 +93,7 @@ export type AgentTaskStatus =
   | "failed";
 
 export type AgentStepStatus =
-  | "pending"
-  | "running"
-  | "completed"
-  | "blocked"
-  | "skipped";
+  "pending" | "running" | "completed" | "blocked" | "skipped";
 
 export type AgentArtifactType =
   | "chat"
@@ -370,8 +373,7 @@ export async function createAgentTask(
     executionModel: string;
     plan?: StepDefinition[];
     deliverables?:
-      | AgentTaskDeliverableDefinition[]
-      | AgentTaskArtifactContractV1[];
+      AgentTaskDeliverableDefinition[] | AgentTaskArtifactContractV1[];
     planningRequest?: AgentTaskPlanningRequest;
     fixedMatterContext?: MatterContextManifestV1;
     initialCheckpoint?: Record<string, unknown>;
@@ -932,9 +934,7 @@ async function pauseAgentTaskSnapshotAtomically(
     taskId,
     userId,
     expectedTaskStatus: snapshot.task.status as
-      | "queued"
-      | "running"
-      | "verifying",
+      "queued" | "running" | "verifying",
     stepId: current?.id ?? null,
     expectedStepAttempt: current?.attempt ?? null,
     leaseOwner: input.leaseOwner ?? null,
@@ -1366,11 +1366,35 @@ export function prepareAgentTaskRevisionTransition(
     throw new Error("Requested changes must include a lawyer direction");
   }
 
+  const checkpoint =
+    snapshot.task.latest_checkpoint &&
+    typeof snapshot.task.latest_checkpoint === "object" &&
+    !Array.isArray(snapshot.task.latest_checkpoint)
+      ? (snapshot.task.latest_checkpoint as Record<string, unknown>)
+      : {};
+  const dispositionIntent = latestDecision.artifact_snapshot.find(
+    (item) =>
+      item &&
+      typeof item === "object" &&
+      !Array.isArray(item) &&
+      (item as { kind?: unknown }).kind ===
+        "contract_playbook_disposition_revision_v1",
+  );
+
   const verifierPosition = snapshot.task.current_plan.length - 1;
   const contractRead = readAgentStepContracts(snapshot.task);
   if (contractRead.state === "invalid") {
     throw new Error(`Step Contract is invalid: ${contractRead.reason}`);
   }
+  const dispositionRevisionStart =
+    contractRead.state === "valid" && dispositionIntent !== undefined
+      ? contractRead.contracts.findIndex(
+          (contract, position) =>
+            position > 0 &&
+            position < verifierPosition &&
+            contract.capability === "create_draft",
+        )
+      : -1;
   const contractedRevisionStart =
     contractRead.state === "valid"
       ? contractRead.contracts.findIndex(
@@ -1382,9 +1406,11 @@ export function prepareAgentTaskRevisionTransition(
         )
       : -1;
   const revisionStart =
-    contractedRevisionStart >= 0
-      ? contractedRevisionStart
-      : Math.min(1, verifierPosition);
+    dispositionRevisionStart >= 0
+      ? dispositionRevisionStart
+      : contractedRevisionStart >= 0
+        ? contractedRevisionStart
+        : Math.min(1, verifierPosition);
   const first = snapshot.task.current_plan[revisionStart];
   if (!first) throw new Error("Task has no revisable deliverable steps");
   if (
@@ -1405,7 +1431,23 @@ export function prepareAgentTaskRevisionTransition(
     revision_start: revisionStart,
     attempt: nextAttempt,
     requested_at: startedAt,
+    ...(dispositionIntent === undefined
+      ? {}
+      : { scope: "contract_playbook_dispositions_v1" }),
   };
+  let revisedReceipt: unknown;
+  if (dispositionIntent !== undefined) {
+    const receipt = contractPlaybookReceiptSchema.parse(
+      checkpoint.contract_playbook_pack_receipt,
+    );
+    revisedReceipt = applyContractPlaybookDispositionRevisionIntent({
+      receipt,
+      intent:
+        contractPlaybookDispositionRevisionIntentSchema.parse(
+          dispositionIntent,
+        ),
+    });
+  }
   return {
     revisionStart,
     first,
@@ -1423,6 +1465,9 @@ export function prepareAgentTaskRevisionTransition(
         ),
         created_at: startedAt,
         revision_request: revisionRequest,
+        ...(revisedReceipt === undefined
+          ? {}
+          : { contract_playbook_pack_receipt: revisedReceipt }),
       },
     ),
   };
@@ -1530,6 +1575,77 @@ export async function reviseAgentTask(db: Db, taskId: string, userId: string) {
   }
   if (!recovered) return null;
   throw new Error("Only one request can start this task revision");
+}
+
+export async function reverifyCompletedAgentTask(
+  db: Db,
+  taskId: string,
+  userId: string,
+) {
+  const snapshot = await getAgentTaskSnapshot(db, taskId, userId);
+  if (!snapshot) return null;
+  if (snapshot.task.status !== "completed") {
+    throw new Error("Only a completed task can restart verification");
+  }
+  const verifier = snapshot.task.current_plan.at(-1);
+  const verifierReceipt = readAgentStepReceipts(
+    snapshot.task.latest_checkpoint,
+  ).at(-1);
+  if (
+    !verifier ||
+    verifier.status !== "completed" ||
+    verifierReceipt?.capability !== "verify" ||
+    verifierReceipt.outcome !== "review_required"
+  ) {
+    throw new Error(
+      "Re-verification is available only for a completed review gap",
+    );
+  }
+
+  const links = controlledAgentReviewArtifactLinks(snapshot);
+  for (const link of links) {
+    const { data: document, error: documentError } = await db
+      .from("documents")
+      .select("id,current_version_id")
+      .eq("id", link.artifact_id)
+      .eq("user_id", userId)
+      .eq("project_id", snapshot.task.matter_id)
+      .maybeSingle();
+    if (documentError) throw new Error(documentError.message);
+    if (!document?.current_version_id) continue;
+    const { data: versions, error: versionError } = await db
+      .from("document_versions")
+      .select("id,version_number")
+      .eq("document_id", document.id)
+      .is("deleted_at", null)
+      .order("version_number", { ascending: false })
+      .limit(2);
+    if (versionError) throw new Error(versionError.message);
+    const current = (versions ?? []).find(
+      (version) => version.id === document.current_version_id,
+    );
+    const base = (versions ?? []).find(
+      (version) => version.id !== document.current_version_id,
+    );
+    if (!current || !base) continue;
+    await startAgentTaskArtifactReverification(db, {
+      taskId,
+      userId,
+      documentId: document.id as string,
+      baseVersionId: base.id as string,
+      versionId: current.id as string,
+      mutationId: [
+        "agent-task-verifier-retry",
+        taskId,
+        verifier.id,
+        verifier.attempt + 1,
+      ].join(":"),
+    });
+    return getAgentTaskSnapshot(db, taskId, userId);
+  }
+  throw new Error(
+    "Re-verification requires one current Task-owned Artifact with version history",
+  );
 }
 
 export async function attachAgentTaskDocuments(
@@ -1789,9 +1905,7 @@ export async function stopAgentTask(
     userId,
     leaseOwner: input.leaseOwner,
     expectedTaskStatus: snapshot.task.status as
-      | "queued"
-      | "running"
-      | "verifying",
+      "queued" | "running" | "verifying",
     stepId: current?.id ?? null,
     expectedStepAttempt: current?.attempt ?? null,
     targetStatus: input.status,

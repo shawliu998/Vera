@@ -93,6 +93,8 @@ export async function generateDocx(
     mutationIdentity?: GeneratedMutationIdentity;
     /** Keep a localized in-document title while fixing an ASCII filename. */
     filenameTitle?: string;
+    /** Build validated DOCX bytes for a server-owned version mutation. */
+    bytesOnly?: boolean;
   },
 ) {
   try {
@@ -509,6 +511,12 @@ export async function generateDocx(
           error: `Generated DOCX is missing required package part: ${requiredPath}`,
         };
       }
+    }
+    if (options?.bytesOnly) {
+      return {
+        buffer: buf,
+        filename: safeGeneratedFilename(options.filenameTitle ?? title, "docx"),
+      };
     }
     return persistGeneratedFile({
       title: options?.filenameTitle ?? title,

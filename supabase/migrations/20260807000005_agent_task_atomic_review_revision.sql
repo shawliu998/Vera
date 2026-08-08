@@ -89,7 +89,29 @@ begin
   end if;
 
   if p_status = 'changes_requested' then
-    if jsonb_array_length(p_artifact_snapshot) <> 0 then
+    if jsonb_array_length(p_artifact_snapshot) = 0 then
+      null;
+    elsif jsonb_array_length(p_artifact_snapshot) <> 1
+      or jsonb_typeof(p_artifact_snapshot -> 0) is distinct from 'object'
+      or p_artifact_snapshot -> 0 ->> 'kind' is distinct from 'contract_playbook_disposition_revision_v1'
+      or jsonb_typeof(p_artifact_snapshot -> 0 -> 'decisions') is distinct from 'array'
+      or jsonb_array_length(p_artifact_snapshot -> 0 -> 'decisions') not between 1 and 80
+      or exists (
+        select 1
+        from jsonb_array_elements(p_artifact_snapshot -> 0 -> 'decisions') decision
+        where jsonb_typeof(decision) is distinct from 'object'
+          or coalesce(decision ->> 'finding_id', '') !~ '^finding-[a-f0-9]{24}$'
+          or coalesce(decision ->> 'disposition', '') not in ('accept', 'comment', 'skip')
+          or not (decision ? 'direction')
+          or (
+            decision -> 'direction' <> 'null'::jsonb
+            and jsonb_typeof(decision -> 'direction') is distinct from 'string'
+          )
+          or (
+            decision -> 'direction' <> 'null'::jsonb
+            and decision ->> 'disposition' is distinct from 'comment'
+          )
+      ) then
       return query select 'invalid_input'::text, v_task.status, v_task.current_step;
       return;
     end if;

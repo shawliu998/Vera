@@ -120,6 +120,23 @@ test("canonical effect input ignores object key order", () => {
   );
 });
 
+test("a revision reservation may target a fixed Version on the existing Document", () => {
+  const receipt = buildAgentStepEffectReservation({
+    stepId: "5ff7fb82-3aa5-49ba-89af-b7086a0f7031",
+    attempt: 2,
+    toolName: "generate_docx",
+    toolInput: { kind: "bounded_revision" },
+    target: {
+      documentId: "0ff133ee-4208-40f8-8df9-3bf5a94331da",
+      versionId: "8d3f5df3-c172-44c6-a857-ad1847aa57e0",
+    },
+  });
+  assert.deepEqual(receipt.target, {
+    document_id: "0ff133ee-4208-40f8-8df9-3bf5a94331da",
+    version_id: "8d3f5df3-c172-44c6-a857-ad1847aa57e0",
+  });
+});
+
 test("effect reservation and commit reuse one deterministic target", async () => {
   const step: Step = {
     id: "5ff7fb82-3aa5-49ba-89af-b7086a0f7031",

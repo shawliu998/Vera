@@ -16,10 +16,15 @@ import {
   materializeContractPlaybookWordDocuments,
 } from "./agentContractPlaybookWordMaterializer";
 import {
+  bindGeneratedTaskWordArtifact,
   generateDocx,
   persistGeneratedDocxBytes,
   type GeneratedMutationIdentity,
 } from "./chat/tools/documentOps";
+import {
+  appendCurrentDocxVersion,
+  durableCurrentVersionMutationId,
+} from "./currentDocumentVersionMutation";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -175,6 +180,52 @@ function assertPersistedDocument(
   return value;
 }
 
+function assertBuiltDocx(value: Awaited<ReturnType<typeof generateDocx>>) {
+  if (
+    !value ||
+    !("buffer" in value) ||
+    !Buffer.isBuffer(value.buffer) ||
+    !("filename" in value) ||
+    typeof value.filename !== "string"
+  ) {
+    throw new Error(
+      "error" in value
+        ? value.error
+        : "Server-materialized Contract opinion bytes were not built",
+    );
+  }
+  return value;
+}
+
+async function loadExistingDeliverableVersion(input: {
+  db: Db;
+  userId: string;
+  matterId: string;
+  documentId: string | null;
+}) {
+  if (!input.documentId) return null;
+  const { data: document, error } = await input.db
+    .from("documents")
+    .select("id,user_id,project_id,current_version_id")
+    .eq("id", input.documentId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (
+    !document ||
+    document.user_id !== input.userId ||
+    document.project_id !== input.matterId ||
+    !document.current_version_id
+  ) {
+    throw new Error(
+      "The current Contract deliverable is unavailable for versioned revision",
+    );
+  }
+  return {
+    documentId: document.id as string,
+    versionId: document.current_version_id as string,
+  };
+}
+
 /**
  * Execute one Contract Playbook creation Step without a drafting model. The
  * server compiles all three outputs from one receipt while reusing the normal
@@ -192,6 +243,7 @@ export async function executeContractPlaybookMaterializationStep(input: {
   receipt: ContractPlaybookReceiptV1;
   deliverableKey: ContractPlaybookMaterializedDeliverableKey;
   artifactPurpose: string;
+  existingArtifactId?: string | null;
   shouldContinue?: () => Promise<boolean>;
 }) {
   const plan = compileContractPlaybookMaterializationPlan(input.receipt);
@@ -216,11 +268,36 @@ export async function executeContractPlaybookMaterializationStep(input: {
     plan,
     deliverableKey: input.deliverableKey,
   });
+  const existing = await loadExistingDeliverableVersion({
+    db: input.db,
+    userId: input.userId,
+    matterId: input.matterId,
+    documentId: input.existingArtifactId ?? null,
+  });
+  const revisionMutationKey = existing
+    ? [
+        "contract-playbook-materialization-v2",
+        input.taskId,
+        input.stepId,
+        input.attempt,
+        input.deliverableKey,
+        plan.receipt_fingerprint,
+        existing.versionId,
+      ].join(":")
+    : null;
   const wanted = buildAgentStepEffectReservation({
     stepId: input.stepId,
     attempt: input.attempt,
     toolName: "generate_docx",
     toolInput: effectInput,
+    ...(existing && revisionMutationKey
+      ? {
+          target: {
+            documentId: existing.documentId,
+            versionId: durableCurrentVersionMutationId(revisionMutationKey),
+          },
+        }
+      : {}),
   });
   const effect = await reserveAgentStepEffect(input.db, {
     taskId: input.taskId,
@@ -244,9 +321,9 @@ export async function executeContractPlaybookMaterializationStep(input: {
     receipt: input.receipt,
     markupCount: documents.sourceReviewMarkupCount,
   });
-  const persisted =
+  const outputBuffer =
     input.deliverableKey === "review-opinion"
-      ? assertPersistedDocument(
+      ? assertBuiltDocx(
           await generateDocx(
             plan.opinion.title || title,
             sourceCondition
@@ -260,24 +337,58 @@ export async function executeContractPlaybookMaterializationStep(input: {
             input.db,
             {
               projectId: input.matterId,
-              mutationIdentity,
               filenameTitle: title,
+              bytesOnly: true,
             },
           ),
-        )
-      : assertPersistedDocument(
-          await persistGeneratedDocxBytes({
-            title,
-            buffer:
-              input.deliverableKey === "contract-revision"
-                ? documents.revisionBytes
-                : documents.cleanBytes,
-            userId: input.userId,
-            db: input.db,
-            projectId: input.matterId,
-            mutationIdentity,
-          }),
-        );
+        ).buffer
+      : input.deliverableKey === "contract-revision"
+        ? documents.revisionBytes
+        : documents.cleanBytes;
+  const persisted = existing
+    ? await (async () => {
+        const bound = await bindGeneratedTaskWordArtifact({
+          extension: "docx",
+          buffer: outputBuffer,
+          projectId: input.matterId,
+          mutationIdentity,
+        });
+        const appended = await appendCurrentDocxVersion({
+          db: input.db,
+          userId: input.userId,
+          projectId: input.matterId,
+          documentId: existing.documentId,
+          baseVersionId: existing.versionId,
+          mutationKey: revisionMutationKey!,
+          filename: `${title}.docx`,
+          buffer: bound,
+          source: "generated",
+          beforeActivate: input.shouldContinue
+            ? async () => {
+                if (!(await input.shouldContinue?.())) {
+                  throw new Error(
+                    "Contract materialization was interrupted before Version activation",
+                  );
+                }
+              }
+            : undefined,
+        });
+        return {
+          document_id: appended.document_id,
+          version_id: appended.version_id,
+          filename: appended.filename,
+        };
+      })()
+    : assertPersistedDocument(
+        await persistGeneratedDocxBytes({
+          title,
+          buffer: outputBuffer,
+          userId: input.userId,
+          db: input.db,
+          projectId: input.matterId,
+          mutationIdentity,
+        }),
+      );
   if (
     persisted.document_id !== effect.target.document_id ||
     persisted.version_id !== effect.target.version_id

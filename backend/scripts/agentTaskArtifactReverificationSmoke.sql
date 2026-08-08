@@ -45,7 +45,16 @@ insert into public.agent_tasks(
   null,
   jsonb_build_object(
     'schema_version', 'agent_task_checkpoint_v1',
-    'contract', jsonb_build_object('fixture', true),
+    'contract', jsonb_build_object(
+      'fixture', true,
+      'step_contracts', jsonb_build_object(
+        'steps', jsonb_build_array(
+          jsonb_build_object('position', 0, 'capability', 'read_sources'),
+          jsonb_build_object('position', 1, 'capability', 'create_draft'),
+          jsonb_build_object('position', 2, 'capability', 'verify')
+        )
+      )
+    ),
     'step_receipts', jsonb_build_array(
       jsonb_build_object(
         'kind', 'agent_step_receipt_v1',

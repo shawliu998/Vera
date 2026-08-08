@@ -45,6 +45,7 @@ export type AgentCheckpoint = {
   source_acquisition?: unknown;
   contract_playbook_context?: unknown;
   contract_playbook_pack_receipt?: unknown;
+  step_receipts?: unknown;
 };
 
 export type AgentRequiredInputChoice = {
@@ -130,6 +131,12 @@ export type AgentArtifactLink = ArtifactLink;
 
 export type AgentReviewStatus =
   "review_required" | "changes_requested" | "approved";
+
+export type ContractDispositionRevisionDecision = {
+  finding_id: string;
+  disposition: "accept" | "comment" | "skip";
+  direction: string | null;
+};
 
 export type ApprovedArtifactSnapshot = {
   artifact_type: "draft" | "tabular_review";

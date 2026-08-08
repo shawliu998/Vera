@@ -4,6 +4,7 @@ import type {
   AgentRequiredInputResponse,
   AgentTask,
   AgentTaskSnapshot,
+  ContractDispositionRevisionDecision,
 } from "@/app/types/agent";
 import {
   buildAgentTaskCreationBody,
@@ -167,14 +168,31 @@ export function submitAgentTaskInput(
 
 export function createAgentReviewDecision(
   taskId: string,
-  input: { status: "approved" | "changes_requested"; note: string },
+  input: {
+    status: "approved" | "changes_requested";
+    note: string;
+    contractDispositions?: ContractDispositionRevisionDecision[];
+  },
 ) {
   return request<AgentTaskSnapshot>(
     `/agent-tasks/${encodeURIComponent(taskId)}/review-decisions`,
     {
       method: "POST",
-      body: JSON.stringify(input),
+      body: JSON.stringify({
+        status: input.status,
+        note: input.note,
+        ...(input.contractDispositions
+          ? { contract_dispositions: input.contractDispositions }
+          : {}),
+      }),
     },
+  );
+}
+
+export function reverifyAgentTask(taskId: string) {
+  return request<AgentTaskSnapshot>(
+    `/agent-tasks/${encodeURIComponent(taskId)}/reverify`,
+    { method: "POST" },
   );
 }
 

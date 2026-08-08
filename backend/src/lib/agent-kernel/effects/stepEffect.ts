@@ -93,6 +93,7 @@ export function buildAgentStepEffectReservation(input: {
   toolName: AgentStepMutationTool;
   toolInput: unknown;
   createdAt?: string;
+  target?: { documentId: string; versionId: string };
 }) {
   const scope = `agent-step:${input.stepId}:attempt:${input.attempt}:${input.toolName}`;
   return effectReceiptSchema.parse({
@@ -106,8 +107,10 @@ export function buildAgentStepEffectReservation(input: {
       .digest("hex"),
     status: "reserved",
     target: {
-      document_id: durableEffectUuid(scope, "document"),
-      version_id: durableEffectUuid(scope, "version"),
+      document_id:
+        input.target?.documentId ?? durableEffectUuid(scope, "document"),
+      version_id:
+        input.target?.versionId ?? durableEffectUuid(scope, "version"),
     },
     effect: null,
     created_at: input.createdAt ?? new Date().toISOString(),

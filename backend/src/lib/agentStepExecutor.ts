@@ -76,7 +76,10 @@ import {
   ContractPlaybookStructuredOutputError,
   parseContractPlaybookAnalysisOutput,
 } from "./agent-packs/contract/contractPlaybookPack";
-import { createContractPlaybookDispositionRequiredInput } from "./agent-packs/contract/contractPlaybookDisposition";
+import {
+  assertContractPlaybookDispositionRevisionApplied,
+  createContractPlaybookDispositionRequiredInput,
+} from "./agent-packs/contract/contractPlaybookDisposition";
 import { compileContractPlaybookAnalysisReceipt } from "./agentContractPlaybookAnalysis";
 import {
   bindContractPlaybookAnalysisToFixedSources,
@@ -293,6 +296,27 @@ export function summarizeTaskCitationRelocation(
   };
 }
 
+export function authoritativeTaskCitationSnapshotIds(
+  task: { latest_checkpoint?: unknown },
+  artifacts: Array<{ artifact_type: string; artifact_id: string }>,
+) {
+  const linked = artifacts
+    .filter((artifact) => artifact.artifact_type === "citation_snapshot")
+    .map((artifact) => artifact.artifact_id);
+  const checkpoint =
+    task.latest_checkpoint &&
+    typeof task.latest_checkpoint === "object" &&
+    !Array.isArray(task.latest_checkpoint)
+      ? (task.latest_checkpoint as Record<string, unknown>)
+      : {};
+  const contractReceipt = contractPlaybookReceiptSchema.safeParse(
+    checkpoint.contract_playbook_pack_receipt,
+  );
+  return contractReceipt.success
+    ? [contractReceipt.data.citation_snapshot_artifact_id]
+    : linked;
+}
+
 export async function verifyTaskCitationLinks(
   db: Db,
   snapshot: NonNullable<TaskSnapshot>,
@@ -305,12 +329,15 @@ export async function verifyTaskCitationLinks(
         artifact.purpose === "Source document",
     )
     .map((artifact) => artifact.artifact_id);
-  const messageIds = snapshot.artifacts
-    .filter((artifact) => artifact.artifact_type === "citation_snapshot")
-    .map((artifact) => artifact.artifact_id);
-  if (!messageIds.length) return { total: 0, relocatable: 0, missing: 0 };
+  const authoritativeMessageIds = authoritativeTaskCitationSnapshotIds(
+    snapshot.task,
+    snapshot.artifacts,
+  );
+  if (!authoritativeMessageIds.length) {
+    return { total: 0, relocatable: 0, missing: 0 };
+  }
   const snapshots = await Promise.all(
-    messageIds.map((artifactId) =>
+    authoritativeMessageIds.map((artifactId) =>
       getAgentTaskEvidence(db, {
         taskId: snapshot.task.id,
         artifactId,
@@ -616,6 +643,43 @@ export async function executeAgentStep(input: {
       : contractPlaybookReceiptSchema.parse(
           checkpoint.contract_playbook_pack_receipt,
         );
+  const latestReviewDecision = snapshot.review.decisions.at(-1) ?? null;
+  const revisionRequest =
+    checkpoint.revision_request &&
+    typeof checkpoint.revision_request === "object" &&
+    !Array.isArray(checkpoint.revision_request)
+      ? (checkpoint.revision_request as Record<string, unknown>)
+      : null;
+  const dispositionRevisionIntent =
+    latestReviewDecision?.status === "changes_requested" &&
+    revisionRequest?.review_decision_id === latestReviewDecision.id
+      ? latestReviewDecision.artifact_snapshot.find(
+          (item) =>
+            item &&
+            typeof item === "object" &&
+            !Array.isArray(item) &&
+            (item as { kind?: unknown }).kind ===
+              "contract_playbook_disposition_revision_v1",
+        )
+      : undefined;
+  if (
+    contractPlaybookContext &&
+    contractPlaybookReceipt &&
+    stepContract?.capability === "analyze" &&
+    dispositionRevisionIntent !== undefined
+  ) {
+    assertContractPlaybookDispositionRevisionApplied({
+      receipt: contractPlaybookReceipt,
+      intent: dispositionRevisionIntent,
+    });
+    return {
+      summary:
+        "Preserved the fixed Contract analysis and applied the lawyer's structured disposition revision without re-analyzing source Versions.",
+      artifacts: [],
+      waitingForInput: false,
+      citationCheck: { total: 0, relocatable: 0, missing: 0 },
+    };
+  }
   if (contractPlaybookContext && stepContract?.capability === "create_draft") {
     if (!contractPlaybookReceipt) {
       throw new ContractPlaybookStructuredOutputError(
@@ -663,6 +727,9 @@ export async function executeAgentStep(input: {
         receipt: contractPlaybookReceipt,
         deliverableKey: output.deliverable_key,
         artifactPurpose: taskDeliverablePurpose(deliverable),
+        existingArtifactId:
+          findDeliverableArtifact(deliverable, snapshot.artifacts)
+            ?.artifact_id ?? null,
       });
     }
   }
